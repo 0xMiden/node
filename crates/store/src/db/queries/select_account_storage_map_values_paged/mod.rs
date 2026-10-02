@@ -72,11 +72,13 @@ pub(crate) fn select_account_storage_map_values_paged(
         })?;
 
     // If we got more rows than the limit, the last block may be incomplete so we drop it entirely
-    // and derive last_block_included from the remaining rows.
+    // and derive last_block_included from the remaining rows. The rows are ordered by block number,
+    // so the rows of the last block are a suffix and a binary search finds where it starts.
     let last_block_included = if let Some(last_block_num) = values.last().map(|v| v.block_num)
         && values.len() > limit
     {
-        values.retain(|v| v.block_num != last_block_num);
+        let complete_len = values.partition_point(|v| v.block_num < last_block_num);
+        values.truncate(complete_len);
         values.last().map_or(*block_range.start(), |v| v.block_num)
     } else {
         *block_range.end()
