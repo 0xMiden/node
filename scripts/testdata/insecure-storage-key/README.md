@@ -21,8 +21,8 @@ This key is public and must not be used outside tests.
 
 Compose checks each staged bundle with `miden-validator dkg validate-fixture --bundle-file <FILE>` before it marks the
 local network as bootstrapped. This fixture-only check binds the secret share to its expected participant index.
-Production bundles must use `miden-validator dkg validate`, which also checks genesis, the ceremony manifest, and signed
-transcript.
+Production bundles must come from a successful `miden-validator dkg participate` ceremony. That ceremony authenticates
+peers against genesis and confirms matching transcript and public output commitments before it reports success.
 
 ## Regenerating
 

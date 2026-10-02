@@ -4,7 +4,7 @@ use iroh::endpoint::{AfterHandshakeOutcome, Connection, EndpointHooks};
 use tokio::sync::mpsc;
 
 use super::*;
-use crate::commands::dkg_p2p::ceremony::peer::ConnectedPeer;
+use crate::commands::dkg::ceremony::peer::ConnectedPeer;
 
 #[rstest::rstest]
 #[case::failed_connection(b"unsupported-protocol")]

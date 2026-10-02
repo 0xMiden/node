@@ -200,9 +200,9 @@ Delete the existing local chain with `make local-network-delete` before changing
 
 ## Storage Key Setup
 
-The Compose bootstrap service runs three concurrent `dkg-p2p participate` processes for a two-of-three storage key
-ceremony. They use the configured local validator signing keys and a dedicated Iroh relay on an internal-only Docker
-network. The relay exposes no host port. The ceremony does not need KMS or public Iroh services.
+The Compose bootstrap service runs three concurrent `dkg participate` processes for a two-of-three storage key ceremony.
+They use the configured local validator signing keys and a dedicated Iroh relay on an internal-only Docker network. The
+relay exposes no host port. The ceremony does not need KMS or public Iroh services.
 
 Bootstrap generates the persistent endpoint identities before genesis and keeps them under `/data/validators/endpoints`
 in the `node-data` volume. Each participant writes its own `/data/validators/<n>/storage-key.bundle`. Bootstrap marks

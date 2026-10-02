@@ -1,11 +1,11 @@
-use super::super::{DkgP2pCommand, DkgP2pOptions};
+use super::super::{DkgCommand, DkgOptions};
 
 #[tokio::test]
 async fn endpoint_secret_is_private_and_not_overwritten() -> anyhow::Result<()> {
     let directory = tempfile::tempdir()?;
     let output_file = directory.path().join("endpoint.secret");
-    DkgP2pOptions {
-        command: DkgP2pCommand::GenerateEndpoint { output_file: output_file.clone() },
+    DkgOptions {
+        command: DkgCommand::GenerateEndpoint { output_file: output_file.clone() },
     }
     .handle()
     .await?;
@@ -16,8 +16,8 @@ async fn endpoint_secret_is_private_and_not_overwritten() -> anyhow::Result<()> 
     }
     let original = fs_err::read(&output_file)?;
 
-    DkgP2pOptions {
-        command: DkgP2pCommand::GenerateEndpoint { output_file: output_file.clone() },
+    DkgOptions {
+        command: DkgCommand::GenerateEndpoint { output_file: output_file.clone() },
     }
     .handle()
     .await

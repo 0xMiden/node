@@ -5,7 +5,7 @@ use futures::future::try_join_all;
 use miden_protocol::crypto::hash::rpo::Rpo256;
 
 use super::{Ceremony, DkgDealings, DkgParticipants, UnconfirmedDkgDealings};
-use crate::commands::dkg_p2p::wire::WireCodec;
+use crate::commands::dkg::wire::WireCodec;
 
 /// Commitment to the session, participant registry, and both sets of dealing roots. Roots appear
 /// in participant order, with decryption before context.

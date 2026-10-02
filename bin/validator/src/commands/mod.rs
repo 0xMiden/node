@@ -1,6 +1,5 @@
 mod bootstrap;
 mod dkg;
-mod dkg_p2p;
 mod export_private_record;
 mod genesis;
 mod issue_private_record_share;
@@ -140,11 +139,8 @@ pub enum ValidatorCommand {
         data_directory: PathBuf,
     },
 
-    /// Runs the storage-key setup ceremony.
-    Dkg(dkg::DkgOptions),
-
     /// Peer-to-peer storage-key setup commands.
-    DkgP2p(dkg_p2p::DkgP2pOptions),
+    Dkg(dkg::DkgOptions),
 
     /// Issues this validator's decryption share for one stored private record.
     IssuePrivateRecordShare(PrivateRecordShareOptions),
@@ -228,8 +224,7 @@ impl ValidatorCommand {
                     .context("failed to apply validator database migrations")?;
                 Ok(())
             },
-            Self::Dkg(options) => dkg::run(options).await,
-            Self::DkgP2p(options) => options.handle().await,
+            Self::Dkg(options) => options.handle().await,
             Self::IssuePrivateRecordShare(options) => {
                 issue_private_record_share::issue_from_options(options)
             },
@@ -291,7 +286,6 @@ impl ValidatorCommand {
             | Self::Pubkey { .. }
             | Self::Keygen
             | Self::Dkg(_)
-            | Self::DkgP2p(_)
             | Self::ExportPrivateRecord(_)
             | Self::IssuePrivateRecordShare(_)
             | Self::Migrate { .. } => OpenTelemetry::Disabled,

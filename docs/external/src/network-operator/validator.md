@@ -30,123 +30,67 @@ current block.
 
 ## Storage Key Setup
 
-The DKG creates the storage key used to re-encrypt validated private inputs. Run one ceremony for the validator set
-committed in genesis. Participant indexes follow the order of validator signing keys in the genesis block.
+The live peer-to-peer DKG creates the storage key used to re-encrypt validated private inputs. Every validator committed
+in genesis must participate. Each validator authenticates its peers with their genesis signing keys, exchanges its own
+DKG messages with every other participant, and confirms matching transcript and public output commitments.
 
 The threshold is network policy. A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators
-cannot. Choose it from the network's confidentiality and availability needs before the ceremony starts.
+cannot. All participants must use the same trusted genesis block, threshold, and storage-key epoch. Participant indexes
+follow the sorted validator signing public keys.
 
 This flow supports initial storage-key bootstrap only. The validator loads one storage-key epoch. Rotation, creating new
 shares, and validator-set changes are not yet supported. Keep each operator bundle available for as long as records from
 its epoch may need to be decrypted.
 
-First, each operator creates a DKG identity for the agreed storage-key epoch and sends `registration.toml` to the
-coordinator. The registration proves ownership of the DKG identity secret. The signing key must match one key in
-genesis. Use `--signing-key.hex` instead of KMS only for local or private deployments.
+Generate a persistent Iroh endpoint identity for each validator before the ceremony. Endpoint provisioning does not
+depend on genesis:
 
 ```bash
-miden-validator dkg identity \
-  --genesis genesis.dat \
-  --epoch <32-byte-hex-epoch> \
-  --signing-key.kms-id <validator-kms-key-id> \
-  --output-directory identity
+miden-validator dkg generate-endpoint --output-file endpoint.secret
 ```
 
-The coordinator collects every registration and prepares one common ceremony directory. The setup coefficient is fixed
-by the validator backend. The session ID is derived from genesis, the epoch, the threshold, and the ordered
-registrations, so every operator can reproduce the same files.
+Keep the secret file private and share the printed public endpoint ID with the other operators. Endpoint IDs identify
+connection destinations, not trusted validator identities. Authentication checks ownership of a validator signing key
+committed in genesis. Reuse the endpoint secret across ceremonies.
 
-```bash
-miden-validator dkg prepare \
-  --genesis genesis.dat \
-  --threshold 2 \
-  --epoch <32-byte-hex-epoch> \
-  --registration validator-1-registration.toml \
-  --registration validator-2-registration.toml \
-  --registration validator-3-registration.toml \
-  --output-directory ceremony
-```
+All participants must use the same dedicated Iroh relay.
 
-Each operator checks the ceremony directory over the authenticated bootstrap channel, then creates its dealings.
-
-```bash
-miden-validator dkg deal \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --identity-secret identity/identity-secret.wire \
-  --output-directory dealing
-```
-
-After all dealings are exchanged, every operator signs the same transcript. Repeat both dealing options once per
+Run the following command for each validator using its own signing key. Repeat `--peer.endpoint` once per other genesis
 validator.
 
 ```bash
-miden-validator dkg accept \
+miden-validator dkg participate \
   --genesis genesis.dat \
-  --ceremony-directory ceremony \
+  --endpoint-secret endpoint.secret \
+  --relay.url https://relay.example.org \
+  --peer.endpoint <other-validator-endpoint-id> \
+  --peer.endpoint <another-validator-endpoint-id> \
+  --threshold 2 \
+  --epoch <32-byte-hex-epoch> \
   --signing-key.kms-id <validator-kms-key-id> \
-  --decryption-dealing validator-1-decryption-dealing.wire \
-  --decryption-dealing validator-2-decryption-dealing.wire \
-  --decryption-dealing validator-3-decryption-dealing.wire \
-  --context-dealing validator-1-context-dealing.wire \
-  --context-dealing validator-2-context-dealing.wire \
-  --context-dealing validator-3-context-dealing.wire \
-  --output-directory acceptance
+  --output-file storage-key.bundle
 ```
 
-Compare `transcript.toml` byte for byte across all operators. Collect one signed `transcript-acceptance.toml` from each
-operator. Each operator can then create and validate its own startup bundle.
+Validators can start at different times; the ceremony waits for all participants to join. The entire ceremony must
+finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer.endpoint` and use `--threshold 1`.
 
-```bash
-miden-validator dkg finalize \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --identity-secret identity/identity-secret.wire \
-  --private-state dealing/private-state.wire \
-  --decryption-dealing validator-1-decryption-dealing.wire \
-  --decryption-dealing validator-2-decryption-dealing.wire \
-  --decryption-dealing validator-3-decryption-dealing.wire \
-  --context-dealing validator-1-context-dealing.wire \
-  --context-dealing validator-2-context-dealing.wire \
-  --context-dealing validator-3-context-dealing.wire \
-  --transcript transcript.toml \
-  --transcript-acceptance validator-1-transcript-acceptance.toml \
-  --transcript-acceptance validator-2-transcript-acceptance.toml \
-  --transcript-acceptance validator-3-transcript-acceptance.toml \
-  --output-directory storage-key
+Every validator writes its own bundle before confirming completion to its peers. The command reports success only after
+every participant confirms persistence with matching session, transcript, and public output commitments. Treat both the
+endpoint secret and the bundle as private files, with permissions of `0600`.
 
-miden-validator dkg validate \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --validator-public-key <validator-public-key-hex> \
-  --bundle-directory storage-key
-```
-
-The files have these handling rules:
-
-| Files                                                                  | Handling                                                          |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `registration.toml`, `manifest.toml`, and both DKG configuration files | Public; send through an authenticated channel.                    |
-| Both dealing files, `transcript.toml`, and transcript acceptances      | Public; send through an authenticated channel.                    |
-| `identity-secret.wire` and `private-state.wire`                        | Private to one operator; never send.                              |
-| `epoch.hex`, `setup-context.wire`, and `public-key-set.wire`           | Public final output; all operators must get identical bytes.      |
-| `secret-share.wire`                                                    | Private final output; each operator gets a different share.       |
-| `storage-key.bundle`                                                   | Complete startup bundle, including this operator's private share. |
-
-Every operator must confirm matching public output hashes before activation. Once the final bundle is secured,
-`identity-secret.wire` and `private-state.wire` are no longer needed. A failed ceremony cannot resume with a partial or
-changed participant set; start a new ceremony instead.
+A failed or timed-out ceremony cannot resume. Do not activate any bundle left by that attempt. Start a new ceremony with
+every participant and a new output path, preserving the endpoint secrets. Ephemeral DKG secrets and nonces are generated
+again; operators do not need to select a session ID.
 
 ## Start
 
 Pass this validator's completed bundle using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`. The
 bundle can live outside the data directory; keep its permissions at `0600`. This versioned binary file contains the
-epoch, public setup, public key set, and private share. The P2P ceremony takes `--output-file <FILE>` and needs only an
-existing output parent directory, not a bootstrapped validator data directory. Offline `dkg finalize` also exports the
-bundle inside its output directory. Treat the entire file as secret. To store it in a text-only secret store,
-base64-encode it for upload and decode it back to the original bytes before loading it.
+epoch, public setup, public key set, and private share. The ceremony takes `--output-file <FILE>` and needs only an
+existing output parent directory, not a bootstrapped validator data directory. Treat the entire file as secret. To store
+it in a text-only secret store, base64-encode it for upload and decode it back to the original bytes before loading it.
 
-The P2P command reports success only after every validator announces a persisted bundle with matching session, dealing
+The DKG command reports success only after every validator announces a persisted bundle with matching session, dealing
 transcript, and public output commitments. A failed or timed-out exchange can leave a local bundle on disk. Do not
 activate that bundle as the output of a successful ceremony.
 

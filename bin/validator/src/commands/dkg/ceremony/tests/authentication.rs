@@ -5,7 +5,7 @@ use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use tokio::task::JoinSet;
 
 use super::*;
-use crate::commands::dkg_p2p::ceremony::peer::ConnectedPeer;
+use crate::commands::dkg::ceremony::peer::ConnectedPeer;
 
 #[rstest::rstest]
 #[case::dialer(true)]

@@ -1,5 +1,5 @@
 use super::*;
-use crate::commands::dkg_p2p::ceremony::session::{CeremonyNonce, SessionId};
+use crate::commands::dkg::ceremony::session::{CeremonyNonce, SessionId};
 
 #[derive(Clone, Copy, Debug)]
 enum Round {

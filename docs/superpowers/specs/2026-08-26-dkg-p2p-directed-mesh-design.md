@@ -1,5 +1,8 @@
 # Validator DKG P2P Directed Mesh Design
 
+This is a historical design draft. For the current protocol and commands, see the
+[validator operator guide](../../external/src/network-operator/validator.md#storage-key-setup).
+
 ## Scope
 
 This design replaces the current pair-election handshake with a simpler directed mesh and

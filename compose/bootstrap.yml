@@ -100,7 +100,7 @@ services:
         ENDPOINTS=/data/validators/endpoints
         mkdir "$${ENDPOINTS}"
         for VALIDATOR in 1 2 3; do
-          ENDPOINT_OUTPUT="$$(miden-validator dkg-p2p generate-endpoint \
+          ENDPOINT_OUTPUT="$$(miden-validator dkg generate-endpoint \
             --output-file "$${ENDPOINTS}/$${VALIDATOR}.secret")"
           ENDPOINT_ID="$$(printf '%s\n' "$${ENDPOINT_OUTPUT}" | sed -n 's/^Iroh endpoint ID: //p')"
           if [ -z "$${ENDPOINT_ID}" ]; then
@@ -181,7 +181,7 @@ services:
                 set -- "$$@" --peer.endpoint "$$(cat "$${ENDPOINTS}/$${PEER}.id")"
               fi
             done
-            miden-validator dkg-p2p participate \
+            miden-validator dkg participate \
               --genesis /data/genesis/genesis.dat \
               --threshold 2 \
               --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \

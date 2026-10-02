@@ -23,8 +23,8 @@ It supports local development keys and KMS-backed signing for deployments that n
 
 ## Peer-to-peer DKG
 
-`miden-validator dkg-p2p participate` requires `--relay.url <URL>`. All ceremony participants must use the same
-dedicated Iroh relay. Use an HTTPS URL for a deployment, or an HTTP URL such as `http://127.0.0.1:3340` for a local
+`miden-validator dkg participate` requires `--relay.url <URL>`. All ceremony participants must use the same dedicated
+Iroh relay. Use an HTTPS URL for a deployment, or an HTTP URL such as `http://127.0.0.1:3340` for a local
 `iroh-relay --dev` process. The validator does not use public Iroh endpoint discovery or default relays.
 
 Each participant also supplies its persistent identity with `--endpoint-secret <FILE>` and the other participants with
