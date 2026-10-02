@@ -240,8 +240,9 @@ async fn ceremony_succeeds(
 #[tokio::test]
 async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Result<()> {
     for round in ["decryption", "context"] {
-        let TestCeremony { _relay, endpoints, validators } =
-            TestCeremony::create_dealings(2, 3).await?;
+        let TestCeremony { _relay, endpoints, validators } = TestCeremony::create_dealings(2, 3)
+            .await
+            .with_context(|| format!("failed to set up {round} dealing mismatch"))?;
         let mut exchanges = JoinSet::new();
         for (ceremony, mut participants, dealings) in validators {
             exchanges.spawn(async move {
@@ -249,14 +250,16 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
                 Ok::<_, anyhow::Error>((ceremony, participants, dealings))
             });
         }
-        let mut validators = tokio::time::timeout(Duration::from_secs(10), async {
+        // Allow the same budget as DKG completion for verifying every dealer's proofs.
+        let mut validators = tokio::time::timeout(Duration::from_secs(30), async {
             let mut validators = Vec::new();
             while let Some(result) = exchanges.join_next().await {
                 validators.push(result??);
             }
             Ok::<_, anyhow::Error>(validators)
         })
-        .await??;
+        .await
+        .with_context(|| format!("dealer exchange timed out before {round} dealing mismatch"))??;
         let (dealer_ceremony, dealer, _) = &validators[2];
         let alternate = dealer_ceremony.create_dealings(dealer)?;
         let dealer_index = dealer.local_index;
@@ -298,7 +301,8 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
             }
             Ok::<_, anyhow::Error>(errors)
         })
-        .await??;
+        .await
+        .with_context(|| format!("confirmation timed out after {round} dealing mismatch"))??;
         // Require at least one validator to report a transcript mismatch.
         //
         // Its abort can disconnect other peers before they compare commitments.
