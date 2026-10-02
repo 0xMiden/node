@@ -617,15 +617,26 @@ impl BoardWriter {
             .context("failed to inspect DKG board artifact slot")?;
         futures::pin_mut!(entries);
         let mut hashes = Vec::new();
+        let key = slot.key(expected_hash);
         while let Some(entry) = entries.next().await {
             let entry = entry.context("failed to read DKG board artifact slot")?;
+            if entry.content_hash() == expected_hash {
+                ensure!(
+                    entry.key() == key.as_bytes(),
+                    "DKG board artifact key does not match its hash"
+                );
+                ensure!(
+                    entry.content_len() == u64::try_from(value.len())?,
+                    "DKG board artifact length does not match its entry"
+                );
+            }
             hashes.push(entry.content_hash());
         }
         SlotValues::from_values(hashes).publish(&expected_hash)?;
 
         let stored_hash = self
             .document
-            .set_bytes(self.author, slot.key(expected_hash), value.to_vec())
+            .set_bytes(self.author, key, value.to_vec())
             .await
             .context("failed to publish DKG board artifact")?;
         ensure!(stored_hash == expected_hash, "Iroh stored artifact under an unexpected hash");
