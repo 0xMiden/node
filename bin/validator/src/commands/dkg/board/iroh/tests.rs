@@ -523,7 +523,10 @@ async fn oversized_upload_is_rejected_before_body_allocation() -> anyhow::Result
     let error = client.upload_raw_for_test(1, 1, MAX_ARTIFACT_BYTES + 1, &[]).await.unwrap_err();
     assert!(error.to_string().contains("exceeds"));
     let error = client.upload_raw_for_test(1, 1, 0, &[]).await.unwrap_err();
-    assert!(error.to_string().contains("DKG board artifact must not be empty"));
+    assert_eq!(
+        error.to_string(),
+        "DKG board rejected the artifact: DKG board artifact must not be empty"
+    );
     assert!(host.read_unique(&ArtifactSlot::Registration(1)).await?.is_none());
 
     client.shutdown().await?;
