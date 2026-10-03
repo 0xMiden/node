@@ -90,4 +90,6 @@ pub enum GenesisConfigError {
     InvalidAccountFileName { name: String },
     #[error("failed to generate a key for the configured authentication scheme")]
     AuthScheme(#[from] AuthSchemeError),
+    #[error("failed to obtain entropy to seed the genesis RNG")]
+    Entropy(#[source] rand::rngs::SysError),
 }
