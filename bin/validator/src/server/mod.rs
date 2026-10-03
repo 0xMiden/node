@@ -8,9 +8,9 @@ use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::info;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_utils::clap::GrpcOptions;
+use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
@@ -148,16 +148,13 @@ impl ValidatorServer {
         );
 
         // Build the gRPC server with the API service and trace layer.
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(miden_validator_v1_validator_service::service(service))
             .add_service(reflection_service)
-            .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
-                shutdown.cancelled_owned(),
-            )
+            .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
             .context("failed to serve validator API")
     }
