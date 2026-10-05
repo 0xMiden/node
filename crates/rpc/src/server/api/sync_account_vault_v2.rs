@@ -4,17 +4,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
-use miden_node_store::{AccountVaultValue, AccountVaultValuesPage, State};
+use miden_node_store::{AccountVaultCursor, AccountVaultValue, State};
 use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_utils::grpc::ClientIp;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::SendTimeoutError;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
-use tracing::Instrument;
 
+use super::sync_stream::{Paginator, SyncStream};
 use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -68,7 +67,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
         &self,
         (account_id, block_range): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        _extensions: &tonic::codegen::http::Extensions,
+        extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
         miden_span_record!(
             account.id = account_id,
@@ -82,95 +81,52 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
             return Err(Status::invalid_argument(format!("account {account_id} is not public")));
         }
 
-        // Fetch the first page before establishing the stream so request validation failures are
-        // returned as the initial RPC status. Each page uses its own short-lived state view; the
-        // stream must not let a client pin a snapshot generation for its entire lifetime.
-        let first_page = self
-            .state
-            .view()
-            .sync_account_vault_v2_page(account_id, block_range.clone(), None, DB_PAGE_SIZE)
-            .await
-            .map_err(|err| database_error_to_status(&err))?;
-
-        // Reserve a slot for a terminal error so a full data buffer cannot turn a timeout or
-        // database failure into an apparently successful end-of-stream.
-        let (tx, rx) = mpsc::channel(STREAM_BUFFER_SIZE + 1);
-        let terminal_permit = tx
-            .clone()
-            .try_reserve_owned()
-            .expect("a newly created vault sync channel must have capacity");
-        VaultSyncProducer {
-            state: Arc::clone(&self.state),
-            account_id,
-            block_range,
-            page: first_page,
-            tx,
-            terminal_permit: Some(terminal_permit),
-        }
-        .spawn();
-
-        Ok(ReceiverStream::new(rx))
+        let permit = self.sync_stream_limiter.acquire(ClientIp::from_extensions(extensions))?;
+        SyncStream::start(
+            VaultPaginator {
+                state: Arc::clone(&self.state),
+                account_id,
+                block_range,
+                cursor: None,
+                done: false,
+            },
+            permit,
+            STREAM_BUFFER_SIZE,
+            SEND_TIMEOUT,
+        )
+        .await
     }
 }
 
-struct VaultSyncProducer {
+struct VaultPaginator {
     state: Arc<State>,
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
-    page: AccountVaultValuesPage,
-    tx: mpsc::Sender<tonic::Result<AccountVaultValue>>,
-    terminal_permit: Option<mpsc::OwnedPermit<tonic::Result<AccountVaultValue>>>,
+    cursor: Option<AccountVaultCursor>,
+    done: bool,
 }
 
-impl VaultSyncProducer {
-    fn spawn(self) {
-        tokio::spawn(self.run().instrument(tracing::Span::current()));
-    }
+#[tonic::async_trait]
+impl Paginator for VaultPaginator {
+    type Item = AccountVaultValue;
 
-    async fn run(mut self) {
-        loop {
-            let next_cursor = self.page.next_cursor.take();
-            for value in std::mem::take(&mut self.page.values) {
-                match self.tx.send_timeout(Ok(value), SEND_TIMEOUT).await {
-                    Ok(()) => {},
-                    Err(SendTimeoutError::Closed(_)) => return,
-                    Err(SendTimeoutError::Timeout(_)) => {
-                        self.send_terminal_error(Status::deadline_exceeded(
-                            "account vault sync client stopped consuming updates",
-                        ));
-                        return;
-                    },
-                }
-            }
-
-            let Some(cursor) = next_cursor else {
-                return;
-            };
-
-            self.page = match self
-                .state
-                .view()
-                .sync_account_vault_v2_page(
-                    self.account_id,
-                    self.block_range.clone(),
-                    Some(cursor),
-                    DB_PAGE_SIZE,
-                )
-                .await
-            {
-                Ok(page) => page,
-                Err(err) => {
-                    self.send_terminal_error(database_error_to_status(&err));
-                    return;
-                },
-            };
+    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
+        if self.done {
+            return Ok(None);
         }
-    }
-
-    fn send_terminal_error(&mut self, status: Status) {
-        self.terminal_permit
-            .take()
-            .expect("terminal permit is consumed at most once")
-            .send(Err(status));
+        let page = self
+            .state
+            .view()
+            .sync_account_vault_v2_page(
+                self.account_id,
+                self.block_range.clone(),
+                self.cursor.take(),
+                DB_PAGE_SIZE,
+            )
+            .await
+            .map_err(|err| database_error_to_status(&err))?;
+        self.done = page.next_cursor.is_none();
+        self.cursor = page.next_cursor;
+        Ok((!page.values.is_empty()).then_some(page.values))
     }
 }

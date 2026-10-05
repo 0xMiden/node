@@ -2868,3 +2868,88 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
     expected.sort_by_key(Asset::id);
     assert_eq!(assets, expected);
 }
+
+#[tokio::test]
+async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let values = vault_stream_values(300);
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &values,
+    )
+    .await;
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(account_id.into()),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = Vec::new();
+    while let Some(update) = stream.message().await.unwrap() {
+        assert_eq!(update.block_num, 0);
+        actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+    }
+    actual.sort_by_key(Asset::id);
+    let mut expected: Vec<_> = values.into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    assert_eq!(actual, expected);
+}
+
+fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
+    (0_u32..count)
+        .map(|index| {
+            let mut bytes = [0; 15];
+            bytes[5..9].copy_from_slice(&index.to_le_bytes());
+            let issuer = AccountId::dummy(
+                bytes,
+                AccountIdVersion::Version1,
+                AccountType::Public,
+                AssetCallbackFlag::Disabled,
+            );
+            let asset = Asset::from(FungibleAsset::new(issuer, u64::from(index) + 1).unwrap());
+            (asset.id(), Some(asset))
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn sync_account_vault_v2_releases_admission_on_disconnect() {
+    let store = TestStore::start().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(300),
+    )
+    .await;
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    );
+    let request = proto::miden::node::v1::SyncAccountVaultV2Request {
+        block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+        account_id: Some(account_id.into()),
+    };
+    let first = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
+    let _second = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
+    let status = service.sync_account_vault_v2(Request::new(request)).await.err().unwrap();
+    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    drop(first);
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+        match service.sync_account_vault_v2(Request::new(request)).await {
+            Ok(_) => return,
+            Err(status) => assert_eq!(status.code(), tonic::Code::ResourceExhausted),
+        }
+    }
+    panic!("disconnected vault stream did not release its admission permit");
+}
