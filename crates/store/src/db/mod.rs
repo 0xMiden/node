@@ -43,6 +43,8 @@ use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::pagination::{Page, Paginated};
 pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
+    NoteSyncCursor,
+    NoteSyncPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     StorageMapCursor,
@@ -798,6 +800,22 @@ impl Db {
                 queries::select_account_storage_map_updates_v2(
                     tx, account_id, range, cursor, page_size,
                 )
+            })
+            .await
+    }
+
+    /// Loads a bounded page of matching notes, including a partial block.
+    pub async fn select_note_sync_page(
+        &self,
+        tags: Vec<u32>,
+        range: ScopedBlockRange,
+        cursor: Option<NoteSyncCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<NoteSyncPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("note sync page", move |tx| {
+                queries::select_note_sync_page(tx, &tags, range, cursor, page_size)
             })
             .await
     }
