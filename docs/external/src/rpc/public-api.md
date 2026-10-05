@@ -96,34 +96,78 @@ codes returned in gRPC status details.
 
 ## State Synchronization
 
-| Method                   | Purpose                                                                                 |
-| ------------------------ | --------------------------------------------------------------------------------------- |
-| `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
-| `SyncNotes`              | Returns note metadata and inclusion proofs for matching note tags within a block range. |
-| `SyncNullifiersV2`       | Streams every matching 16-bit-prefix nullifier through an explicit target.              |
-| `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
-| `SyncAccountVault`       | Returns historical public account vault updates within a block range.                   |
-| `SyncAccountVaultV2`     | Streams one target-state vault update per key changed within an inclusive block range.  |
-| `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
-| `SyncChainMmr`           | Returns the chain MMR delta, target header, and protocol config when required.          |
+Authenticate the `SyncChainMmr` target header and its MMR delta first. Keep its block number `N` fixed for all other
+requests in the attempt. Delta streams take `StateDeltaRange`: `from_block_exclusive = C` and `to_block_inclusive = N`
+request `(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return
+an empty delta after target validation. `SyncAccountVaultV2` also accepts the legacy inclusive `block_range`; send
+exactly one range representation.
 
-Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large sync requests.
+| Method                     | Purpose                                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------------------ |
+| `SyncChainMmr`             | Returns the chain MMR delta, authenticated target header, and required protocol config.          |
+| `SyncAccountCommitments`   | Streams one target account witness for each changed tracked account, including private accounts. |
+| `SyncNotesV2`              | Streams block frames and compact matching notes with target-anchored block paths.                |
+| `SyncNullifiersV2`         | Streams every matching 16-bit-prefix consumption through the target.                             |
+| `SyncAccountVaultV2`       | Streams the final target value of every changed vault key.                                       |
+| `SyncAccountStorageMapsV2` | Streams the final target value of every changed storage-map key.                                 |
+| `GetTransactionsById`      | Streams requested transactions committed at or before `target_block_num`.                        |
+| `SyncTransactionsV2`       | Streams complete account transaction events in the requested range.                              |
 
-## Streaming
+Verify account witnesses against the target header's account root. Compare each proven commitment with the local account
+header. Fetch `GetAccount` at `N` only for divergent accounts. Verify fetched details and the recomputed vault/storage
+commitments before applying the update. Vault deletions have no asset. Storage-map deletions have a zero word.
+`GetAccount` supplies slot changes, including removed slots, which map-key updates cannot describe.
+
+`SyncNotesV2` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
+repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
+and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note
+bodies and missing attachment content with `GetNotesById`. Reject malformed or incomplete records.
+
+Use `GetTransactionsById` for locally pending or unconfirmed transaction IDs. Returned IDs committed by `N`. An ID
+omitted from a successfully completed stream was not committed by `N`; omission alone does not mean expiration,
+conflict, or permanent rejection. Continue separate expiration and conflict checks. This endpoint does not add a
+transaction-inclusion proof. Keep the existing transaction-validation rules. Use `SyncTransactionsV2` when complete
+account event discovery is required, including recovery of previously untracked consumed public notes. Local-ID lookups
+cannot discover an externally submitted transaction whose ID the client does not know.
+
+All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
+all responses and their negative lookup outcomes. Commit one local update only after every stream and proof check
+succeeds. Discard partial results after any error and retry the same pinned range. A vault/map/account target can become
+unavailable when it leaves the retained account-history window during paging; restart the entire attempt with a newly
+authenticated target in that case.
+
+Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
+and request-list limits remain. Transaction messages fit under 4 MiB for the pinned protocol; see
+[Transaction Stream Size](./transaction-stream-size.md). The service admits up to 32 finite sync streams globally and
+two per client IP across all methods. Missing client IPs share one admission bucket. Compact streams load 256 rows per
+page and buffer 32 messages. Transaction streams load and buffer one record. A reader that blocks a producer send for 10
+seconds receives `DEADLINE_EXCEEDED`; a disconnected reader releases its permit. These are application buffer limits,
+separate from HTTP/2 and proxy buffers.
+
+## Compatibility and deployment
+
+The unary `SyncNotes`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, and `SyncNullifiers` endpoints
+remain available alongside their streams. Clients can use unary requests when a new method returns `UNIMPLEMENTED`
+before any data arrives. Midstream errors and failed proofs must fail the attempt. Do not silently fall back after a
+partial response. Keep full account transaction discovery until unknown consumed-public-note recovery has an equivalent
+verified discovery source.
+
+Local tests verify exact multi-page results, concurrent block writes, cancellation, admission release, gRPC-Web OK
+trailers, and non-OK terminal errors. Client adoption and the deployment proxy path require separate acceptance. Before
+removing compatibility support, test native and browser clients through the actual reverse proxy/load balancer: check
+stream forwarding without whole-body buffering, cancellation, terminal trailers, idle deadlines, and configured
+per-message limits. Verify the server request timeout and the body-stream lifetime separately. Record consumer versions
+and owner approval for the removal release. Repository tests do not establish production deployment acceptance.
+
+## Block Streaming
 
 | Method              | Purpose                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------- |
 | `BlockSubscription` | Streams committed blocks from `block_from`, replaying history before live blocks.     |
 | `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs. |
 
-`SyncAccountVaultV2` is a finite server stream. A client whose state includes block `C` and which is synchronizing to
-block `N` requests the inclusive range `[C + 1, N]`. An OK end-of-stream marks the result complete; a non-OK termination
-must be discarded and retried. The target `N` must remain within the server's retained account-history window, but `C`
-may be older. If the target crosses the pruning horizon before all pages are read, the server terminates the stream with
-`INVALID_ARGUMENT`; retry against a newer target.
-
-These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
-useful for indexers, explorers, and other services that need an append-only view of network progress.
+These subscriptions replicate chain data from an upstream source. They also support indexers and explorers that need an
+append-only view of network progress.
 
 ## Network Note Debugging
 
