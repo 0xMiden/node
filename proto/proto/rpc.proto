@@ -119,6 +119,9 @@ service NodeService {
     // Streams one target value for each changed public-account storage-map key.
     rpc SyncAccountStorageMapsV2(SyncAccountStorageMapsV2Request) returns (stream SyncAccountStorageMapsV2Response) {}
 
+    // Streams target-state witnesses for requested accounts changed within the pinned delta.
+    rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
+
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
@@ -1009,4 +1012,19 @@ message SyncNotesV2Response {
 message NoteBlockStart {
     blockchain.BlockHeader block_header = 1;
     primitives.MerklePath mmr_path = 2;
+}
+
+// Compare returned commitments with local account headers. Fetch GetAccount at the same target
+// only for divergent accounts. Unknown and unchanged IDs are omitted after successful completion.
+message SyncAccountCommitmentsRequest {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+// Verify this witness against the TARGET header's account root, not last_updated_at.
+// Private accounts have witnesses too. No private account details are disclosed.
+// Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
+// 4 unavailable history, 5 exhausted stream capacity.
+message SyncAccountCommitmentsResponse {
+    fixed32 last_updated_at = 1;
+    account.AccountWitness witness = 2;
 }

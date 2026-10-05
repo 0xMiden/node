@@ -435,3 +435,31 @@ impl miden_node_v1_node_service::SyncNotesV2 for Upstream {
         Err(tonic::Status::unimplemented("unused test endpoint"))
     }
 }
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncAccountCommitments for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncAccountCommitmentsResponse;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncAccountCommitmentsRequest,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountCommitmentsResponse> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}

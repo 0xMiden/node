@@ -39,6 +39,7 @@ use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 pub use crate::db::queries::{
+    AccountCommitmentChangesPage,
     AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
     NoteSyncCursor,
@@ -964,6 +965,22 @@ impl Db {
         self.reader
             .read("note sync page", move |tx| {
                 queries::select_note_sync_page(tx, &tags, range, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads changed account identities and their last update at a pinned target.
+    pub async fn select_account_commitment_changes(
+        &self,
+        ids: Vec<AccountId>,
+        range: ScopedBlockRange,
+        cursor: Option<AccountId>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountCommitmentChangesPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("account commitment changes", move |tx| {
+                queries::select_account_commitment_changes(tx, &ids, range, cursor, page_size)
             })
             .await
     }

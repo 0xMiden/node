@@ -233,3 +233,7 @@ pub(crate) use check_account_history_target::check_account_history_target;
 mod select_note_sync_page;
 pub(crate) use select_note_sync_page::select_note_sync_page;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
+
+mod select_account_commitment_changes;
+pub use select_account_commitment_changes::AccountCommitmentChangesPage;
+pub(crate) use select_account_commitment_changes::select_account_commitment_changes;

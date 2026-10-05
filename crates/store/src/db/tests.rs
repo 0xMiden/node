@@ -4839,3 +4839,92 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
         .unwrap();
     assert_eq!(before_second_block.notes.len(), 5);
 }
+
+#[test]
+fn account_commitment_stream_selects_changed_accounts_at_target() {
+    let db = &TestDb::new();
+    let public = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let private = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let unchanged = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let unknown = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    for height in 1..=6 {
+        create_block(db, height.into());
+    }
+    for (id, height) in
+        [(public, 1), (unchanged, 1), (public, 2), (private, 3), (public, 4), (public, 6)]
+    {
+        upsert_mock_account(db, id, u64::from(height), height.into()).unwrap();
+    }
+    let ids = vec![public, private, unchanged, unknown, public];
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let requested = ids.clone();
+        let page = db
+            .read(move |tx| {
+                queries::select_account_commitment_changes(
+                    tx,
+                    &requested,
+                    2.into()..=5.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.changes);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let mut expected = vec![(public, 4.into()), (private, 3.into())];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(actual, expected);
+    let absent = db
+        .read(move |tx| {
+            queries::select_account_commitment_changes(
+                tx,
+                &[unknown],
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert!(absent.changes.is_empty());
+    let first = db
+        .read(move |tx| {
+            queries::select_account_commitment_changes(
+                tx,
+                &[public, private],
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    let cursor = first.next_cursor.expect("two changed accounts require continuation");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    assert!(
+        db.read(move |tx| queries::select_account_commitment_changes(
+            tx,
+            &[public, private],
+            0.into()..=5.into(),
+            Some(cursor),
+            NonZeroUsize::MIN
+        ))
+        .is_ok()
+    );
+    create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
+    prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
+    assert_matches!(
+        db.read(move |tx| queries::select_account_commitment_changes(
+            tx,
+            &[public],
+            0.into()..=5.into(),
+            None,
+            NonZeroUsize::MIN
+        )),
+        Err(DatabaseError::BlockPruned { .. })
+    );
+}

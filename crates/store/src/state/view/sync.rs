@@ -248,6 +248,18 @@ impl StateView {
             .await
     }
 
+    /// Loads changed-account identities at the requested target; witnesses must use the same view.
+    pub async fn sync_account_commitments_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<AccountId>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::db::AccountCommitmentChangesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        self.db.select_account_commitment_changes(ids, range, cursor, page_size).await
+    }
+
     /// Returns storage map values for syncing within a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this

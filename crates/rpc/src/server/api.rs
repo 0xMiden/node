@@ -97,6 +97,7 @@ mod submit_auth_tx_batch;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription;
+mod sync_account_commitments;
 mod sync_account_storage_maps;
 mod sync_account_storage_maps_v2;
 mod sync_account_vault;
@@ -344,6 +345,10 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
             ),
             (
                 "SyncTransactions".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
+            ),
+            (
+                "SyncAccountCommitments".into(),
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),

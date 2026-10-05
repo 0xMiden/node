@@ -2240,6 +2240,15 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
+    assert_eq!(
+        limits.endpoints["SyncNotesV2"].parameters[QueryParamNoteTagLimit::PARAM_NAME],
+        QueryParamNoteTagLimit::LIMIT as u32
+    );
+    assert_eq!(
+        limits.endpoints["SyncAccountCommitments"].parameters[QueryParamAccountIdLimit::PARAM_NAME],
+        QueryParamAccountIdLimit::LIMIT as u32
+    );
+
     // The account vault and storage-map endpoints accept a singular account_id, not a repeated
     // list, so they do not have list parameter limits.
     assert!(
@@ -3349,4 +3358,165 @@ async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
         assert_eq!(status.details(), &[detail]);
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn account_commitment_stream_returns_authenticated_public_and_private_witnesses() {
+    use tokio_stream::StreamExt;
+    let mut builder = MockChainBuilder::new();
+    let public = builder.add_existing_wallet(Auth::IncrNonce).unwrap();
+    let private = AccountBuilder::new([9; 32])
+        .account_type(AccountType::Private)
+        .with_component(BasicWallet)
+        .with_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap();
+    builder.add_account(private.clone()).unwrap();
+    let chain = builder.build().unwrap();
+    let mut store =
+        TestStore::start_from_mock_genesis(&chain.latest_block(), chain.protocol_config()).await;
+    let root = chain.latest_block().header().account_root();
+    let later = account_commitment_later_block(
+        &store,
+        &chain.latest_block(),
+        chain.protocol_config(),
+        private.id(),
+    )
+    .await;
+    assert_ne!(later.header().account_root(), root);
+    store.writer.apply_block(later, None).await.unwrap();
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let unknown = AccountId::dummy(
+        [8; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let mut stream = service
+        .sync_account_commitments(Request::new(
+            proto::miden::node::v1::SyncAccountCommitmentsRequest {
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: Some(0),
+                }),
+                account_ids: vec![
+                    public.id().into(),
+                    private.id().into(),
+                    unknown.into(),
+                    public.id().into(),
+                ],
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut found = HashMap::new();
+    while let Some(item) = stream.next().await {
+        let item = item.unwrap();
+        assert_eq!(item.last_updated_at, 0);
+        let witness = item.witness.unwrap().decode_fields().unwrap().verify().unwrap();
+        let leaf = witness.leaf();
+        witness.path().verify(leaf.index().position(), leaf.hash(), &root).unwrap();
+        assert!(found.insert(witness.id(), witness.state_commitment()).is_none());
+    }
+    assert_eq!(
+        found,
+        HashMap::from([
+            (public.id(), public.to_commitment()),
+            (private.id(), private.to_commitment())
+        ])
+    );
+}
+
+async fn account_commitment_later_block(
+    store: &TestStore,
+    genesis: &ProvenBlock,
+    config: &ProtocolConfig,
+    account: AccountId,
+) -> SignedBlock {
+    use miden_protocol::account::AccountUpdateDetails;
+    use miden_protocol::block::account_tree::AccountTree;
+    use miden_protocol::block::{BlockAccountUpdate, BlockBody, BlockHeader};
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+    let replacement = Word::from([123_u32, 0, 0, 0]);
+    let entries = genesis.body().updated_accounts().iter().map(|update| {
+        (
+            update.account_id(),
+            if update.account_id() == account {
+                replacement
+            } else {
+                update.final_state_commitment()
+            },
+        )
+    });
+    let root = AccountTree::with_entries(entries).unwrap().root();
+    let update =
+        BlockAccountUpdate::new(account, replacement, AccountUpdateDetails::Private).unwrap();
+    let body = BlockBody::new(
+        vec![update],
+        vec![],
+        vec![],
+        OrderedTransactionHeaders::new_unchecked(vec![]),
+    )
+    .unwrap();
+    let base = next_block_with_protocol_config(store, config).await;
+    let h = base.header();
+    let header = BlockHeader::new(
+        h.prev_block_commitment(),
+        h.block_num(),
+        h.chain_commitment(),
+        root,
+        h.nullifier_root(),
+        body.compute_block_note_tree().root(),
+        body.transaction_commitment(),
+        h.validator_config().clone(),
+        h.fee_parameters().clone(),
+        h.protocol_config_commitment(),
+        None,
+        h.timestamp(),
+    );
+    SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap())
+}
+
+#[tokio::test]
+async fn account_commitment_stream_validates_lists_and_future_empty_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: None,
+            account_ids: vec![proto::account::AccountId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    let status = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.details(), &[3]);
+    let mut stream = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(0),
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
 }
