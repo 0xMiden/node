@@ -79,8 +79,7 @@ Give `--ticket-directory` a new path when restarting the board because it will n
 validator loses its private state, cannot rejoin, or finds a different transcript, discard the ceremony and start again
 with fresh identities and sessions. Each validator collects the signed registrations and derives the common files from
 its expected threshold and epoch. It rejects different board copies, checks every later artifact, and validates its
-storage key bundle against the transcript accepted by every validator. A board directory from an older format cannot be
-reopened; start that ceremony again in a new directory.
+storage key bundle against the transcript accepted by every validator.
 
 The commands below provide a manual recovery path. First, each operator creates a DKG identity for the agreed
 storage-key epoch and sends `registration.toml` to the coordinator. The registration proves ownership of the DKG

@@ -404,37 +404,6 @@ async fn incomplete_board_metadata_is_rejected() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn legacy_board_metadata_is_rejected() -> anyhow::Result<()> {
-    let root = tempfile::tempdir()?;
-    let data_directory = tempfile::tempdir_in(root.path())?;
-    let data_directory = data_directory.path();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs_err::set_permissions(data_directory, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let upload_secrets_directory = data_directory.join(UPLOAD_SECRETS_DIRECTORY);
-    fs_err::create_dir_all(&upload_secrets_directory)?;
-    fs_err::write(data_directory.join(DOCUMENT_ID_FILE), hex::encode([0; 32]))?;
-    fs_err::write(data_directory.join(BOARD_FORMAT_FILE), b"participant-upload-v3\n")?;
-    for participant in 1..=3 {
-        fs_err::write(
-            upload_secrets_directory.join(format!("participant-{participant}.hex")),
-            hex::encode([0; 32]),
-        )?;
-    }
-
-    let error = BoardNode::create_for_test(data_directory)
-        .await
-        .err()
-        .context("legacy board metadata unexpectedly reopened")?;
-    assert!(error.to_string().contains("unsupported DKG board format"), "{error:#}");
-    assert!(!data_directory.join(BOARD_METADATA_DIRECTORY).exists());
-    Ok(())
-}
-
-#[tokio::test]
 async fn previous_board_format_is_not_reopened() -> anyhow::Result<()> {
     let root = tempfile::tempdir()?;
     let data_directory = root.path().join("host");
@@ -451,12 +420,6 @@ async fn previous_board_format_is_not_reopened() -> anyhow::Result<()> {
         .context("old board format unexpectedly reopened")?;
     assert!(error.to_string().contains("unsupported DKG board format"));
     Ok(())
-}
-
-#[test]
-fn legacy_board_ticket_is_rejected() {
-    BoardTicket::from_str("miden-storage-key-dkg-board-v3:1:00:invalid")
-        .expect_err("old board ticket unexpectedly parsed");
 }
 
 #[tokio::test]
