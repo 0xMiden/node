@@ -2764,6 +2764,7 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: block_range(),
             account_id: account_id(),
+            range: None,
         })
         .await
         .expect_err("sync_account_vault_v2 should reject block_to beyond chain tip");
@@ -2793,6 +2794,7 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
     let status = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: None,
+            range: None,
             account_id: Some(public_account.into()),
         })
         .await
@@ -2809,6 +2811,7 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(private_account.into()),
+            range: None,
         })
         .await
         .expect_err("sync_account_vault_v2 should reject private accounts");
@@ -2818,6 +2821,7 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(public_account.into()),
+            range: None,
         })
         .await
         .expect("sync_account_vault_v2 should accept a public account at the chain tip")
@@ -2844,6 +2848,7 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(account_id.into()),
+            range: None,
         })
         .await
         .expect("sync_account_vault_v2 should return a stream")
@@ -2885,6 +2890,7 @@ async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
             block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(account_id.into()),
+            range: None,
         })
         .await
         .unwrap()
@@ -2918,6 +2924,86 @@ fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
 }
 
 #[tokio::test]
+async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(2),
+    )
+    .await;
+    for (from, expected) in [(None, 2), (Some(0), 0)] {
+        let mut stream = client
+            .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: from,
+                    to_block_inclusive: Some(0),
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut count = 0;
+        while stream.message().await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, expected);
+    }
+}
+
+#[tokio::test]
+async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for (request, expected_detail) in [
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: Some(proto::miden::node::v1::BlockRange {
+                    block_from: 0,
+                    block_to: 0,
+                }),
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: Some(0),
+                }),
+            },
+            2,
+        ),
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: Some(1),
+                    to_block_inclusive: Some(1),
+                }),
+            },
+            3,
+        ),
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: None,
+                }),
+            },
+            2,
+        ),
+    ] {
+        let error = client.sync_account_vault_v2(request).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.details(), &[expected_detail]);
+    }
+}
+
+#[tokio::test]
 async fn sync_account_vault_v2_releases_admission_on_disconnect() {
     let store = TestStore::start().await;
     let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
@@ -2938,11 +3024,13 @@ async fn sync_account_vault_v2_releases_admission_on_disconnect() {
     let request = proto::miden::node::v1::SyncAccountVaultV2Request {
         block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
         account_id: Some(account_id.into()),
+        range: None,
     };
     let first = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
     let _second = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
     let status = service.sync_account_vault_v2(Request::new(request)).await.err().unwrap();
     assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    assert_eq!(status.details(), &[5]);
     drop(first);
     for _ in 0..100 {
         tokio::task::yield_now().await;

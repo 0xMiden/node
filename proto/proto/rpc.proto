@@ -557,6 +557,11 @@ message SyncAccountVaultRequest {
 }
 
 // Account vault synchronization request with squashed, server-streaming responses.
+//
+// Pin the target to the block authenticated by SyncChainMmr. Apply updates only after an OK
+// end-of-stream; discard partial updates on error and retry the same target while retained.
+// Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
+// 4 unavailable history, 5 exhausted stream capacity, 6 non-public account.
 message SyncAccountVaultV2Request {
     // Inclusive range of vault updates to consider.
     //
@@ -564,10 +569,13 @@ message SyncAccountVaultV2Request {
     // [C + 1, N]. The server emits at most one update per vault key: the value of that key at
     // `block_to`, provided the key changed within this range. `block_to` must be within the
     // server's retained account-history window; `block_from` may be older.
-    BlockRange block_range = 1;
+    optional BlockRange block_range = 1;
 
     // Public account whose asset vault should be synchronized.
     account.AccountId account_id = 2;
+
+    // Explicit synchronization delta. Specify exactly one range representation.
+    optional StateDeltaRange range = 3;
 }
 
 message SyncAccountVaultResponse {
@@ -797,6 +805,15 @@ message BlockRange {
 
     // Block number up to which to check (inclusive).
     fixed32 block_to = 2;
+}
+
+// Changes after the client's current block, materialized at an explicit target.
+message StateDeltaRange {
+    // Absence includes genesis. A present value excludes that block.
+    optional fixed32 from_block_exclusive = 1;
+
+    // Required by validation. Zero selects genesis.
+    optional fixed32 to_block_inclusive = 2;
 }
 
 // PAGINATION INFO

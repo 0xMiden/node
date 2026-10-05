@@ -70,3 +70,25 @@ error_codes!(SyncChainMmrErrorCode { FutureBlock = 2 });
 pub(super) fn internal_error(message: impl Into<String>) -> Status {
     Status::with_details(Code::Internal, message, vec![0].into())
 }
+
+// New finite streams use an independent method namespace; existing unary assignments stay fixed.
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(super) enum SyncAccountVaultV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    ResourceExhausted = 5,
+    AccountNotPublic = 6,
+}
+
+impl SyncAccountVaultV2ErrorCode {
+    pub(super) fn status(self, message: impl Into<String>) -> Status {
+        let code = match self {
+            Self::ResourceExhausted => Code::ResourceExhausted,
+            _ => Code::InvalidArgument,
+        };
+        Status::with_details(code, message.into(), vec![self as u8].into())
+    }
+}
