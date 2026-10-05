@@ -741,9 +741,6 @@ impl BoardRuntime {
                 metadata.permissions().mode() & 0o777
             );
         }
-        #[cfg(not(unix))]
-        durably_create_directory_all(data_directory)
-            .context("failed to create Iroh data directory")?;
         let secret = load_or_create_endpoint_secret(data_directory)?;
         let builder = if use_network_services {
             Endpoint::builder(presets::N0)
