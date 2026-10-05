@@ -14,6 +14,8 @@ use crate::db::queries::{
     AccountVaultAssets,
     NoteSyncMulti,
     NullifiersByPrefix,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
     StorageMapValuesPage,
     TransactionsRecords,
 };
@@ -210,6 +212,20 @@ impl StateView {
         let block_range = self.scope_range(block_range)?;
         self.db
             .select_account_vault_updates_v2(account_id, block_range, cursor, page_size)
+            .await
+    }
+
+    /// Loads a bounded page of squashed storage-map updates at the requested target.
+    pub async fn sync_account_storage_maps_v2_page(
+        &self,
+        account_id: AccountId,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<StorageMapCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<StorageMapUpdatesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        self.db
+            .select_account_storage_map_updates_v2(account_id, range, cursor, page_size)
             .await
     }
 

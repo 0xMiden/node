@@ -45,6 +45,8 @@ pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
@@ -781,6 +783,25 @@ impl Db {
             })
             .await
     }
+
+    /// Selects one target value per changed storage-map key in a bounded page.
+    pub async fn select_account_storage_map_updates_v2(
+        &self,
+        account_id: AccountId,
+        block_range: ScopedBlockRange,
+        cursor: Option<StorageMapCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<StorageMapUpdatesPage> {
+        let range = block_range.into_inner();
+        self.reader
+            .read("account storage map sync v2", move |tx| {
+                queries::select_account_storage_map_updates_v2(
+                    tx, account_id, range, cursor, page_size,
+                )
+            })
+            .await
+    }
+
     /// Returns the script for a note by its root.
     pub async fn select_note_script_by_root(&self, root: Word) -> Result<Option<NoteScript>> {
         self.reader
