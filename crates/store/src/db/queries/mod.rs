@@ -5,10 +5,6 @@
 //! through [`DbReader::read`](miden_node_db::sqlite::DbReader::read) /
 //! [`DbWriter::write`](miden_node_db::sqlite::DbWriter::write). One module per query, holding the
 //! function and the `.sql` file it executes.
-//!
-//! The store is being migrated to the framework incrementally: every write goes through the
-//! modules here, while most reads still run on the diesel layer in [`crate::db::models`]. Read
-//! queries move here one batch at a time until the diesel layer is removed.
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
@@ -61,14 +57,34 @@ struct InvalidNetworkAccountType(i64);
 // BLOCK QUERIES
 // =================================================================================================
 
+mod block_header_row;
+
 mod insert_block_header;
 pub(crate) use insert_block_header::insert_block_header;
+
+mod select_all_block_header_commitments;
+pub(crate) use select_all_block_header_commitments::select_all_block_header_commitments;
+
+mod select_block_header_and_signatures_by_block_num;
+pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
+
+mod select_block_header_by_block_num;
+pub(crate) use select_block_header_by_block_num::select_block_header_by_block_num;
+
+mod select_block_headers;
+pub(crate) use select_block_headers::select_block_headers;
 
 // PROTOCOL CONFIG QUERIES
 // =================================================================================================
 
 mod insert_protocol_config;
 pub(crate) use insert_protocol_config::insert_protocol_config;
+
+mod select_protocol_config_by_commitment;
+pub(crate) use select_protocol_config_by_commitment::select_protocol_config_by_commitment;
+
+mod select_protocol_config_commitment_at;
+pub(crate) use select_protocol_config_commitment_at::select_protocol_config_commitment_at;
 
 // NOTE QUERIES
 // =================================================================================================
@@ -79,17 +95,60 @@ pub(crate) use insert_note_scripts::insert_note_scripts;
 mod insert_notes;
 pub(crate) use insert_notes::insert_notes;
 
+mod note_row;
+
+mod get_note_sync_multi;
+pub(crate) use get_note_sync_multi::get_note_sync_multi;
+#[cfg(test)]
+pub(crate) use get_note_sync_multi::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
+
+mod select_note_script_by_root;
+pub(crate) use select_note_script_by_root::select_note_script_by_root;
+
+mod select_notes_by_id;
+pub(crate) use select_notes_by_id::select_notes_by_id;
+
+mod select_notes_since_block_by_tag;
+pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
+
+mod select_existing_note_ids;
+pub(crate) use select_existing_note_ids::select_existing_note_ids;
+
+mod select_note_ids_by_nullifier;
+pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
+
+mod select_note_inclusion_proofs;
+pub(crate) use select_note_inclusion_proofs::select_note_inclusion_proofs;
+
+mod select_note_sync_records;
+pub(crate) use select_note_sync_records::select_note_sync_records;
+
 // NULLIFIER QUERIES
 // =================================================================================================
 
 mod insert_nullifiers_for_block;
 pub(crate) use insert_nullifiers_for_block::insert_nullifiers_for_block;
 
+#[cfg(test)]
+mod select_all_nullifiers;
+#[cfg(test)]
+pub(crate) use select_all_nullifiers::select_all_nullifiers;
+
+mod select_nullifiers_by_prefix;
+pub(crate) use select_nullifiers_by_prefix::select_nullifiers_by_prefix;
+
+mod select_nullifiers_paged;
+pub use select_nullifiers_paged::NullifiersPage;
+pub(crate) use select_nullifiers_paged::select_nullifiers_paged;
+
 // TRANSACTION QUERIES
 // =================================================================================================
 
 mod insert_transactions;
 pub(crate) use insert_transactions::insert_transactions;
+
+mod select_transactions_records;
+pub(crate) use select_transactions_records::select_transactions_records;
 
 // ACCOUNT QUERIES
 // =================================================================================================
@@ -111,20 +170,50 @@ pub use upsert_accounts::{PrecomputedPublicAccountState, PrecomputedPublicAccoun
 mod filter_network_accounts;
 pub(crate) use filter_network_accounts::filter_network_accounts;
 
+mod select_account_commitments_paged;
+pub use select_account_commitments_paged::AccountCommitmentsPage;
+pub(crate) use select_account_commitments_paged::select_account_commitments_paged;
+
+mod select_public_account_ids_paged;
+pub use select_public_account_ids_paged::PublicAccountIdsPage;
+pub(crate) use select_public_account_ids_paged::select_public_account_ids_paged;
+
+mod select_public_account_state_roots_paged;
+pub use select_public_account_state_roots_paged::PublicAccountStateRootsPage;
+pub(crate) use select_public_account_state_roots_paged::select_public_account_state_roots_paged;
+
 mod select_account_header_with_storage_header_at_block;
 pub(crate) use select_account_header_with_storage_header_at_block::select_account_header_with_storage_header_at_block;
 
 mod select_vault_at_block;
 pub(crate) use select_vault_at_block::select_vault_at_block;
 
+mod account_row;
+
+mod select_account;
+pub(crate) use select_account::select_account;
+
+mod select_account_code_by_commitment;
+pub(crate) use select_account_code_by_commitment::select_account_code_by_commitment;
+
+mod select_account_storage_map_values_paged;
 #[cfg(test)]
-mod select_full_account;
-#[cfg(test)]
-pub(crate) use select_full_account::select_full_account;
+pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
+pub use select_account_storage_map_values_paged::StorageMapValuesPage;
+pub(crate) use select_account_storage_map_values_paged::select_account_storage_map_values_paged;
+
+mod select_account_vault_assets;
+pub(crate) use select_account_vault_assets::select_account_vault_assets;
 
 #[cfg(test)]
-mod select_latest_storage;
+mod select_all_accounts;
 #[cfg(test)]
+pub(crate) use select_all_accounts::select_all_accounts;
+
+mod select_full_account;
+pub(crate) use select_full_account::select_full_account;
+
+mod select_latest_storage;
 pub(crate) use select_latest_storage::select_latest_storage;
 
 // BLOCK APPLICATION

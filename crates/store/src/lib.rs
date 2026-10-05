@@ -17,8 +17,7 @@ pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
-pub use db::models::conv::SqlTypeConvert;
-pub use db::models::queries::StorageMapValuesPage;
+pub use db::queries::StorageMapValuesPage;
 pub use db::{
     AccountVaultValue,
     DatabaseOptions,
