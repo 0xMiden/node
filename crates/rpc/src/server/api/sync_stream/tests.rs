@@ -221,3 +221,39 @@ async fn disconnect_cancels_pending_page_and_releases_admission() {
     tokio::task::yield_now().await;
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
+
+#[tokio::test]
+async fn completed_producer_keeps_unread_response_admitted_until_eof_or_drop() {
+    let limiter = SyncStreamLimiter::new(1, 1);
+    let mut stream = SyncStream::start(
+        Pages::new([Ok(vec![1])]),
+        limiter.acquire(Some(client(1))).unwrap(),
+        1,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(limiter.acquire(Some(client(1))).err().unwrap().code(), Code::ResourceExhausted);
+    assert_eq!(stream.next().await.unwrap().unwrap(), 1);
+    assert!(stream.next().await.is_none());
+    let mut stream = SyncStream::start(
+        Pages::new([Ok(vec![2])]),
+        limiter.acquire(Some(client(1))).unwrap(),
+        1,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(limiter.acquire(Some(client(2))).err().unwrap().code(), Code::ResourceExhausted);
+    assert_eq!(stream.next().await.unwrap().unwrap(), 2);
+    // Consuming data alone does not signal successful termination.
+    assert!(limiter.acquire(Some(client(1))).is_err());
+    drop(stream);
+    assert!(limiter.acquire(Some(client(1))).is_ok());
+}

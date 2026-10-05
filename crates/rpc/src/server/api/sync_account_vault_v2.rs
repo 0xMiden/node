@@ -9,10 +9,9 @@ use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_node_utils::grpc::ClientIp;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::error_codes::SyncAccountVaultV2ErrorCode as ErrorCode;
-use super::sync_stream::{Paginator, SyncStream};
+use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -29,7 +28,7 @@ type RequestInput = (AccountId, SyncRange);
 impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcService {
     type Input = RequestInput;
     type Item = AccountVaultValue;
-    type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
+    type ItemStream = SyncResponseStream<Self::Item>;
 
     fn decode(
         request: proto::miden::node::v1::SyncAccountVaultV2Request,

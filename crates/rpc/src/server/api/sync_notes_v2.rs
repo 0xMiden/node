@@ -10,11 +10,10 @@ use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use miden_protocol::block::BlockNumber;
 use proto::miden::node::v1::sync_notes_v2_response::Item;
 use proto::miden::node::v1::{NoteBlockStart, SyncNotesV2Response};
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::error_codes::SyncNotesV2ErrorCode as ErrorCode;
 use super::sync_notes::note_sync_record_to_proto;
-use super::sync_stream::{Paginator, SyncStream};
+use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
 const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
@@ -25,7 +24,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
     type Input = (SyncRange, Vec<u32>);
     type Item = SyncNotesV2Response;
-    type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
+    type ItemStream = SyncResponseStream<Self::Item>;
 
     fn decode(request: proto::miden::node::v1::SyncNotesV2Request) -> tonic::Result<Self::Input> {
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;

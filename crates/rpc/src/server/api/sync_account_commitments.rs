@@ -10,10 +10,9 @@ use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_protocol::account::AccountId;
 use proto::miden::node::v1::SyncAccountCommitmentsResponse;
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::error_codes::SyncAccountCommitmentsErrorCode as ErrorCode;
-use super::sync_stream::{Paginator, SyncStream};
+use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
 const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
@@ -24,7 +23,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcService {
     type Input = (SyncRange, Vec<AccountId>);
     type Item = SyncAccountCommitmentsResponse;
-    type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
+    type ItemStream = SyncResponseStream<Self::Item>;
 
     fn decode(
         request: proto::miden::node::v1::SyncAccountCommitmentsRequest,

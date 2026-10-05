@@ -8,17 +8,16 @@ use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamTransactionIdLimit;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
-use tokio_stream::wrappers::ReceiverStream;
 
 use super::error_codes::GetTransactionsByIdErrorCode as ErrorCode;
-use super::sync_stream::{Paginator, SyncStream};
+use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcService {
     type Input = (BlockNumber, Vec<TransactionId>);
     type Item = TransactionRecord;
-    type ItemStream = ReceiverStream<tonic::Result<Self::Item>>;
+    type ItemStream = SyncResponseStream<Self::Item>;
     fn decode(
         request: proto::miden::node::v1::GetTransactionsByIdRequest,
     ) -> tonic::Result<Self::Input> {
