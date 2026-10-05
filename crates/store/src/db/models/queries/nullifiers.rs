@@ -90,17 +90,15 @@ pub(crate) fn select_nullifiers_by_prefix(
     QueryParamNullifierPrefixLimit::check(nullifier_prefixes.len())?;
 
     let prefixes = nullifier_prefixes.iter().map(|prefix| nullifier_prefix_to_raw_sql(*prefix));
-    let raw = SelectDsl::select(
-        schema::nullifiers::table,
-        NullifierWithoutPrefixRawRow::as_select(),
-    )
-    .filter(schema::nullifiers::nullifier_prefix.eq_any(prefixes))
-    .filter(schema::nullifiers::block_num.ge(block_range.start().to_raw_sql()))
-    .filter(schema::nullifiers::block_num.le(block_range.end().to_raw_sql()))
-    .order(schema::nullifiers::block_num.asc())
-    // Request an additional row so we can determine whether this is the last page.
-    .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64"))
-    .load::<NullifierWithoutPrefixRawRow>(conn)?;
+    let raw =
+        SelectDsl::select(schema::nullifiers::table, NullifierWithoutPrefixRawRow::as_select())
+            .filter(schema::nullifiers::nullifier_prefix.eq_any(prefixes))
+            .filter(schema::nullifiers::block_num.ge(block_range.start().to_raw_sql()))
+            .filter(schema::nullifiers::block_num.le(block_range.end().to_raw_sql()))
+            .order(schema::nullifiers::block_num.asc())
+            // Request an additional row so we can determine whether this is the last page.
+            .limit(i64::try_from(MAX_ROWS + 1).expect("limit fits within i64"))
+            .load::<NullifierWithoutPrefixRawRow>(conn)?;
 
     // Discard the last block in the response (assumes more than one block may be present)
     if let Some(last) = raw.last()
