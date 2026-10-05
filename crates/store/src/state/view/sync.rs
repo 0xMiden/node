@@ -260,6 +260,20 @@ impl StateView {
         self.db.select_account_commitment_changes(ids, range, cursor, page_size).await
     }
 
+    /// Looks up only transactions committed at or before the explicit target.
+    pub async fn get_transactions_by_id_page(
+        &self,
+        ids: Vec<miden_protocol::transaction::TransactionId>,
+        target: BlockNumber,
+        cursor: Option<miden_protocol::transaction::TransactionId>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::db::TransactionsByIdPage, DatabaseError> {
+        let target = self
+            .scope_block(target)
+            .ok_or(crate::RangeBeyondTip { chain_tip: *self.tip(), block_to: target })?;
+        self.db.select_transactions_by_id(ids, target, cursor, page_size).await
+    }
+
     /// Returns storage map values for syncing within a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this

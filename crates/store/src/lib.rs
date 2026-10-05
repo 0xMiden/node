@@ -171,6 +171,25 @@ pub mod test_support {
             .await
             .expect("insert test storage-map values");
     }
+    /// Inserts transaction headers for downstream reconciliation tests.
+    pub async fn seed_transactions(
+        db_path: &Path,
+        block: BlockNumber,
+        headers: Vec<miden_protocol::transaction::TransactionHeader>,
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed transactions", move |tx| {
+                crate::db::queries::insert_transactions(
+                    tx,
+                    block,
+                    &miden_protocol::transaction::OrderedTransactionHeaders::new_unchecked(headers),
+                )
+            })
+            .await
+            .expect("insert test transactions");
+    }
 }
 // CONSTANTS
 // =================================================================================================

@@ -81,9 +81,11 @@ use miden_protocol::testing::account_id::{
 };
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
+    InputNotes,
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    TransactionHeader,
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::Deserializable;
@@ -3519,4 +3521,150 @@ async fn account_commitment_stream_validates_lists_and_future_empty_targets() {
         .unwrap()
         .into_inner();
     assert!(stream.message().await.unwrap().is_none());
+}
+
+fn transaction_stream_fixture(account: AccountId, number: u32) -> TransactionHeader {
+    TransactionHeader::new(
+        account,
+        Word::from([number, 0, 0, 0]),
+        Word::from([number + 1, 0, 0, 0]),
+        InputNotes::new_unchecked(vec![]),
+        vec![],
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn transaction_lookup_stream_reconciles_ids_and_empty_success() {
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    let headers: Vec<_> = (1..=3).map(|n| transaction_stream_fixture(account, n)).collect();
+    miden_node_store::test_support::seed_transactions(&path, BlockNumber::GENESIS, headers.clone())
+        .await;
+    let missing = transaction_stream_fixture(account, 9).id();
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![
+                headers[0].id().into(),
+                headers[2].id().into(),
+                missing.into(),
+                headers[0].id().into(),
+            ],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = vec![];
+    while let Some(item) = stream.message().await.unwrap() {
+        let record = item.transaction.unwrap();
+        assert_eq!(record.block_num, 0);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        actual.push(header.id());
+    }
+    actual.sort_unstable();
+    let mut expected = vec![headers[0].id(), headers[2].id()];
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![missing.into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn transaction_lookup_stream_validates_raw_ids_and_target_presence() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: None,
+            transaction_ids: vec![proto::transaction::TransactionId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    for (target, detail) in [(None, 2), (Some(1), 3)] {
+        let status = client
+            .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+                target_block_num: target,
+                transaction_ids: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
+#[tokio::test]
+async fn transaction_lookup_stream_reports_a_late_invalid_record_as_error() {
+    use miden_protocol::note::{
+        NoteAttachments,
+        NoteDetailsCommitment,
+        NoteHeader,
+        NoteMetadata,
+        PartialNoteMetadata,
+    };
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(account, NoteType::Public),
+        &NoteAttachments::empty(),
+    );
+    let outputs = (0..=miden_protocol::MAX_OUTPUT_NOTES_PER_TX)
+        .map(|index| {
+            NoteHeader::new(
+                NoteDetailsCommitment::from_raw(Word::from([
+                    u32::try_from(index).unwrap(),
+                    8,
+                    0,
+                    0,
+                ])),
+                metadata,
+            )
+        })
+        .collect();
+    let invalid = TransactionHeader::new(
+        account,
+        Word::from([99_u32, 0, 0, 0]),
+        Word::from([100_u32, 0, 0, 0]),
+        InputNotes::new_unchecked(vec![]),
+        outputs,
+    )
+    .unwrap();
+    let valid = (1..1000)
+        .map(|number| transaction_stream_fixture(account, number))
+        .find(|header| header.id().as_bytes() < invalid.id().as_bytes())
+        .unwrap();
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    miden_node_store::test_support::seed_transactions(
+        &path,
+        BlockNumber::GENESIS,
+        vec![valid.clone(), invalid.clone()],
+    )
+    .await;
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![valid.id().into(), invalid.id().into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let first = stream.message().await.unwrap().unwrap().transaction.unwrap();
+    assert_eq!(first.header.unwrap().transaction_id, Some(valid.id().into()));
+    let error = stream.message().await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert_eq!(error.details(), &[0]);
 }

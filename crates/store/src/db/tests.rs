@@ -4250,12 +4250,24 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     let expected = TransactionRecord {
         block_num,
-        header: tx,
+        header: tx.clone(),
         output_note_proofs: vec![],
         consumed_note_refs: vec![],
     };
 
     assert_eq!(*record, expected);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::select_transactions_by_id(
+                tx_db,
+                &[tx.id()],
+                block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, vec![expected]);
 }
 
 /// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
@@ -4306,6 +4318,18 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
     let record = retrieved.1.first().expect("entry should exist");
 
     assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::select_transactions_by_id(
+                tx_db,
+                &[tx.id()],
+                block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, retrieved.1);
 }
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
@@ -4927,4 +4951,69 @@ fn account_commitment_stream_selects_changed_accounts_at_target() {
         )),
         Err(DatabaseError::BlockPruned { .. })
     );
+}
+
+#[test]
+fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let transactions: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
+    for height in 1..=2 {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+    }
+    insert_transactions(
+        db,
+        1.into(),
+        &OrderedTransactionHeaders::new_unchecked(transactions[..3].to_vec()),
+    )
+    .unwrap();
+    insert_transactions(
+        db,
+        2.into(),
+        &OrderedTransactionHeaders::new_unchecked(vec![transactions[3].clone()]),
+    )
+    .unwrap();
+    let missing = mock_block_transaction(account, 9).id();
+    let ids = vec![
+        transactions[0].id(),
+        transactions[2].id(),
+        transactions[3].id(),
+        missing,
+        transactions[0].id(),
+    ];
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let requested = ids.clone();
+        let page = db
+            .read(move |tx| {
+                queries::select_transactions_by_id(
+                    tx,
+                    &requested,
+                    1.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.records.into_iter().map(|r| {
+            assert_eq!(r.block_num, 1.into());
+            r.header
+        }));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let mut expected = vec![transactions[0].clone(), transactions[2].clone()];
+    expected.sort_by_key(TransactionHeader::id);
+    actual.sort_by_key(TransactionHeader::id);
+    assert_eq!(actual, expected);
+    let page = db
+        .read(move |tx| {
+            queries::select_transactions_by_id(tx, &ids, 0.into(), None, NonZeroUsize::MIN)
+        })
+        .unwrap();
+    assert!(page.records.is_empty());
 }

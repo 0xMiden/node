@@ -237,3 +237,9 @@ pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
 mod select_account_commitment_changes;
 pub use select_account_commitment_changes::AccountCommitmentChangesPage;
 pub(crate) use select_account_commitment_changes::select_account_commitment_changes;
+
+mod select_transactions_by_id;
+pub use select_transactions_by_id::TransactionsByIdPage;
+pub(crate) use select_transactions_by_id::select_transactions_by_id;
+
+mod transaction_record;

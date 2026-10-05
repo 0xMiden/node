@@ -122,6 +122,9 @@ service NodeService {
     // Streams target-state witnesses for requested accounts changed within the pinned delta.
     rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
 
+    // Streams requested transactions committed at or before the explicit target.
+    rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
+
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
@@ -1028,3 +1031,14 @@ message SyncAccountCommitmentsResponse {
     fixed32 last_updated_at = 1;
     account.AccountWitness witness = 2;
 }
+
+// Zero selects genesis. Absence is invalid. IDs omitted from an OK-completed stream were not
+// committed by the target. A failed stream gives no conclusion about absent IDs.
+message GetTransactionsByIdRequest {
+    optional fixed32 target_block_num = 1;
+    repeated transaction.TransactionId transaction_ids = 2;
+}
+// One complete bounded record per message; aggregate stream size is unrestricted.
+// Status detail byte: 1 malformed request, 2 missing target, 3 future target,
+// 5 exhausted stream capacity. No transaction inclusion proof is added by this lookup.
+message GetTransactionsByIdResponse { TransactionRecord transaction = 1; }
