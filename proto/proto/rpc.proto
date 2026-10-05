@@ -86,7 +86,10 @@ service NodeService {
     // --------------------------------------------------------------------------------------------
 
     // Returns transactions records for specific accounts within a block range.
-    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {}
+    // Deprecated: use SyncTransactionsV2. Kept for clients that have not adopted streams.
+    rpc SyncTransactions(SyncTransactionsRequest) returns (SyncTransactionsResponse) {
+        option deprecated = true;
+    }
 
     // Returns info which can be used by the client to sync up to the tip of chain for the notes
     // they are interested in.
@@ -97,12 +100,18 @@ service NodeService {
     //
     // If `response.pagination_info.block_num` is less than the requested range end, make
     // another request starting from `response.pagination_info.block_num + 1` to continue syncing.
-    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {}
+    // Deprecated: use SyncNotesV2. Kept for clients that have not adopted streams.
+    rpc SyncNotes(SyncNotesRequest) returns (SyncNotesResponse) {
+        option deprecated = true;
+    }
 
     // Returns a list of nullifiers that match the specified prefixes and are recorded in the node.
     //
     // Note that only 16-bit prefixes are supported at this time.
-    rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
+    // Deprecated: use SyncNullifiersV2. Kept for clients that have not adopted streams.
+    rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {
+        option deprecated = true;
+    }
 
     // Streams each matching consumption through the explicit target; only 16-bit prefixes are supported.
     rpc SyncNullifiersV2(SyncNullifiersV2Request) returns (stream SyncNullifiersV2Response) {}
@@ -111,13 +120,19 @@ service NodeService {
     rpc SyncNotesV2(SyncNotesV2Request) returns (stream SyncNotesV2Response) {}
 
     // Returns account vault updates for specified account within a block range.
-    rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
+    // Deprecated: use SyncAccountVaultV2. Kept for clients that have not adopted streams.
+    rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {
+        option deprecated = true;
+    }
 
     // Streams the final account vault value for every key changed within a block range.
     rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream SyncAccountVaultV2Response) {}
 
     // Returns storage map updates for specified account and storage slots within a block range.
-    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
+    // Deprecated: use SyncAccountStorageMapsV2. Kept for clients that have not adopted streams.
+    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {
+        option deprecated = true;
+    }
 
     // Streams one target value for each changed public-account storage-map key.
     rpc SyncAccountStorageMapsV2(SyncAccountStorageMapsV2Request) returns (stream SyncAccountStorageMapsV2Response) {}

@@ -147,17 +147,18 @@ separate from HTTP/2 and proxy buffers.
 ## Compatibility and deployment
 
 The unary `SyncNotes`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, and `SyncNullifiers` endpoints
-remain available alongside their streams. Clients can use unary requests when a new method returns `UNIMPLEMENTED`
-before any data arrives. Midstream errors and failed proofs must fail the attempt. Do not silently fall back after a
-partial response. Keep full account transaction discovery until unknown consumed-public-note recovery has an equivalent
-verified discovery source.
+are deprecated and remain available alongside their streams. Clients can use unary requests when a new method returns
+`UNIMPLEMENTED` before any data arrives. Midstream errors and failed proofs must fail the attempt. Do not silently fall
+back after a partial response. Keep full account transaction discovery until unknown consumed-public-note recovery has
+an equivalent verified discovery source.
 
 Local tests verify exact multi-page results, concurrent block writes, cancellation, admission release, gRPC-Web OK
 trailers, and non-OK terminal errors. Client adoption and the deployment proxy path require separate acceptance. Before
 removing compatibility support, test native and browser clients through the actual reverse proxy/load balancer: check
 stream forwarding without whole-body buffering, cancellation, terminal trailers, idle deadlines, and configured
 per-message limits. Verify the server request timeout and the body-stream lifetime separately. Record consumer versions
-and owner approval for the removal release. Repository tests do not establish production deployment acceptance.
+and owner approval for the removal release. The funding service still uses the supported unary methods. Repository tests
+do not establish production deployment acceptance.
 
 ## Block Streaming
 

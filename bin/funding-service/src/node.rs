@@ -180,6 +180,10 @@ impl RpcNodeClient {
     }
 
     /// Returns one page of deposits and the last block checked in the given range.
+    #[expect(
+        deprecated,
+        reason = "funding-service keeps unary sync until coordinated consumer migration"
+    )]
     pub async fn sync_deposits(
         &self,
         funder: AccountId,
@@ -270,6 +274,10 @@ impl RpcNodeClient {
     }
 
     /// Returns the requested nullifiers spent from genesis through `tip`.
+    #[expect(
+        deprecated,
+        reason = "funding-service keeps unary sync until coordinated consumer migration"
+    )]
     pub async fn spent_nullifiers(
         &self,
         nullifiers: &[Nullifier],
@@ -323,6 +331,10 @@ impl RpcNodeClient {
     }
 
     /// Checks for commitment before reporting expiration. Reads every page in the block range.
+    #[expect(
+        deprecated,
+        reason = "funding-service keeps unary sync until coordinated consumer migration"
+    )]
     pub async fn transaction_status(
         &self,
         account_id: AccountId,
