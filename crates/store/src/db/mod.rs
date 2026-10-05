@@ -44,6 +44,8 @@ pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
     NoteSyncCursor,
     NoteSyncPage,
+    NullifierCursor,
+    NullifierUpdatesPage,
     NullifiersPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
@@ -999,6 +1001,22 @@ impl Db {
         self.reader
             .read("transactions by id", move |tx| {
                 queries::select_transactions_by_id(tx, &ids, *target, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads a bounded prefix-filtered nullifier page.
+    pub async fn select_nullifier_updates_page(
+        &self,
+        prefixes: Vec<u16>,
+        range: ScopedBlockRange,
+        cursor: Option<NullifierCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<NullifierUpdatesPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("nullifier updates page", move |tx| {
+                queries::select_nullifier_updates_page(tx, &prefixes, range, cursor, page_size)
             })
             .await
     }

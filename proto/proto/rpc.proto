@@ -104,6 +104,9 @@ service NodeService {
     // Note that only 16-bit prefixes are supported at this time.
     rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
 
+    // Streams each matching consumption through the explicit target; only 16-bit prefixes are supported.
+    rpc SyncNullifiersV2(SyncNullifiersV2Request) returns (stream SyncNullifiersV2Response) {}
+
     // Streams block-start frames followed by bounded compact matching note records.
     rpc SyncNotesV2(SyncNotesV2Request) returns (stream SyncNotesV2Response) {}
 
@@ -1057,3 +1060,15 @@ message SyncTransactionsV2Request {
 // Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
 // 5 exhausted stream capacity.
 message SyncTransactionsV2Response { TransactionRecord transaction = 1; }
+
+// Prefix queries preserve the privacy of individual tracked note nullifiers.
+message SyncNullifiersV2Request {
+    StateDeltaRange range = 1;
+    uint32 prefix_len = 2;
+    repeated uint32 nullifiers = 3;
+}
+// Every nullifier is an append-only identity. OK end-of-stream completes the requested range.
+message SyncNullifiersV2Response {
+    primitives.Word nullifier = 1;
+    fixed32 block_num = 2;
+}

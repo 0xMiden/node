@@ -100,6 +100,7 @@ codes returned in gRPC status details.
 | ------------------------ | --------------------------------------------------------------------------------------- |
 | `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
 | `SyncNotes`              | Returns note metadata and inclusion proofs for matching note tags within a block range. |
+| `SyncNullifiersV2`       | Streams every matching 16-bit-prefix nullifier through an explicit target.              |
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns historical public account vault updates within a block range.                   |
 | `SyncAccountVaultV2`     | Streams one target-state vault update per key changed within an inclusive block range.  |

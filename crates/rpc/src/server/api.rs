@@ -108,6 +108,7 @@ mod sync_chain_mmr;
 mod sync_notes;
 mod sync_notes_v2;
 mod sync_nullifiers;
+mod sync_nullifiers_v2;
 mod sync_stream;
 mod sync_transactions;
 mod sync_transactions_v2;
@@ -347,6 +348,10 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
             (
                 "GetTransactionsById".into(),
                 endpoint_limits(&[(TransactionId::PARAM_NAME, TransactionId::LIMIT)]),
+            ),
+            (
+                "SyncNullifiersV2".into(),
+                endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),
             ),
             (
                 "SyncNullifiers".into(),

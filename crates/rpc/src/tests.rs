@@ -3820,3 +3820,89 @@ async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
         .into_inner();
     assert!(stream.message().await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn nullifier_stream_reconciles_every_record_and_validates_prefixes() {
+    use miden_protocol::note::Nullifier;
+    use miden_protocol::{Felt, Word};
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let expected: HashSet<_> = (0..600)
+        .map(|i| {
+            Nullifier::from_raw(Word::from([
+                Felt::ZERO,
+                Felt::ZERO,
+                Felt::ZERO,
+                Felt::new_unchecked((1 << 48) + i),
+            ]))
+        })
+        .collect();
+    miden_node_store::test_support::seed_nullifiers(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        0.into(),
+        expected.iter().copied().collect(),
+    )
+    .await;
+    let request = proto::miden::node::v1::SyncNullifiersV2Request {
+        range: Some(proto::miden::node::v1::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+        prefix_len: 16,
+        nullifiers: vec![1, 1],
+    };
+    let mut stream = client.sync_nullifiers_v2(request.clone()).await.unwrap().into_inner();
+    let mut found = HashSet::new();
+    while let Some(item) = stream.message().await.unwrap() {
+        assert_eq!(item.block_num, 0);
+        let word = item.nullifier.unwrap().decode_fields().unwrap();
+        assert!(found.insert(Nullifier::from_raw(word)));
+    }
+    assert_eq!(found, expected);
+    for prefixes in [vec![], vec![2]] {
+        let mut stream = client
+            .sync_nullifiers_v2(proto::miden::node::v1::SyncNullifiersV2Request {
+                nullifiers: prefixes,
+                ..request.clone()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(stream.message().await.unwrap().is_none());
+    }
+    for (bad, code) in [
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request { prefix_len: 15, ..request.clone() },
+            6,
+        ),
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request {
+                nullifiers: vec![65536],
+                ..request.clone()
+            },
+            1,
+        ),
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request {
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: Some(1),
+                    to_block_inclusive: Some(1),
+                }),
+                ..request.clone()
+            },
+            3,
+        ),
+    ] {
+        let status = client.sync_nullifiers_v2(bad).await.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[code]);
+    }
+    let status = client
+        .sync_nullifiers_v2(proto::miden::node::v1::SyncNullifiersV2Request {
+            range: None,
+            nullifiers: vec![65536; 1001],
+            ..request
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+}

@@ -274,6 +274,18 @@ impl StateView {
         self.db.select_transactions_by_id(ids, target, cursor, page_size).await
     }
 
+    /// Loads prefix-matching nullifiers through an explicit target.
+    pub async fn sync_nullifiers_v2_page(
+        &self,
+        prefixes: Vec<u16>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::NullifierCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::NullifierUpdatesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        self.db.select_nullifier_updates_page(prefixes, range, cursor, page_size).await
+    }
+
     /// Loads a bounded page of complete transaction events, including partial blocks.
     pub async fn sync_transactions_v2_page(
         &self,

@@ -128,6 +128,13 @@ fall into the ordinary-gRPC-status bucket described above:
   re-sealing, and back off rather than retrying in a tight loop, since official endpoints may rate limit requests at the
   infrastructure level.
 
+## Nullifier stream errors
+
+`SyncNullifiersV2` uses detail codes `1` (malformed input or a prefix above `u16::MAX`), `2` (invalid or missing range),
+`3` (future target), and `6` (prefix length other than 16), with `INVALID_ARGUMENT`. Admission rejection uses code `5`
+with `RESOURCE_EXHAUSTED`. The request limit is 1000 prefixes, checked before decoding and deduplication. Discover it
+under `GetLimits.endpoints["SyncNullifiersV2"].parameters["nullifier_prefix"]`.
+
 ## Request Limits
 
 Use `GetLimits` to discover method-specific request limits before sending large sync requests. Methods such as

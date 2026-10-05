@@ -5095,3 +5095,55 @@ fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_esti
     expected.sort_by_key(TransactionHeader::id);
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn nullifier_updates_page_preserves_partial_blocks_and_target() {
+    let db = &TestDb::new();
+    create_block(db, 1.into());
+    create_block(db, 2.into());
+    let expected: Vec<_> = (0..7).map(|i| num_to_nullifier((1 << 48) + i)).collect();
+    insert_nullifiers_for_block(db, &expected, 1.into()).unwrap();
+    insert_nullifiers_for_block(db, &[num_to_nullifier(2 << 48)], 1.into()).unwrap();
+    let mut cursor = None;
+    let mut found = std::collections::HashSet::new();
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_nullifier_updates_page(
+                    tx,
+                    &[1, 1],
+                    0.into()..=1.into(),
+                    cursor,
+                    std::num::NonZeroUsize::new(2).unwrap(),
+                )
+            })
+            .unwrap();
+        for row in page.records {
+            assert_eq!(row.block_num, BlockNumber::from(1));
+            assert!(found.insert(row.nullifier));
+        }
+        if cursor.is_none() {
+            insert_nullifiers_for_block(db, &[num_to_nullifier((1 << 48) + 99)], 2.into()).unwrap();
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(found, expected.into_iter().collect());
+    for prefixes in [vec![], vec![3]] {
+        let page = db
+            .read(move |tx| {
+                queries::select_nullifier_updates_page(
+                    tx,
+                    &prefixes,
+                    0.into()..=1.into(),
+                    None,
+                    std::num::NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        assert!(page.records.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
+}
