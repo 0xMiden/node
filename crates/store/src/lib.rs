@@ -17,7 +17,12 @@ pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
-pub use db::queries::StorageMapValuesPage;
+pub use db::queries::{
+    StorageMapCursor,
+    StorageMapUpdatesPage,
+    StorageMapValue,
+    StorageMapValuesPage,
+};
 pub use db::{
     AccountVaultCursor,
     AccountVaultValue,
@@ -137,6 +142,32 @@ pub mod test_support {
             })
             .await
             .expect("insert test account vault values");
+    }
+    /// Inserts storage-map values for downstream RPC stream tests.
+    pub async fn seed_storage_map(
+        db_path: &Path,
+        account_id: AccountId,
+        block_num: BlockNumber,
+        values: &[(
+            miden_protocol::account::StorageSlotName,
+            miden_protocol::account::StorageMapKey,
+            Word,
+        )],
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        let values = values.to_vec();
+        writer
+            .write::<_, DatabaseError, _>("seed storage map", move |tx| {
+                for (slot, key, value) in values {
+                    crate::db::queries::insert_storage_map_value(
+                        tx, account_id, block_num, &slot, key, value,
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("insert test storage-map values");
     }
 }
 // CONSTANTS

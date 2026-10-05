@@ -4637,3 +4637,118 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
+
+#[test]
+fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for n in 1..=6 {
+        create_block(db, n.into());
+        upsert_mock_account(db, account, 0, n.into()).unwrap();
+    }
+    let slot = StorageSlotName::mock(1);
+    let other_slot = StorageSlotName::mock(2);
+    let key = StorageMapKey::new(num_to_word(1));
+    let deleted = StorageMapKey::new(num_to_word(2));
+    let unchanged = StorageMapKey::new(num_to_word(3));
+    for (block, name, map_key, value) in [
+        (1, slot.clone(), key, 10),
+        (1, slot.clone(), unchanged, 30),
+        (2, slot.clone(), deleted, 20),
+        (3, slot.clone(), key, 40),
+        (3, other_slot.clone(), key, 50),
+        (5, slot.clone(), deleted, 0),
+        (6, slot.clone(), key, 60),
+    ] {
+        insert_storage_map_value(db, account, block.into(), name, map_key, num_to_word(value))
+            .unwrap();
+    }
+    let mut cursor = None;
+    let mut values = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_account_storage_map_updates_v2(
+                    tx,
+                    account,
+                    2.into()..=5.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        values.extend(page.values);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(values.len(), 3);
+    assert!(
+        values
+            .iter()
+            .any(|v| v.slot_name == slot && v.key == key && v.value == num_to_word(40))
+    );
+    assert!(
+        values
+            .iter()
+            .any(|v| v.slot_name == other_slot && v.key == key && v.value == num_to_word(50))
+    );
+    assert!(values.iter().any(|v| v.key == deleted && v.value == Word::empty()));
+    assert!(values.iter().all(|v| v.key != unchanged));
+}
+
+#[test]
+fn storage_map_stream_rechecks_retention_between_pages() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    create_block(db, 5.into());
+    upsert_mock_account(db, account, 0, 5.into()).unwrap();
+    for key in 1..=2 {
+        insert_storage_map_value(
+            db,
+            account,
+            5.into(),
+            StorageSlotName::mock(1),
+            StorageMapKey::new(num_to_word(key)),
+            num_to_word(key),
+        )
+        .unwrap();
+    }
+    let first = db
+        .read(move |tx| {
+            queries::select_account_storage_map_updates_v2(
+                tx,
+                account,
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    let cursor = first.next_cursor.expect("must continue within block five");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    let at_cutoff = cursor.clone();
+    assert!(
+        db.read(move |tx| queries::select_account_storage_map_updates_v2(
+            tx,
+            account,
+            0.into()..=5.into(),
+            Some(at_cutoff),
+            NonZeroUsize::MIN
+        ))
+        .is_ok()
+    );
+    create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
+    prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
+    assert_matches!(
+        db.read(move |tx| queries::select_account_storage_map_updates_v2(
+            tx,
+            account,
+            0.into()..=5.into(),
+            Some(cursor),
+            NonZeroUsize::MIN
+        )),
+        Err(DatabaseError::BlockPruned { .. })
+    );
+}

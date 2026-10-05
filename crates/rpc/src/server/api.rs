@@ -98,6 +98,7 @@ mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription;
 mod sync_account_storage_maps;
+mod sync_account_storage_maps_v2;
 mod sync_account_vault;
 mod sync_account_vault_v2;
 mod sync_chain_mmr;

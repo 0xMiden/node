@@ -113,6 +113,9 @@ service NodeService {
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
 
+    // Streams one target value for each changed public-account storage-map key.
+    rpc SyncAccountStorageMapsV2(SyncAccountStorageMapsV2Request) returns (stream SyncAccountStorageMapsV2Response) {}
+
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
@@ -964,4 +967,21 @@ message SubmitProvenTxBatchRequest {
 
 message SubmitProvenTxBatchResponse {
     fixed32 block_num = 1;
+}
+
+// Pin the target to SyncChainMmr. Apply the complete stream only after OK termination.
+// Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
+// 4 unavailable history, 5 exhausted stream capacity, 6 non-public account.
+message SyncAccountStorageMapsV2Request {
+    StateDeltaRange range = 1;
+    account.AccountId account_id = 2;
+}
+
+// One changed key's value at the target. A zero word represents deletion.
+// Other account changes, including removed slots, are conveyed by GetAccount at the target.
+message SyncAccountStorageMapsV2Response {
+    string slot_name = 1;
+    primitives.Word key = 2;
+    primitives.Word value = 3;
+    fixed32 last_updated_at = 4;
 }

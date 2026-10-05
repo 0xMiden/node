@@ -46,6 +46,8 @@ pub use crate::db::queries::{
     PrecomputedPublicAccountStates,
     PublicAccountIdsPage,
     PublicAccountStateRootsPage,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
     StorageMapValuesPage,
 };
 use crate::errors::{DatabaseError, NoteSyncError};
@@ -925,6 +927,24 @@ impl Db {
                     block_range,
                     cursor,
                     page_size,
+                )
+            })
+            .await
+    }
+
+    /// Selects one target value per changed storage-map key in a bounded page.
+    pub async fn select_account_storage_map_updates_v2(
+        &self,
+        account_id: AccountId,
+        block_range: ScopedBlockRange,
+        cursor: Option<StorageMapCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<StorageMapUpdatesPage> {
+        let range = block_range.into_inner();
+        self.reader
+            .read("account storage map sync v2", move |tx| {
+                queries::select_account_storage_map_updates_v2(
+                    tx, account_id, range, cursor, page_size,
                 )
             })
             .await

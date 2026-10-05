@@ -9,11 +9,10 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::{Asset, AssetId};
 use miden_protocol::block::BlockNumber;
 
-use crate::db::queries::HISTORICAL_BLOCK_RETENTION;
+use crate::db::queries::check_account_history_target;
 use crate::db::{AccountVaultCursor, AccountVaultValue, AccountVaultValuesPage};
 use crate::errors::DatabaseError;
 
-const SQL_CHAIN_TIP: &str = include_str!("select_chain_tip.sql");
 const SQL_PAGE: &str = include_str!("select_account_vault_updates_v2.sql");
 const SQL_PAGE_AFTER: &str = include_str!("select_account_vault_updates_v2_after.sql");
 
@@ -42,23 +41,7 @@ pub(crate) fn select_account_vault_updates_v2(
         });
     }
 
-    // Check the retention horizon before loading the page. This read establishes the SQLite
-    // transaction's snapshot, so the page query below observes the same chain tip and pruning
-    // state. Rejecting here avoids loading a page that would be discarded as incomplete.
-    let chain_tip = tx
-        .query(SQL_CHAIN_TIP, &[], |row| row.get::<BlockNumber>(0))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| DatabaseError::DataCorrupted("block headers table is empty".to_owned()))?;
-    let oldest_available = chain_tip
-        .checked_sub(HISTORICAL_BLOCK_RETENTION)
-        .unwrap_or(BlockNumber::GENESIS);
-    if *block_range.end() < oldest_available {
-        return Err(DatabaseError::BlockPruned {
-            block_num: *block_range.end(),
-            oldest_available,
-        });
-    }
+    check_account_history_target(tx, *block_range.end())?;
 
     let limit = page_size.get();
     let query_limit = i64::try_from(limit.saturating_add(1)).expect("page size fits within i64");
