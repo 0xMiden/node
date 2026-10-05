@@ -19,6 +19,7 @@ use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
     QueryParamVaultAssetLimit,
+    QueryParamTransactionIdLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -90,6 +91,7 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod get_transactions_by_id;
 mod is_account_allowed;
 mod is_invitation_code_valid;
 mod register_account;
@@ -110,6 +112,7 @@ mod sync_notes_v2;
 mod sync_nullifiers;
 mod sync_stream;
 mod sync_transactions;
+mod transaction_stream;
 
 // ================================================================================================
 
@@ -340,9 +343,14 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
     use QueryParamVaultAssetLimit as VaultAsset;
+    use QueryParamTransactionIdLimit as TransactionId;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
+            (
+                "GetTransactionsById".into(),
+                endpoint_limits(&[(TransactionId::PARAM_NAME, TransactionId::LIMIT)]),
+            ),
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),

@@ -50,6 +50,7 @@ pub use crate::db::queries::{
     PrecomputedPublicAccountStates,
     StorageMapCursor,
     StorageMapUpdatesPage,
+    TransactionsByIdPage,
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
@@ -833,6 +834,21 @@ impl Db {
         self.reader
             .read("account commitment changes", move |tx| {
                 queries::select_account_commitment_changes(tx, &ids, range, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads one bounded page of requested transaction records committed by the target.
+    pub async fn select_transactions_by_id(
+        &self,
+        ids: Vec<miden_protocol::transaction::TransactionId>,
+        target: ScopedBlockNum,
+        cursor: Option<miden_protocol::transaction::TransactionId>,
+        page_size: NonZeroUsize,
+    ) -> Result<TransactionsByIdPage> {
+        self.reader
+            .read("transactions by id", move |tx| {
+                queries::select_transactions_by_id(tx, &ids, *target, cursor, page_size)
             })
             .await
     }
