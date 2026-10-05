@@ -274,6 +274,18 @@ impl StateView {
         self.db.select_transactions_by_id(ids, target, cursor, page_size).await
     }
 
+    /// Loads a bounded page of complete transaction events, including partial blocks.
+    pub async fn sync_transactions_v2_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::TransactionCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        self.db.select_transactions_records_page(ids, range, cursor, page_size).await
+    }
+
     /// Returns storage map values for syncing within a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this

@@ -125,6 +125,9 @@ service NodeService {
     // Streams requested transactions committed at or before the explicit target.
     rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
 
+    // Streams complete transaction events for requested accounts within the pinned delta.
+    rpc SyncTransactionsV2(SyncTransactionsV2Request) returns (stream SyncTransactionsV2Response) {}
+
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
@@ -1042,3 +1045,15 @@ message GetTransactionsByIdRequest {
 // Status detail byte: 1 malformed request, 2 missing target, 3 future target,
 // 5 exhausted stream capacity. No transaction inclusion proof is added by this lookup.
 message GetTransactionsByIdResponse { TransactionRecord transaction = 1; }
+
+// Complete event discovery for requested accounts, including externally submitted transactions.
+// Zero target selects genesis; absence is invalid. Individual records are bounded, the stream is not.
+message SyncTransactionsV2Request {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+// Preserve transaction input/output order, erased output commitments and public consumed-note refs.
+// Apply the complete result only after OK termination; a failed stream is incomplete.
+// Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
+// 5 exhausted stream capacity.
+message SyncTransactionsV2Response { TransactionRecord transaction = 1; }

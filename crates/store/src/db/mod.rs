@@ -52,6 +52,8 @@ pub use crate::db::queries::{
     StorageMapCursor,
     StorageMapUpdatesPage,
     StorageMapValuesPage,
+    TransactionCursor,
+    TransactionRecordsPage,
     TransactionsByIdPage,
 };
 use crate::errors::{DatabaseError, NoteSyncError};
@@ -997,6 +999,22 @@ impl Db {
         self.reader
             .read("transactions by id", move |tx| {
                 queries::select_transactions_by_id(tx, &ids, *target, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads a bounded transaction event page without aggregate byte truncation.
+    pub async fn select_transactions_records_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: ScopedBlockRange,
+        cursor: Option<TransactionCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<TransactionRecordsPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("transaction history page", move |tx| {
+                queries::select_transactions_records_page(tx, &ids, range, cursor, page_size)
             })
             .await
     }

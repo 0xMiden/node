@@ -154,8 +154,12 @@ mod tests {
     fn maximum_whole_transaction_records_fit_the_derived_transport_bound() {
         for authenticated in [false, true] {
             let record = encode(maximum_record(authenticated)).unwrap();
+            let history = proto::miden::node::v1::SyncTransactionsV2Response {
+                transaction: Some(record.clone()),
+            };
             let wrapper =
                 proto::miden::node::v1::GetTransactionsByIdResponse { transaction: Some(record) };
+            assert_eq!(history.encoded_len(), wrapper.encoded_len());
             assert!(wrapper.encoded_len() <= ENCODED_UPPER_BOUND);
             assert!(wrapper.encoded_len() < MAX_RESPONSE_PAYLOAD_BYTES);
         }

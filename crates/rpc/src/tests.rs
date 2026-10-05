@@ -3668,3 +3668,155 @@ async fn transaction_lookup_stream_reports_a_late_invalid_record_as_error() {
     assert_eq!(error.code(), tonic::Code::Internal);
     assert_eq!(error.details(), &[0]);
 }
+
+fn large_transaction_stream_fixture(
+    account: AccountId,
+) -> (Vec<TransactionHeader>, Vec<miden_node_store::NoteRecord>) {
+    use miden_protocol::block::BlockNoteIndex;
+    use miden_protocol::crypto::merkle::SparseMerklePath;
+    use miden_protocol::note::{
+        NoteAttachments,
+        NoteDetailsCommitment,
+        NoteHeader,
+        NoteMetadata,
+        PartialNoteMetadata,
+    };
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(account, NoteType::Public),
+        &NoteAttachments::empty(),
+    );
+    let mut records = vec![];
+    let headers = (0_u32..10)
+        .map(|number| {
+            let notes: Vec<_> = (0..miden_protocol::MAX_OUTPUT_NOTES_PER_TX)
+                .map(|index| {
+                    let header = NoteHeader::new(
+                        NoteDetailsCommitment::from_raw(Word::from([
+                            number,
+                            u32::try_from(index).unwrap(),
+                            5,
+                            0,
+                        ])),
+                        metadata,
+                    );
+                    records.push(miden_node_store::NoteRecord {
+                        block_num: BlockNumber::GENESIS,
+                        note_index: BlockNoteIndex::new(number as usize, index).unwrap(),
+                        note_id: header.id().as_word(),
+                        metadata,
+                        details: None,
+                        attachments: NoteAttachments::empty(),
+                        inclusion_path: SparseMerklePath::from_parts(
+                            0,
+                            vec![Word::from([miden_protocol::Felt::MAX; 4]); 16],
+                        )
+                        .unwrap(),
+                    });
+                    header
+                })
+                .collect();
+            TransactionHeader::new(
+                account,
+                Word::from([number + 1, 0, 0, 0]),
+                Word::from([number + 2, 0, 0, 0]),
+                InputNotes::new_unchecked(vec![]),
+                notes,
+            )
+            .unwrap()
+        })
+        .collect();
+    (headers, records)
+}
+
+#[tokio::test]
+async fn transaction_history_stream_returns_a_whole_block_larger_than_four_mebibytes() {
+    use miden_node_proto::prost::Message;
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let (headers, notes) = large_transaction_stream_fixture(account);
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    miden_node_store::test_support::seed_notes(&path, notes).await;
+    miden_node_store::test_support::seed_transactions(&path, BlockNumber::GENESIS, headers.clone())
+        .await;
+    let mut stream = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![account.into(), account.into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = HashSet::new();
+    let mut total_bytes = 0;
+    while let Some(item) = stream.message().await.unwrap() {
+        assert!(item.encoded_len() < 4 * 1024 * 1024);
+        total_bytes += item.encoded_len();
+        let record = item.transaction.unwrap();
+        assert_eq!(record.block_num, 0);
+        assert_eq!(record.output_note_proofs.len(), 1024);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        assert!(actual.insert(header.id()));
+    }
+    assert!(total_bytes > 4 * 1024 * 1024);
+    assert_eq!(actual, headers.iter().map(TransactionHeader::id).collect());
+    let mut lookup = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: headers.iter().map(|header| header.id().into()).collect(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut found = HashSet::new();
+    while let Some(item) = lookup.message().await.unwrap() {
+        let record = item.transaction.unwrap();
+        assert_eq!(record.output_note_proofs.len(), 1024);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        assert!(found.insert(header.id()));
+    }
+    assert_eq!(found, actual);
+}
+
+#[tokio::test]
+async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: None,
+            account_ids: vec![proto::account::AccountId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    let status = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.details(), &[3]);
+    let mut stream = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(0),
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}

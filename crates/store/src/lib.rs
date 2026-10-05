@@ -24,6 +24,8 @@ pub use db::queries::{
     StorageMapUpdatesPage,
     StorageMapValue,
     StorageMapValuesPage,
+    TransactionCursor,
+    TransactionRecordsPage,
 };
 pub use db::{
     AccountVaultCursor,
@@ -189,6 +191,20 @@ pub mod test_support {
             })
             .await
             .expect("insert test transactions");
+    }
+    /// Inserts note records for transaction transport tests.
+    pub async fn seed_notes(db_path: &Path, notes: Vec<crate::NoteRecord>) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed notes", move |tx| {
+                crate::db::queries::insert_notes(
+                    tx,
+                    &notes.into_iter().map(|note| (note, None)).collect::<Vec<_>>(),
+                )
+            })
+            .await
+            .expect("insert test note records");
     }
 }
 // CONSTANTS

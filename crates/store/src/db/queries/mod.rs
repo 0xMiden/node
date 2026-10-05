@@ -243,3 +243,7 @@ pub use select_transactions_by_id::TransactionsByIdPage;
 pub(crate) use select_transactions_by_id::select_transactions_by_id;
 
 mod transaction_record;
+
+mod select_transactions_records_page;
+pub(crate) use select_transactions_records_page::select_transactions_records_page;
+pub use select_transactions_records_page::{TransactionCursor, TransactionRecordsPage};

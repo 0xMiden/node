@@ -4268,6 +4268,18 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
         })
         .unwrap();
     assert_eq!(lookup.records, vec![expected]);
+    let history = db
+        .read(move |tx_db| {
+            queries::select_transactions_records_page(
+                tx_db,
+                &[bob],
+                BlockNumber::GENESIS..=block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(history.records, lookup.records);
 }
 
 /// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
@@ -4330,6 +4342,18 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
         })
         .unwrap();
     assert_eq!(lookup.records, retrieved.1);
+    let history = db
+        .read(move |tx_db| {
+            queries::select_transactions_records_page(
+                tx_db,
+                &[bob],
+                BlockNumber::GENESIS..=block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(history.records, retrieved.1);
 }
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
@@ -5016,4 +5040,58 @@ fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
         })
         .unwrap();
     assert!(page.records.is_empty());
+}
+
+#[test]
+fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_estimates() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let headers: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
+    for height in 1..=2 {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+    }
+    insert_transactions(
+        db,
+        1.into(),
+        &OrderedTransactionHeaders::new_unchecked(headers[..3].to_vec()),
+    )
+    .unwrap();
+    insert_transactions(
+        db,
+        2.into(),
+        &OrderedTransactionHeaders::new_unchecked(vec![headers[3].clone()]),
+    )
+    .unwrap();
+    db.write(|tx| -> Result<usize> {
+        Ok(tx.execute("UPDATE transactions SET size_in_bytes = 10000000", &[])?)
+    })
+    .unwrap();
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_transactions_records_page(
+                    tx,
+                    &[account, account],
+                    0.into()..=1.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.records.into_iter().map(|r| {
+            assert_eq!(r.block_num, 1.into());
+            r.header
+        }));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    actual.sort_by_key(TransactionHeader::id);
+    let mut expected = headers[..3].to_vec();
+    expected.sort_by_key(TransactionHeader::id);
+    assert_eq!(actual, expected);
 }
