@@ -1174,9 +1174,12 @@ async fn active_runner_stops_and_reopens_an_incomplete_board() -> TestResult {
         .await
         .context("active runner did not publish registration")?;
     shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(30), task)
+    let stopped = tokio::time::timeout(Duration::from_secs(30), task)
         .await
-        .context("active runner did not stop after cancellation")???;
+        .context("active runner did not stop after cancellation")??
+        .expect_err("a runner stopped before completion must not report success");
+    assert_eq!(stopped.to_string(), runner::STOPPED_BEFORE_COMPLETION);
+    assert!(!output_directory.exists());
     let (other_board, other_tickets) = board::CoordinatorBoard::create_with_network(
         &root.path().join("other-board"),
         3,
@@ -1557,7 +1560,10 @@ async fn iroh_ceremony_resumes_after_validator_restart() -> TestResult {
                 }
             };
             shutdown.cancel();
-            tokio::time::timeout(restart_checkpoint_timeout, run).await??;
+            let stopped = tokio::time::timeout(restart_checkpoint_timeout, run)
+                .await?
+                .expect_err("a runner stopped before completion must not report success");
+            assert_eq!(stopped.to_string(), runner::STOPPED_BEFORE_COMPLETION);
             assert_eq!(board.reader().read_unique(&slot).await?, Some(published.clone()));
             Ok::<_, anyhow::Error>(published)
         }

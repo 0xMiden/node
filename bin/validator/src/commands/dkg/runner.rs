@@ -65,6 +65,15 @@ const ACCEPTANCE_DIRECTORY: &str = "acceptance";
 const PUBLIC_ACCEPTANCES_DIRECTORY: &str = "public-acceptances";
 const BOARD_DIRECTORY: &str = "board";
 const CEREMONY_WAIT_TIMEOUT: Duration = Duration::from_hours(24);
+
+/// The error message when the validator runner receives a shutdown request before the ceremony is
+/// complete.
+///
+/// The runner returns an error so that the process does not report success without a storage key
+/// bundle.
+pub(super) const STOPPED_BEFORE_COMPLETION: &str =
+    "storage key DKG stopped before completion; run the same command again to resume";
+
 /// Inputs for the shared storage key DKG board.
 #[derive(clap::Args)]
 pub(super) struct DkgBoardServeOptions {
@@ -379,10 +388,10 @@ where
         ParticipantBoard::join(&board_directory, ticket, participant_count, shutdown.clone()).await,
     )?
     else {
-        return Ok(());
+        anyhow::bail!(STOPPED_BEFORE_COMPLETION);
     };
     let result = tokio::select! {
-        _ = shutdown.cancelled() => Ok(()),
+        _ = shutdown.cancelled() => Err(anyhow::anyhow!(STOPPED_BEFORE_COMPLETION)),
         result = run_validator_on_board::<B>(
         &board,
         genesis_path,
