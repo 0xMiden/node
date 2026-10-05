@@ -103,6 +103,7 @@ mod sync_account_vault;
 mod sync_account_vault_v2;
 mod sync_chain_mmr;
 mod sync_notes;
+mod sync_notes_v2;
 mod sync_nullifiers;
 mod sync_stream;
 mod sync_transactions;
@@ -346,6 +347,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
+            ("SyncNotesV2".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
             (
                 "GetAccount".into(),

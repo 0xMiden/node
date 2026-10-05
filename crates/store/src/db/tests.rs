@@ -4752,3 +4752,90 @@ fn storage_map_stream_rechecks_retention_between_pages() {
         Err(DatabaseError::BlockPruned { .. })
     );
 }
+
+#[test]
+fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
+    let db = &TestDb::new();
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let mut expected = vec![];
+    for block in 1_u32..=3 {
+        create_block(db, block.into());
+        for index in 0..5 {
+            let note = Note::mock_noop(Word::from([block, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            let metadata = NoteMetadata::new(
+                PartialNoteMetadata::new(sender, kind)
+                    .with_tag((if block == 2 { 99 } else { 42 }).into()),
+                note.attachments(),
+            );
+            let record = NoteRecord {
+                block_num: block.into(),
+                note_index: BlockNoteIndex::new(0, index as usize).unwrap(),
+                note_id: note.id().as_word(),
+                metadata,
+                details: None,
+                attachments: note.attachments().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            };
+            insert_notes(db, &[(record.clone(), None)]).unwrap();
+            if block != 2 {
+                expected.push((record.block_num, record.note_index, note.id(), kind));
+            }
+        }
+    }
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_note_sync_page(
+                    tx,
+                    &[42, 42],
+                    0.into()..=3.into(),
+                    cursor,
+                    NonZeroUsize::new(2).unwrap(),
+                )
+            })
+            .unwrap();
+        actual.extend(
+            page.notes
+                .into_iter()
+                .map(|n| (n.block_num, n.note_index, n.note_id, n.metadata.note_type())),
+        );
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(actual, expected);
+    for tags in [vec![], vec![100]] {
+        assert!(
+            db.read(move |tx| queries::select_note_sync_page(
+                tx,
+                &tags,
+                0.into()..=3.into(),
+                None,
+                NonZeroUsize::MIN
+            ))
+            .unwrap()
+            .notes
+            .is_empty()
+        );
+    }
+    let before_second_block = db
+        .read(|tx| {
+            queries::select_note_sync_page(
+                tx,
+                &[42],
+                0.into()..=1.into(),
+                None,
+                NonZeroUsize::new(10).unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(before_second_block.notes.len(), 5);
+}

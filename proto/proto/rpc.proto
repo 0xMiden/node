@@ -104,6 +104,9 @@ service NodeService {
     // Note that only 16-bit prefixes are supported at this time.
     rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
 
+    // Streams block-start frames followed by bounded compact matching note records.
+    rpc SyncNotesV2(SyncNotesV2Request) returns (stream SyncNotesV2Response) {}
+
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
@@ -984,4 +987,26 @@ message SyncAccountStorageMapsV2Response {
     primitives.Word key = 2;
     primitives.Word value = 3;
     fixed32 last_updated_at = 4;
+}
+
+// Pin the target to SyncChainMmr. An absent target is invalid; absent lower bound bootstraps.
+// Preserve tag-list limits; duplicates do not cause repeated notes.
+message SyncNotesV2Request {
+    StateDeltaRange range = 1;
+    repeated fixed32 note_tags = 2;
+}
+
+// A block frame precedes that block's notes exactly once. Apply only after OK termination.
+// Block paths use the MMR at target + 1 leaves, including the authenticated target header.
+// Status detail byte: 1 malformed request, 2 invalid range, 3 future target,
+// 4 unavailable proof history, 5 exhausted stream capacity.
+message SyncNotesV2Response {
+    oneof item {
+        NoteBlockStart block = 1;
+        NoteSyncRecord note = 2;
+    }
+}
+message NoteBlockStart {
+    blockchain.BlockHeader block_header = 1;
+    primitives.MerklePath mmr_path = 2;
 }

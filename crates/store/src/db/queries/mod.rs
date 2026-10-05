@@ -229,3 +229,7 @@ pub use select_account_storage_map_updates_v2::{StorageMapCursor, StorageMapUpda
 
 mod check_account_history_target;
 pub(crate) use check_account_history_target::check_account_history_target;
+
+mod select_note_sync_page;
+pub(crate) use select_note_sync_page::select_note_sync_page;
+pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};

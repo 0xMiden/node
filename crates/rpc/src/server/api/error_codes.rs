@@ -113,3 +113,23 @@ impl SyncAccountStorageMapsV2ErrorCode {
         Status::with_details(code, message.into(), vec![self as u8].into())
     }
 }
+
+#[derive(Clone, Copy)]
+#[repr(u8)]
+pub(super) enum SyncNotesV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    ResourceExhausted = 5,
+}
+
+impl SyncNotesV2ErrorCode {
+    pub(super) fn status(self, message: impl Into<String>) -> Status {
+        let code = match self {
+            Self::ResourceExhausted => Code::ResourceExhausted,
+            _ => Code::InvalidArgument,
+        };
+        Status::with_details(code, message.into(), vec![self as u8].into())
+    }
+}

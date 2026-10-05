@@ -2508,6 +2508,14 @@ async fn next_block_with_protocol_config(
     store: &TestStore,
     config: &ProtocolConfig,
 ) -> SignedBlock {
+    next_block_with_notes(store, config, vec![]).await
+}
+
+async fn next_block_with_notes(
+    store: &TestStore,
+    config: &ProtocolConfig,
+    notes: Vec<OutputNote>,
+) -> SignedBlock {
     use miden_protocol::block::{BlockBody, BlockHeader};
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::transaction::OrderedTransactionHeaders;
@@ -2520,8 +2528,13 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
+    let batches = if notes.is_empty() {
+        vec![]
+    } else {
+        vec![notes.into_iter().enumerate().collect()]
+    };
     let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
+        BlockBody::new(vec![], batches, vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
             .unwrap();
 
     let header = BlockHeader::new(
@@ -3141,6 +3154,196 @@ async fn storage_map_stream_validates_target_presence_and_account_visibility() {
                 range,
                 account_id: Some(account_id.into()),
             })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
+fn note_stream_fixture(
+    sender: AccountId,
+    height: u32,
+    count: u32,
+) -> Vec<miden_protocol::note::Note> {
+    use miden_protocol::note::{Note, PartialNoteMetadata};
+    (0..count)
+        .map(|index| {
+            let base = Note::mock_noop(Word::from([height, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            Note::with_attachments(
+                base.assets().clone(),
+                PartialNoteMetadata::new(sender, kind).with_tag(42.into()),
+                base.recipient().clone(),
+                base.attachments().clone(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
+    use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::note::Note;
+    use proto::miden::node::v1::sync_notes_v2_response::Item;
+    let (mut client, _, mut store, _guard) = start_rpc().await;
+    let (genesis, _) = store.state.view().get_block_header(Some(0.into()), false).await.unwrap();
+    let genesis = genesis.unwrap();
+    let config = store
+        .state
+        .view()
+        .get_protocol_config(genesis.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let sender = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let mut mmr = Mmr::new();
+    mmr.add(genesis.commitment()).unwrap();
+    let mut expected = vec![];
+    for (height, count) in [(1_u32, 300_u32), (2, 0), (3, 2)] {
+        let notes = note_stream_fixture(sender, height, count);
+        let outputs = notes
+            .iter()
+            .map(|note| match note.metadata().note_type() {
+                NoteType::Public => {
+                    OutputNote::Public(PublicOutputNote::new(note.clone()).unwrap())
+                },
+                NoteType::Private => OutputNote::Private(
+                    miden_protocol::transaction::PrivateOutputNote::new(
+                        *note.header(),
+                        note.attachments().clone(),
+                    )
+                    .unwrap(),
+                ),
+            })
+            .collect();
+        let block = next_block_with_notes(&store, &config, outputs).await;
+        mmr.add(block.header().commitment()).unwrap();
+        expected.extend(notes);
+        store.writer.apply_block(block, None).await.unwrap();
+    }
+    let mut stream = client
+        .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(3),
+            }),
+            note_tags: vec![42, 42],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let block = next_block_with_protocol_config(&store, &config).await;
+    store.writer.apply_block(block, None).await.unwrap();
+    let mut blocks = vec![];
+    let mut actual = vec![];
+    let mut current_header = None;
+    while let Some(frame) = stream.message().await.unwrap() {
+        match frame.item.unwrap() {
+            Item::Block(block) => {
+                let header: miden_protocol::block::BlockHeader =
+                    block.block_header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+                let path = block.mmr_path.unwrap().decode_fields().unwrap().verify().unwrap();
+                let proof =
+                    mmr.open_at(header.block_num().as_u32() as usize, mmr.forest()).unwrap();
+                assert_eq!(path, *proof.merkle_path());
+                mmr.peaks().verify(header.commitment(), proof).unwrap();
+                blocks.push(header.block_num().as_u32());
+                current_header = Some(header);
+            },
+            Item::Note(note) => {
+                let (id, proof) =
+                    note.inclusion_proof.unwrap().decode_fields().unwrap().verify().unwrap();
+                let header = current_header.as_ref().unwrap();
+                assert_eq!(header.block_num(), proof.location().block_num());
+                let expected_note = &expected[actual.len()];
+                assert_eq!(id, expected_note.id());
+                proof
+                    .note_path()
+                    .verify(
+                        u64::from(proof.location().block_note_tree_index()),
+                        expected_note.id().as_word(),
+                        &header.note_root(),
+                    )
+                    .unwrap();
+                actual.push(id);
+            },
+        }
+    }
+    assert_eq!(blocks, vec![1, 3]);
+    assert_eq!(actual, expected.iter().map(Note::id).collect::<Vec<_>>());
+}
+
+#[tokio::test]
+async fn note_stream_web_reports_successful_terminal_status() {
+    use miden_node_proto::prost::Message;
+    let (_, address, _store, _guard) = start_rpc().await;
+    let request = proto::miden::node::v1::SyncNotesV2Request {
+        range: Some(proto::miden::node::v1::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+        note_tags: vec![],
+    }
+    .encode_to_vec();
+    let mut framed = vec![0];
+    framed.extend_from_slice(&u32::try_from(request.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(&request);
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/miden.node.v1.NodeService/SyncNotesV2"))
+        .header(CONTENT_TYPE, "application/grpc-web+proto")
+        .header(ACCEPT, concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION")))
+        .body(framed)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.bytes().await.unwrap();
+    assert_eq!(body[0], 0x80, "empty successful stream ends with web trailers");
+    let size = usize::try_from(u32::from_be_bytes(body[1..5].try_into().unwrap())).unwrap();
+    assert_eq!(size, body.len() - 5);
+    let trailers = std::str::from_utf8(&body[5..]).unwrap();
+    assert!(
+        trailers
+            .lines()
+            .any(|line| line.trim() == "grpc-status:0" || line.trim() == "grpc-status: 0")
+    );
+}
+
+#[tokio::test]
+async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request {
+            range: None,
+            note_tags: vec![42; 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    for (range, detail) in [
+        (None, 1),
+        (
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: None,
+            }),
+            2,
+        ),
+        (
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            3,
+        ),
+    ] {
+        let status = client
+            .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request { range, note_tags: vec![] })
             .await
             .unwrap_err();
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
