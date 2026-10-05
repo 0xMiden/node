@@ -36,12 +36,10 @@ mod persistence;
 mod upload;
 
 #[cfg(test)]
-use persistence::ENDPOINT_SECRET_FILE;
+use persistence::{BOARD_FORMAT_FILE, ENDPOINT_SECRET_FILE, UPLOAD_SECRETS_DIRECTORY};
 use persistence::{
-    BOARD_FORMAT_FILE,
     BOARD_METADATA_DIRECTORY,
     DOCUMENT_ID_FILE,
-    UPLOAD_SECRETS_DIRECTORY,
     load_or_create_endpoint_secret,
     load_upload_secrets,
     publish_board_metadata,
@@ -248,12 +246,6 @@ impl BoardNode {
             let upload_secrets = load_upload_secrets(&metadata_directory, participant_count)?;
             (document, upload_secrets)
         } else {
-            ensure!(
-                !data_directory.join(DOCUMENT_ID_FILE).exists()
-                    && !data_directory.join(BOARD_FORMAT_FILE).exists()
-                    && !data_directory.join(UPLOAD_SECRETS_DIRECTORY).exists(),
-                "unsupported DKG board format; start a new ceremony in a new data directory"
-            );
             let document = runtime.docs.create().await.context("failed to create Iroh document")?;
             persist_new_document(&document, data_directory).await?;
             let upload_secrets = (0..participant_count)
