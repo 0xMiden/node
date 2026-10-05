@@ -273,7 +273,8 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::AccountNotFoundInDb(_)
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
-        DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
+        DatabaseError::TransactionPageExceedsPayloadLimit { .. }
+        | DatabaseError::BlockExceedsPageLimit { .. } => Status::out_of_range(message),
         DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },

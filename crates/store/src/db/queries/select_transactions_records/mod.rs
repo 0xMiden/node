@@ -22,8 +22,10 @@ use miden_protocol::transaction::{
 };
 
 use crate::db::TransactionRecord;
+use crate::db::pagination::{Page, Paginated};
 use crate::db::queries::{select_note_ids_by_nullifier, select_note_sync_records};
 use crate::errors::DatabaseError;
+use crate::state::ScopedBlockRange;
 
 const SQL_FIRST_CHUNK: &str = include_str!("select_transactions_records_chunk.sql");
 const SQL_AFTER_CURSOR: &str = include_str!("select_transactions_records_chunk_after.sql");
@@ -40,37 +42,54 @@ struct TransactionRow {
     size_in_bytes: i64,
 }
 
-/// Select complete transaction records for the given accounts and block range.
+/// Paginated query over the complete transaction records of a set of accounts within an inclusive
+/// block range, ordered by block number.
 ///
-/// # Parameters
-/// * `account_ids`: List of account IDs to filter by
-///     - Limit: 0 <= size <= 1000
-/// * `block_range`: Range of blocks to include inclusive
+/// Pages are limited by payload size rather than by row count. See [`select_transactions_records`]
+/// for how a page is filled.
+#[derive(Debug, Clone)]
+pub(crate) struct TransactionsRecords {
+    account_ids: Vec<AccountId>,
+    block_range: RangeInclusive<BlockNumber>,
+}
+
+impl TransactionsRecords {
+    /// Creates the query for `account_ids` within `block_range`.
+    pub(crate) fn new(account_ids: Vec<AccountId>, block_range: ScopedBlockRange) -> Self {
+        Self {
+            account_ids,
+            block_range: block_range.into_inner(),
+        }
+    }
+}
+
+impl Paginated for TransactionsRecords {
+    type Item = TransactionRecord;
+    type Cursor = BlockNumber;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        after: Option<&BlockNumber>,
+    ) -> Result<Page<TransactionRecord, BlockNumber>, DatabaseError> {
+        let block_from = after.map_or(*self.block_range.start(), |block| block.child());
+        select_transactions_records(tx, &self.account_ids, block_from..=*self.block_range.end())
+    }
+}
+
+/// Selects the page of complete transaction records for up to 1000 `account_ids` that starts at the
+/// beginning of `block_range`.
 ///
-/// # Returns
-/// A tuple of (`last_block_included`, `transaction_records`) where:
-/// - `last_block_included`: The highest block number included in the response
-/// - `transaction_records`: Vector of transaction records, limited by payload size
-///
-/// # Note
-/// This function returns complete transaction record information including state commitments and
-/// output note inclusion proofs, allowing for direct conversion to proto `TransactionRecord`
-/// without loading full block data. We use a chunked loading strategy to prevent memory
-/// exhaustion attacks and ensure predictable resource usage.
-///
-/// Notes:
-/// - Uses stable ordering (`block_num`, `transaction_id`) to ensure consistent results across
-///   paginated queries.
-/// - Uses cursor-based pagination.
-/// - The query is executed in chunks of 1000 transactions to prevent loading excessive data and to
-///   stop as soon as the accumulated size approaches the 4MB limit.
-/// - Given the size of note records, 1000 records are guaranteed never to return more than about
-///   60MB of data.
-pub(crate) fn select_transactions_records(
+/// Records include state commitments and output note inclusion proofs, so they convert directly to
+/// proto `TransactionRecord`s without loading block data. Rows are read in chunks of 1000, ordered
+/// by `(block_num, transaction_id)`, until the accumulated size reaches the response payload limit.
+/// Chunking bounds memory use against requests that match many transactions: given the size of
+/// note records, one chunk never exceeds about 60 MB. A page never splits a block.
+fn select_transactions_records(
     tx: &ReadTx<'_>,
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
-) -> Result<(BlockNumber, Vec<TransactionRecord>), DatabaseError> {
+) -> Result<Page<TransactionRecord, BlockNumber>, DatabaseError> {
     const NUM_TXS_PER_CHUNK: i64 = 1000; // Read 1000 transactions at a time
 
     QueryParamAccountIdLimit::check(account_ids.len())?;
@@ -144,7 +163,10 @@ pub(crate) fn select_transactions_records(
 
     let Some(truncation_block) = truncated_at_block else {
         // Every matching transaction in the range fit within the payload cap.
-        return Ok((*block_range.end(), with_output_note_proofs(tx, transactions)?));
+        return Ok(Page {
+            items: with_output_note_proofs(tx, transactions)?,
+            next: None,
+        });
     };
 
     // We stopped within `truncation_block`, so that block may be partial. Block-based pagination
@@ -170,7 +192,10 @@ pub(crate) fn select_transactions_records(
     let last_included_block = truncation_block
         .parent()
         .expect("transactions exist in a block before the truncation block");
-    Ok((last_included_block, with_output_note_proofs(tx, transactions)?))
+    Ok(Page {
+        items: with_output_note_proofs(tx, transactions)?,
+        next: Some(last_included_block),
+    })
 }
 
 /// Maps a `SELECT account_id, block_num, transaction_id, initial_state_commitment,

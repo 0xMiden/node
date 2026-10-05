@@ -1,14 +1,27 @@
 use std::ops::RangeInclusive;
 
 use miden_node_tracing::miden_instrument;
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 
 use super::StateView;
 use crate::COMPONENT;
-use crate::db::queries::StorageMapValuesPage;
-use crate::db::{AccountVaultValue, NoteSyncUpdate, NullifierInfo};
+use crate::db::queries::{
+    AccountStorageMapValuesPaged,
+    AccountVaultAssets,
+    NoteSyncMulti,
+    NullifiersByPrefix,
+    StorageMapValuesPage,
+    TransactionsRecords,
+};
+use crate::db::{
+    AccountVaultValue,
+    NoteSyncUpdate,
+    NullifierInfo,
+    default_storage_map_entries_limit,
+};
 use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
 
 // STATE SYNCHRONIZATION ENDPOINTS
@@ -26,7 +39,9 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(BlockNumber, Vec<crate::db::TransactionRecord>), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        self.db.select_transactions_records(account_ids, block_range).await
+        let block_end = block_range.end();
+        let page = self.db.page(TransactionsRecords::new(account_ids, block_range), None).await?;
+        Ok((page.next.unwrap_or(block_end), page.items))
     }
 
     /// Returns the chain MMR delta and the block header at the range's end for the specified
@@ -94,7 +109,7 @@ impl StateView {
     /// Loads data to synchronize a client's notes.
     ///
     /// Returns as many blocks with matching notes as fit within the response payload limit
-    /// ([`MAX_RESPONSE_PAYLOAD_BYTES`](miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES)).
+    /// ([`MAX_RESPONSE_PAYLOAD_BYTES`]).
     /// Each block includes its header and MMR proof at forest `block_range.end() + 1`.
     ///
     /// Also returns the last block number checked. If this equals `block_range.end()`, the
@@ -120,21 +135,18 @@ impl StateView {
         // view's blockchain MMR always has at least tip + 1 leaves.
         let mmr_checkpoint = block_end + 1;
 
-        let note_syncs = self.db.get_note_sync_multi(block_range, note_tags.into()).await?;
+        let query = NoteSyncMulti::new(note_tags, block_range, MAX_RESPONSE_PAYLOAD_BYTES);
+        let page = self.db.page(query, None).await?;
 
         let mut results = Vec::new();
 
-        for note_sync in note_syncs {
+        for note_sync in page.items {
             let mmr_proof =
                 self.blockchain().open_at(note_sync.block_header.block_num(), mmr_checkpoint)?;
             results.push((note_sync, mmr_proof));
         }
 
-        // if results is empty, return `block_end` since the sync is complete.
-        let last_block_checked =
-            results.last().map_or(block_end, |(update, _)| update.block_header.block_num());
-
-        Ok((results, last_block_checked))
+        Ok((results, page.next.unwrap_or(block_end)))
     }
 
     /// Returns nullifiers matching the given prefixes that were created within a block range.
@@ -148,9 +160,14 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(Vec<NullifierInfo>, BlockNumber), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        self.db
-            .select_nullifiers_by_prefix(prefix_len, nullifier_prefixes, block_range)
-            .await
+        assert_eq!(prefix_len, 16, "Only 16-bit prefixes are supported");
+
+        let block_end = block_range.end();
+        let nullifier_prefixes =
+            nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
+        let query = NullifiersByPrefix::new(prefix_len as u8, nullifier_prefixes, block_range);
+        let page = self.db.page(query, None).await?;
+        Ok((page.items, page.next.unwrap_or(block_end)))
     }
 
     // ACCOUNT STATE SYNCHRONIZATION
@@ -166,7 +183,9 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        self.db.get_account_vault_sync(account_id, block_range).await
+        let block_end = block_range.end();
+        let page = self.db.page(AccountVaultAssets::new(account_id, block_range), None).await?;
+        Ok((page.next.unwrap_or(block_end), page.items))
     }
 
     /// Returns storage map values for syncing within a block range.
@@ -179,6 +198,16 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<StorageMapValuesPage, DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        self.db.select_storage_map_sync_values(account_id, block_range, None).await
+        let block_end = block_range.end();
+        let query = AccountStorageMapValuesPaged::new(
+            account_id,
+            block_range,
+            default_storage_map_entries_limit(),
+        );
+        let page = self.db.page(query, None).await?;
+        Ok(StorageMapValuesPage {
+            last_block_included: page.next.unwrap_or(block_end),
+            values: page.items,
+        })
     }
 }

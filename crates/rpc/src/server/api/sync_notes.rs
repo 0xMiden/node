@@ -139,9 +139,9 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
         NoteSyncError::DeserializationFailed(err) => {
             SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
         },
-        NoteSyncError::UnderlyingDatabaseError(_)
-        | NoteSyncError::EmptyBlockHeadersTable
-        | NoteSyncError::MmrError(_) => internal_error(message),
+        NoteSyncError::UnderlyingDatabaseError(_) | NoteSyncError::MmrError(_) => {
+            internal_error(message)
+        },
     }
 }
 

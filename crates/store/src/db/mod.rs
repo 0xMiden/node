@@ -2,9 +2,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::pin::pin;
 use std::sync::Arc;
 
 use anyhow::Context;
+use futures::{Stream, TryStreamExt};
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_tracing::{info, miden_instrument, warn};
@@ -38,25 +40,21 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
+use crate::db::pagination::{Page, Paginated};
 pub use crate::db::queries::{
-    AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
-    NullifiersPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
-    PublicAccountIdsPage,
-    PublicAccountStateRootsPage,
-    StorageMapValuesPage,
 };
-use crate::errors::{DatabaseError, NoteSyncError};
+use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
-use crate::state::{ScopedBlockNum, ScopedBlockRange};
+use crate::state::ScopedBlockNum;
 use crate::{COMPONENT, LOG_TARGET};
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
     2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
 
-fn default_storage_map_entries_limit() -> usize {
+pub(crate) fn default_storage_map_entries_limit() -> usize {
     MAX_RESPONSE_PAYLOAD_BYTES / STORAGE_MAP_VALUE_PER_ROW_BYTES
 }
 
@@ -74,6 +72,8 @@ pub(crate) use test_db::TestDb;
 
 /// Query functions on the `miden-node-db` SQLite framework.
 pub(crate) mod queries;
+
+pub(crate) mod pagination;
 
 mod utils;
 
@@ -319,55 +319,52 @@ impl Db {
         Ok(())
     }
 
-    /// Returns a page of nullifiers for tree rebuilding.
+    /// Reads the page of `query` after `after`, or the first page when `after` is `None`.
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
         err,
     )]
-    pub async fn select_nullifiers_paged(
+    pub(crate) async fn page<Q: Paginated>(
         &self,
-        page_size: std::num::NonZeroUsize,
-        after_nullifier: Option<Nullifier>,
-    ) -> Result<NullifiersPage> {
+        query: Q,
+        after: Option<Q::Cursor>,
+    ) -> Result<Page<Q::Item, Q::Cursor>> {
         self.reader
-            .read("read nullifiers paged", move |tx| {
-                queries::select_nullifiers_paged(tx, page_size, after_nullifier)
-            })
+            .read(std::any::type_name::<Q>(), move |tx| query.page(tx, after.as_ref()))
             .await
     }
 
-    /// Loads the nullifiers that match the prefixes from the DB.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        fields(
-            prefix_len,
-            prefix.count = nullifier_prefixes.len(),
-        ),
-        err,
-    )]
-    pub async fn select_nullifiers_by_prefix(
+    /// Streams the items of every non-empty page of `query` in order, ending after the page whose
+    /// `next` is `None`.
+    ///
+    /// Each page runs in its own read transaction, so no reader connection stays checked out
+    /// between pages. As a consequence, different pages can observe different snapshots of the
+    /// database.
+    pub(crate) fn pages<Q: Paginated>(
         &self,
-        prefix_len: u32,
-        nullifier_prefixes: Vec<u32>,
-        block_range: ScopedBlockRange,
-    ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-        let block_range = block_range.into_inner();
-        assert_eq!(prefix_len, 16, "Only 16-bit prefixes are supported");
-
-        self.reader
-            .read("nullifieres by prefix", move |tx| {
-                let nullifier_prefixes =
-                    nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
-                queries::select_nullifiers_by_prefix(
-                    tx,
-                    prefix_len as u8,
-                    &nullifier_prefixes[..],
-                    block_range,
-                )
-            })
-            .await
+        query: Q,
+    ) -> impl Stream<Item = Result<Vec<Q::Item>>> + Send + use<Q> {
+        let reader = self.reader.clone();
+        let query = Arc::new(query);
+        // The state holds the `after` cursor of the next page, or `None` once the last page is
+        // read.
+        futures::stream::try_unfold(Some(None), move |state: Option<Option<Q::Cursor>>| {
+            let reader = reader.clone();
+            let query = Arc::clone(&query);
+            async move {
+                let Some(after) = state else {
+                    return Ok(None);
+                };
+                let page = reader
+                    .read(std::any::type_name::<Q>(), move |tx| query.page(tx, after.as_ref()))
+                    .await?;
+                if page.items.is_empty() {
+                    return Ok(None);
+                }
+                Ok::<_, DatabaseError>(Some((page.items, page.next.map(Some))))
+            }
+        })
     }
 
     /// Search for a [`BlockHeader`] from the database by its `block_num`.
@@ -448,60 +445,6 @@ impl Db {
             .await
     }
 
-    /// Returns a page of account commitments for tree rebuilding.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err,
-    )]
-    pub async fn select_account_commitments_paged(
-        &self,
-        page_size: std::num::NonZeroUsize,
-        after_account_id: Option<AccountId>,
-    ) -> Result<AccountCommitmentsPage> {
-        self.reader
-            .read("read account commitments paged", move |tx| {
-                queries::select_account_commitments_paged(tx, page_size, after_account_id)
-            })
-            .await
-    }
-
-    /// Returns a page of public account IDs for forest rebuilding.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err,
-    )]
-    pub async fn select_public_account_ids_paged(
-        &self,
-        page_size: std::num::NonZeroUsize,
-        after_account_id: Option<AccountId>,
-    ) -> Result<PublicAccountIdsPage> {
-        self.reader
-            .read("read public account IDs paged", move |tx| {
-                queries::select_public_account_ids_paged(tx, page_size, after_account_id)
-            })
-            .await
-    }
-
-    /// Returns a page of public account state roots for forest consistency verification.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err,
-    )]
-    pub async fn select_public_account_state_roots_paged(
-        &self,
-        page_size: std::num::NonZeroUsize,
-        after_account_id: Option<AccountId>,
-    ) -> Result<PublicAccountStateRootsPage> {
-        self.reader
-            .read("read public account state roots paged", move |tx| {
-                queries::select_public_account_state_roots_paged(tx, page_size, after_account_id)
-            })
-            .await
-    }
-
     /// Loads public account details from the DB.
     #[miden_instrument(
         level = "debug",
@@ -571,29 +514,6 @@ impl Db {
             .read("Get account header with storage header at block", move |tx| {
                 queries::select_account_header_with_storage_header_at_block(
                     tx, account_id, *block_num,
-                )
-            })
-            .await
-    }
-
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err,
-    )]
-    pub async fn get_note_sync_multi(
-        &self,
-        block_range: ScopedBlockRange,
-        note_tags: Arc<[u32]>,
-    ) -> Result<Vec<NoteSyncUpdate>, NoteSyncError> {
-        let block_range = block_range.into_inner();
-        self.reader
-            .read("notes sync task", move |tx| {
-                queries::get_note_sync_multi(
-                    tx,
-                    &note_tags,
-                    block_range,
-                    MAX_RESPONSE_PAYLOAD_BYTES,
                 )
             })
             .await
@@ -742,31 +662,6 @@ impl Db {
         resolved_note_ids
     }
 
-    /// Selects storage map values for syncing storage maps for a specific account ID.
-    ///
-    /// The returned values are the latest known values up to `block_range.end()`, and no values
-    /// earlier than `block_range.start()` are returned.
-    pub(crate) async fn select_storage_map_sync_values(
-        &self,
-        account_id: AccountId,
-        block_range: ScopedBlockRange,
-        entries_limit: Option<usize>,
-    ) -> Result<StorageMapValuesPage> {
-        let block_range = block_range.into_inner();
-        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
-
-        self.reader
-            .read("select storage map sync values", move |tx| {
-                queries::select_account_storage_map_values_paged(
-                    tx,
-                    account_id,
-                    block_range,
-                    entries_limit,
-                )
-            })
-            .await
-    }
-
     /// Reconstructs storage map details from the database for a specific slot at a block.
     ///
     /// Used as fallback when `AccountStateForest` cache misses (historical or evicted queries).
@@ -790,53 +685,26 @@ impl Db {
 
         // TODO this remains expensive with a large history until we implement pruning for DB
         // columns
-        let mut values = Vec::new();
-        let mut block_range_start = BlockNumber::GENESIS;
         let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
+        let query = queries::AccountStorageMapValuesPaged::new(
+            account_id,
+            block_num.range_from(BlockNumber::GENESIS),
+            entries_limit,
+        );
 
-        let mut page = self
-            .select_storage_map_sync_values(
-                account_id,
-                block_num.range_from(block_range_start),
-                Some(entries_limit),
-            )
-            .await?;
-
-        values.extend(page.values);
-        let mut last_block_included = page.last_block_included;
-
-        // If the first page returned no values, the block at block_range_start has more entries
-        // than the limit allows (e.g. genesis accounts with large storage maps).
-        if values.is_empty() && last_block_included == block_range_start {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
-        }
-
+        let mut values = Vec::new();
+        let mut pages = pin!(self.pages(query));
         loop {
-            if page.last_block_included == *block_num
-                || page.last_block_included < block_range_start
-            {
-                break;
+            match pages.try_next().await {
+                Ok(Some(page)) => values.extend(page),
+                Ok(None) => break,
+                // A single block holds more entries than fit in a page, as with genesis accounts
+                // that have large storage maps.
+                Err(DatabaseError::BlockExceedsPageLimit { .. }) => {
+                    return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
+                },
+                Err(err) => return Err(err),
             }
-
-            block_range_start = page.last_block_included.child();
-            page = self
-                .select_storage_map_sync_values(
-                    account_id,
-                    block_num.range_from(block_range_start),
-                    Some(entries_limit),
-                )
-                .await?;
-
-            if page.last_block_included <= last_block_included {
-                return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
-            }
-
-            last_block_included = page.last_block_included;
-            values.extend(page.values);
-        }
-
-        if page.last_block_included != *block_num {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
         }
 
         // Filter to the specific slot and collect latest values per key
@@ -881,42 +749,10 @@ impl Db {
             .await
     }
 
-    pub async fn get_account_vault_sync(
-        &self,
-        account_id: AccountId,
-        block_range: ScopedBlockRange,
-    ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-        let block_range = block_range.into_inner();
-        self.reader
-            .read("account vault sync", move |tx| {
-                queries::select_account_vault_assets(tx, account_id, block_range)
-            })
-            .await
-    }
-
     /// Returns the script for a note by its root.
     pub async fn select_note_script_by_root(&self, root: Word) -> Result<Option<NoteScript>> {
         self.reader
             .read("note script by root", move |tx| queries::select_note_script_by_root(tx, root))
-            .await
-    }
-
-    /// Returns the complete transaction records for the specified accounts within the specified
-    /// block range, including state commitments and note IDs.
-    ///
-    /// Note: This method is size-limited (~5MB) and may not return all matching transactions
-    /// if the limit is exceeded. Transactions from partial blocks are excluded to maintain
-    /// consistency.
-    pub async fn select_transactions_records(
-        &self,
-        account_ids: Vec<AccountId>,
-        block_range: ScopedBlockRange,
-    ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-        let block_range = block_range.into_inner();
-        self.reader
-            .read("full transactions records", move |tx| {
-                queries::select_transactions_records(tx, &account_ids, block_range)
-            })
             .await
     }
 }

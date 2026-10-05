@@ -63,6 +63,14 @@ impl ScopedBlockRange {
         Self(range)
     }
 
+    /// Constructs a scoped block range without validation.
+    ///
+    /// Test-only: lets database tests exercise scoped queries without a running state.
+    #[cfg(test)]
+    pub(crate) fn new_unchecked(range: RangeInclusive<BlockNumber>) -> Self {
+        Self(range)
+    }
+
     /// Returns the start of the validated range.
     pub(crate) fn start(&self) -> BlockNumber {
         *self.0.start()
