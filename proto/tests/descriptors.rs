@@ -105,9 +105,9 @@ fn descriptors_embed_their_dependencies() {
     }
 }
 
-/// Deprecation must preserve existing unary contracts and keep each replacement server-streaming.
+/// Legacy synchronization methods must remain supported unary methods alongside their streams.
 #[test]
-fn unary_sync_deprecations_preserve_cardinality_and_have_stream_replacements() {
+fn legacy_sync_methods_remain_non_deprecated_alongside_streams() {
     let descriptor = miden_node_proto_build::rpc_api_descriptor();
     let service = descriptor
         .file
@@ -124,7 +124,7 @@ fn unary_sync_deprecations_preserve_cardinality_and_have_stream_replacements() {
     ] {
         let legacy = service.method.iter().find(|method| method.name() == old).unwrap();
         assert!(
-            legacy
+            !legacy
                 .options
                 .as_ref()
                 .is_some_and(|options| options.deprecated.unwrap_or_default())

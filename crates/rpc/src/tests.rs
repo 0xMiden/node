@@ -1,8 +1,3 @@
-#![expect(
-    deprecated,
-    reason = "legacy synchronization methods remain covered during client migration"
-)]
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroUsize;
 use std::sync::Arc;

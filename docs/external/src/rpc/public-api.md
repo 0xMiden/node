@@ -147,7 +147,7 @@ separate from HTTP/2 and proxy buffers.
 ## Compatibility and deployment
 
 The unary `SyncNotes`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, and `SyncNullifiers` endpoints
-are deprecated and remain available alongside their streams. Clients can use unary requests when a new method returns
+remain supported without deprecation alongside their streams. Clients can use unary requests when a new method returns
 `UNIMPLEMENTED` before any data arrives. Midstream errors and failed proofs must fail the attempt. Do not silently fall
 back after a partial response. Keep full account transaction discovery until unknown consumed-public-note recovery has
 an equivalent verified discovery source.
