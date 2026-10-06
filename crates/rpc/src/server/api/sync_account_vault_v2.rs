@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
@@ -11,16 +10,10 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 
 use super::error_codes::SyncAccountVaultV2ErrorCode as ErrorCode;
+use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, database_error_to_status};
 use crate::{COMPONENT, LOG_TARGET};
-
-/// Database rows fetched per page. This bounds internal work and memory, not encoded response size.
-const DB_PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
-/// Stream items buffered before backpressure pauses the database producer.
-const STREAM_BUFFER_SIZE: usize = 32;
-/// Maximum time a stream producer waits for a stalled client to accept one update.
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 type RequestInput = (AccountId, SyncRange);
 

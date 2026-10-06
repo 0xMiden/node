@@ -1,6 +1,4 @@
-use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, State, TransactionRecord};
@@ -10,6 +8,11 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
 
 use super::error_codes::GetTransactionsByIdErrorCode as ErrorCode;
+use super::stream_settings::{
+    SEND_TIMEOUT,
+    TRANSACTION_DB_PAGE_SIZE,
+    TRANSACTION_STREAM_BUFFER_SIZE,
+};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
@@ -63,8 +66,8 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
                 done: false,
             },
             permit,
-            1,
-            Duration::from_secs(10),
+            TRANSACTION_STREAM_BUFFER_SIZE,
+            SEND_TIMEOUT,
         )
         .await
     }
@@ -91,7 +94,7 @@ impl Paginator for LookupPaginator {
                 self.ids.clone(),
                 self.target,
                 self.cursor,
-                NonZeroUsize::MIN,
+                TRANSACTION_DB_PAGE_SIZE,
             )
             .await
             .map_err(|err| match err {

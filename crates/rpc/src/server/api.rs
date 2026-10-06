@@ -94,6 +94,7 @@ mod get_transactions_by_id;
 mod is_account_allowed;
 mod register_account;
 mod status;
+mod stream_settings;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
 mod submit_proven_tx;
