@@ -17,13 +17,21 @@ runs:
         source /etc/os-release
         echo "id=${ID}-${VERSION_ID}" >> "${GITHUB_OUTPUT}"
 
+    - name: Hash xtask dependencies
+      id: dependencies
+      shell: bash
+      run: |
+        python3 -B -m unittest discover -s "${GITHUB_ACTION_PATH}"
+        digest="$(python3 -B "${GITHUB_ACTION_PATH}/cache_key.py")"
+        echo "hash=${digest}" >> "${GITHUB_OUTPUT}"
+
     - name: Restore xtask
       id: cache
       uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
       with:
         path: ${{ runner.temp }}/xtask-bin
         # Accept only an exact match because the binary runs without a Cargo build check.
-        key: xtask-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.id }}-${{ hashFiles('xtask/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/actions/setup-xtask/action.yml') }}
+        key: xtask-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.id }}-${{ steps.dependencies.outputs.hash }}-${{ hashFiles('xtask/**', 'rust-toolchain.toml', '.cargo/config.toml', '.github/actions/setup-xtask/action.yml', '.github/actions/setup-xtask/cache_key.py') }}
 
     - name: Build xtask
       if: steps.cache.outputs.cache-hit != 'true'
