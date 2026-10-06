@@ -7,12 +7,14 @@ use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use miden_protocol::block::BlockNumber;
 use proto::miden::node::v1::sync_notes_v2_response::Item;
 use proto::miden::node::v1::{NoteBlockStart, SyncNotesV2Response};
+use tracing::miden_instrument;
 
 use super::error_codes::SyncNotesV2ErrorCode as ErrorCode;
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_notes::note_sync_record_to_proto;
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
+use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
@@ -39,6 +41,11 @@ impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
         Ok(item)
     }
 
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "sync_notes_v2",
+        err,
+    )]
     async fn handle(
         &self,
         (range, tags): Self::Input,

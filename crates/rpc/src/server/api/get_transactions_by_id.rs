@@ -5,6 +5,7 @@ use miden_node_store::{DatabaseError, State, TransactionRecord};
 use miden_node_utils::limiter::QueryParamTransactionIdLimit;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
+use tracing::miden_instrument;
 
 use super::error_codes::GetTransactionsByIdErrorCode as ErrorCode;
 use super::stream_settings::{
@@ -14,12 +15,14 @@ use super::stream_settings::{
 };
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
+use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcService {
     type Input = (BlockNumber, Vec<TransactionId>);
     type Item = TransactionRecord;
     type ItemStream = SyncResponseStream<Self::Item>;
+
     fn decode(
         request: proto::miden::node::v1::GetTransactionsByIdRequest,
     ) -> tonic::Result<Self::Input> {
@@ -39,6 +42,7 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
         ids.dedup();
         Ok((target, ids))
     }
+
     fn encode(
         item: Self::Item,
     ) -> tonic::Result<proto::miden::node::v1::GetTransactionsByIdResponse> {
@@ -46,6 +50,12 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
             transaction: Some(super::transaction_stream::encode(item)?),
         })
     }
+
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "get_transactions_by_id",
+        err,
+    )]
     async fn handle(
         &self,
         (target, ids): Self::Input,
@@ -74,6 +84,7 @@ struct LookupPaginator {
     cursor: Option<TransactionId>,
     done: bool,
 }
+
 #[tonic::async_trait]
 impl Paginator for LookupPaginator {
     type Item = TransactionRecord;
