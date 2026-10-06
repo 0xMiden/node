@@ -152,7 +152,11 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         // backed up to the block store by `validate_block`, so it is available to subscribers by
         // the time they observe this new tip.
         self.committed_tip.send_replace(BlockNumber::from(new_block_num));
-        self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
+        // A replacement stores no additional block. The count must stay equal to the number of
+        // stored block headers, which is the value a restart reads.
+        if !is_replacement {
+            self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
+        }
 
         Ok((signature, block_commitment, self.signer.public_key()))
     }

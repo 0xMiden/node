@@ -683,6 +683,37 @@ async fn chain_tip_replacement_succeeds() {
     );
 }
 
+/// A replacement of the tip block stores no additional block, so it does not change the signed
+/// block count. The count in memory then stays equal to the growth of the count that a restart
+/// reads from the database.
+#[tokio::test]
+async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
+    let mut tv = TestValidator::new().await;
+    let genesis_header = tv.chain_tip.clone();
+    let chain_at_genesis = tv.chain.clone();
+    let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    tv.apply_empty_block().await;
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        chain_at_genesis,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let replacement =
+        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
+            .unwrap();
+    tv.call_sign_block(&replacement)
+        .await
+        .expect("chain tip replacement should succeed");
+
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+    let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    assert_eq!(stored - stored_at_genesis, 1);
+}
+
 /// A block at chain tip + 2 (skipping a block number) should be rejected.
 #[tokio::test]
 async fn chain_tip_plus_two_rejected() {
