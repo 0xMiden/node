@@ -47,8 +47,9 @@ pub(super) async fn get_validated_private_transaction(
 }
 
 fn parse_transaction_id(value: &str) -> Result<TransactionId, ApiError> {
-    let bytes = decode_hex("transaction_id", value)?;
-    TransactionId::read_from_bytes(&bytes).map_err(|_error| {
-        ApiError::bad_request("transaction_id must be a canonical transaction id")
-    })
+    let invalid = || ApiError::bad_request("transaction_id must be a canonical transaction id");
+    // `read_from_bytes` does not reject bytes after the id, so the length is checked first.
+    let bytes: [u8; 32] =
+        decode_hex("transaction_id", value)?.try_into().map_err(|_bytes| invalid())?;
+    TransactionId::read_from_bytes(&bytes).map_err(|_error| invalid())
 }

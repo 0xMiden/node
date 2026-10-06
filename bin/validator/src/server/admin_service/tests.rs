@@ -391,9 +391,19 @@ async fn get_transaction_returns_the_full_record() {
     .unwrap_err();
     assert_eq!(error.status, StatusCode::NOT_FOUND);
 
-    let error = get_validated_private_transaction(State(service), Path("not hex".to_owned()))
-        .await
-        .unwrap_err();
+    let error =
+        get_validated_private_transaction(State(service.clone()), Path("not hex".to_owned()))
+            .await
+            .unwrap_err();
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
+
+    // An id with bytes after the 32-byte transaction id does not name the stored transaction.
+    let error = get_validated_private_transaction(
+        State(service),
+        Path(format!("{}00", hex::encode(transaction_id.to_bytes()))),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
