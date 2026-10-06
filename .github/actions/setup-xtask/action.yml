@@ -1,5 +1,5 @@
 name: "Setup xtask"
-description: "Restore or build xtask on Linux"
+description: "Restore or build xtask on Linux and add it to PATH"
 
 inputs:
   save-cache:
@@ -47,3 +47,8 @@ runs:
       with:
         path: ${{ runner.temp }}/xtask-bin
         key: ${{ steps.cache.outputs.cache-primary-key }}
+
+    - name: Add xtask to PATH
+      shell: bash
+      # The runner controls this path. The directory contains only the xtask binary.
+      run: echo "${RUNNER_TEMP}/xtask-bin" >> "${GITHUB_PATH}" # zizmor: ignore[github-env]

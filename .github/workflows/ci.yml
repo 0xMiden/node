@@ -408,7 +408,7 @@ jobs:
       - name: Install Markdown tools
         run: npm install --global prettier@3.8.3 markdownlint-cli2@0.22.1
       - name: Fmt
-        run: make format-check XTASK="${RUNNER_TEMP}/xtask-bin/xtask"
+        run: make format-check XTASK=xtask
       - name: Markdown lint
         run: make markdown-lint
 
