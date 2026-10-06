@@ -2,8 +2,8 @@
 
 Builds the genesis xUSDC faucet and its distributor **offline** — before any network exists — and writes their `.mac`
 account files. The faucet id hashes the account seed plus the code and storage commitments (no chain state), so the id
-the tool prints is the id the network boots with, reproducible from the config. Recording the consumed deposit nonces
-and prefunding the distributor are later steps that leave the faucet id unchanged.
+the tool prints is the id the network boots with, reproducible from the config. Recording the consumed deposit nonces,
+prefunding the distributor and upgrading the token policy manager are later steps that leave the faucet id unchanged.
 
 The config names the five role holders the `XReserveStablecoinBuilder` seeds — **owner** (`ADMIN`), **attest_admin**,
 **pauser**, **unpauser**, **blocklist_manager** — by bare account id (hex or bech32). At launch the distributor doubles
@@ -22,7 +22,7 @@ cargo install --path crates/usdcx-genesis --locked    # add --force to reinstall
 
 Every command works in the current directory: it reads its inputs under their well-known names (each `--flag` below can
 point elsewhere) and writes one new file. No command overwrites an existing file, so a re-run needs the old output moved
-away first. Start from copies of the crate's two templates, then run the four commands in launch order:
+away first. Start from copies of the crate's two templates, then run the five commands in launch order:
 
 ```sh
 cp <repo>/crates/usdcx-genesis/config.template.json config.json    # then replace every <...> value
@@ -31,6 +31,7 @@ miden-usdcx-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-p
 miden-usdcx-genesis faucet [--config config.json]
 miden-usdcx-genesis prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
 miden-usdcx-genesis record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
+miden-usdcx-genesis upgrade-policy-manager [--faucet usdcx-faucet.genesis.mac]
 ```
 
 1. `new-distributor` generates a fresh public basic wallet with a new signing key (ECDSA secp256k1/keccak by default,
@@ -49,8 +50,15 @@ miden-usdcx-genesis record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.j
 4. `record-nonces` records the Circle deposit nonces listed in `nonces.json` as consumed in the faucet and writes
    `usdcx-faucet.genesis.mac`. Recording a nonce twice is a no-op, so the file can list every nonce so far. Run it after
    the deposits, when their nonces are known.
+5. `upgrade-policy-manager` replaces the faucet's token policy manager with the V2 one and writes
+   `usdcx-faucet-v2.genesis.mac`. The faucet issues the network's fee asset, and the V1 transfer policies fail while the
+   faucet is paused: a pause would block every fee payment, including the one needed to unpause it. The V2 transfer
+   policies ignore the pause, so pause only stops mints and burns. `faucet` keeps building the V1 faucet because its id
+   is the one registered with Circle; the upgrade keeps that id, the vault and the recorded nonces. It refuses a faucet
+   that does not have the V1 code, e.g. one that is already upgraded.
 
-Steps 3 and 4 both read the faucet written by step 2 and are independent of each other.
+Steps 3 and 4 both read the faucet written by step 2 and are independent of each other. Step 5 reads the faucet written
+by step 4.
 
 ## Config
 
@@ -110,10 +118,10 @@ The faucet records them as consumed, so the relayer cannot mint them a second ti
 
 ## Node genesis (the network operator's artifact)
 
-The operator's `genesis.toml` takes the two `.genesis.mac` files:
+The operator's `genesis.toml` takes the upgraded faucet and the prefunded distributor:
 
 ```toml
-native_faucet = "usdcx-faucet.genesis.mac"
+native_faucet = "usdcx-faucet-v2.genesis.mac"
 
 [[account]]
 path = "distributor.genesis.mac"

@@ -31,9 +31,13 @@ pub const FAUCET_MAC_FILE: &str = "usdcx-faucet.mac";
 /// operator's genesis config, and the funding service's account file.
 pub const GENESIS_DISTRIBUTOR_MAC_FILE: &str = "distributor.genesis.mac";
 
-/// The faucet with the deposit nonces recorded that `record-nonces` writes: the value of the
-/// `native_faucet` key in the network operator's genesis config.
+/// The faucet with the deposit nonces recorded that `record-nonces` writes and
+/// `upgrade-policy-manager` reads.
 pub const GENESIS_FAUCET_MAC_FILE: &str = "usdcx-faucet.genesis.mac";
+
+/// The faucet with the token policy manager V2 that `upgrade-policy-manager` writes: the value of
+/// the `native_faucet` key in the network operator's genesis config.
+pub const GENESIS_FAUCET_V2_MAC_FILE: &str = "usdcx-faucet-v2.genesis.mac";
 
 /// Writes `file` to `path`, refusing to overwrite an existing file. A file carrying secret keys is
 /// created readable by its owner only.

@@ -83,6 +83,12 @@ pub fn record_nonces(
     miden_usdcx::record_used_nonces(faucet.clone(), nonces)
 }
 
+/// Replaces the token policy manager of the genesis `faucet` with the V2 one and returns the
+/// upgraded faucet, keeping its id, vault, nonce and recorded state.
+pub fn upgrade_policy_manager(faucet: &Account) -> Result<Account, XReserveStablecoinBuilderError> {
+    miden_usdcx::upgrade_to_token_policy_manager_v2(faucet.clone())
+}
+
 // DISTRIBUTOR
 // ================================================================================================
 

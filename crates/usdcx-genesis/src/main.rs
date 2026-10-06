@@ -1,6 +1,6 @@
 //! `miden-usdcx-genesis` — builds the genesis xUSDC faucet and its distributor offline and writes
 //! their `.mac` account files. Every command reads and writes the current directory under the
-//! well-known file names (each input can be pointed elsewhere). The four commands, in launch
+//! well-known file names (each input can be pointed elsewhere). The five commands, in launch
 //! order:
 //!
 //! ```text
@@ -10,6 +10,8 @@
 //!                                                                                   # writes distributor.genesis.mac
 //! cargo run -p miden-usdcx-genesis -- record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.json]
 //!                                                                                   # writes usdcx-faucet.genesis.mac
+//! cargo run -p miden-usdcx-genesis -- upgrade-policy-manager [--faucet usdcx-faucet.genesis.mac]
+//!                                                                                   # writes usdcx-faucet-v2.genesis.mac
 //! ```
 //!
 //! Exit 0 = the account file written. The id listing goes to stdout. No command overwrites an
@@ -26,6 +28,7 @@ use miden_usdcx_genesis::accounts::{
     new_distributor,
     prefund_distributor,
     record_nonces,
+    upgrade_policy_manager,
 };
 use miden_usdcx_genesis::config::{GenesisToolConfig, UsedNoncesFile};
 use miden_usdcx_genesis::output::{
@@ -34,6 +37,7 @@ use miden_usdcx_genesis::output::{
     FAUCET_MAC_FILE,
     GENESIS_DISTRIBUTOR_MAC_FILE,
     GENESIS_FAUCET_MAC_FILE,
+    GENESIS_FAUCET_V2_MAC_FILE,
     NONCES_FILE,
     read_account_file,
     render_ids,
@@ -85,6 +89,14 @@ enum Command {
         #[arg(long, default_value = NONCES_FILE)]
         nonces: PathBuf,
     },
+    /// Replaces the faucet's token policy manager with the V2 one, whose transfer policies keep
+    /// working while the faucet is paused, and writes the result as the genesis-ready
+    /// usdcx-faucet-v2.genesis.mac.
+    UpgradePolicyManager {
+        /// The faucet file written by `record-nonces`.
+        #[arg(long, default_value = GENESIS_FAUCET_MAC_FILE)]
+        faucet: PathBuf,
+    },
 }
 
 /// The signing schemes `new-distributor` can generate a key for.
@@ -109,6 +121,7 @@ fn main() -> Result<()> {
         Command::Faucet { config } => run_faucet(&config),
         Command::Prefund { faucet, distributor } => run_prefund(&faucet, &distributor),
         Command::RecordNonces { faucet, nonces } => run_record_nonces(&faucet, &nonces),
+        Command::UpgradePolicyManager { faucet } => run_upgrade_policy_manager(&faucet),
     }
 }
 
@@ -185,5 +198,23 @@ fn run_record_nonces(faucet_path: &Path, nonces_path: &Path) -> Result<()> {
         )
     );
     println!("written to {GENESIS_FAUCET_MAC_FILE}");
+    Ok(())
+}
+
+fn run_upgrade_policy_manager(faucet_path: &Path) -> Result<()> {
+    let (faucet, _) = read_account_file(faucet_path)?.into_parts();
+    let upgraded = upgrade_policy_manager(&faucet).context("upgrading the token policy manager")?;
+    write_account_file(
+        &AccountFile::new(upgraded.clone(), Vec::new()),
+        Path::new(GENESIS_FAUCET_V2_MAC_FILE),
+    )?;
+    print!(
+        "{}",
+        render_ids(
+            &format!("usdcx-faucet ({GENESIS_FAUCET_V2_MAC_FILE}, token policy manager V2)"),
+            upgraded.id(),
+        )
+    );
+    println!("written to {GENESIS_FAUCET_V2_MAC_FILE}");
     Ok(())
 }
