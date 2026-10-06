@@ -81,17 +81,12 @@ pub(super) enum SyncAccountVaultV2ErrorCode {
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
-    ResourceExhausted = 5,
     AccountNotPublic = 6,
 }
 
 impl SyncAccountVaultV2ErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -102,17 +97,12 @@ pub(super) enum SyncAccountStorageMapsV2ErrorCode {
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
-    ResourceExhausted = 5,
     AccountNotPublic = 6,
 }
 
 impl SyncAccountStorageMapsV2ErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -123,16 +113,11 @@ pub(super) enum SyncNotesV2ErrorCode {
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
-    ResourceExhausted = 5,
 }
 
 impl SyncNotesV2ErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -143,16 +128,11 @@ pub(super) enum SyncAccountCommitmentsErrorCode {
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
-    ResourceExhausted = 5,
 }
 
 impl SyncAccountCommitmentsErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -162,16 +142,11 @@ pub(super) enum GetTransactionsByIdErrorCode {
     DeserializationFailed = 1,
     MissingTarget = 2,
     FutureTarget = 3,
-    ResourceExhausted = 5,
 }
 
 impl GetTransactionsByIdErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -181,16 +156,11 @@ pub(super) enum SyncTransactionsV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
-    ResourceExhausted = 5,
 }
 
 impl SyncTransactionsV2ErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }
 
@@ -200,16 +170,11 @@ pub(super) enum SyncNullifiersV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
-    ResourceExhausted = 5,
     InvalidPrefixLength = 6,
 }
 
 impl SyncNullifiersV2ErrorCode {
     pub(super) fn status(self, message: impl Into<String>) -> Status {
-        let code = match self {
-            Self::ResourceExhausted => Code::ResourceExhausted,
-            _ => Code::InvalidArgument,
-        };
-        Status::with_details(code, message.into(), vec![self as u8].into())
+        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
     }
 }

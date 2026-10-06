@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, State, TransactionRecord};
-use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamTransactionIdLimit;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
@@ -51,12 +50,8 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
         &self,
         (target, ids): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let permit = self
-            .sync_stream_limiter
-            .acquire(ClientIp::from_extensions(extensions))
-            .map_err(|err| ErrorCode::ResourceExhausted.status(err.message()))?;
         SyncStream::start(
             LookupPaginator {
                 state: Arc::clone(&self.state),
@@ -65,7 +60,6 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
                 cursor: None,
                 done: false,
             },
-            permit,
             TRANSACTION_STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )

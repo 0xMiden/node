@@ -134,7 +134,6 @@ pub struct RpcService {
     block_subscription_semaphore: Arc<Semaphore>,
     proof_subscription_semaphore: Arc<Semaphore>,
     subscription_ban: Arc<IpBanList>,
-    sync_stream_limiter: sync_stream::SyncStreamLimiter,
 }
 
 impl RpcService {
@@ -155,7 +154,6 @@ impl RpcService {
             block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
             subscription_ban: Arc::new(IpBanList::default()),
-            sync_stream_limiter: sync_stream::SyncStreamLimiter::default(),
         }
     }
 
