@@ -191,7 +191,9 @@ impl PrivateRecordContext {
         let (chain_id, rest) = rest.split_at_checked(32).ok_or_else(malformed)?;
         let (key_epoch, rest) = rest.split_at_checked(32).ok_or_else(malformed)?;
         let (transaction_id, version) = rest.split_at_checked(32).ok_or_else(malformed)?;
-        if domain != CONTEXT_DOMAIN_V1 || version != PRIVATE_RECORD_FORMAT_V1.to_be_bytes() {
+        if domain != CONTEXT_DOMAIN_V1
+            || version != PrivateRecordFormatVersion::V1.as_u32().to_be_bytes()
+        {
             return Err(malformed());
         }
         let transaction_id =
