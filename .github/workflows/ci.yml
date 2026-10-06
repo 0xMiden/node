@@ -321,6 +321,8 @@ jobs:
           tool: cargo-binstall
       - name: Install cargo-audit
         run: cargo binstall --no-confirm cargo-audit@0.22.2
+      - name: Check xtask dependencies
+        run: cargo audit --file xtask/Cargo.lock --deny yanked --deny unsound
       - name: Check dependencies
         run: |
           set +e
