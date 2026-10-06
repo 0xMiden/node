@@ -3,7 +3,6 @@ use std::sync::Arc;
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, NullifierCursor, NullifierInfo, State};
-use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 
 use super::error_codes::SyncNullifiersV2ErrorCode as ErrorCode;
@@ -54,12 +53,8 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
         &self,
         (target, ids): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let permit = self
-            .sync_stream_limiter
-            .acquire(ClientIp::from_extensions(extensions))
-            .map_err(|err| ErrorCode::ResourceExhausted.status(err.message()))?;
         SyncStream::start(
             NullifierPaginator {
                 state: Arc::clone(&self.state),
@@ -68,7 +63,6 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
                 cursor: None,
                 done: false,
             },
-            permit,
             STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )

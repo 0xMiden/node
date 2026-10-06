@@ -4,7 +4,6 @@ use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, GetAccountError, State};
-use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_protocol::account::AccountId;
 use proto::miden::node::v1::SyncAccountCommitmentsResponse;
@@ -46,12 +45,8 @@ impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcSe
         &self,
         (range, ids): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let permit = self
-            .sync_stream_limiter
-            .acquire(ClientIp::from_extensions(extensions))
-            .map_err(|err| ErrorCode::ResourceExhausted.status(err.message()))?;
         SyncStream::start(
             AccountPaginator {
                 state: Arc::clone(&self.state),
@@ -60,7 +55,6 @@ impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcSe
                 cursor: None,
                 done: false,
             },
-            permit,
             STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )

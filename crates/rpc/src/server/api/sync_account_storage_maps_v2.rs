@@ -5,7 +5,6 @@ use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, State, StorageMapCursor, StorageMapValue};
 use miden_node_tracing::{miden_instrument, miden_span_record};
-use miden_node_utils::grpc::ClientIp;
 use miden_protocol::account::AccountId;
 
 use super::error_codes::SyncAccountStorageMapsV2ErrorCode as ErrorCode;
@@ -60,7 +59,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMapsV2 for Rpc
         &self,
         (account_id, block_range): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
         miden_span_record!(
             account.id = account_id,
@@ -76,10 +75,6 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMapsV2 for Rpc
             );
         }
 
-        let permit = self
-            .sync_stream_limiter
-            .acquire(ClientIp::from_extensions(extensions))
-            .map_err(|err| ErrorCode::ResourceExhausted.status(err.message()))?;
         SyncStream::start(
             StorageMapPaginator {
                 state: Arc::clone(&self.state),
@@ -88,7 +83,6 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMapsV2 for Rpc
                 cursor: None,
                 done: false,
             },
-            permit,
             STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )

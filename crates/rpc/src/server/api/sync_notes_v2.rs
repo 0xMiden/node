@@ -3,7 +3,6 @@ use std::sync::Arc;
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, NoteSyncCursor, NoteSyncError, State};
-use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use miden_protocol::block::BlockNumber;
 use proto::miden::node::v1::sync_notes_v2_response::Item;
@@ -44,12 +43,8 @@ impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
         &self,
         (range, tags): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let permit = self
-            .sync_stream_limiter
-            .acquire(ClientIp::from_extensions(extensions))
-            .map_err(|err| ErrorCode::ResourceExhausted.status(err.message()))?;
         SyncStream::start(
             NotePaginator {
                 state: Arc::clone(&self.state),
@@ -59,7 +54,6 @@ impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
                 last_block: None,
                 done: false,
             },
-            permit,
             STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )

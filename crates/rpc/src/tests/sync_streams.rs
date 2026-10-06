@@ -1,4 +1,4 @@
-//! Cross-endpoint admission and concurrent-write acceptance checks.
+//! Concurrent-reader and concurrent-write acceptance checks.
 use std::net::{IpAddr, Ipv4Addr};
 
 use miden_node_utils::grpc::ClientIp;
@@ -8,7 +8,7 @@ use tokio_stream::StreamExt;
 
 use super::*;
 
-/// Pins prefix discovery to genesis and assigns a client address for admission checks.
+/// Pins prefix discovery to genesis and assigns a client address for concurrent requests.
 fn request(client: u8) -> Request<proto::miden::node::v1::SyncNullifiersV2Request> {
     let mut request = Request::new(proto::miden::node::v1::SyncNullifiersV2Request {
         range: Some(proto::miden::node::v1::StateDeltaRange {
@@ -64,27 +64,9 @@ async fn sync_readers_preserve_targets_and_leave_block_writes_available() {
     );
     let mut slow = service.sync_nullifiers_v2(request(1)).await.unwrap().into_inner();
     let disconnected = service.sync_nullifiers_v2(request(1)).await.unwrap();
-    let status = service.sync_nullifiers_v2(request(1)).await.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
+    let mut fast_a = service.sync_nullifiers_v2(request(1)).await.unwrap().into_inner();
+    let mut fast_b = service.sync_nullifiers_v2(request(1)).await.unwrap().into_inner();
     drop(disconnected);
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            match service.sync_nullifiers_v2(request(1)).await {
-                Ok(stream) => {
-                    drop(stream);
-                    break;
-                },
-                Err(status) => {
-                    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
-                    tokio::task::yield_now().await;
-                },
-            }
-        }
-    })
-    .await
-    .expect("disconnect releases admission promptly");
-    let mut fast_a = service.sync_nullifiers_v2(request(2)).await.unwrap().into_inner();
-    let mut fast_b = service.sync_nullifiers_v2(request(3)).await.unwrap().into_inner();
     let read = async |stream: &mut <RpcService as Api>::SyncNullifiersV2Stream| {
         let mut found = HashSet::new();
         while let Some(item) = stream.next().await {

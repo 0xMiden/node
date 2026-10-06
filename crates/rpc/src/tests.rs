@@ -3038,9 +3038,10 @@ async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets
     }
 }
 
-/// Dropping a vault response must restore its client admission capacity.
+/// Concurrent vault streams must return complete results without a client or global limit.
 #[tokio::test]
-async fn sync_account_vault_v2_releases_admission_on_disconnect() {
+async fn sync_account_vault_v2_accepts_many_concurrent_streams() {
+    use tokio_stream::StreamExt;
     let store = TestStore::start().await;
     let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     miden_node_store::test_support::seed_account_vault(
@@ -3062,20 +3063,24 @@ async fn sync_account_vault_v2_releases_admission_on_disconnect() {
         account_id: Some(account_id.into()),
         range: None,
     };
-    let first = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
-    let _second = service.sync_account_vault_v2(Request::new(request)).await.unwrap();
-    let status = service.sync_account_vault_v2(Request::new(request)).await.err().unwrap();
-    assert_eq!(status.code(), tonic::Code::ResourceExhausted);
-    assert_eq!(status.details(), &[5]);
-    drop(first);
-    for _ in 0..100 {
-        tokio::task::yield_now().await;
-        match service.sync_account_vault_v2(Request::new(request)).await {
-            Ok(_) => return,
-            Err(status) => assert_eq!(status.code(), tonic::Code::ResourceExhausted),
-        }
+    let mut expected: Vec<_> =
+        vault_stream_values(300).into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    let mut streams = Vec::new();
+    for _ in 0..40 {
+        streams
+            .push(service.sync_account_vault_v2(Request::new(request)).await.unwrap().into_inner());
     }
-    panic!("disconnected vault stream did not release its admission permit");
+    for mut stream in streams {
+        let mut actual = Vec::new();
+        while let Some(item) = stream.next().await {
+            let update = item.unwrap();
+            assert_eq!(update.block_num, 0);
+            actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+        }
+        actual.sort_by_key(Asset::id);
+        assert_eq!(actual, expected);
+    }
 }
 
 /// Storage-map streaming must preserve complete key sets and validate empty-delta targets.
