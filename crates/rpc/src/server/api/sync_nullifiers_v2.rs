@@ -4,17 +4,20 @@ use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, NullifierCursor, NullifierInfo, State};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
+use tracing::miden_instrument;
 
 use super::error_codes::SyncNullifiersV2ErrorCode as ErrorCode;
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
+use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService {
     type Input = (SyncRange, Vec<u16>);
     type Item = NullifierInfo;
     type ItemStream = SyncResponseStream<Self::Item>;
+
     fn decode(
         request: proto::miden::node::v1::SyncNullifiersV2Request,
     ) -> tonic::Result<Self::Input> {
@@ -43,12 +46,19 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
         ids.dedup();
         Ok((target, ids))
     }
+
     fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::SyncNullifiersV2Response> {
         Ok(proto::miden::node::v1::SyncNullifiersV2Response {
             nullifier: Some(item.nullifier.as_word().into()),
             block_num: item.block_num.as_u32(),
         })
     }
+
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "sync_account_nullifiers_v2",
+        err,
+    )]
     async fn handle(
         &self,
         (target, ids): Self::Input,

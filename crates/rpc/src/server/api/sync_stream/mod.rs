@@ -42,6 +42,7 @@ impl<P: Paginator> SyncStream<P> {
             .checked_add(1)
             .filter(|_| buffer_capacity > 0)
             .ok_or_else(|| Status::internal("invalid synchronization stream buffer capacity"))?;
+
         // Initial validation errors are RPC statuses, before any stream data is sent.
         let first_page = checked_page(paginator.load_next_page().await?)?;
         let (tx, rx) = mpsc::channel(capacity);
