@@ -27,6 +27,8 @@ impl Pages {
 impl Paginator for Pages {
     type Item = u32;
 
+    /// Returns scripted pages and counts loads so tests can detect unwanted reads after
+    /// cancellation.
     async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
         self.loads.fetch_add(1, Ordering::SeqCst);
         self.pages.pop_front().transpose()
@@ -37,6 +39,7 @@ fn client(n: u8) -> IpAddr {
     Ipv4Addr::new(127, 0, 0, n).into()
 }
 
+/// An empty result must complete successfully without keeping a concurrency slot.
 #[tokio::test]
 async fn empty_stream_completes_and_releases_admission() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -52,6 +55,7 @@ async fn empty_stream_completes_and_releases_admission() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// Page boundaries must not change result order or omit items under backpressure.
 #[tokio::test]
 async fn pages_preserve_every_item_in_order() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -71,6 +75,7 @@ async fn pages_preserve_every_item_in_order() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// Initial validation must fail before any stream data is exposed and must release admission.
 #[tokio::test]
 async fn first_page_error_is_initial_status_and_releases_admission() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -85,6 +90,7 @@ async fn first_page_error_is_initial_status_and_releases_admission() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// A page failure after valid data must terminate the stream with a failure.
 #[tokio::test]
 async fn later_page_error_follows_delivered_items() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -102,6 +108,7 @@ async fn later_page_error_follows_delivered_items() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// A full data buffer must not hide a stalled-reader failure behind successful completion.
 #[tokio::test(start_paused = true)]
 async fn stalled_reader_receives_terminal_error_even_when_buffer_is_full() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -122,6 +129,7 @@ async fn stalled_reader_receives_terminal_error_even_when_buffer_is_full() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// Disconnected readers must not trigger more database work or retain admission.
 #[tokio::test]
 async fn disconnect_prevents_next_page_and_releases_admission() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -142,6 +150,7 @@ async fn disconnect_prevents_next_page_and_releases_admission() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// An invalid empty continuation page must not make an incomplete update appear successful.
 #[tokio::test]
 async fn empty_page_is_an_error_instead_of_silent_incomplete_success() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -156,6 +165,7 @@ async fn empty_page_is_an_error_instead_of_silent_incomplete_success() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// Admission must enforce both limits and restore capacity when permits are dropped.
 #[test]
 fn global_and_client_limits_are_independent_and_reusable() {
     let limiter = SyncStreamLimiter::new(2, 1);
@@ -170,6 +180,7 @@ fn global_and_client_limits_are_independent_and_reusable() {
     assert!(limiter.acquire(Some(client(3))).is_ok());
 }
 
+/// Missing client addresses must not bypass the per-client admission limit.
 #[test]
 fn unresolved_addresses_share_a_limit() {
     let limiter = SyncStreamLimiter::new(3, 1);
@@ -189,6 +200,9 @@ struct PendingPage {
 impl Paginator for PendingPage {
     type Item = u32;
 
+    /// Waits indefinitely after notifying the test that page loading has started.
+    ///
+    /// Lets the test verify that a disconnect cancels a pending page load.
     async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
         if self.first {
             self.first = false;
@@ -199,6 +213,7 @@ impl Paginator for PendingPage {
     }
 }
 
+/// Dropping a response must cancel an in-progress page load before releasing admission.
 #[tokio::test]
 async fn disconnect_cancels_pending_page_and_releases_admission() {
     let limiter = SyncStreamLimiter::new(1, 1);
@@ -222,6 +237,9 @@ async fn disconnect_cancels_pending_page_and_releases_admission() {
     assert!(limiter.acquire(Some(client(1))).is_ok());
 }
 
+/// Unread response data must remain counted after the producer finishes.
+///
+/// Admission becomes reusable only after the consumer observes completion or drops the response.
 #[tokio::test]
 async fn completed_producer_keeps_unread_response_admitted_until_eof_or_drop() {
     let limiter = SyncStreamLimiter::new(1, 1);

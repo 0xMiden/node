@@ -16,6 +16,10 @@ pub struct AccountCommitmentChangesPage {
     pub next_cursor: Option<AccountId>,
 }
 
+/// Selects one changed version per requested account that remains valid at the target.
+///
+/// Checks retention in the page snapshot. Uses database account-ID order and one extra
+/// row to determine whether another page is needed.
 pub(crate) fn select_account_commitment_changes(
     tx: &ReadTx<'_>,
     ids: &[AccountId],

@@ -438,6 +438,8 @@ mod tests {
         assert_eq!(status.details(), &[0]);
     }
 
+    /// Unavailable retained history must remain a client target failure instead of an internal
+    /// failure.
     #[test]
     fn block_pruned_database_error_is_invalid_argument() {
         let status = database_error_to_status(&DatabaseError::BlockPruned {

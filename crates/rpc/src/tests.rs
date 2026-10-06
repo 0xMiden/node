@@ -2528,6 +2528,9 @@ async fn next_block_with_protocol_config(
     next_block_with_notes(store, config, vec![]).await
 }
 
+/// Builds the next signed block with real note commitments and the preceding chain MMR.
+///
+/// Keeps account state unchanged so note-stream tests can verify paths on a committed chain.
 async fn next_block_with_notes(
     store: &TestStore,
     config: &ProtocolConfig,
@@ -2811,6 +2814,8 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[5]);
 }
 
+/// Malformed requests and private accounts must fail before streaming. Empty public results must
+/// complete.
 #[tokio::test]
 async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
     let (mut rpc_client, _rpc_addr, _store, _guard) = start_rpc().await;
@@ -2859,6 +2864,7 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
     assert_eq!(stream.message().await.expect("stream should complete successfully"), None);
 }
 
+/// A changed vault key must expose its final target value, including deletion.
 #[tokio::test]
 async fn sync_account_vault_v2_streams_squashed_updates() {
     let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
@@ -2904,6 +2910,7 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
     assert_eq!(assets, expected);
 }
 
+/// The response must retain every changed key when one block exceeds the database page size.
 #[tokio::test]
 async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
     let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
@@ -2936,6 +2943,7 @@ async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
     assert_eq!(actual, expected);
 }
 
+/// Builds distinct vault keys so stream tests can detect missing rows across database pages.
 fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
     (0_u32..count)
         .map(|index| {
@@ -2953,6 +2961,7 @@ fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
         .collect()
 }
 
+/// Bootstrap must include genesis. An already synchronized target must return an empty delta.
 #[tokio::test]
 async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
     let (mut client, _, store, _guard) = start_rpc().await;
@@ -2985,6 +2994,7 @@ async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
     }
 }
 
+/// Range aliases must not produce ambiguous requests or let empty deltas bypass target validation.
 #[tokio::test]
 async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3033,6 +3043,7 @@ async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets
     }
 }
 
+/// Dropping a vault response must restore its client admission capacity.
 #[tokio::test]
 async fn sync_account_vault_v2_releases_admission_on_disconnect() {
     let store = TestStore::start().await;
@@ -3072,6 +3083,7 @@ async fn sync_account_vault_v2_releases_admission_on_disconnect() {
     panic!("disconnected vault stream did not release its admission permit");
 }
 
+/// Storage-map streaming must preserve complete key sets and validate empty-delta targets.
 #[tokio::test]
 async fn storage_map_stream_returns_every_key_and_handles_empty_ranges() {
     let (mut client, _, store, _guard) = start_rpc().await;
@@ -3129,6 +3141,7 @@ async fn storage_map_stream_returns_every_key_and_handles_empty_ranges() {
     }
 }
 
+/// Missing targets and private-account requests must fail before map data is returned.
 #[tokio::test]
 async fn storage_map_stream_validates_target_presence_and_account_visibility() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3178,6 +3191,7 @@ async fn storage_map_stream_validates_target_presence_and_account_visibility() {
     }
 }
 
+/// Builds tagged public and private notes with distinct identities for exact stream reconciliation.
 fn note_stream_fixture(
     sender: AccountId,
     height: u32,
@@ -3202,6 +3216,8 @@ fn note_stream_fixture(
         .collect()
 }
 
+/// Note frames must preserve every match and authenticate against the selected target after later
+/// commits.
 #[tokio::test(flavor = "multi_thread")]
 async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
     use miden_protocol::crypto::merkle::mmr::Mmr;
@@ -3295,6 +3311,7 @@ async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
     assert_eq!(actual, expected.iter().map(Note::id).collect::<Vec<_>>());
 }
 
+/// A gRPC-Web client must receive a successful terminal trailer for a completed empty stream.
 #[tokio::test]
 async fn note_stream_web_reports_successful_terminal_status() {
     use miden_node_proto::prost::Message;
@@ -3331,6 +3348,8 @@ async fn note_stream_web_reports_successful_terminal_status() {
     );
 }
 
+/// Duplicate tags must not bypass request limits. Missing or future targets must fail before
+/// streaming.
 #[tokio::test]
 async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3368,6 +3387,8 @@ async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
     }
 }
 
+/// Changed public and private accounts must expose witnesses for the target, despite later account
+/// changes.
 #[tokio::test(flavor = "multi_thread")]
 async fn account_commitment_stream_returns_authenticated_public_and_private_witnesses() {
     use tokio_stream::StreamExt;
@@ -3442,6 +3463,7 @@ async fn account_commitment_stream_returns_authenticated_public_and_private_witn
     );
 }
 
+/// Builds a later private-account update to test witness authentication against an earlier target.
 async fn account_commitment_later_block(
     store: &TestStore,
     genesis: &ProvenBlock,
@@ -3492,6 +3514,7 @@ async fn account_commitment_later_block(
     SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap())
 }
 
+/// Account request limits and target validation must apply even when the delta is empty.
 #[tokio::test]
 async fn account_commitment_stream_validates_lists_and_future_empty_targets() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3529,6 +3552,7 @@ async fn account_commitment_stream_validates_lists_and_future_empty_targets() {
     assert!(stream.message().await.unwrap().is_none());
 }
 
+/// Builds distinct empty-note transaction headers for target and ID reconciliation tests.
 fn transaction_stream_fixture(account: AccountId, number: u32) -> TransactionHeader {
     TransactionHeader::new(
         account,
@@ -3540,6 +3564,8 @@ fn transaction_stream_fixture(account: AccountId, number: u32) -> TransactionHea
     .unwrap()
 }
 
+/// Successful lookup completion must distinguish committed requested IDs from absent IDs at the
+/// target.
 #[tokio::test]
 async fn transaction_lookup_stream_reconciles_ids_and_empty_success() {
     let (mut client, _, store, _guard) = start_rpc().await;
@@ -3587,6 +3613,7 @@ async fn transaction_lookup_stream_reconciles_ids_and_empty_success() {
     assert!(stream.message().await.unwrap().is_none());
 }
 
+/// Transaction lookup must enforce raw-list limits and require a target, including empty requests.
 #[tokio::test]
 async fn transaction_lookup_stream_validates_raw_ids_and_target_presence() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3611,6 +3638,8 @@ async fn transaction_lookup_stream_validates_raw_ids_and_target_presence() {
     }
 }
 
+/// A malformed record after valid data must fail the stream instead of completing an incomplete
+/// lookup.
 #[tokio::test]
 async fn transaction_lookup_stream_reports_a_late_invalid_record_as_error() {
     use miden_protocol::note::{
@@ -3675,6 +3704,9 @@ async fn transaction_lookup_stream_reports_a_late_invalid_record_as_error() {
     assert_eq!(error.details(), &[0]);
 }
 
+/// Builds full transaction records whose combined block exceeds the transport message limit.
+///
+/// Uses complete output proof shapes to test transport bounds independently of proof authentication.
 fn large_transaction_stream_fixture(
     account: AccountId,
 ) -> (Vec<TransactionHeader>, Vec<miden_node_store::NoteRecord>) {
@@ -3734,6 +3766,8 @@ fn large_transaction_stream_fixture(
     (headers, records)
 }
 
+/// Aggregate block size must not omit transaction events while each individual message stays
+/// bounded.
 #[tokio::test]
 async fn transaction_history_stream_returns_a_whole_block_larger_than_four_mebibytes() {
     use miden_node_proto::prost::Message;
@@ -3790,6 +3824,7 @@ async fn transaction_history_stream_returns_a_whole_block_larger_than_four_mebib
     assert_eq!(found, actual);
 }
 
+/// Event discovery must enforce account limits and validate the target of an empty delta.
 #[tokio::test]
 async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
     let (mut client, _, _store, _guard) = start_rpc().await;
@@ -3827,6 +3862,8 @@ async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
     assert!(stream.message().await.unwrap().is_none());
 }
 
+/// Consumption discovery must retain every matching identity and reject invalid or oversized prefix
+/// lists.
 #[tokio::test]
 async fn nullifier_stream_reconciles_every_record_and_validates_prefixes() {
     use miden_protocol::note::Nullifier;

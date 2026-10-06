@@ -25,6 +25,10 @@ pub struct StorageMapUpdatesPage {
     pub next_cursor: Option<StorageMapCursor>,
 }
 
+/// Selects the target value of each public-account map key changed in the inclusive range.
+///
+/// Preserves zero-value deletions and checks retention in the page snapshot. The block,
+/// slot, and key cursor permits continuation within one block.
 pub(crate) fn select_account_storage_map_updates_v2(
     tx: &ReadTx<'_>,
     account_id: AccountId,

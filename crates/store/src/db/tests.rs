@@ -171,6 +171,7 @@ fn upsert_accounts(
     })
 }
 
+/// Loads one vault page from the test database to inspect target squashing and continuation.
 fn select_account_vault_updates_v2(
     db: &TestDb,
     account_id: AccountId,
@@ -738,6 +739,7 @@ fn sync_account_vault_basic_validation() {
     assert_eq!(vault_key_1_asset.unwrap().asset, Some(updated_fungible_asset_1));
 }
 
+/// Vault history must select one target value per changed key and preserve removal markers.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
@@ -815,6 +817,7 @@ fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
     assert_matches!(private, Err(DatabaseError::AccountNotPublic(id)) if id == private_account);
 }
 
+/// Pruning between page reads must fail the attempt instead of returning a partial vault update.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
@@ -4686,6 +4689,8 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
 
+/// Repeated map changes must collapse to target values without losing keys at same-block page
+/// boundaries.
 #[test]
 fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
     let db = &TestDb::new();
@@ -4746,6 +4751,7 @@ fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
     assert!(values.iter().all(|v| v.key != unchanged));
 }
 
+/// Storage-map continuation must recheck target retention after history pruning.
 #[test]
 fn storage_map_stream_rechecks_retention_between_pages() {
     let db = &TestDb::new();
@@ -4801,6 +4807,7 @@ fn storage_map_stream_rechecks_retention_between_pages() {
     );
 }
 
+/// Note-page cursors must retain exact tag matches when one block spans several pages.
 #[test]
 fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
     let db = &TestDb::new();
@@ -4888,6 +4895,7 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
     assert_eq!(before_second_block.notes.len(), 5);
 }
 
+/// Account discovery must select the version valid at the target and exclude later changes.
 #[test]
 fn account_commitment_stream_selects_changed_accounts_at_target() {
     let db = &TestDb::new();
@@ -4977,6 +4985,8 @@ fn account_commitment_stream_selects_changed_accounts_at_target() {
     );
 }
 
+/// Lookup must exclude unrequested and post-target transactions while preserving full record
+/// contents.
 #[test]
 fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
     let db = &TestDb::new();
@@ -5042,6 +5052,7 @@ fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
     assert!(page.records.is_empty());
 }
 
+/// Same-block event pages must remain complete even when stored aggregate byte estimates are large.
 #[test]
 fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_estimates() {
     let db = &TestDb::new();
@@ -5096,6 +5107,7 @@ fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_esti
     assert_eq!(actual, expected);
 }
 
+/// Prefix discovery must preserve same-block page boundaries and exclude post-target insertions.
 #[test]
 fn nullifier_updates_page_preserves_partial_blocks_and_target() {
     let db = &TestDb::new();

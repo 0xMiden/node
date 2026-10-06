@@ -105,6 +105,7 @@ fn descriptors_embed_their_dependencies() {
     }
 }
 
+/// Deprecation must preserve existing unary contracts and keep each replacement server-streaming.
 #[test]
 fn unary_sync_deprecations_preserve_cardinality_and_have_stream_replacements() {
     let descriptor = miden_node_proto_build::rpc_api_descriptor();

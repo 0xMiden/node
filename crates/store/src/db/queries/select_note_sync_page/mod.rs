@@ -21,6 +21,9 @@ pub struct NoteSyncPage {
     pub next_cursor: Option<NoteSyncCursor>,
 }
 
+/// Selects matching compact note records in block, batch, and note-index order.
+///
+/// Uses one extra row to detect continuation without excluding a partially returned block.
 pub(crate) fn select_note_sync_page(
     tx: &ReadTx<'_>,
     tags: &[u32],
