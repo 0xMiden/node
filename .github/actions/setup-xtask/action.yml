@@ -1,0 +1,44 @@
+name: "Setup xtask"
+description: "Restore or build xtask on Linux"
+
+inputs:
+  save-cache:
+    description: "Save the binary after a cache miss"
+    required: false
+    default: "false"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Identify runner image
+      id: image
+      shell: bash
+      run: |
+        source /etc/os-release
+        echo "id=${ID}-${VERSION_ID}" >> "${GITHUB_OUTPUT}"
+
+    - name: Restore xtask
+      id: cache
+      uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      with:
+        path: ${{ runner.temp }}/xtask-bin
+        # Accept only an exact match because the binary runs without a Cargo build check.
+        key: xtask-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.id }}-${{ hashFiles('xtask/**', 'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', '.cargo/config.toml', '.github/actions/setup-xtask/action.yml') }}
+
+    - name: Build xtask
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        CARGO_PROFILE_DEV_DEBUG: "0"
+        CARGO_TARGET_DIR: ${{ runner.temp }}/xtask-build
+      run: |
+        rustup toolchain install --no-self-update
+        cargo build --locked --package xtask
+        install -D "${CARGO_TARGET_DIR}/debug/xtask" "${RUNNER_TEMP}/xtask-bin/xtask"
+
+    - name: Save xtask
+      if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      with:
+        path: ${{ runner.temp }}/xtask-bin
+        key: ${{ steps.cache.outputs.cache-primary-key }}

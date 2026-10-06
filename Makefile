@@ -7,6 +7,7 @@ help:
 # -- variables ------------------------------------------------------------------------------------
 
 WARNINGS=RUSTDOCFLAGS="-D warnings"
+XTASK ?= cargo xtask
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_PROFILE_ARGS = --profile telemetry --profile monitor
 COMPOSE_OVERRIDE_FILE ?=
@@ -47,13 +48,13 @@ fix: ## Runs Fix with configs
 
 .PHONY: format
 format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
 format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
 
 
