@@ -326,6 +326,71 @@ async fn list_pages_in_committed_order_and_filters_by_block_range() {
     );
 }
 
+/// A replacement of the tip block gives the block's positions to its own transactions. A sweep that
+/// resumes after the last position it read does not see them. A sweep that reads the tip block
+/// again from its first position does.
+#[tokio::test]
+async fn list_serves_a_replaced_tip_block_from_its_first_position() {
+    let mut keys = operator_keys();
+    let (_directory, writer, reader) = test_database().await;
+    let transaction_ids = (1u64..=3)
+        .map(|i| TransactionId::from_raw(Word::try_from([i, i, i, i]).unwrap()))
+        .collect::<Vec<_>>();
+    for (seed, transaction_id) in (41u8..=43).zip(&transaction_ids) {
+        let record = target_record(&keys[0], *transaction_id, seed, b"record");
+        writer.insert_validated_private_transaction(record).await.unwrap();
+    }
+    commit(&writer, 1, &[transaction_ids[0], transaction_ids[1]]).await;
+    let service = ValidatorAdminService::new(keys.remove(0), reader);
+
+    let page = list(&service, ListTransactionsQuery::default()).await.unwrap();
+    assert_eq!(page.transactions.len(), 2);
+    let pagination = page.pagination;
+    assert_eq!(
+        (pagination.chain_tip, pagination.block_num, pagination.block_tx_index),
+        (1, Some(1), Some(1))
+    );
+
+    writer
+        .replace_signed_block(
+            BlockHeader::mock(1, None, None, &[]),
+            ProtocolConfig::mock(),
+            vec![transaction_ids[2]],
+        )
+        .await
+        .unwrap();
+
+    let resumed = list(
+        &service,
+        ListTransactionsQuery {
+            block_from: pagination.block_num,
+            tx_index_from: pagination.block_tx_index.map(|index| index + 1),
+            ..ListTransactionsQuery::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(resumed.transactions.is_empty());
+
+    let reread = list(
+        &service,
+        ListTransactionsQuery {
+            block_from: Some(pagination.chain_tip),
+            ..ListTransactionsQuery::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reread
+            .transactions
+            .iter()
+            .map(|item| (item.transaction_id.as_str(), item.block_num, item.block_tx_index))
+            .collect::<Vec<_>>(),
+        vec![(hex::encode(transaction_ids[2].to_bytes()).as_str(), 1, 0)],
+    );
+}
+
 #[tokio::test]
 async fn list_rejects_invalid_parameters() {
     let mut keys = operator_keys();

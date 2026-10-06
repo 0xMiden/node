@@ -27,6 +27,11 @@ pub(super) const MAX_RECORD_PAGE_LIMIT: usize = 100;
 /// committed transactions are listed; ones that are still in flight, that were never included in a
 /// signed block, or that predate block linkage have no place in the committed order and are
 /// reachable by transaction id instead.
+///
+/// The block at the chain tip can still be replaced. A replacement gives the positions in that
+/// block to its own transactions, so the rows of the tip block are provisional. A sweep that needs
+/// final rows must set `block_to` below the reported `chain_tip`, or must read the tip block again
+/// from its first position after the tip advances.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct ListTransactionsQuery {
     pub(super) limit: Option<usize>,
@@ -96,7 +101,8 @@ pub(super) struct ListValidatedPrivateTransactionsResponse {
 /// How far the sweep got, mirroring the `PaginationInfo` message the node's sync RPCs return.
 #[derive(Debug, Deserialize, Serialize)]
 pub(super) struct PaginationInfo {
-    /// Highest block this validator has signed, so a caller can tell whether it has caught up.
+    /// Highest block this validator has signed, so a caller can tell whether it has caught up. This
+    /// block can still be replaced, so its rows are provisional.
     pub(super) chain_tip: u32,
     /// Block of the last transaction in this response. To request the next page, repeat the request
     /// with `block_from` set to this and `tx_index_from` set to `block_tx_index + 1`. `null` when
