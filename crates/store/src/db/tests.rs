@@ -5136,6 +5136,22 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
         }
         if cursor.is_none() {
             insert_nullifiers_for_block(db, &[num_to_nullifier((1 << 48) + 99)], 2.into()).unwrap();
+            let earlier_cursor = page.next_cursor;
+            let later = db
+                .read(move |tx| {
+                    queries::select_nullifier_updates_page(
+                        tx,
+                        &[1],
+                        2.into()..=2.into(),
+                        earlier_cursor,
+                        NonZeroUsize::MIN,
+                    )
+                })
+                .unwrap();
+            assert_eq!(later.records.len(), 1);
+            assert_eq!(later.records[0].block_num, BlockNumber::from(2));
+            assert_eq!(later.records[0].nullifier, num_to_nullifier((1 << 48) + 99));
+            assert!(later.next_cursor.is_none());
         }
         cursor = page.next_cursor;
         if cursor.is_none() {

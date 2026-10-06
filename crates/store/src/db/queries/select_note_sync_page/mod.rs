@@ -38,7 +38,8 @@ pub(crate) fn select_note_sync_page(
     let tags = InList::from_values(tags);
     let limit = page_size.get();
     let query_limit = i64::try_from(limit.saturating_add(1)).expect("page size fits within i64");
-    let mut notes = match cursor {
+    // The cursor supplies the SQL lower bound. Use the first page if it precedes the range.
+    let mut notes = match cursor.filter(|cursor| cursor.block_num >= *range.start()) {
         None => tx.query(
             include_str!("select_page.sql"),
             &[&tags, range.start(), range.end(), &query_limit],
@@ -51,15 +52,7 @@ pub(crate) fn select_note_sync_page(
                 i64::try_from(cursor.index.note_idx_in_batch()).expect("note index fits i64");
             tx.query(
                 include_str!("select_page_after.sql"),
-                &[
-                    &tags,
-                    range.start(),
-                    range.end(),
-                    &cursor.block_num,
-                    &batch_index,
-                    &note_index,
-                    &query_limit,
-                ],
+                &[&tags, range.end(), &cursor.block_num, &batch_index, &note_index, &query_limit],
                 note_sync_record_from_row,
             )?
         },

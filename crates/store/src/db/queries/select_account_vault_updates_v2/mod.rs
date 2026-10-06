@@ -48,12 +48,12 @@ pub(crate) fn select_account_vault_updates_v2(
     let map_row = |row: &miden_node_db::sqlite::Row<'_>| {
         Ok((row.get::<BlockNumber>(0)?, row.get::<Word>(1)?, row.get::<Option<Asset>>(2)?))
     };
-    let mut rows = match cursor {
+    // The cursor supplies the SQL lower bound. Use the first page if it precedes the range.
+    let mut rows = match cursor.filter(|cursor| cursor.block_num >= *block_range.start()) {
         Some(cursor) => tx.query(
             SQL_PAGE_AFTER,
             &[
                 &account_id,
-                block_range.start(),
                 block_range.end(),
                 &cursor.block_num,
                 &Word::from(cursor.vault_key),

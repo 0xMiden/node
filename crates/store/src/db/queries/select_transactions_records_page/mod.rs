@@ -40,7 +40,8 @@ pub(crate) fn select_transactions_records_page(
     let ids = InList::from_values(ids);
     let limit = page_size.get();
     let query_limit = i64::try_from(limit.saturating_add(1)).expect("page size fits i64");
-    let mut rows = match cursor {
+    // The cursor supplies the SQL lower bound. Use the first page if it precedes the range.
+    let mut rows = match cursor.filter(|cursor| cursor.block >= *range.start()) {
         None => tx.query(
             include_str!("select_page.sql"),
             &[range.start(), range.end(), &ids, &query_limit],
@@ -48,7 +49,7 @@ pub(crate) fn select_transactions_records_page(
         )?,
         Some(cursor) => tx.query(
             include_str!("select_page_after.sql"),
-            &[range.start(), range.end(), &ids, &query_limit, &cursor.block, &cursor.id],
+            &[range.end(), &ids, &query_limit, &cursor.block, &cursor.id],
             transaction_row_from_row,
         )?,
     };
