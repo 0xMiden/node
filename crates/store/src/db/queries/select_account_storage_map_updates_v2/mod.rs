@@ -53,7 +53,8 @@ pub(crate) fn select_account_storage_map_updates_v2(
             value: row.get::<Word>(3)?,
         })
     };
-    let mut values = match cursor {
+    // The cursor supplies the SQL lower bound. Use the first page if it precedes the range.
+    let mut values = match cursor.filter(|cursor| cursor.block_num >= *range.start()) {
         None => tx.query(
             include_str!("select_page.sql"),
             &[&account_id, range.start(), range.end(), &query_limit],
@@ -63,7 +64,6 @@ pub(crate) fn select_account_storage_map_updates_v2(
             include_str!("select_page_after.sql"),
             &[
                 &account_id,
-                range.start(),
                 range.end(),
                 &cursor.block_num,
                 &cursor.slot_name,

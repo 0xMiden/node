@@ -42,7 +42,8 @@ pub(crate) fn select_nullifier_updates_page(
             block_num: row.get(1)?,
         })
     };
-    let mut records = match cursor {
+    // The cursor supplies the SQL lower bound. Use the first page if it precedes the range.
+    let mut records = match cursor.filter(|cursor| cursor.block >= *range.start()) {
         None => tx.query(
             include_str!("select_page.sql"),
             &[&prefixes, range.start(), range.end(), &query_limit],
@@ -50,14 +51,7 @@ pub(crate) fn select_nullifier_updates_page(
         )?,
         Some(cursor) => tx.query(
             include_str!("select_page_after.sql"),
-            &[
-                &prefixes,
-                range.start(),
-                range.end(),
-                &query_limit,
-                &cursor.block,
-                &cursor.nullifier,
-            ],
+            &[&prefixes, range.end(), &query_limit, &cursor.block, &cursor.nullifier],
             decode,
         )?,
     };
