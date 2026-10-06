@@ -19,6 +19,9 @@ pub struct NullifierUpdatesPage {
     pub records: Vec<NullifierInfo>,
     pub next_cursor: Option<NullifierCursor>,
 }
+/// Selects every prefix-matching consumption in the inclusive range without squashing.
+///
+/// The block-and-nullifier cursor follows database order and can split one block across pages.
 pub(crate) fn select_nullifier_updates_page(
     tx: &ReadTx<'_>,
     prefixes: &[u16],

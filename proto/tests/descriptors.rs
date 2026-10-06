@@ -105,6 +105,7 @@ fn descriptors_embed_their_dependencies() {
     }
 }
 
+/// Deprecation must preserve existing unary contracts and keep each replacement server-streaming.
 #[test]
 fn note_transport_fetch_bounds_are_message_fields() {
     let descriptor = miden_node_proto_build::note_transport_api_descriptor();

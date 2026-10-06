@@ -6,6 +6,10 @@ use miden_protocol::block::BlockNumber;
 use super::HISTORICAL_BLOCK_RETENTION;
 use crate::errors::DatabaseError;
 
+/// Checks that the target remains in the retained account-history window.
+///
+/// Use the same read transaction for this check and the page query so pruning cannot
+/// change the database snapshot between validation and selection.
 pub(crate) fn check_account_history_target(
     tx: &ReadTx<'_>,
     target: BlockNumber,

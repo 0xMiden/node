@@ -38,6 +38,8 @@ impl Default for SyncStreamLimiter {
 }
 
 impl SyncStreamLimiter {
+    /// Creates independent global and per-client limits shared by all finite synchronization
+    /// methods.
     pub(in crate::server::api) fn new(global: usize, per_client: usize) -> Self {
         Self(Arc::new(Admission {
             global: Arc::new(Semaphore::new(global)),
@@ -46,6 +48,9 @@ impl SyncStreamLimiter {
         }))
     }
 
+    /// Attempts admission without waiting and returns a permit that releases both limits.
+    ///
+    /// Missing client addresses share one bucket. A per-client rejection also releases the global slot.
     pub(in crate::server::api) fn acquire(
         &self,
         client: Option<IpAddr>,
@@ -67,6 +72,9 @@ impl SyncStreamLimiter {
 }
 
 impl Drop for SyncStreamPermit {
+    /// Releases the client count and removes its bucket when the last permit expires.
+    ///
+    /// The owned semaphore permit releases the global slot with the same lifetime.
     fn drop(&mut self) {
         let mut clients =
             self.admission.clients.lock().expect("sync admission lock is not poisoned");

@@ -19,6 +19,10 @@ pub(super) use admission::{SyncStreamLimiter, SyncStreamPermit};
 pub(super) trait Paginator: Send + 'static {
     type Item: Send + 'static;
 
+    /// Returns a bounded, nonempty page, or `None` after successful completion.
+    ///
+    /// Page errors must fail the complete synchronization attempt. Do not retain database
+    /// transactions or state views after the page is loaded.
     async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>>;
 }
 
@@ -36,6 +40,9 @@ impl<T> std::fmt::Debug for SyncResponseStream<T> {
 
 impl<T> tokio_stream::Stream for SyncResponseStream<T> {
     type Item = tonic::Result<T>;
+    /// Releases response admission only after the consumer observes end-of-stream.
+    ///
+    /// Unread buffered data keeps its permit even after the producer finishes.
     fn poll_next(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let result = Pin::new(&mut self.receiver).poll_next(context);
         if matches!(result, Poll::Ready(None)) {
@@ -54,6 +61,10 @@ pub(super) struct SyncStream<P: Paginator> {
 }
 
 impl<P: Paginator> SyncStream<P> {
+    /// Validates the first page before exposing a response stream.
+    ///
+    /// Reserves a channel slot for a terminal error so a full data buffer cannot hide failure.
+    /// The producer and response share admission until both lifetimes end.
     pub(super) async fn start(
         mut paginator: P,
         permit: SyncStreamPermit,
@@ -89,6 +100,9 @@ impl<P: Paginator> SyncStream<P> {
         })
     }
 
+    /// Sends bounded pages with backpressure and a deadline for each blocked send.
+    ///
+    /// Cancels pending page loads on disconnect. Sends later failures through the reserved terminal slot.
     async fn run(mut self, mut page: Vec<P::Item>) {
         loop {
             for item in page {
@@ -120,11 +134,14 @@ impl<P: Paginator> SyncStream<P> {
         }
     }
 
+    /// Uses the reserved slot to report failure even when the data buffer is full.
     fn fail(&mut self, status: Status) {
         self.terminal.take().expect("terminal status is sent once").send(Err(status));
     }
 }
 
+/// Rejects empty pages so a faulty paginator cannot report incomplete data as successful
+/// completion.
 fn checked_page<T>(page: Option<Vec<T>>) -> tonic::Result<Option<Vec<T>>> {
     if page.as_ref().is_some_and(Vec::is_empty) {
         return Err(Status::internal("synchronization paginator returned an empty page"));

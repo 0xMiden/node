@@ -14,6 +14,10 @@ pub struct TransactionsByIdPage {
     pub next_cursor: Option<TransactionId>,
 }
 
+/// Selects requested transactions committed by the target in database ID order.
+///
+/// Reconstructs complete records only for the returned page. Reads one extra row to
+/// detect continuation without using aggregate byte estimates.
 pub(crate) fn select_transactions_by_id(
     tx: &ReadTx<'_>,
     ids: &[TransactionId],

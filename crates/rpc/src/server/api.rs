@@ -443,6 +443,8 @@ mod tests {
         assert_eq!(status.details(), &[0]);
     }
 
+    /// Unavailable retained history must remain a client target failure instead of an internal
+    /// failure.
     #[test]
     fn range_below_retention_is_an_invalid_block_range() {
         let error = DatabaseError::from(miden_node_store::RangeBelowRetention {

@@ -22,6 +22,10 @@ pub struct TransactionRecordsPage {
     pub next_cursor: Option<TransactionCursor>,
 }
 
+/// Selects complete account transaction events in block-and-ID database order.
+///
+/// The cursor permits partial-block pages. Reconstructs only the returned rows and
+/// does not truncate a block to satisfy an aggregate response-size estimate.
 pub(crate) fn select_transactions_records_page(
     tx: &ReadTx<'_>,
     ids: &[AccountId],

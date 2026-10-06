@@ -8,6 +8,7 @@ use tokio_stream::StreamExt;
 
 use super::*;
 
+/// Pins prefix discovery to genesis and assigns a client address for admission checks.
 fn request(client: u8) -> Request<proto::miden::node::v1::SyncNullifiersV2Request> {
     let mut request = Request::new(proto::miden::node::v1::SyncNullifiersV2Request {
         range: Some(proto::miden::node::v1::StateDeltaRange {
@@ -32,6 +33,9 @@ fn nullifier(index: u64) -> Nullifier {
     ]))
 }
 
+/// Slow and disconnected readers must not block fast readers or committed block writes.
+///
+/// Each successful reader must obtain the exact pinned result set. Stalled readers must fail explicitly.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sync_readers_preserve_targets_and_leave_block_writes_available() {
     let mut store = TestStore::start().await;
