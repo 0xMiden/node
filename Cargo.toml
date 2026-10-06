@@ -149,21 +149,6 @@ trybuild           = { version = "1.0" }
 url                = { features = ["serde"], version = "2.5" }
 zeroize            = { version = "1.8" }
 
-# The protocol branch adds the token policy manager V2 the USDCx genesis faucet upgrades to.
-[patch.crates-io]
-miden-agglayer             = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-block-prover         = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-objects              = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-protobuf             = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-protobuf-derive      = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-protocol             = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-protocol-build-utils = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-standards            = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-testing              = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-tx                   = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-tx-batch             = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-miden-usdcx                = { branch = "pgackst-bump-version-17.1", git = "https://github.com/0xMiden/protocol" }
-
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.
 ignored = ["libsqlite3-sys"]
