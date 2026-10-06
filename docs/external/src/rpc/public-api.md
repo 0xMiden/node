@@ -137,27 +137,7 @@ unavailable when it leaves the retained account-history window during paging; re
 authenticated target in that case.
 
 Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
-and request-list limits remain. Transaction messages fit under 4 MiB for the pinned protocol; see
-[Transaction Stream Size](./transaction-stream-size.md). Compact streams load 256 rows per page and buffer 32 messages.
-Transaction streams load and buffer one record. A reader that blocks a producer send for 10 seconds receives
-`DEADLINE_EXCEEDED`; a disconnect cancels pending page loads. These are application buffer limits, separate from HTTP/2
-and proxy buffers.
-
-## Compatibility and deployment
-
-The unary `SyncNotes`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions`, and `SyncNullifiers` endpoints
-remain supported without deprecation alongside their streams. Clients can use unary requests when a new method returns
-`UNIMPLEMENTED` before any data arrives. Midstream errors and failed proofs must fail the attempt. Do not silently fall
-back after a partial response. Keep full account transaction discovery until unknown consumed-public-note recovery has
-an equivalent verified discovery source.
-
-Local tests verify exact multi-page results, concurrent block writes, cancellation, concurrent streams from one client,
-gRPC-Web OK trailers, and non-OK terminal errors. Client adoption and the deployment proxy path require separate
-acceptance. Before removing compatibility support, test native and browser clients through the actual reverse proxy/load
-balancer: check stream forwarding without whole-body buffering, cancellation, terminal trailers, idle deadlines, and
-configured per-message limits. Verify the server request timeout and the body-stream lifetime separately. Record
-consumer versions and owner approval for the removal release. The funding service still uses the supported unary
-methods. Repository tests do not establish production deployment acceptance.
+and request-list limits remain.
 
 ## Block Streaming
 
