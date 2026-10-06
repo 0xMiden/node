@@ -93,14 +93,15 @@ use crate::account_state_forest::{
     HISTORICAL_BLOCK_RETENTION,
     TestAccountStateForestExt,
 };
-use crate::db::models::queries as diesel_queries;
-use crate::db::models::queries::{
+use crate::db::queries::{
+    self,
     NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
     NOTE_SYNC_RECORD_BYTES,
+    PrecomputedPublicAccountState,
+    PrecomputedPublicAccountStates,
     StorageMapValue,
     StorageMapValuesPage,
 };
-use crate::db::queries::{self, PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::{DatabaseError, NoteSyncError};
 
@@ -196,11 +197,8 @@ fn prune_history(db: &TestDb, chain_tip: BlockNumber) -> Result<(usize, usize, u
     db.write(move |tx| queries::prune_history(tx, chain_tip))
 }
 
-// Read drivers below run on the diesel layer until their queries migrate to the framework; each one
-// opens a fresh diesel connection over the same database file.
-
 fn select_all_nullifiers(db: &TestDb) -> Result<Vec<NullifierInfo>> {
-    diesel_queries::select_all_nullifiers(&mut db.diesel_conn())
+    db.read(queries::select_all_nullifiers)
 }
 
 fn select_nullifiers_by_prefix(
@@ -209,12 +207,10 @@ fn select_nullifiers_by_prefix(
     nullifier_prefixes: &[u16],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-    diesel_queries::select_nullifiers_by_prefix(
-        &mut db.diesel_conn(),
-        prefix_len,
-        nullifier_prefixes,
-        block_range,
-    )
+    let nullifier_prefixes = nullifier_prefixes.to_vec();
+    db.read(move |tx| {
+        queries::select_nullifiers_by_prefix(tx, prefix_len, &nullifier_prefixes, block_range)
+    })
 }
 
 fn select_notes_since_block_by_tag(
@@ -222,11 +218,13 @@ fn select_notes_since_block_by_tag(
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<Vec<NoteSyncRecord>> {
-    diesel_queries::select_notes_since_block_by_tag(&mut db.diesel_conn(), note_tags, block_range)
+    let note_tags = note_tags.to_vec();
+    db.read(move |tx| queries::select_notes_since_block_by_tag(tx, &note_tags, block_range))
 }
 
 fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord>> {
-    diesel_queries::select_notes_by_id(&mut db.diesel_conn(), note_ids)
+    let note_ids = note_ids.to_vec();
+    db.read(move |tx| queries::select_notes_by_id(tx, &note_ids))
 }
 
 fn select_existing_note_ids(
@@ -234,11 +232,12 @@ fn select_existing_note_ids(
     note_ids: &[NoteId],
     up_to_block: BlockNumber,
 ) -> Result<HashSet<NoteId>> {
-    diesel_queries::select_existing_note_ids(&mut db.diesel_conn(), note_ids, up_to_block)
+    let note_ids = note_ids.to_vec();
+    db.read(move |tx| queries::select_existing_note_ids(tx, &note_ids, up_to_block))
 }
 
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
-    diesel_queries::select_note_script_by_root(&mut db.diesel_conn(), root)
+    db.read(move |tx| queries::select_note_script_by_root(tx, root))
 }
 
 fn get_note_sync_multi(
@@ -247,52 +246,47 @@ fn get_note_sync_multi(
     block_range: RangeInclusive<BlockNumber>,
     max_response_payload_bytes: usize,
 ) -> std::result::Result<Vec<NoteSyncUpdate>, NoteSyncError> {
-    diesel_queries::get_note_sync_multi(
-        &mut db.diesel_conn(),
-        note_tags,
-        block_range,
-        max_response_payload_bytes,
-    )
+    let note_tags = note_tags.to_vec();
+    db.read(move |tx| {
+        queries::get_note_sync_multi(tx, &note_tags, block_range, max_response_payload_bytes)
+    })
 }
 
 fn select_block_header_by_block_num(
     db: &TestDb,
     maybe_block_num: Option<BlockNumber>,
 ) -> Result<Option<BlockHeader>> {
-    diesel_queries::select_block_header_by_block_num(&mut db.diesel_conn(), maybe_block_num)
+    db.read(move |tx| queries::select_block_header_by_block_num(tx, maybe_block_num))
 }
 
 fn select_block_header_and_signatures_by_block_num(
     db: &TestDb,
     block_num: BlockNumber,
 ) -> Result<Option<(BlockHeader, BlockSignatures)>> {
-    diesel_queries::select_block_header_and_signatures_by_block_num(
-        &mut db.diesel_conn(),
-        block_num,
-    )
+    db.read(move |tx| queries::select_block_header_and_signatures_by_block_num(tx, block_num))
 }
 
 fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
-    diesel_queries::select_block_headers(&mut db.diesel_conn(), blocks.into_iter())
+    db.read(move |tx| queries::select_block_headers(tx, blocks.into_iter()))
 }
 
 fn select_all_block_header_commitments(db: &TestDb) -> Result<Vec<BlockHeaderCommitment>> {
-    diesel_queries::select_all_block_header_commitments(&mut db.diesel_conn())
+    db.read(queries::select_all_block_header_commitments)
 }
 
 fn select_account(db: &TestDb, account_id: AccountId) -> Result<AccountInfo> {
-    diesel_queries::select_account(&mut db.diesel_conn(), account_id)
+    db.read(move |tx| queries::select_account(tx, account_id))
 }
 
 fn select_all_accounts(db: &TestDb) -> Result<Vec<AccountInfo>> {
-    diesel_queries::select_all_accounts(&mut db.diesel_conn())
+    db.read(queries::select_all_accounts)
 }
 
 fn select_account_code_by_commitment(
     db: &TestDb,
     code_commitment: Word,
 ) -> Result<Option<Vec<u8>>> {
-    diesel_queries::select_account_code_by_commitment(&mut db.diesel_conn(), code_commitment)
+    db.read(move |tx| queries::select_account_code_by_commitment(tx, code_commitment))
 }
 
 fn select_latest_storage(db: &TestDb, account_id: AccountId) -> Result<AccountStorage> {
@@ -305,12 +299,9 @@ fn select_account_storage_map_values_paged(
     block_range: RangeInclusive<BlockNumber>,
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
-    diesel_queries::select_account_storage_map_values_paged(
-        &mut db.diesel_conn(),
-        account_id,
-        block_range,
-        limit,
-    )
+    db.read(move |tx| {
+        queries::select_account_storage_map_values_paged(tx, account_id, block_range, limit)
+    })
 }
 
 fn select_account_vault_assets(
@@ -318,7 +309,7 @@ fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-    diesel_queries::select_account_vault_assets(&mut db.diesel_conn(), account_id, block_range)
+    db.read(move |tx| queries::select_account_vault_assets(tx, account_id, block_range))
 }
 
 fn select_vault_at_block(
@@ -334,7 +325,8 @@ fn select_transactions_records(
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-    diesel_queries::select_transactions_records(&mut db.diesel_conn(), account_ids, block_range)
+    let account_ids = account_ids.to_vec();
+    db.read(move |tx| queries::select_transactions_records(tx, &account_ids, block_range))
 }
 
 // TEST HELPERS
@@ -447,7 +439,7 @@ fn bootstrap_rolls_back_protocol_config_when_genesis_insert_fails() {
 
     assert!(db.write(move |tx| super::insert_genesis(tx, empty_genesis_block())).is_err());
     assert_eq!(
-        diesel_queries::select_protocol_config_by_commitment(&mut db.diesel_conn(), commitment)
+        db.read(move |tx| queries::select_protocol_config_by_commitment(tx, commitment))
             .unwrap(),
         None
     );
