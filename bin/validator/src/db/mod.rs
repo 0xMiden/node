@@ -221,6 +221,12 @@ impl ValidatorDbWriter {
     ///
     /// See [`record_protocol_config_activation`] for how the activation is recorded.
     /// Callers must validate block order before this method runs.
+    ///
+    /// The write replaces the header row. If the height holds a block, the `ON DELETE CASCADE` on
+    /// `block_transactions` deletes the links of that block, and this method does not link the
+    /// transactions of the new block. Only tests use this method. Server code uses
+    /// [`Self::insert_signed_block`] and [`Self::replace_signed_block`].
+    #[cfg(test)]
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -415,8 +421,7 @@ pub async fn bootstrap(
 ) -> Result<(), DatabaseError> {
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
 
-    db.upsert_block_header_with_protocol_config(genesis_header, Some(protocol_config))
-        .await
+    db.insert_signed_block(genesis_header, protocol_config, Vec::new()).await
 }
 
 /// Applies all pending migrations to an existing DB.

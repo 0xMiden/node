@@ -64,5 +64,7 @@ pub use load_private_records_by_setup_context::load_private_records_by_setup_con
 mod transaction_exists;
 pub use transaction_exists::transaction_exists;
 
+#[cfg(test)]
 mod upsert_block_header;
+#[cfg(test)]
 pub use upsert_block_header::upsert_block_header;
