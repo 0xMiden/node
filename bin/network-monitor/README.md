@@ -35,6 +35,10 @@ On a chain with a non-zero verification base fee, network transaction checks add
 balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
 such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
+Each faucet check requests `MIDEN_MONITOR_FAUCET_MINT_AMOUNT` base units, which defaults to one token of a faucet with 6
+decimals. Keep this amount at or below the faucet's maximum claimable amount, otherwise the faucet rejects every request
+and the faucet card stays unhealthy.
+
 The note transport check uses the standard gRPC health service for `miden.note_transport.v1.NoteTransportService`. Only
 a `SERVING` response marks the service as healthy. Its dashboard card shows the service URL.
 
