@@ -33,7 +33,11 @@ pub(super) async fn issue_decryption_share(
     // validated the transaction, cross-validator recovery (combining shares over one validator's
     // ciphertext) keeps working.
     let context = PrivateRecordContext::try_from_bytes(&decryption_context)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+        .map_err(|error| map_share_error(&error))?;
+    // A share from this validator's key opens only records sealed under the same key epoch.
+    if context.key_epoch() != service.operator_key.key_epoch() {
+        return Err(map_share_error(&PrivateRecordError::KeyEpochMismatch));
+    }
     let validated = service
         .reader
         .transaction_exists(context.transaction_id())
@@ -62,20 +66,21 @@ pub(super) async fn issue_decryption_share(
 /// here, instead of silently defaulting to an internal error over what may be a malformed
 /// request.
 ///
-/// Only the bad-request arm is reachable today. `issue_decryption_share` rejects, in order, a
-/// ciphertext that does not decode, a wrong-sized wrapped content key, and a ciphertext not bound
-/// to the supplied context; `MalformedDecryptionContext` comes from this endpoint's own context
-/// parsing. Everything in the internal arm belongs to sealing, share combination, or decoding a
-/// stored record — none of which this endpoint does — so reaching one is a validator fault rather
-/// than the caller's.
+/// The bad-request arm holds the failures that a request can cause. `issue_decryption_share`
+/// rejects a ciphertext that does not decode, a wrapped content key of the wrong size, and a
+/// ciphertext that is not bound to the supplied context. `MalformedDecryptionContext` and
+/// `KeyEpochMismatch` come from the checks that this endpoint makes on the context. The internal
+/// arm holds `ShareGeneration`, which a request that passes these checks does not cause, and the
+/// failures of sealing, share combination, and stored record decoding, which this endpoint does
+/// not do.
 fn map_share_error(error: &PrivateRecordError) -> ApiError {
     match error {
         PrivateRecordError::InvalidGoldenEncoding(_)
         | PrivateRecordError::InvalidEncryptedRecordKey
         | PrivateRecordError::MalformedDecryptionContext
+        | PrivateRecordError::KeyEpochMismatch
         | PrivateRecordError::DecryptionContextMismatch => ApiError::bad_request(error.to_string()),
-        PrivateRecordError::KeyEpochMismatch
-        | PrivateRecordError::RecordIdMismatch
+        PrivateRecordError::RecordIdMismatch
         | PrivateRecordError::InvalidValidatorId(_)
         | PrivateRecordError::SetupContextMismatch
         | PrivateRecordError::RecordEncryption

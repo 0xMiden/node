@@ -47,6 +47,7 @@ use crate::{
     PrivateRecordId,
     PrivateRecordSealer,
     PrivateRecordShareRequest,
+    StorageKeyEpoch,
     StoredPrivateRecord,
 };
 
@@ -486,6 +487,39 @@ async fn share_refused_for_unvalidated_transaction() {
     let error = issue(&service, share_request(&record)).await.unwrap_err();
 
     assert_eq!(error.status, StatusCode::NOT_FOUND);
+}
+
+/// A share from this validator's key opens only records sealed under the same key epoch, so the
+/// share endpoint refuses a context that names another epoch.
+#[tokio::test]
+async fn share_refused_for_another_key_epoch() {
+    let mut keys = operator_keys();
+    let transaction_id = TransactionId::from_raw(Word::from([1u32, 2, 3, 4]));
+    let record = target_record(&keys[0], transaction_id, 6, b"record");
+    let (_directory, writer, reader) = test_database().await;
+    writer.insert_validated_private_transaction(record.clone()).await.unwrap();
+
+    // The transaction is validated and the ciphertext is bound to the context, so the request fails
+    // only on the epoch that the context names.
+    let other_epoch = StorageKeyEpoch::new([0xaa; 32]);
+    assert_ne!(other_epoch, keys[0].key_epoch());
+    let context =
+        PrivateRecordContext::new(record.context().chain_id(), other_epoch, transaction_id)
+            .to_bytes();
+    let ciphertext = keys[0]
+        .sealing_key()
+        .seal_bytes_with_associated_data(&mut ChaCha20Rng::from_seed([7; 32]), &[0; 32], &context)
+        .unwrap();
+    let request = IssueDecryptionShareRequest {
+        ciphertext: hex::encode(to_wire_bytes(&ciphertext)),
+        decryption_context: hex::encode(context),
+    };
+
+    let error = issue(&ValidatorAdminService::new(keys.remove(0), reader), request)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
