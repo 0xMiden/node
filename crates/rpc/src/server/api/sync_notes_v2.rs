@@ -1,6 +1,4 @@
-use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
@@ -12,13 +10,10 @@ use proto::miden::node::v1::sync_notes_v2_response::Item;
 use proto::miden::node::v1::{NoteBlockStart, SyncNotesV2Response};
 
 use super::error_codes::SyncNotesV2ErrorCode as ErrorCode;
+use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_notes::note_sync_record_to_proto;
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
-
-const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
-const BUFFER_SIZE: usize = 32;
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
@@ -65,7 +60,7 @@ impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
                 done: false,
             },
             permit,
-            BUFFER_SIZE,
+            STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )
         .await
@@ -96,7 +91,7 @@ impl Paginator for NotePaginator {
                 if range.is_some() { self.tags.clone() } else { vec![] },
                 range.unwrap_or(self.range.target..=self.range.target),
                 self.cursor,
-                PAGE_SIZE,
+                DB_PAGE_SIZE,
             )
             .await
             .map_err(|err| match err {

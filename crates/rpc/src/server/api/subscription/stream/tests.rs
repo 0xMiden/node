@@ -141,15 +141,14 @@ async fn stream_waiting_for_tip_exits_when_receiver_is_dropped() {
 
 #[tokio::test]
 async fn shutdown_while_send_is_pending_reports_server_shutdown() {
-    let (tip_tx, tip_rx) =
-        watch::channel(BlockNumber::from((SUBSCRIBER_CHANNEL_CAPACITY + 1) as u32));
+    let (tip_tx, tip_rx) = watch::channel(BlockNumber::from((STREAM_BUFFER_SIZE + 1) as u32));
     let source = TestSubscription::default();
     let fetch_count = source.fetch_count();
     let _stream = source
         .stream(BlockNumber::GENESIS, tip_rx)
         .expect("subscription start should be valid");
 
-    wait_for_fetch_count(&fetch_count, SUBSCRIBER_CHANNEL_CAPACITY + 1).await;
+    wait_for_fetch_count(&fetch_count, STREAM_BUFFER_SIZE + 1).await;
     drop(tip_tx);
 
     wait_for_subscription_exit(&source).await;
@@ -157,18 +156,18 @@ async fn shutdown_while_send_is_pending_reports_server_shutdown() {
 
 #[tokio::test(start_paused = true)]
 async fn full_buffer_reports_slow_subscriber_before_eos() {
-    let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(SUBSCRIBER_CHANNEL_CAPACITY as u32));
+    let (_tip_tx, tip_rx) = watch::channel(BlockNumber::from(STREAM_BUFFER_SIZE as u32));
     let source = TestSubscription::default();
     let fetch_count = source.fetch_count();
     let mut stream = source
         .stream(BlockNumber::GENESIS, tip_rx)
         .expect("subscription start should be valid");
 
-    wait_for_fetch_count(&fetch_count, SUBSCRIBER_CHANNEL_CAPACITY + 1).await;
+    wait_for_fetch_count(&fetch_count, STREAM_BUFFER_SIZE + 1).await;
     tokio::time::advance(SEND_TIMEOUT).await;
     tokio::task::yield_now().await;
 
-    for expected_block in 0..SUBSCRIBER_CHANNEL_CAPACITY {
+    for expected_block in 0..STREAM_BUFFER_SIZE {
         let item = stream
             .next()
             .await

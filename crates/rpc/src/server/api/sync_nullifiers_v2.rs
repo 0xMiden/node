@@ -1,6 +1,4 @@
-use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
@@ -9,6 +7,7 @@ use miden_node_utils::grpc::ClientIp;
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 
 use super::error_codes::SyncNullifiersV2ErrorCode as ErrorCode;
+use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
@@ -70,8 +69,8 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
                 done: false,
             },
             permit,
-            32,
-            Duration::from_secs(10),
+            STREAM_BUFFER_SIZE,
+            SEND_TIMEOUT,
         )
         .await
     }
@@ -99,7 +98,7 @@ impl Paginator for NullifierPaginator {
                 if range.is_some() { self.ids.clone() } else { vec![] },
                 range.unwrap_or(self.target.target..=self.target.target),
                 self.cursor,
-                NonZeroUsize::new(256).expect("nonzero page size"),
+                DB_PAGE_SIZE,
             )
             .await
             .map_err(|err| match err {

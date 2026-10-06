@@ -1,6 +1,4 @@
-use std::num::NonZeroUsize;
 use std::sync::Arc;
-use std::time::Duration;
 
 use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_proto::domain::block::SyncRange;
@@ -12,12 +10,9 @@ use miden_protocol::account::AccountId;
 use proto::miden::node::v1::SyncAccountCommitmentsResponse;
 
 use super::error_codes::SyncAccountCommitmentsErrorCode as ErrorCode;
+use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
-
-const PAGE_SIZE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
-const BUFFER_SIZE: usize = 32;
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcService {
@@ -66,7 +61,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcSe
                 done: false,
             },
             permit,
-            BUFFER_SIZE,
+            STREAM_BUFFER_SIZE,
             SEND_TIMEOUT,
         )
         .await
@@ -94,7 +89,7 @@ impl Paginator for AccountPaginator {
                 if range.is_some() { self.ids.clone() } else { vec![] },
                 range.unwrap_or(self.range.target..=self.range.target),
                 self.cursor,
-                PAGE_SIZE,
+                DB_PAGE_SIZE,
             )
             .await
             .map_err(|err| match err {
