@@ -132,10 +132,6 @@ impl RpcNodeClient {
         ),
         err(level = "debug"),
     )]
-    #[expect(
-        deprecated,
-        reason = "funding-service keeps unary sync until coordinated consumer migration"
-    )]
     pub async fn transaction_status(
         &self,
         account_id: AccountId,
