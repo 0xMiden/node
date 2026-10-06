@@ -16,7 +16,6 @@ use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteDetails, NoteHeader};
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
@@ -116,7 +115,7 @@ impl Server {
             service.name = COMPONENT,
             service.version = env!("CARGO_PKG_VERSION"),
             rpc.listen = listener.local_addr()?.to_string());
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(
@@ -144,7 +143,7 @@ impl Server {
             .add_service(health_service)
             .add_service(reflection)
             .add_service(miden_note_transport_v1_note_transport_service::service(self))
-            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async move {
+            .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), async move {
                 shutdown.cancelled().await;
                 health
                     .set_service_status(

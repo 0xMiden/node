@@ -7,6 +7,7 @@ help:
 # -- variables ------------------------------------------------------------------------------------
 
 WARNINGS=RUSTDOCFLAGS="-D warnings"
+XTASK ?= cargo xtask
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_PROFILE_ARGS = --profile telemetry --profile monitor
 COMPOSE_OVERRIDE_FILE ?=
@@ -35,26 +36,30 @@ TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 .PHONY: clippy
 clippy: ## Runs Clippy with configs
+	cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets --all-features -- -D warnings
 	cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 	cargo clippy --locked --all-targets --all-features -p miden-remote-prover -- -D warnings
 
 
 .PHONY: fix
 fix: ## Runs Fix with configs
+	cargo fix --allow-staged --allow-dirty --all-targets --all-features --manifest-path xtask/Cargo.toml
 	cargo fix --allow-staged --allow-dirty --all-targets --all-features --workspace
 	cargo fix --allow-staged --allow-dirty --all-targets --all-features -p miden-remote-prover
 
 
 .PHONY: format
 format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
 format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all --check -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: markdown-format
@@ -79,6 +84,7 @@ markdown-spellcheck: ## Spellchecks Markdown files
 
 .PHONY: shear
 shear: ## Runs cargo-shear to find unused or misplaced dependencies
+	cd xtask && cargo shear --check-test-targets --deny-warnings
 	cargo shear --check-test-targets --deny-warnings
 
 
@@ -121,12 +127,14 @@ serve-docs: ## Serves the docs
 
 .PHONY: test
 test:  ## Runs all tests
+	cargo test --locked --manifest-path xtask/Cargo.toml --all-targets --all-features
 	cargo nextest run --all-features --workspace
 
 # --- checking ------------------------------------------------------------------------------------
 
 .PHONY: check
 check: ## Check all targets and features for errors without code generation
+	cargo check --all-features --all-targets --locked --manifest-path xtask/Cargo.toml
 	cargo check --all-features --all-targets --locked --workspace
 
 .PHONY: check-features
@@ -137,6 +145,7 @@ check-features: ## Checks all feature combinations compile without warnings usin
 
 .PHONY: build
 build: ## Builds all crates and re-builds protobuf bindings for proto crates
+	cargo build --locked --manifest-path xtask/Cargo.toml
 	cargo build --locked --workspace
 
 # --- installing ----------------------------------------------------------------------------------
