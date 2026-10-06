@@ -9,11 +9,11 @@ use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
+use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use proof_kind::ProofKind;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
@@ -107,7 +107,7 @@ impl Server {
             )
             .await;
 
-        let server = tonic::transport::Server::builder()
+        let server = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
@@ -118,10 +118,7 @@ impl Server {
             .add_service(status_service)
             .add_service(health_service)
             .add_service(reflection_service)
-            .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
-                shutdown.cancelled_owned(),
-            );
+            .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned());
 
         let server =
             tokio::spawn(async move { server.await.context("failed while serving proof server") });
