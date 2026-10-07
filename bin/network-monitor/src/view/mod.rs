@@ -69,9 +69,30 @@ pub fn page(state: &ServerState) -> Markup {
 /// `#status-container`.
 pub fn status_fragment(snapshot: &NetworkStatus) -> Markup {
     let rpc_chain_tip = find_rpc_chain_tip(&snapshot.services);
+    let validators: Vec<_> = snapshot
+        .services
+        .iter()
+        .filter_map(|service| {
+            if let ServiceDetails::ValidatorStatus(details) = &service.details {
+                Some((service, details))
+            } else {
+                None
+            }
+        })
+        .collect();
+    let first_validator = snapshot
+        .services
+        .iter()
+        .position(|service| matches!(service.details, ServiceDetails::ValidatorStatus(_)));
     html! {
-        @for service in &snapshot.services {
-            (service_card(service, rpc_chain_tip))
+        @for (index, service) in snapshot.services.iter().enumerate() {
+            @if matches!(service.details, ServiceDetails::ValidatorStatus(_)) {
+                @if Some(index) == first_validator {
+                    (cards::render_validators(&validators))
+                }
+            } @else {
+                (service_card(service, rpc_chain_tip))
+            }
         }
         div class="refresh-button-container" {
             button class="button"
@@ -152,11 +173,13 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
         ServiceDetails::RpcStatus(d) => cards::render_rpc_status(d),
         ServiceDetails::RemoteProverStatus(d) => cards::render_remote_prover(d),
         ServiceDetails::FaucetTest(d) => cards::render_faucet_test(d, healthy),
+        ServiceDetails::FundingStatus(d) => cards::render_funding_service(d, healthy),
         ServiceDetails::NtxIncrement(d) => cards::render_ntx_increment(d, healthy),
         ServiceDetails::NtxTracking(d) => cards::render_ntx_tracking(d, healthy),
         ServiceDetails::ExplorerStatus(d) => cards::render_explorer(d, rpc_chain_tip, healthy),
         ServiceDetails::NoteTransportStatus(d) => cards::render_note_transport(d, healthy),
-        ServiceDetails::ValidatorStatus(d) => cards::render_validator(d, healthy),
+        // Validators share a card rendered by `status_fragment`.
+        ServiceDetails::ValidatorStatus(_) => html! {},
         ServiceDetails::AgglayerStatus(d) => cards::render_agglayer(d),
         ServiceDetails::Error => html! {},
     }
@@ -391,6 +414,8 @@ mod tests {
         assert!(html.contains("Faucet:"));
         assert!(html.contains("Faucet Token Info"));
         assert!(html.contains("Last Note ID"));
+        assert!(html.contains("0.01 tokens"));
+        assert!(html.contains("0.000001 tokens"));
     }
 
     /// Metadata is fetched independently of the mint test, so an unhealthy faucet (minting failing)
@@ -424,6 +449,8 @@ mod tests {
         assert!(html.contains("Faucet Token Info"));
         assert!(html.contains("0.15.0"));
         assert!(html.contains("tokenid"));
+        assert!(html.contains("0.000001 tokens"));
+        assert!(html.contains(&helpers::metric_row("Balance:", "-").into_string()));
     }
 
     #[test]
@@ -490,8 +517,136 @@ mod tests {
             signed_blocks_count: 5,
         };
         let html = render(vec![healthy("validator", ServiceDetails::ValidatorStatus(details))]);
-        assert!(html.contains("Validator:"));
+        assert!(html.contains("Validators"));
+        assert!(html.contains("1/1 healthy"));
+        assert!(html.contains("Version 1.0"));
         assert!(html.contains("Signed Blocks"));
+        assert!(!html.contains("https://validator.example"));
+        assert!(!html.contains("URL:"));
+    }
+
+    #[test]
+    fn renders_named_validators_with_independent_health() {
+        let services = vec![
+            healthy(
+                "Validator (Miden)",
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                    url: "https://miden.example".to_string(),
+                    chain_tip: 42,
+                    validated_transactions_count: 123,
+                    signed_blocks_count: 21,
+                    ..Default::default()
+                }),
+            ),
+            healthy("rpc", ServiceDetails::RpcStatus(rpc_details())),
+            ServiceStatus::unhealthy(
+                "Validator (Gateway)",
+                "connection refused",
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                    url: "https://gateway.example".to_string(),
+                    ..Default::default()
+                }),
+            ),
+        ];
+        let html = render(services);
+        assert_eq!(html.matches("aria-label=\"Validators\"").count(), 1);
+        assert!(html.contains("1/2 healthy"));
+        assert!(html.contains("Miden"));
+        assert!(html.contains("Gateway"));
+        assert!(html.contains("42"));
+        assert!(html.contains("123"));
+        assert!(html.contains("21"));
+        assert!(html.contains("Mempool stats"));
+        assert!(html.contains("View error for Gateway"));
+        assert!(!html.contains("View error for Miden"));
+        assert!(html.contains("connection refused"));
+        assert!(html.contains("✓ HEALTHY"));
+        assert!(html.contains("✗ UNHEALTHY"));
+        assert!(!html.contains("https://miden.example"));
+        assert!(!html.contains("https://gateway.example"));
+    }
+
+    #[test]
+    fn validator_summary_distinguishes_pending_checks_from_failures() {
+        let services = vec![
+            healthy(
+                "Validator (Miden)",
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+            ),
+            ServiceStatus::unknown(
+                "Validator (Gateway)",
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+            ),
+        ];
+        let html = render(services.clone());
+        assert!(html.contains("1/2 healthy · 1 unknown"));
+        assert!(html.contains("? UNKNOWN"));
+        assert!(!html.contains("✗ UNHEALTHY"));
+        assert!(html.contains("validator-summary unknown"));
+
+        let mut services = services;
+        services[1].status = Status::Healthy;
+        let html = render(services);
+        assert!(html.contains("2/2 healthy"));
+        assert!(html.contains("validator-summary healthy"));
+    }
+
+    #[test]
+    fn no_validator_card_without_configured_validators() {
+        let html = render(vec![healthy("rpc", ServiceDetails::RpcStatus(rpc_details()))]);
+        assert!(!html.contains("Validators"));
+    }
+
+    #[test]
+    fn renders_funding_status_and_unavailable_state() {
+        use crate::funding_service::{FundingStatusResponse, NativeAsset};
+        use crate::status::FundingStatusDetails;
+
+        let details = FundingStatusDetails {
+            url: "https://funding.example".to_string(),
+            status: Some(FundingStatusResponse {
+                version: "1.2.3".to_string(),
+                account_id: "0x1234".to_string(),
+                native_asset: NativeAsset {
+                    asset_id: "0xabcd".to_string(),
+                    name: "Miden".to_string(),
+                    symbol: "MIDEN".to_string(),
+                    decimals: 6,
+                },
+                balance: 123_456,
+                chain_tip: 42,
+                max_amount: 1000,
+                verification_base_fee: 7,
+            }),
+        };
+        let html = render(vec![healthy("Funding Service", ServiceDetails::FundingStatus(details))]);
+        for expected in [
+            "Funding Service",
+            "https://funding.example",
+            "1.2.3",
+            "0x1234",
+            "0xabcd",
+            "MIDEN",
+            "0.123456 MIDEN",
+            "0.001 MIDEN",
+            "0.000007 MIDEN",
+            "Balance:",
+            "Max Request:",
+            "Verification Base Fee:",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+        let html = render(vec![ServiceStatus::unhealthy(
+            "Funding Service",
+            "unreachable",
+            ServiceDetails::FundingStatus(FundingStatusDetails {
+                url: "https://funding.example".to_string(),
+                status: None,
+            }),
+        )]);
+        assert!(html.contains("https://funding.example"));
+        assert!(html.contains("unreachable"));
+        assert!(!html.contains("Balance:"));
     }
 
     #[test]

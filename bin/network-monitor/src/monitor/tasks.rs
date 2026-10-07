@@ -25,6 +25,7 @@ use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
 use crate::funding::funding_client_from_config;
+use crate::funding_service::FundingService;
 use crate::note_transport::NoteTransportService;
 use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
@@ -86,11 +87,32 @@ impl Tasks {
         self.spawn_service(svc)
     }
 
-    /// Spawn the validator status checker task.
-    pub fn spawn_validator_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
-        let validator_url = config.validator_url.clone().expect("Validator URL exists");
-        let svc = ValidatorService::new(
-            validator_url,
+    /// Spawns an independent status checker for each configured validator.
+    pub fn spawn_validator_checkers(
+        &mut self,
+        config: &MonitorConfig,
+    ) -> Vec<Receiver<ServiceStatus>> {
+        let validators = config
+            .validators
+            .iter()
+            .map(|validator| (format!("Validator ({})", validator.name), &validator.url))
+            .chain(config.validator_url.iter().map(|url| ("Validator".to_string(), url)));
+        validators
+            .map(|(name, url)| {
+                self.spawn_service(ValidatorService::new(
+                    name,
+                    url.clone(),
+                    config.status_check_interval,
+                    config.request_timeout,
+                ))
+            })
+            .collect()
+    }
+
+    /// Spawns the funding service status checker independently of transaction checks.
+    pub fn spawn_funding_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let svc = FundingService::new(
+            config.funding_service_url.clone().expect("Funding service URL exists"),
             config.status_check_interval,
             config.request_timeout,
         );
@@ -327,4 +349,53 @@ async fn bootstrap_ntx(
         CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;
 
     Ok((increment_svc, tracking_svc))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+    use crate::status::Status;
+
+    #[tokio::test]
+    async fn named_validators_are_polled_independently() {
+        let slow = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let validators = format!(
+            "Miden=http://{},Gateway=http://{}",
+            slow.local_addr().unwrap(),
+            unavailable.local_addr().unwrap(),
+        );
+        drop(unavailable);
+        let config = MonitorConfig::parse_from([
+            "monitor",
+            "--validators",
+            &validators,
+            "--request-timeout",
+            "30s",
+        ]);
+        let mut tasks = Tasks::new();
+        let mut receivers = tasks.spawn_validator_checkers(&config);
+        assert_eq!(receivers.len(), 2);
+        assert_eq!(receivers[0].borrow().name, "Validator (Miden)");
+        assert_eq!(receivers[1].borrow().name, "Validator (Gateway)");
+
+        tokio::time::timeout(Duration::from_secs(5), receivers[1].changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(receivers[0].borrow().status, Status::Unknown);
+        let failed = receivers[1].borrow();
+        assert_eq!(failed.name, "Validator (Gateway)");
+        assert_eq!(failed.status, Status::Unhealthy);
+        assert!(failed.error.is_some());
+        assert!(matches!(failed.details, ServiceDetails::ValidatorStatus(_)));
+    }
+
+    #[tokio::test]
+    async fn validators_are_optional() {
+        let config = MonitorConfig::parse_from(["monitor"]);
+        assert!(Tasks::new().spawn_validator_checkers(&config).is_empty());
+    }
 }
