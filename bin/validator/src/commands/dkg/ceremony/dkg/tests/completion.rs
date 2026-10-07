@@ -1,3 +1,5 @@
+use miden_protocol::crypto::hash::rpo::Rpo256;
+
 use super::*;
 use crate::commands::dkg::ceremony::session::{CeremonyNonce, SessionId};
 

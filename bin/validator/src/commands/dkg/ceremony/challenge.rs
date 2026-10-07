@@ -62,7 +62,7 @@ impl WireCodec for Challenge {
 }
 
 /// A claimed validator key and its signature over a challenge and connection binding. Decoding this
-/// message does not authenticate the key or establish genesis membership.
+/// message does not authenticate the key or compare it with the configured peer key.
 #[derive(Debug)]
 pub struct ChallengeResponse {
     validator_public_key: PublicKey,
@@ -74,7 +74,7 @@ impl ChallengeResponse {
 
     /// Verifies proof of key ownership for the local challenge and connection binding.
     ///
-    /// The returned key still requires a separate genesis membership check before it can identify
+    /// The returned key must still match the configured peer key before it can identify
     /// an authenticated ceremony peer.
     pub fn verify_against(
         self,

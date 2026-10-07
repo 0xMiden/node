@@ -23,17 +23,19 @@ It supports local development keys and KMS-backed signing for deployments that n
 
 ## Peer-to-peer DKG
 
-`miden-validator dkg participate` connects directly to peers by default, without public relays or address discovery.
-Supply each peer as `--peer.endpoint <ENDPOINT_ID>@<IP:PORT>` and choose the local UDP listening address with
-`--bind-address <IP:PORT>`. Loopback addresses allow a local ceremony without internet access.
+Supply each peer to `miden-validator dkg participate` as `--peer <PUBLIC_KEY> <ENDPOINT_ID>[@<IP:PORT>]`.
+The socket address is required unless `--enable-public-relay` is set. By default, peers connect directly without public
+relays or address discovery. Optionally use `--bind-address <IP:PORT>` to select the local UDP listening address.
+Loopback addresses allow a local ceremony without internet access.
 
 Use `--enable-public-relay` on each participant to opt into n0's public Iroh relays and address discovery. Peer socket
-addresses then become optional: `--peer.endpoint <ENDPOINT_ID>` is sufficient. Direct connections remain available, with
-encrypted relay transport as a fallback. The public relays are intended for development and testing, not guaranteed
+addresses then become optional: `--peer <PUBLIC_KEY> <ENDPOINT_ID>` is sufficient. Direct connections remain available,
+with encrypted relay transport as a fallback. The public relays are intended for development and testing, not guaranteed
 production availability.
 
 Each participant supplies its persistent identity with `--endpoint-secret <FILE>`. Regardless of the connection route,
-peers must authenticate with their genesis validator keys.
+each endpoint must authenticate with its configured validator public key. Obtain these keys from a trusted source.
+All participants must configure the same validator set.
 
 ## License
 

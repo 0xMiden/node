@@ -181,11 +181,15 @@ services:
             set --
             for PEER in 1 2 3; do
               if [ "$${PEER}" != "$${VALIDATOR}" ]; then
-                set -- "$$@" --peer.endpoint "$$(cat "$${ENDPOINTS}/$${PEER}.id")@127.0.0.1:900$${PEER}"
+                case "$${PEER}" in
+                  1) PUBLIC_KEY="$${VALIDATOR_1_PUBLIC_KEY}" ;;
+                  2) PUBLIC_KEY="$${VALIDATOR_2_PUBLIC_KEY}" ;;
+                  3) PUBLIC_KEY="$${VALIDATOR_3_PUBLIC_KEY}" ;;
+                esac
+                set -- "$$@" --peer "$${PUBLIC_KEY}" "$$(cat "$${ENDPOINTS}/$${PEER}.id")@127.0.0.1:900$${PEER}"
               fi
             done
             miden-validator dkg participate \
-              --genesis /data/genesis/genesis.dat \
               --threshold 2 \
               --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
               --signing-key.hex "$${SIGNING_KEY}" \

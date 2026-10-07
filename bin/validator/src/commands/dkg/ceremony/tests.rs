@@ -1,13 +1,10 @@
-use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId, SecretKey as IrohSecretKey};
-use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
@@ -31,7 +28,7 @@ fn test_signing_key(seed: u8) -> SigningKey {
 #[test]
 fn ceremony_config_codec_roundtrip() {
     let expected =
-        CeremonyConfig::new(Rpo256::hash(b"test genesis"), 2, StorageKeyEpoch::new([9; 32]));
+        CeremonyConfig::new(&[SigningKey::new().public_key()], 1, StorageKeyEpoch::new([9; 32]));
     let encoded = expected.encode();
     let decoded = CeremonyConfig::decode(&encoded).unwrap();
 
@@ -40,20 +37,17 @@ fn ceremony_config_codec_roundtrip() {
 
 fn test_ceremony(
     signing_key: &SigningKey,
-    validator_keys: Vec<PublicKey>,
     endpoint_secret: IrohSecretKey,
-    peer_endpoints: BTreeSet<EndpointId>,
+    peers: Vec<(EndpointId, PublicKey)>,
 ) -> Ceremony {
-    let quorum = validator_keys.len().try_into().unwrap();
-    let validator_set =
-        ValidatorConfig::new(validator_keys, quorum).expect("test validator set must be valid");
+    let mut validator_set = vec![signing_key.public_key()];
+    validator_set.extend(peers.iter().map(|(_, key)| key.clone()));
     Ceremony {
-        genesis_commitment: Rpo256::hash(b"test genesis"),
-        validator_set: Arc::new(validator_set),
+        validator_set,
         endpoint_secret,
         enable_public_relay: false,
         bind_address: Some("127.0.0.1:0".parse().unwrap()),
-        peer_endpoints: peer_endpoints.into_iter().map(|id| (id, id.into())).collect(),
+        peers: peers.into_iter().map(|(id, key)| (id, (id.into(), key))).collect(),
         threshold: NonZeroUsize::new(2).unwrap(),
         epoch: StorageKeyEpoch::new([9; 32]),
         signer: Arc::new(ValidatorSigner::new_local(signing_key.clone())),
@@ -84,18 +78,15 @@ async fn registry_confirmation_rejects_different_registry_roots() -> TestResult 
 
     let signing_key_a = test_signing_key(33);
     let signing_key_b = test_signing_key(34);
-    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
     let ceremony_a = test_ceremony(
         &signing_key_a,
-        validator_keys.clone(),
         endpoint_secret_a,
-        BTreeSet::from([endpoint_b.id()]),
+        vec![(endpoint_b.id(), signing_key_b.public_key())],
     );
     let ceremony_b = test_ceremony(
         &signing_key_b,
-        validator_keys,
         endpoint_secret_b,
-        BTreeSet::from([endpoint_a.id()]),
+        vec![(endpoint_a.id(), signing_key_a.public_key())],
     );
 
     let (peers_a, peers_b) = tokio::try_join!(
@@ -154,18 +145,15 @@ async fn session_confirmation_rejects_different_session_ids() -> TestResult {
 
     let signing_key_a = test_signing_key(29);
     let signing_key_b = test_signing_key(30);
-    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
     let ceremony_a = test_ceremony(
         &signing_key_a,
-        validator_keys.clone(),
         endpoint_secret_a,
-        BTreeSet::from([endpoint_b.id()]),
+        vec![(endpoint_b.id(), signing_key_b.public_key())],
     );
     let ceremony_b = test_ceremony(
         &signing_key_b,
-        validator_keys,
         endpoint_secret_b,
-        BTreeSet::from([endpoint_a.id()]),
+        vec![(endpoint_a.id(), signing_key_a.public_key())],
     );
 
     let (peers_a, peers_b) = tokio::try_join!(

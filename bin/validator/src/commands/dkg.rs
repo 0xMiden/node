@@ -67,10 +67,6 @@ struct ParticipateOptions {
     #[arg(long, value_name = "FILE")]
     output_file: PathBuf,
 
-    /// Trusted genesis block for the network.
-    #[arg(long, value_name = "FILE")]
-    genesis: PathBuf,
-
     /// File containing this validator's persistent peer-to-peer endpoint secret.
     ///
     /// Reusing this secret keeps the advertised endpoint ID stable across ceremonies.
@@ -87,12 +83,12 @@ struct ParticipateOptions {
     #[arg(long, value_name = "IP:PORT")]
     bind_address: Option<SocketAddr>,
 
-    /// Peer-to-peer endpoint of another validator. Repeat once per other genesis validator.
+    /// Trusted validator public key and peer-to-peer endpoint. Repeat once per other validator.
     ///
     /// Append @IP:PORT for direct connections. A socket address is required unless public relays
-    /// are enabled. Each peer must prove ownership of a genesis validator key during authentication.
-    #[arg(long = "peer.endpoint", value_name = "ENDPOINT_ID[@IP:PORT]", value_parser = ParticipateOptions::parse_peer_endpoint)]
-    peer_endpoints: Vec<EndpointAddr>,
+    /// are enabled. Each endpoint must prove ownership of its paired validator key.
+    #[arg(long = "peer", num_args = 2, value_names = ["PUBLIC_KEY", "ENDPOINT_ID[@IP:PORT]"])]
+    peers: Vec<String>,
 
     /// Maximum duration of peer authentication and all subsequent ceremony steps.
     #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = humantime::parse_duration)]
@@ -106,7 +102,7 @@ struct ParticipateOptions {
     #[arg(long, value_name = "HEX")]
     epoch: String,
 
-    /// Validator signing key committed by genesis.
+    /// This validator's signing key.
     #[command(flatten)]
     signing_key: ValidatorSigningKey,
 }

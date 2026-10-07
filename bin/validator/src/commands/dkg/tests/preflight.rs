@@ -3,32 +3,16 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use clap::Parser;
+use iroh::{EndpointId, SecretKey as IrohSecretKey};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
 use miden_protocol::utils::serde::Serializable;
 
-use super::super::super::{ValidatorSigningKey, ValidatorStorageKey};
-use super::super::ParticipateOptions;
+use super::super::super::{ValidatorCommand, ValidatorSigningKey, ValidatorStorageKey};
+use super::super::{DkgCommand, ParticipateOptions};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
-
-struct TestGenesis {
-    path: PathBuf,
-    signing_keys: Vec<SigningKey>,
-}
-
-fn write_genesis(root: &Path, validator_count: usize) -> TestResultWith<TestGenesis> {
-    let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
-    let validator_keys = signing_keys.iter().map(SigningKey::public_key).collect();
-    let genesis_directory = root.join("genesis");
-    super::super::super::genesis::tests::command(root, validator_keys)?.execute()?;
-
-    Ok(TestGenesis {
-        path: genesis_directory.join("genesis.dat"),
-        signing_keys,
-    })
-}
 
 fn write_endpoint_secret(root: &Path, seed: u8) -> TestResultWith<(PathBuf, EndpointId)> {
     let secret = IrohSecretKey::from_bytes(&[seed; 32]);
@@ -40,21 +24,19 @@ fn write_endpoint_secret(root: &Path, seed: u8) -> TestResultWith<(PathBuf, Endp
 impl ParticipateOptions {
     fn for_tests(
         output_file: &Path,
-        genesis: &Path,
         signing_key: &SigningKey,
         endpoint_secret: &Path,
-        peer_endpoints: Vec<EndpointId>,
+        peers: Vec<(PublicKey, EndpointId)>,
         threshold: usize,
     ) -> Self {
         Self {
             output_file: output_file.to_path_buf(),
-            genesis: genesis.to_path_buf(),
             endpoint_secret: endpoint_secret.to_path_buf(),
             enable_public_relay: false,
             bind_address: Some("127.0.0.1:0".parse().unwrap()),
-            peer_endpoints: peer_endpoints
+            peers: peers
                 .into_iter()
-                .map(|id| EndpointAddr::new(id).with_ip_addr("127.0.0.1:9".parse().unwrap()))
+                .flat_map(|(key, id)| [hex::encode(key.to_bytes()), format!("{id}@127.0.0.1:9")])
                 .collect(),
             timeout: Duration::from_secs(30),
             threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
@@ -71,19 +53,12 @@ impl ParticipateOptions {
 async fn single_validator_ceremony_succeeds() -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");
-    let genesis = write_genesis(root.path(), 1)?;
+    let signing_key = SigningKey::new();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
 
-    ParticipateOptions::for_tests(
-        &output_file,
-        &genesis.path,
-        &genesis.signing_keys[0],
-        &endpoint_secret,
-        Vec::new(),
-        1,
-    )
-    .handle()
-    .await?;
+    ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1)
+        .handle()
+        .await?;
 
     let operator_key = ValidatorStorageKey { file: output_file.clone() }.load()?;
     assert_eq!(operator_key.key_epoch().as_bytes(), &[9; 32]);
@@ -101,46 +76,65 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
 #[tokio::test]
 async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 2)?;
-    let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
-    let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
-    let output_a = root.path().join("a.bundle");
-    let output_b = root.path().join("b.bundle");
-    let socket_a = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let socket_b = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
-    let address_a = socket_a.local_addr()?;
-    let address_b = socket_b.local_addr()?;
-    let mut options_a = ParticipateOptions::for_tests(
-        &output_a,
-        &genesis.path,
-        &genesis.signing_keys[0],
-        &secret_a,
-        vec![endpoint_b],
-        2,
-    );
-    let mut options_b = ParticipateOptions::for_tests(
-        &output_b,
-        &genesis.path,
-        &genesis.signing_keys[1],
-        &secret_b,
-        vec![endpoint_a],
-        2,
-    );
-    options_a.bind_address = Some(address_a);
-    options_b.bind_address = Some(address_b);
-    options_a.peer_endpoints =
-        vec![ParticipateOptions::parse_peer_endpoint(&format!("{endpoint_b}@{address_b}"))?];
-    options_b.peer_endpoints =
-        vec![ParticipateOptions::parse_peer_endpoint(&format!("{endpoint_a}@{address_a}"))?];
-    drop((socket_a, socket_b));
-
-    tokio::try_join!(options_a.handle(), options_b.handle())?;
-
-    let key_a = ValidatorStorageKey { file: output_a }.load()?;
-    let key_b = ValidatorStorageKey { file: output_b }.load()?;
-    assert_eq!(key_a.setup_context(), key_b.setup_context());
-    assert_eq!(key_a.public_key_set(), key_b.public_key_set());
-    assert_ne!(key_a.participant(), key_b.participant());
+    let signing_keys = (0..3).map(|_| SigningKey::new()).collect::<Vec<_>>();
+    let endpoints = (1..=3)
+        .map(|seed| write_endpoint_secret(root.path(), seed))
+        .collect::<Result<Vec<_>, _>>()?;
+    let sockets = (0..3)
+        .map(|_| UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut commands = Vec::new();
+    let mut outputs = Vec::new();
+    for local in 0..3 {
+        let output = root.path().join(format!("{local}.bundle"));
+        let mut args = vec![
+            "miden-validator".to_owned(),
+            "dkg".to_owned(),
+            "participate".to_owned(),
+            "--output-file".to_owned(),
+            output.display().to_string(),
+            "--endpoint-secret".to_owned(),
+            endpoints[local].0.display().to_string(),
+            "--signing-key.hex".to_owned(),
+            hex::encode(signing_keys[local].to_bytes()),
+            "--bind-address".to_owned(),
+            sockets[local].local_addr()?.to_string(),
+            "--threshold".to_owned(),
+            "2".to_owned(),
+            "--epoch".to_owned(),
+            "09".repeat(32),
+            "--timeout".to_owned(),
+            "30s".to_owned(),
+        ];
+        // Rotate peer order to check that argument order does not change the shared result.
+        for offset in 1..3 {
+            let peer = (local + offset) % 3;
+            args.extend([
+                "--peer".to_owned(),
+                hex::encode(signing_keys[peer].public_key().to_bytes()),
+                format!("{}@{}", endpoints[peer].1, sockets[peer].local_addr()?),
+            ]);
+        }
+        let ValidatorCommand::Dkg(options) = ValidatorCommand::try_parse_from(args)? else {
+            panic!("expected DKG command");
+        };
+        let DkgCommand::Participate(options) = options.command else {
+            panic!("expected participate command");
+        };
+        commands.push(options);
+        outputs.push(output);
+    }
+    drop(sockets);
+    futures::future::try_join_all(commands.into_iter().map(|options| options.handle())).await?;
+    let bundles = outputs
+        .into_iter()
+        .map(|file| ValidatorStorageKey { file }.load())
+        .collect::<Result<Vec<_>, _>>()?;
+    for pair in bundles.windows(2) {
+        assert_eq!(pair[0].setup_context(), pair[1].setup_context());
+        assert_eq!(pair[0].public_key_set(), pair[1].public_key_set());
+        assert_ne!(pair[0].participant(), pair[1].participant());
+    }
     Ok(())
 }
 
@@ -152,18 +146,20 @@ async fn peer_socket_is_required_without_public_relay(
     #[case] enable_public_relay: bool,
 ) -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 2)?;
+    let signing_keys = (0..2).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
     let mut options = ParticipateOptions::for_tests(
         &root.path().join("operator-key.bundle"),
-        &genesis.path,
-        &genesis.signing_keys[0],
+        &signing_keys[0],
         &endpoint_secret,
         Vec::new(),
         1,
     );
     options.enable_public_relay = enable_public_relay;
-    options.peer_endpoints = vec![IrohSecretKey::generate().public().into()];
+    options.peers = vec![
+        hex::encode(signing_keys[1].public_key().to_bytes()),
+        IrohSecretKey::generate().public().to_string(),
+    ];
 
     let result = options.validate().await;
     if enable_public_relay {
@@ -209,28 +205,15 @@ fn peer_endpoint_rejects_unusable_socket(#[case] socket: &str) {
 async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");
-    let genesis = write_genesis(root.path(), 1)?;
+    let signing_key = SigningKey::new();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
-    ParticipateOptions::for_tests(
-        &output_file,
-        &genesis.path,
-        &genesis.signing_keys[0],
-        &endpoint_secret,
-        Vec::new(),
-        1,
-    )
-    .handle()
-    .await?;
+    ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1)
+        .handle()
+        .await?;
 
     let original = fs_err::read(&output_file)?;
-    let mut options = ParticipateOptions::for_tests(
-        &output_file,
-        &genesis.path,
-        &genesis.signing_keys[0],
-        &endpoint_secret,
-        Vec::new(),
-        1,
-    );
+    let mut options =
+        ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1);
     options.epoch = "0a".repeat(32);
     let error = options.handle().await.expect_err("existing storage keys must not be replaced");
     assert!(error.to_string().contains("storage key bundle already exists"));
@@ -245,7 +228,7 @@ async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
 async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");
-    let genesis = write_genesis(root.path(), 2)?;
+    let signing_keys = (0..2).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let (secret_a, endpoint_a) = write_endpoint_secret(root.path(), 1)?;
     let (secret_b, endpoint_b) = write_endpoint_secret(root.path(), 2)?;
     // Leave the peer offline for each connection direction.
@@ -258,10 +241,9 @@ async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) ->
     };
     let mut options = ParticipateOptions::for_tests(
         &output_file,
-        &genesis.path,
-        &genesis.signing_keys[0],
+        &signing_keys[0],
         &endpoint_secret,
-        vec![peer],
+        vec![(signing_keys[1].public_key(), peer)],
         2,
     );
     options.timeout = Duration::from_millis(100);
@@ -276,21 +258,25 @@ async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) ->
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::local_key(true)]
+#[case::duplicate_peer_key(false)]
 #[tokio::test]
-async fn participate_rejects_a_signer_outside_genesis() -> TestResult {
+async fn participate_rejects_repeated_validator_keys(#[case] local_key: bool) -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 3)?;
-    let outsider = SigningKey::new();
+    let signing_keys = (0..3).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
     let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
 
     let error = ParticipateOptions::for_tests(
         &root.path().join("operator-key.bundle"),
-        &genesis.path,
-        &outsider,
+        &signing_keys[0],
         &endpoint_secret,
-        vec![peer_one, peer_two],
+        vec![
+            (signing_keys[1].public_key(), peer_one),
+            (signing_keys[usize::from(!local_key)].public_key(), peer_two),
+        ],
         2,
     )
     .validate()
@@ -298,35 +284,42 @@ async fn participate_rejects_a_signer_outside_genesis() -> TestResult {
     .err()
     .expect("validation should fail");
 
-    assert!(format!("{error:#}").contains("validator signing key is not committed by genesis"));
+    let expected = if local_key {
+        "peer keys contain the local validator key"
+    } else {
+        "peer validator keys contain duplicates"
+    };
+    assert!(format!("{error:#}").contains(expected), "{error:#}");
     Ok(())
 }
 
 #[tokio::test]
 async fn participate_rejects_an_invalid_peer_endpoint_set() -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 3)?;
+    let signing_keys = (0..3).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let (endpoint_secret, local_endpoint) = write_endpoint_secret(root.path(), 1)?;
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
 
     let cases = [
-        (vec![peer_one], "expected 2 peer endpoints"),
         (vec![peer_one, peer_one], "peer endpoints contain duplicates"),
         (vec![peer_one, local_endpoint], "peer endpoints contain the local endpoint"),
     ];
     for (peer_endpoints, expected) in cases {
         let mut options = ParticipateOptions::for_tests(
             &root.path().join("operator-key.bundle"),
-            &genesis.path,
-            &genesis.signing_keys[0],
+            &signing_keys[0],
             &endpoint_secret,
-            peer_endpoints,
+            signing_keys[1..]
+                .iter()
+                .map(SigningKey::public_key)
+                .zip(peer_endpoints)
+                .collect(),
             2,
         );
         // Distinct socket addresses must not make duplicate endpoint identities acceptable.
-        for (index, peer) in options.peer_endpoints.iter_mut().enumerate() {
-            *peer = EndpointAddr::new(peer.id)
-                .with_ip_addr((Ipv4Addr::LOCALHOST, 9000 + index as u16).into());
+        for (index, pair) in options.peers.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let id = ParticipateOptions::parse_peer_endpoint(&pair[1])?.id;
+            pair[1] = format!("{id}@127.0.0.1:{}", 9000 + index);
         }
         let error = options.validate().await.err().expect("validation should fail");
         let error = format!("{error:#}");
@@ -336,26 +329,28 @@ async fn participate_rejects_an_invalid_peer_endpoint_set() -> TestResult {
 }
 
 #[tokio::test]
-async fn participate_rejects_a_threshold_exceeding_the_genesis_validator_set() -> TestResult {
+async fn participate_rejects_a_threshold_exceeding_the_validator_set() -> TestResult {
     let root = tempfile::tempdir()?;
-    let genesis = write_genesis(root.path(), 3)?;
+    let signing_keys = (0..3).map(|_| SigningKey::new()).collect::<Vec<_>>();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
     let (_, peer_one) = write_endpoint_secret(root.path(), 2)?;
     let (_, peer_two) = write_endpoint_secret(root.path(), 3)?;
 
     let error = ParticipateOptions::for_tests(
         &root.path().join("operator-key.bundle"),
-        &genesis.path,
-        &genesis.signing_keys[0],
+        &signing_keys[0],
         &endpoint_secret,
-        vec![peer_one, peer_two],
+        vec![
+            (signing_keys[1].public_key(), peer_one),
+            (signing_keys[2].public_key(), peer_two),
+        ],
         4,
     )
     .validate()
     .await
     .err()
     .expect("validation should fail");
-    assert!(format!("{error:#}").contains("threshold must not exceed the 3 genesis validators"));
+    assert!(format!("{error:#}").contains("threshold must not exceed the 3 configured validators"));
 
     Ok(())
 }

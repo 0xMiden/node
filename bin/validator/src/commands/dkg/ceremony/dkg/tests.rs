@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -11,9 +10,7 @@ use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
 use iroh_relay::server::{RelayConfig, Server, ServerConfig};
 use itertools::Itertools;
-use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use tokio::task::JoinSet;
 
@@ -45,10 +42,7 @@ impl TestCeremony {
         let relay = Server::spawn(relay_config).await?;
         let relay_url: RelayUrl = format!("http://{}", relay.http_addr().unwrap()).parse()?;
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
-        let validator_set = Arc::new(ValidatorConfig::new(
-            signing_keys.iter().map(SigningKey::public_key).collect(),
-            validator_count.try_into()?,
-        )?);
+        let validator_set = signing_keys.iter().map(SigningKey::public_key).collect::<Vec<_>>();
         let mut endpoints = Vec::new();
         let mut endpoint_secrets = Vec::new();
         for _ in 0..validator_count {
@@ -65,23 +59,31 @@ impl TestCeremony {
             endpoint_secrets.push(secret);
         }
 
-        let endpoint_ids = endpoints.iter().map(Endpoint::id).collect::<BTreeSet<_>>();
+        let configured_peers = endpoints
+            .iter()
+            .zip(&validator_set)
+            .map(|(endpoint, key)| {
+                (
+                    endpoint.id(),
+                    (
+                        EndpointAddr::new(endpoint.id()).with_relay_url(relay_url.clone()),
+                        key.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         let mut exchanges = JoinSet::new();
         for ((signing_key, endpoint_secret), endpoint) in
             signing_keys.into_iter().zip(endpoint_secrets).zip(endpoints.clone())
         {
-            let mut peer_endpoints = endpoint_ids.clone();
-            peer_endpoints.remove(&endpoint.id());
+            let mut peers = configured_peers.clone();
+            peers.remove(&endpoint.id());
             let ceremony = Ceremony {
-                genesis_commitment: Rpo256::hash(b"test genesis"),
-                validator_set: Arc::clone(&validator_set),
+                validator_set: validator_set.clone(),
                 endpoint_secret,
                 enable_public_relay: false,
                 bind_address: None,
-                peer_endpoints: peer_endpoints
-                    .into_iter()
-                    .map(|id| (id, EndpointAddr::new(id).with_relay_url(relay_url.clone())))
-                    .collect(),
+                peers,
                 threshold: NonZeroUsize::new(threshold).unwrap(),
                 epoch: StorageKeyEpoch::new([9; 32]),
                 signer: Arc::new(ValidatorSigner::new_local(signing_key)),

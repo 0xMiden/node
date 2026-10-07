@@ -10,9 +10,7 @@ use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::{info, warn};
-use miden_node_utils::genesis::read_genesis_block;
-use miden_protocol::Word;
-use miden_protocol::block::ValidatorConfig;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
 use rand_core_06::OsRng;
@@ -36,7 +34,7 @@ mod session;
 #[cfg(test)]
 mod tests;
 
-/// Peers whose distinct validator keys, together with the local key, match the genesis validator
+/// Peers whose distinct validator keys, together with the local key, match the configured validator
 /// set. Authentication alone does not establish agreement on ceremony configuration.
 pub struct AuthenticatedPeers {
     authenticated_peers: Vec<AuthenticatedPeer>,
@@ -73,22 +71,20 @@ pub struct DkgParticipants {
     registry: ParticipantRegistry<StorageGroup>,
 }
 
-/// Validated inputs for one live DKG ceremony. The genesis commitment and validator set come from
-/// the same valid genesis block. The signer belongs to that set, and the nonzero threshold does
-/// not exceed its size. The persistent endpoint identity is valid, with one distinct, non-local
-/// peer endpoint per other genesis validator. Every peer has a direct socket address unless
+/// Validated inputs for one live DKG ceremony. The validator set contains the local signer and
+/// distinct peer keys, and the nonzero threshold does not exceed its size. Each peer key has one
+/// distinct, non-local endpoint. Every peer has a direct socket address unless
 /// public relays and address discovery are enabled.
 ///
 /// These checks establish local configuration, not peer identities.
-/// [`Ceremony::authenticate_peers`] must bind endpoints to genesis validator keys before the
+/// [`Ceremony::authenticate_peers`] must bind endpoints to their configured validator keys before the
 /// ceremony exchanges configuration or DKG messages.
 pub(super) struct Ceremony {
-    genesis_commitment: Word,
-    validator_set: Arc<ValidatorConfig>,
+    validator_set: Vec<PublicKey>,
     endpoint_secret: IrohSecretKey,
     enable_public_relay: bool,
     bind_address: Option<SocketAddr>,
-    peer_endpoints: BTreeMap<EndpointId, EndpointAddr>,
+    peers: BTreeMap<EndpointId, (EndpointAddr, PublicKey)>,
     threshold: NonZeroUsize,
     epoch: StorageKeyEpoch,
     signer: Arc<ValidatorSigner>,
@@ -118,7 +114,7 @@ impl Ceremony {
             .context("failed to bind Iroh endpoint")
     }
 
-    /// Connects to every configured endpoint and requires exactly the genesis validator set.
+    /// Connects to every configured endpoint and authenticates its paired validator key.
     ///
     /// The smaller endpoint ID dials to avoid duplicate connections. Each connection authenticates
     /// independently, so a late peer does not block authentication of peers that are already online.
@@ -128,26 +124,28 @@ impl Ceremony {
     ) -> anyhow::Result<AuthenticatedPeers> {
         let local_endpoint = endpoint.id();
         let mut authentications = JoinSet::new();
-        for peer_addr in self.peer_endpoints.values().filter(|peer| local_endpoint < peer.id) {
+        for (peer_addr, validator_key) in
+            self.peers.values().filter(|(peer, _)| local_endpoint < peer.id)
+        {
             let peer_addr = peer_addr.clone();
             let endpoint = endpoint.clone();
-            let validator_set = Arc::clone(&self.validator_set);
+            let validator_key = validator_key.clone();
             let signer = Arc::clone(&self.signer);
             authentications.spawn(async move {
                 ConnectedPeer::connect(&endpoint, peer_addr)
                     .await?
-                    .authenticate(&validator_set, &signer)
+                    .authenticate(&validator_key, &signer)
                     .await
             });
         }
 
         let mut expected_incoming = self
-            .peer_endpoints
+            .peers
             .keys()
             .copied()
             .filter(|peer| *peer < local_endpoint)
             .collect::<BTreeSet<_>>();
-        let mut authenticated_peers = Vec::with_capacity(self.peer_endpoints.len());
+        let mut authenticated_peers = Vec::with_capacity(self.peers.len());
         let mut progress = tokio::time::interval(Duration::from_secs(10));
         progress.set_missed_tick_behavior(MissedTickBehavior::Skip);
         // Establish incoming connections separately from validator authentication.
@@ -178,18 +176,18 @@ impl Ceremony {
                         },
                     };
                     let peer_endpoint = connected_peer.endpoint_id();
-                    if !self.peer_endpoints.contains_key(&peer_endpoint) {
+                    let Some((_, validator_key)) = self.peers.get(&peer_endpoint) else {
                         connected_peer.close(b"endpoint is not a configured DKG peer");
                         continue;
-                    }
+                    };
                     if !expected_incoming.remove(&peer_endpoint) {
                         connected_peer.close(b"duplicate or wrong-direction DKG connection");
                         continue;
                     }
-                    let validator_set = Arc::clone(&self.validator_set);
+                    let validator_key = validator_key.clone();
                     let signer = Arc::clone(&self.signer);
                     authentications.spawn(async move {
-                        connected_peer.authenticate(&validator_set, &signer).await
+                        connected_peer.authenticate(&validator_key, &signer).await
                     });
                 },
                 Some(result) = authentications.join_next(), if !authentications.is_empty() => {
@@ -200,34 +198,17 @@ impl Ceremony {
                         target: miden_validator::LOG_TARGET,
                         "Waiting for DKG peers to connect and authenticate",
                         dkg.peers.authenticated = authenticated_peers.len() #[nonstandard],
-                        dkg.peers.expected = self.peer_endpoints.len() #[nonstandard]
+                        dkg.peers.expected = self.peers.len() #[nonstandard]
                     );
                 },
             }
         }
 
-        // Check the complete validator set after individual proofs of key ownership.
-        //
-        // Membership checks alone would allow multiple endpoints to authenticate with one
-        // validator's key while another genesis validator is absent.
-        let mut authenticated_validator_keys = authenticated_peers
-            .iter()
-            .map(|peer| peer.validator_public_key().clone())
-            .collect::<Vec<_>>();
-        authenticated_validator_keys.push(self.signer.public_key());
-        let authenticated_validator_set =
-            ValidatorConfig::new(authenticated_validator_keys, self.validator_set.quorum())
-                .context("authenticated validator keys do not form a valid validator set")?;
-        ensure!(
-            authenticated_validator_set == *self.validator_set,
-            "authenticated validator set does not match genesis",
-        );
-
         Ok(AuthenticatedPeers { authenticated_peers })
     }
 
-    /// Requires each authenticated peer to use the same genesis commitment, threshold, and epoch
-    /// before exchanging attempt-specific values.
+    /// Requires each authenticated peer to use the same validator set, threshold, and epoch before
+    /// exchanging attempt-specific values.
     pub async fn exchange_configs(
         &self,
         mut peers: AuthenticatedPeers,
@@ -388,7 +369,7 @@ impl Ceremony {
     fn config(&self) -> anyhow::Result<CeremonyConfig> {
         let threshold = u32::try_from(self.threshold.get())
             .context("threshold does not fit in the ceremony config format")?;
-        Ok(CeremonyConfig::new(self.genesis_commitment, threshold, self.epoch))
+        Ok(CeremonyConfig::new(&self.validator_set, threshold, self.epoch))
     }
 }
 
@@ -409,21 +390,9 @@ impl DkgParticipants {
 }
 
 impl ParticipateOptions {
-    /// Loads trusted genesis and local key material and checks participation inputs before any peer
-    /// connections are opened.
+    /// Loads trusted peer keys and local key material and checks participation inputs before any
+    /// peer connections are opened.
     pub(super) async fn validate(self) -> anyhow::Result<Ceremony> {
-        let genesis =
-            read_genesis_block(&self.genesis).context("failed to validate genesis block")?;
-        let genesis_commitment = genesis.inner().header().commitment();
-        let validator_set = genesis.inner().header().validator_config().clone();
-        let validator_count = validator_set.len();
-
-        ensure!(
-            self.threshold.get() <= validator_count,
-            "threshold must not exceed the {validator_count} genesis validators, got {}",
-            self.threshold,
-        );
-
         let epoch =
             StorageKeyEpoch::from_hex(self.epoch).context("failed to decode storage key epoch")?;
 
@@ -434,44 +403,47 @@ impl ParticipateOptions {
         let endpoint_secret = IrohSecretKey::try_from(endpoint_secret_bytes.as_slice())
             .context("failed to decode Iroh endpoint secret")?;
 
-        let expected_peer_count = validator_count.saturating_sub(1);
-        ensure!(
-            self.peer_endpoints.len() == expected_peer_count,
-            "expected {expected_peer_count} peer endpoints for {validator_count} genesis validators, got {}",
-            self.peer_endpoints.len(),
-        );
-        let peer_count = self.peer_endpoints.len();
-        let peer_endpoints = self
-            .peer_endpoints
-            .into_iter()
-            .map(|peer| (peer.id, peer))
-            .collect::<BTreeMap<_, _>>();
-        ensure!(peer_endpoints.len() == peer_count, "peer endpoints contain duplicates");
-        ensure!(
-            !peer_endpoints.contains_key(&endpoint_secret.public()),
-            "peer endpoints contain the local endpoint",
-        );
-        for peer in peer_endpoints.values() {
+        let signer = Arc::new(self.signing_key.into_signer().await?);
+        let mut validator_set = vec![signer.public_key()];
+        let mut peers = BTreeMap::new();
+        for pair in self.peers.chunks(2) {
+            let [key, endpoint] = pair else {
+                anyhow::bail!("each --peer requires a public key followed by an endpoint");
+            };
+            let key = super::super::parse_validator_public_key(key)
+                .map_err(anyhow::Error::msg)
+                .context("invalid peer validator public key")?;
+            ensure!(key != signer.public_key(), "peer keys contain the local validator key");
+            ensure!(!validator_set.contains(&key), "peer validator keys contain duplicates");
+            let peer = Self::parse_peer_endpoint(endpoint)?;
+            ensure!(
+                peer.id != endpoint_secret.public(),
+                "peer endpoints contain the local endpoint"
+            );
             ensure!(
                 self.enable_public_relay || peer.ip_addrs().next().is_some(),
                 "peer {} requires a socket address unless --enable-public-relay is set",
                 peer.id,
             );
+            validator_set.push(key.clone());
+            ensure!(
+                peers.insert(peer.id, (peer, key)).is_none(),
+                "peer endpoints contain duplicates"
+            );
         }
-
-        let signer = Arc::new(self.signing_key.into_signer().await?);
+        let validator_count = validator_set.len();
         ensure!(
-            validator_set.keys().contains(&signer.public_key()),
-            "validator signing key is not committed by genesis",
+            self.threshold.get() <= validator_count,
+            "threshold must not exceed the {validator_count} configured validators, got {}",
+            self.threshold,
         );
 
         Ok(Ceremony {
-            genesis_commitment,
-            validator_set: Arc::new(validator_set),
+            validator_set,
             endpoint_secret,
             enable_public_relay: self.enable_public_relay,
             bind_address: self.bind_address,
-            peer_endpoints,
+            peers,
             threshold: self.threshold,
             epoch,
             signer,

@@ -6,7 +6,6 @@ use iroh::endpoint::{Connection, Incoming, Side};
 use iroh::{Endpoint, EndpointAddr, EndpointId};
 use miden_node_tracing::warn;
 use miden_node_utils::retry::{self, Retryable};
-use miden_protocol::block::ValidatorConfig;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
 use rand_core_06::OsRng;
@@ -83,13 +82,13 @@ impl ConnectedPeer {
         self.connection.close(0u8.into(), reason);
     }
 
-    /// Exchanges signed challenges and binds this connection to a genesis validator key.
+    /// Exchanges signed challenges and binds this connection to its configured validator key.
     ///
     /// Both sides send before reading at each exchange. The returned peer retains the same stream
     /// for subsequent ceremony messages, but no ceremony configuration has been exchanged yet.
     pub async fn authenticate(
         self,
-        validator_set: &ValidatorConfig,
+        expected_validator_key: &PublicKey,
         signer: &ValidatorSigner,
     ) -> anyhow::Result<AuthenticatedPeer> {
         // Derive the tls-exporter channel binding defined in RFC 9266, section 2.
@@ -121,8 +120,9 @@ impl ConnectedPeer {
             .context("failed to read challenge response")?;
         let validator_public_key = response.verify_against(&challenge, &channel_binding)?;
         ensure!(
-            validator_set.keys().contains(&validator_public_key),
-            "peer validator key is not committed by genesis",
+            &validator_public_key == expected_validator_key,
+            "peer validator key does not match the key configured for endpoint {}",
+            self.endpoint_id(),
         );
         Ok(AuthenticatedPeer {
             validator_public_key,
@@ -133,7 +133,7 @@ impl ConnectedPeer {
     }
 }
 
-/// A connection authenticated as a genesis validator, with one ordered stream for the ceremony.
+/// A connection authenticated as its configured validator, with one ordered stream for the ceremony.
 ///
 /// Both ends must call the exchange methods in protocol order. Buffered stream data allows one
 /// peer to reach the next step while the other is still waiting for its remaining peers.

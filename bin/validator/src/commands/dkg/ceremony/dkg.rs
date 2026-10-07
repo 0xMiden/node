@@ -222,7 +222,7 @@ impl Ceremony {
         local: LocalDealings,
     ) -> anyhow::Result<UnconfirmedDkgDealings> {
         let local_messages = DealerMessages::from_local(&local);
-        let mut validator_keys = self.validator_set.keys().to_vec();
+        let mut validator_keys = self.validator_set.clone();
         validator_keys.sort_by_key(Serializable::to_bytes);
 
         let mut exchanges = FuturesUnordered::new();
@@ -328,7 +328,7 @@ impl DkgDealings {
 
 /// A nonzero, attempt-specific key used to protect and recover shares in dealer messages.
 ///
-/// This is separate from the persistent Iroh identity and genesis signing key. It is also not
+/// This is separate from the persistent Iroh identity and validator signing key. It is also not
 /// the resulting storage-key share, which is derived from all dealers' contributions.
 pub struct DkgSecretKey(StorageScalar);
 

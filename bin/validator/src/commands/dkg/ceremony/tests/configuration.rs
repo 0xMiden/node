@@ -1,16 +1,14 @@
 use std::time::Duration;
 
-use miden_protocol::Word;
-
 use super::*;
 
 #[rstest::rstest]
-#[case::different_genesis(Rpo256::hash(b"other genesis"), 2, StorageKeyEpoch::new([9; 32]))]
-#[case::different_threshold(Rpo256::hash(b"test genesis"), 1, StorageKeyEpoch::new([9; 32]))]
-#[case::different_epoch(Rpo256::hash(b"test genesis"), 2, StorageKeyEpoch::new([10; 32]))]
+#[case::different_validator_set(true, 2, StorageKeyEpoch::new([9; 32]))]
+#[case::different_threshold(false, 1, StorageKeyEpoch::new([9; 32]))]
+#[case::different_epoch(false, 2, StorageKeyEpoch::new([10; 32]))]
 #[tokio::test]
 async fn config_exchange_rejects_mismatch(
-    #[case] genesis_commitment: Word,
+    #[case] different_validator_set: bool,
     #[case] threshold: usize,
     #[case] epoch: StorageKeyEpoch,
 ) -> TestResult {
@@ -23,23 +21,26 @@ async fn config_exchange_rejects_mismatch(
 
     let signing_key_a = SigningKey::new();
     let signing_key_b = SigningKey::new();
-    let validator_keys = vec![signing_key_a.public_key(), signing_key_b.public_key()];
     let ceremony_a = test_ceremony(
         &signing_key_a,
-        validator_keys.clone(),
         secret_a,
-        BTreeSet::from([endpoint_b.id()]),
+        vec![(endpoint_b.id(), signing_key_b.public_key())],
     );
-    let mut ceremony_b =
-        test_ceremony(&signing_key_b, validator_keys, secret_b, BTreeSet::from([endpoint_a.id()]));
-    ceremony_b.genesis_commitment = genesis_commitment;
+    let mut ceremony_b = test_ceremony(
+        &signing_key_b,
+        secret_b,
+        vec![(endpoint_a.id(), signing_key_a.public_key())],
+    );
+    if different_validator_set {
+        ceremony_b.validator_set.push(SigningKey::new().public_key());
+    }
     ceremony_b.threshold = NonZeroUsize::new(threshold).unwrap();
     ceremony_b.epoch = epoch;
     let config_a = format!("{:?}", ceremony_a.config()?);
     let config_b = format!("{:?}", ceremony_b.config()?);
 
     let (result_a, result_b) = tokio::time::timeout(Duration::from_secs(10), async {
-        // Valid genesis identities authenticate even when their ceremony settings disagree.
+        // Configured identities authenticate even when their ceremony settings disagree.
         let (peers_a, peers_b) = tokio::try_join!(
             ceremony_a.authenticate_peers(&endpoint_a),
             ceremony_b.authenticate_peers(&endpoint_b),

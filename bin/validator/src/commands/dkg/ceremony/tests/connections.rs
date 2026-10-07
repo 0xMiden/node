@@ -22,9 +22,8 @@ async fn unrelated_connection_does_not_abort_authentication(#[case] alpn: &[u8])
     let peer_signing_key = SigningKey::new();
     let ceremony = test_ceremony(
         &local_signing_key,
-        vec![local_signing_key.public_key(), peer_signing_key.public_key()],
         local_secret,
-        BTreeSet::from([peer.id()]),
+        vec![(peer.id(), peer_signing_key.public_key())],
     );
     let signer = ValidatorSigner::new_local(peer_signing_key);
 
@@ -41,7 +40,7 @@ async fn unrelated_connection_does_not_abort_authentication(#[case] alpn: &[u8])
 
             ConnectedPeer::connect(&peer, endpoint.id().into())
                 .await?
-                .authenticate(&ceremony.validator_set, &signer)
+                .authenticate(&local_signing_key.public_key(), &signer)
                 .await
         })
     })
@@ -101,9 +100,8 @@ async fn stalled_connections_do_not_prevent_peer_authentication(
     let peer_signing_key = SigningKey::new();
     let ceremony = test_ceremony(
         &local_signing_key,
-        vec![local_signing_key.public_key(), peer_signing_key.public_key()],
         local_secret,
-        BTreeSet::from([peer.id()]),
+        vec![(peer.id(), peer_signing_key.public_key())],
     );
     let signer = ValidatorSigner::new_local(peer_signing_key);
 
@@ -127,7 +125,7 @@ async fn stalled_connections_do_not_prevent_peer_authentication(
             let authenticated = tokio::time::timeout(Duration::from_secs(5), async {
                 ConnectedPeer::connect(&peer, endpoint.id().into())
                     .await?
-                    .authenticate(&ceremony.validator_set, &signer)
+                    .authenticate(&local_signing_key.public_key(), &signer)
                     .await
             })
             .await??;
@@ -171,13 +169,11 @@ async fn extra_connection_does_not_replace_an_authenticated_peer(
     let missing_signing_key = SigningKey::new();
     let ceremony = test_ceremony(
         &local_signing_key,
-        vec![
-            local_signing_key.public_key(),
-            peer_signing_key.public_key(),
-            missing_signing_key.public_key(),
-        ],
         local_secret,
-        BTreeSet::from([peer.id(), missing.id()]),
+        vec![
+            (peer.id(), peer_signing_key.public_key()),
+            (missing.id(), missing_signing_key.public_key()),
+        ],
     );
     let peer_signer = ValidatorSigner::new_local(peer_signing_key);
     let missing_signer = ValidatorSigner::new_local(missing_signing_key);
@@ -191,7 +187,7 @@ async fn extra_connection_does_not_replace_an_authenticated_peer(
                 ConnectedPeer::accept(incoming).await?
             };
             let authenticated =
-                connection.authenticate(&ceremony.validator_set, &peer_signer).await?;
+                connection.authenticate(&local_signing_key.public_key(), &peer_signer).await?;
 
             // Dial again while the ceremony still waits for the last peer.
             //
@@ -201,7 +197,7 @@ async fn extra_connection_does_not_replace_an_authenticated_peer(
             }
             let last = ConnectedPeer::connect(&missing, endpoint.id().into())
                 .await?
-                .authenticate(&ceremony.validator_set, &missing_signer)
+                .authenticate(&local_signing_key.public_key(), &missing_signer)
                 .await?;
             Ok::<_, anyhow::Error>([authenticated, last])
         })

@@ -31,7 +31,7 @@ current block.
 ## Storage Key Setup
 
 The distributed key generation (DKG) ceremony creates the key material used to protect stored private inputs. Every
-validator in genesis must participate, and each produces its own private bundle for starting the validator service.
+validator must participate, and each produces its own private bundle for starting the validator service.
 
 The threshold determines how many validators must cooperate to decrypt stored data, not how many must join the ceremony.
 A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators cannot.
@@ -39,7 +39,9 @@ A threshold of `t` lets any `t` validators decrypt a stored record; fewer valida
 This procedure supports initial storage-key setup only. Storage-key rotation and validator-set changes are not yet
 supported. Keep each validator's bundle for as long as stored records may need to be decrypted.
 
-Before starting, all operators must agree on the threshold and storage-key epoch and use the same trusted genesis block.
+Before starting, all operators must agree on the participating validators, threshold, and storage-key epoch. Exchange
+validator public keys through a trusted channel. The ceremony uses these keys to authenticate peers and does not require
+a genesis block. For initial network setup, use the same validator keys as the network's genesis configuration.
 
 Generate a persistent Iroh endpoint identity for each validator:
 
@@ -50,18 +52,17 @@ miden-validator dkg generate-endpoint --output-file endpoint.secret
 Keep the endpoint secret private and share the printed public endpoint ID with the other operators. Reuse the endpoint
 secret across ceremonies.
 
-Run the following command for each validator using its own signing key. Repeat `--peer.endpoint` once per other genesis
-validator. This example opts into n0's public Iroh relays and address discovery, so operators only need to exchange
-endpoint IDs. The public relays are intended for development and testing; do not rely on them for guaranteed production
-availability.
+Run the following command for each validator using its own signing key. Repeat `--peer` once per other validator, with
+that validator's public key followed by its endpoint ID. Do not include the local validator. This example opts into n0's
+public Iroh relays and address discovery, so no peer socket addresses are needed. The public relays are intended for
+development and testing; do not rely on them for guaranteed production availability.
 
 ```bash
 miden-validator dkg participate \
-  --genesis genesis.dat \
   --endpoint-secret endpoint.secret \
   --enable-public-relay \
-  --peer.endpoint <other-validator-endpoint-id> \
-  --peer.endpoint <another-validator-endpoint-id> \
+  --peer <other-validator-public-key> <other-validator-endpoint-id> \
+  --peer <another-validator-public-key> <another-validator-endpoint-id> \
   --threshold 2 \
   --epoch <32-byte-hex-epoch> \
   --signing-key.kms-id <validator-kms-key-id> \
@@ -69,13 +70,12 @@ miden-validator dkg participate \
 ```
 
 For a local or private network with direct UDP connectivity, omit `--enable-public-relay`. Set a local listening address
-with `--bind-address <IP:PORT>` and supply each peer as `--peer.endpoint <ENDPOINT_ID>@<IP:PORT>`. For example, local
-participants can listen on `127.0.0.1:9001` and `127.0.0.1:9002`. This mode uses no public relay or address discovery
-and works without internet access. IPv6 peer addresses use brackets, such as `<ENDPOINT_ID>@[::1]:9002`.
+with `--bind-address <IP:PORT>` and supply each peer as `--peer <PUBLIC_KEY> <ENDPOINT_ID>@<IP:PORT>`. For example,
+local participants can listen on `127.0.0.1:9001` and `127.0.0.1:9002`. This mode uses no public relay or address
+discovery and works without internet access. IPv6 peer addresses use brackets, such as `<ENDPOINT_ID>@[::1]:9002`.
 
 Validators can start at different times; the ceremony waits for all participants to join. The entire ceremony must
-finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer.endpoint` and use
-`--threshold 1`.
+finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer` and use `--threshold 1`.
 
 The command reports success only after every validator confirms it has saved its bundle. Only then is the bundle safe to
 use. Each bundle belongs to one validator and must remain private.

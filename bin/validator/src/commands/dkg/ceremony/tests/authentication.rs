@@ -23,11 +23,8 @@ async fn authentication_rejects_mitm_relayed_responses() -> TestResult {
 
     let a_key = SigningKey::new();
     let b_key = SigningKey::new();
-    let validator_keys = vec![a_key.public_key(), b_key.public_key()];
-    let a_ceremony =
-        test_ceremony(&a_key, validator_keys.clone(), a_secret, BTreeSet::from([proxy_a.id()]));
-    let b_ceremony =
-        test_ceremony(&b_key, validator_keys, b_secret, BTreeSet::from([proxy_b.id()]));
+    let a_ceremony = test_ceremony(&a_key, a_secret, vec![(proxy_a.id(), b_key.public_key())]);
+    let b_ceremony = test_ceremony(&b_key, b_secret, vec![(proxy_b.id(), a_key.public_key())]);
 
     // Forward challenges and responses between two attacker-owned connections.
     //
@@ -94,16 +91,17 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
     let [local_secret, remote_secret] = secrets;
     let local_signing_key = SigningKey::new();
     let remote_signing_key = SigningKey::new();
-    let validator_keys = vec![local_signing_key.public_key(), remote_signing_key.public_key()];
     let mut ceremony = test_ceremony(
         &local_signing_key,
-        validator_keys.clone(),
         local_secret,
-        BTreeSet::from([remote_secret.public()]),
+        vec![(remote_secret.public(), remote_signing_key.public_key())],
     );
-    ceremony.peer_endpoints.insert(
+    ceremony.peers.insert(
         remote_secret.public(),
-        iroh::EndpointAddr::new(remote_secret.public()).with_ip_addr(remote_address),
+        (
+            iroh::EndpointAddr::new(remote_secret.public()).with_ip_addr(remote_address),
+            remote_signing_key.public_key(),
+        ),
     );
     let endpoint = ceremony.bind_endpoint().await?;
 
@@ -119,12 +117,13 @@ async fn authentication_waits_for_a_late_peer(#[case] local_is_dialer: bool) -> 
 
     let mut remote_ceremony = test_ceremony(
         &remote_signing_key,
-        validator_keys,
         remote_secret,
-        BTreeSet::from([endpoint.id()]),
+        vec![(endpoint.id(), local_signing_key.public_key())],
     );
     remote_ceremony.bind_address = Some(remote_address);
-    remote_ceremony.peer_endpoints.insert(endpoint.id(), endpoint.addr());
+    remote_ceremony
+        .peers
+        .insert(endpoint.id(), (endpoint.addr(), local_signing_key.public_key()));
     drop(remote_socket);
     let remote = remote_ceremony.bind_endpoint().await?;
     let (local_peers, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
@@ -168,20 +167,18 @@ async fn authentication_failure_aborts_while_another_peer_is_offline() -> TestRe
     let local_signing_key = SigningKey::new();
     let ceremony = test_ceremony(
         &local_signing_key,
-        vec![
-            local_signing_key.public_key(),
-            SigningKey::new().public_key(),
-            SigningKey::new().public_key(),
-        ],
         local_secret,
-        BTreeSet::from([remote.id(), missing_secret.public()]),
+        vec![
+            (remote.id(), SigningKey::new().public_key()),
+            (missing_secret.public(), SigningKey::new().public_key()),
+        ],
     );
     let untrusted_signer = ValidatorSigner::new_local(SigningKey::new());
     let (result, _remote_peer) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(ceremony.authenticate_peers(&endpoint), async {
             ConnectedPeer::connect(&remote, endpoint.id().into())
                 .await?
-                .authenticate(&ceremony.validator_set, &untrusted_signer)
+                .authenticate(&local_signing_key.public_key(), &untrusted_signer)
                 .await
         })
     })
@@ -189,15 +186,23 @@ async fn authentication_failure_aborts_while_another_peer_is_offline() -> TestRe
     let error = result
         .err()
         .expect("authentication failure must abort without the missing peer");
-    assert!(format!("{error:#}").contains("peer validator key is not committed by genesis"));
+    assert!(
+        format!("{error:#}")
+            .contains("peer validator key does not match the key configured for endpoint")
+    );
 
     endpoint.close().await;
     remote.close().await;
     Ok(())
 }
 
+#[rstest::rstest]
+#[case::duplicate_key(false)]
+#[case::swapped_keys(true)]
 #[tokio::test]
-async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> TestResult {
+async fn authentication_rejects_keys_configured_for_other_endpoints(
+    #[case] swapped_keys: bool,
+) -> TestResult {
     let secret = IrohSecretKey::generate();
     let (endpoint, lookup) = bind_test_endpoint(secret.clone()).await?;
     let (endpoint_b, lookup_b) = bind_test_endpoint(IrohSecretKey::generate()).await?;
@@ -212,23 +217,25 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
     let signing_key_c = SigningKey::new();
     let ceremony = test_ceremony(
         &signing_key_a,
-        vec![
-            signing_key_a.public_key(),
-            signing_key_b.public_key(),
-            signing_key_c.public_key(),
-        ],
         secret,
-        BTreeSet::from([endpoint_b.id(), endpoint_c.id()]),
+        vec![
+            (endpoint_b.id(), signing_key_b.public_key()),
+            (endpoint_c.id(), signing_key_c.public_key()),
+        ],
     );
 
     let mut authentications = JoinSet::new();
-    for remote in [endpoint_b.clone(), endpoint_c.clone()] {
+    let wrong_key_b = if swapped_keys {
+        signing_key_c
+    } else {
+        signing_key_b.clone()
+    };
+    for (remote, signing_key) in
+        [(endpoint_b.clone(), wrong_key_b), (endpoint_c.clone(), signing_key_b)]
+    {
         let local_id = endpoint.id();
-        let validator_set = Arc::clone(&ceremony.validator_set);
-        // Authenticate both remote endpoints with B's key.
-        //
-        // Each endpoint can prove key ownership, but the pair cannot represent both B and C.
-        let signer = ValidatorSigner::new_local(signing_key_b.clone());
+        let expected_key = signing_key_a.public_key();
+        let signer = ValidatorSigner::new_local(signing_key);
         authentications.spawn(async move {
             let connection = if remote.id() < local_id {
                 ConnectedPeer::connect(&remote, local_id.into()).await?
@@ -236,33 +243,24 @@ async fn authentication_rejects_two_endpoints_using_the_same_validator_key() -> 
                 let incoming = remote.accept().await.expect("test endpoint must stay open");
                 ConnectedPeer::accept(incoming).await?
             };
-            connection.authenticate(&validator_set, &signer).await
+            connection.authenticate(&expected_key, &signer).await
         });
     }
-    let (result, remote_peers) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(ceremony.authenticate_peers(&endpoint), async {
-            let mut peers = Vec::new();
-            while let Some(result) = authentications.join_next().await {
-                // Retain peer results without requiring authentication to succeed.
-                //
-                // The validator can reject duplicate identities before a peer reads its response.
-                peers.push(result?);
-            }
-            // Return the peers to keep their connections alive.
-            //
-            // The ceremony must check the complete validator set before the test drops the peers.
-            Ok::<_, anyhow::Error>(peers)
-        })
-    })
-    .await?;
-    let _remote_peers = remote_peers?;
-    let error = result.err().expect("duplicate validator identities must stop authentication");
+    // Keep completed remote peers in the task set until local authentication stops. A rejected key
+    // can abort the ceremony before the other remote peer authenticates.
+    let result =
+        tokio::time::timeout(Duration::from_secs(10), ceremony.authenticate_peers(&endpoint))
+            .await?;
+    let error = result
+        .err()
+        .expect("a key from another configured peer must not authenticate this endpoint");
     let error = format!("{error:#}");
     assert!(
-        error.contains("authenticated validator keys do not form a valid validator set"),
+        error.contains("peer validator key does not match the key configured for endpoint"),
         "{error}",
     );
 
+    drop(authentications);
     endpoint.close().await;
     endpoint_b.close().await;
     endpoint_c.close().await;

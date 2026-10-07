@@ -156,13 +156,13 @@ The key each validator operator starts their validator with must match the publi
 
 ## Storage Key Ceremony
 
-After genesis is built, all listed validators must take part in a distributed key generation (DKG) ceremony to protect
-stored private inputs. The ceremony produces a private bundle for each validator, required to start its validator
-service. All validators must participate, even when fewer are needed to decrypt stored data.
+All validators must take part in a distributed key generation (DKG) ceremony to protect stored private inputs. The
+ceremony produces a private bundle for each validator, required to start its validator service. All validators must
+participate, even when fewer are needed to decrypt stored data.
 
-The ceremony and database bootstrap can run in either order, but both must finish before the validator starts. Follow
-[storage key setup](./validator.md#storage-key-setup) to coordinate with the other operators, run the ceremony, and
-handle its results.
+The ceremony uses the validators' public keys directly and can run before genesis is built. The ceremony and database
+bootstrap must both finish before the validator starts. Follow [storage key setup](./validator.md#storage-key-setup) to
+coordinate with the other operators, run the ceremony, and handle its results.
 
 Bootstrap takes no transaction encryption key: that key is configured separately when the validator is started, and
 nothing cross-checks it against the genesis block. Every validator must be started with the same encryption key; the
