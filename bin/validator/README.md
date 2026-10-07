@@ -23,9 +23,12 @@ It supports local development keys and KMS-backed signing for deployments that n
 
 ## Peer-to-peer DKG
 
-The ceremony assumes all validators are trusted to follow the protocol. It is not designed to handle Byzantine
-participants or equivocation, where a validator sends conflicting messages to different peers. Transcript comparisons
-abort on detected mismatches; they do not provide Byzantine fault tolerance.
+Validators compare ceremony transcript commitments and abort on a mismatch, including when a participant sends
+conflicting contributions to different peers (equivocation).
+
+Completion requires every configured validator. Any participant can prevent completion by withholding messages or
+sending conflicting contributions. Run the ceremony with validators you trust to cooperate; it cannot exclude a faulty
+participant and continue with a smaller set.
 
 Supply each peer to `miden-validator dkg participate` as `--peer <PUBLIC_KEY> <ENDPOINT_ID>[@<IP:PORT>]`. The socket
 address is required unless `--enable-public-relay` is set. By default, peers connect directly without public relays or

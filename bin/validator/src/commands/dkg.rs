@@ -1,8 +1,9 @@
-//! Runs live storage-key ceremonies over a direct mesh of authenticated, trusted validators.
+//! Runs live storage-key ceremonies over a direct mesh of authenticated validators.
 //!
-//! The ceremony assumes that all participants follow the protocol. It does not handle Byzantine
-//! participants or equivocation. Transcript comparisons abort on detected mismatches but do not
-//! provide Byzantine fault tolerance. Completion follows local bundle persistence.
+//! Validators compare transcript commitments and abort on conflicting views of the ceremony.
+//! Completion requires every configured validator to persist its bundle and confirm with peers.
+//! Any participant can prevent completion by withholding messages. The ceremony cannot exclude a
+//! faulty participant and continue with a smaller set.
 
 use std::io::Write;
 use std::net::SocketAddr;
