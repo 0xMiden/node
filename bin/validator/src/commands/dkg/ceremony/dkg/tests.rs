@@ -179,8 +179,17 @@ async fn ceremony_succeeds(
             .clone();
         completions.spawn(async move {
             ceremony.persist(&output_file, output.clone())?;
-            ceremony.confirm_completion(&mut participants, completion).await?;
-            endpoint.close().await;
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                ceremony.confirm_completion(&mut participants, completion),
+            )
+            .await
+            .context("DKG test completion exchange timed out")??;
+            // Endpoint shutdown can wait for QUIC close timers after ceremony completion. Keep it
+            // separate from the completion exchange deadline.
+            tokio::time::timeout(Duration::from_secs(60), endpoint.close())
+                .await
+                .context("DKG test endpoint shutdown timed out")?;
             let streams = participants
                 .session
                 .authenticated_peers
@@ -190,17 +199,13 @@ async fn ceremony_succeeds(
             Ok::<_, anyhow::Error>((output, streams))
         });
     }
-    let (outputs, mut streams) = tokio::time::timeout(Duration::from_secs(10), async {
-        let mut outputs = Vec::new();
-        let mut streams = Vec::new();
-        while let Some(result) = completions.join_next().await {
-            let (output, peer_streams) = result??;
-            outputs.push(output);
-            streams.extend(peer_streams);
-        }
-        Ok::<_, anyhow::Error>((outputs, streams))
-    })
-    .await??;
+    let mut outputs = Vec::new();
+    let mut streams = Vec::new();
+    while let Some(result) = completions.join_next().await {
+        let (output, peer_streams) = result??;
+        outputs.push(output);
+        streams.extend(peer_streams);
+    }
 
     tokio::time::timeout(Duration::from_secs(10), async {
         for (_, send, receive) in &mut streams {
@@ -211,7 +216,8 @@ async fn ceremony_succeeds(
         }
         Ok::<_, anyhow::Error>(())
     })
-    .await??;
+    .await
+    .context("DKG test stream EOF check timed out")??;
     for output in &outputs {
         assert_eq!(output.sealing_key, outputs[0].sealing_key);
         assert_eq!(output.public_key_set, outputs[0].public_key_set);
