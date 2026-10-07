@@ -7,7 +7,8 @@ use std::time::Duration;
 use anyhow::{Context, ensure};
 use futures::future::try_join_all;
 use golden_core::{ParticipantIndex, ParticipantRegistry};
-use iroh::endpoint::presets;
+use iroh::endpoint::Builder;
+use iroh::endpoint::presets::{self, Preset};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::{info, warn};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
@@ -74,7 +75,8 @@ pub struct DkgParticipants {
 /// Validated inputs for one live DKG ceremony. The validator set contains the local signer and
 /// distinct peer keys, and the nonzero threshold does not exceed its size. Each peer key has one
 /// distinct, non-local endpoint. Every peer has a direct socket address unless
-/// public relays and address discovery are enabled.
+/// public relays and address discovery are enabled. Direct-mode participants that accept peers
+/// have an explicit, nonzero listening port.
 ///
 /// These checks establish local configuration, not peer identities.
 /// [`Ceremony::authenticate_peers`] must bind endpoints to their configured validator keys before the
@@ -99,19 +101,23 @@ impl Ceremony {
     /// An explicit bind address replaces both default wildcard listeners so a loopback bind stays
     /// local. The command handler owns endpoint shutdown.
     pub async fn bind_endpoint(&self) -> anyhow::Result<Endpoint> {
+        self.endpoint_builder(presets::N0)?
+            .bind()
+            .await
+            .context("failed to bind Iroh endpoint")
+    }
+
+    fn endpoint_builder(&self, relay_preset: impl Preset) -> anyhow::Result<Builder> {
         let mut builder = Endpoint::builder(presets::Minimal);
         if self.enable_public_relay {
-            builder = builder.preset(presets::N0);
+            builder = builder.preset(relay_preset);
         }
         if let Some(address) = self.bind_address {
             builder = builder.clear_ip_transports().bind_addr(address)?;
         }
-        builder
+        Ok(builder
             .secret_key(self.endpoint_secret.clone())
-            .alpns(vec![Self::ALPN.to_vec()])
-            .bind()
-            .await
-            .context("failed to bind Iroh endpoint")
+            .alpns(vec![Self::ALPN.to_vec()]))
     }
 
     /// Connects to every configured endpoint and authenticates its paired validator key.
@@ -437,6 +443,12 @@ impl ParticipateOptions {
             "threshold must not exceed the {validator_count} configured validators, got {}",
             self.threshold,
         );
+        if !self.enable_public_relay && peers.keys().any(|peer| *peer < endpoint_secret.public()) {
+            ensure!(
+                self.bind_address.is_some_and(|address| address.port() != 0),
+                "--bind-address with a nonzero port is required to accept peers without --enable-public-relay",
+            );
+        }
 
         Ok(Ceremony {
             validator_set,

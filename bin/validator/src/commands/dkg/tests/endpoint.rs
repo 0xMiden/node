@@ -7,7 +7,7 @@ async fn endpoint_secret_is_private_and_not_overwritten() -> anyhow::Result<()> 
     DkgOptions {
         command: DkgCommand::GenerateEndpoint { output_file: output_file.clone() },
     }
-    .handle()
+    .handle(CancellationToken::new())
     .await?;
     #[cfg(unix)]
     {
@@ -19,9 +19,10 @@ async fn endpoint_secret_is_private_and_not_overwritten() -> anyhow::Result<()> 
     DkgOptions {
         command: DkgCommand::GenerateEndpoint { output_file: output_file.clone() },
     }
-    .handle()
+    .handle(CancellationToken::new())
     .await
     .expect_err("endpoint generation must not replace an existing identity");
     assert_eq!(fs_err::read(output_file)?, original);
     Ok(())
 }
+use miden_node_utils::shutdown::CancellationToken;

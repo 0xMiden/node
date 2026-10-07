@@ -1,4 +1,3 @@
-use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -7,8 +6,7 @@ use golden_core::verify_dealing_for_receiver;
 use golden_ehtdh1::{Combiner, Ehtdh1Material, UnsealingShare};
 use golden_evrf::paper::secp_secq::SecpSecqBackend;
 use iroh::endpoint::presets;
-use iroh::{Endpoint, EndpointAddr, RelayMode, RelayUrl, SecretKey as IrohSecretKey};
-use iroh_relay::server::{RelayConfig, Server, ServerConfig};
+use iroh::{Endpoint, EndpointAddr, SecretKey as IrohSecretKey};
 use itertools::Itertools;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
@@ -17,12 +15,13 @@ use tokio::task::JoinSet;
 use super::super::completion::Completion;
 use super::super::peer::AuthenticatedPeer;
 use super::*;
+use crate::commands::dkg::tests::relay::LocalRelay;
 
 mod completion;
 mod rejection;
 
 struct TestCeremony {
-    _relay: Server,
+    _relay: LocalRelay,
     endpoints: Vec<Endpoint>,
     validators: Vec<(Ceremony, DkgParticipants, LocalDealings)>,
 }
@@ -37,10 +36,7 @@ struct CompletedValidator {
 
 impl TestCeremony {
     async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
-        let mut relay_config = ServerConfig::default();
-        relay_config.relay = Some(RelayConfig::new((Ipv4Addr::LOCALHOST, 0)));
-        let relay = Server::spawn(relay_config).await?;
-        let relay_url: RelayUrl = format!("http://{}", relay.http_addr().unwrap()).parse()?;
+        let relay = LocalRelay::start().await?;
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
         let validator_set = signing_keys.iter().map(SigningKey::public_key).collect::<Vec<_>>();
         let mut endpoints = Vec::new();
@@ -51,8 +47,7 @@ impl TestCeremony {
             let endpoint = Endpoint::builder(presets::Minimal)
                 .secret_key(secret.clone())
                 .alpns(vec![Ceremony::ALPN.to_vec()])
-                .relay_mode(RelayMode::Custom(relay_url.clone().into()))
-                .clear_ip_transports()
+                .preset(&relay)
                 .bind()
                 .await?;
             endpoints.push(endpoint);
@@ -66,7 +61,7 @@ impl TestCeremony {
                 (
                     endpoint.id(),
                     (
-                        EndpointAddr::new(endpoint.id()).with_relay_url(relay_url.clone()),
+                        EndpointAddr::new(endpoint.id()).with_relay_url(relay.url.clone()),
                         key.clone(),
                     ),
                 )

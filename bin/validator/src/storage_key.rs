@@ -474,8 +474,8 @@ pub(crate) mod tests {
     }
 
     /// Writes the deterministic, insecure two-of-three fixture to
-    /// `scripts/testdata/insecure-storage-key/`. The output includes shared public files, each
-    /// participant's secret share, and a complete bundle per participant.
+    /// `scripts/testdata/insecure-storage-key/`. The output contains one complete bundle per
+    /// participant.
     ///
     /// Threshold recovery requires distinct participant shares. This test stays ignored to avoid
     /// rewriting committed files during normal test runs.
@@ -488,23 +488,12 @@ pub(crate) mod tests {
             .join("../../scripts/testdata/insecure-storage-key");
         fs_err::create_dir_all(&dir).unwrap();
 
-        let (setup_context, public_key_set, _) = values_for(participant(1));
-        fs_err::write(dir.join("setup-context.wire"), to_wire_bytes(&setup_context)).unwrap();
-        fs_err::write(dir.join("public-key-set.wire"), to_wire_bytes(&public_key_set)).unwrap();
-
         for index in [1u32, 2, 3] {
-            let (.., secret_share) = values_for(participant(index));
+            let (setup_context, public_key_set, secret_share) = values_for(participant(index));
             let validator_dir = dir.join(format!("validator-{index}"));
             fs_err::create_dir_all(&validator_dir).unwrap();
-            fs_err::write(validator_dir.join("secret-share.wire"), to_wire_bytes(&secret_share))
-                .unwrap();
-            let operator_key = GoldenOperatorKey::new(
-                EPOCH,
-                setup_context.clone(),
-                public_key_set.clone(),
-                secret_share,
-            )
-            .unwrap();
+            let operator_key =
+                GoldenOperatorKey::new(EPOCH, setup_context, public_key_set, secret_share).unwrap();
             fs_err::write(
                 validator_dir.join("storage-key.bundle"),
                 operator_key.encode().to_bytes(),

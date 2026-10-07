@@ -5,11 +5,12 @@ use std::time::{Duration, Instant};
 
 use clap::Parser;
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
 use miden_protocol::utils::serde::Serializable;
 
 use super::super::super::{ValidatorCommand, ValidatorSigningKey, ValidatorStorageKey};
-use super::super::{DkgCommand, ParticipateOptions};
+use super::super::{DkgCommand, DkgOptions, ParticipateOptions};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 type TestResultWith<T> = Result<T, Box<dyn std::error::Error>>;
@@ -57,7 +58,7 @@ async fn single_validator_ceremony_succeeds() -> TestResult {
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
 
     ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1)
-        .handle()
+        .handle(CancellationToken::new())
         .await?;
 
     let operator_key = ValidatorStorageKey { file: output_file.clone() }.load()?;
@@ -125,7 +126,10 @@ async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
         outputs.push(output);
     }
     drop(sockets);
-    futures::future::try_join_all(commands.into_iter().map(|options| options.handle())).await?;
+    futures::future::try_join_all(
+        commands.into_iter().map(|options| options.handle(CancellationToken::new())),
+    )
+    .await?;
     let bundles = outputs
         .into_iter()
         .map(|file| ValidatorStorageKey { file }.load())
@@ -201,6 +205,100 @@ fn peer_endpoint_rejects_unusable_socket(#[case] socket: &str) {
     assert!(ParticipateOptions::parse_peer_endpoint(&format!("{id}@{socket}")).is_err());
 }
 
+#[rstest::rstest]
+#[case::acceptor_missing(false, false, None, false)]
+#[case::acceptor_random(false, false, Some(0), false)]
+#[case::acceptor_fixed(false, false, Some(9000), true)]
+#[case::dialer_missing(false, true, None, true)]
+#[case::dialer_random(false, true, Some(0), true)]
+#[case::relay_missing(true, false, None, true)]
+#[case::relay_random(true, false, Some(0), true)]
+#[tokio::test]
+async fn direct_acceptors_require_a_fixed_listening_port(
+    #[case] enable_public_relay: bool,
+    #[case] local_is_dialer: bool,
+    #[case] port: Option<u16>,
+    #[case] valid: bool,
+) -> TestResult {
+    let root = tempfile::tempdir()?;
+    let mut endpoints =
+        [write_endpoint_secret(root.path(), 1)?, write_endpoint_secret(root.path(), 2)?];
+    endpoints.sort_by_key(|(_, id)| *id);
+    let local = usize::from(!local_is_dialer);
+    let mut options = ParticipateOptions::for_tests(
+        &root.path().join("operator-key.bundle"),
+        &SigningKey::new(),
+        &endpoints[local].0,
+        vec![(SigningKey::new().public_key(), endpoints[1 - local].1)],
+        2,
+    );
+    options.enable_public_relay = enable_public_relay;
+    options.bind_address = port.map(|port| (Ipv4Addr::LOCALHOST, port).into());
+
+    let result = options.validate().await;
+    if valid {
+        result?;
+    } else {
+        let error = result.err().expect("a direct acceptor needs an advertised port");
+        assert!(error.to_string().contains("--bind-address with a nonzero port is required"));
+    }
+    Ok(())
+}
+
+#[rstest::rstest]
+#[case::dialer(true)]
+#[case::acceptor(false)]
+#[tokio::test]
+async fn cancellation_closes_endpoint_while_waiting_for_a_peer(
+    #[case] local_is_dialer: bool,
+) -> TestResult {
+    let root = tempfile::tempdir()?;
+    let output_file = root.path().join("operator-key.bundle");
+    let mut endpoints =
+        [write_endpoint_secret(root.path(), 1)?, write_endpoint_secret(root.path(), 2)?];
+    endpoints.sort_by_key(|(_, id)| *id);
+    let local = usize::from(!local_is_dialer);
+    let mut options = ParticipateOptions::for_tests(
+        &output_file,
+        &SigningKey::new(),
+        &endpoints[local].0,
+        vec![(SigningKey::new().public_key(), endpoints[1 - local].1)],
+        2,
+    );
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let address = socket.local_addr()?;
+    options.bind_address = Some(address);
+    drop(socket);
+    let shutdown = CancellationToken::new();
+    let command = ValidatorCommand::Dkg(DkgOptions {
+        command: DkgCommand::Participate(Box::new(options)),
+    });
+
+    let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(command.handle(shutdown.clone()), async {
+            // Cancel only after the ceremony owns its listening socket.
+            loop {
+                match UdpSocket::bind(address) {
+                    Ok(socket) => drop(socket),
+                    Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => break,
+                    Err(error) => panic!("failed to check ceremony socket: {error}"),
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            shutdown.cancel();
+        })
+    })
+    .await?;
+
+    assert_eq!(
+        result.expect_err("cancellation must abort the ceremony").to_string(),
+        "DKG ceremony cancelled"
+    );
+    let _released_socket = UdpSocket::bind(address)?;
+    assert!(!output_file.exists());
+    Ok(())
+}
+
 #[tokio::test]
 async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
     let root = tempfile::tempdir()?;
@@ -208,14 +306,17 @@ async fn ceremony_refuses_to_overwrite_bundle() -> TestResult {
     let signing_key = SigningKey::new();
     let (endpoint_secret, _) = write_endpoint_secret(root.path(), 1)?;
     ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1)
-        .handle()
+        .handle(CancellationToken::new())
         .await?;
 
     let original = fs_err::read(&output_file)?;
     let mut options =
         ParticipateOptions::for_tests(&output_file, &signing_key, &endpoint_secret, Vec::new(), 1);
     options.epoch = "0a".repeat(32);
-    let error = options.handle().await.expect_err("existing storage keys must not be replaced");
+    let error = options
+        .handle(CancellationToken::new())
+        .await
+        .expect_err("existing storage keys must not be replaced");
     assert!(error.to_string().contains("storage key bundle already exists"));
     assert_eq!(fs_err::read(output_file)?, original, "bundle was modified");
     Ok(())
@@ -247,11 +348,15 @@ async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) ->
         2,
     );
     options.timeout = Duration::from_millis(100);
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
+    options.bind_address = Some(socket.local_addr()?);
+    drop(socket);
 
     let started = Instant::now();
-    let error = tokio::time::timeout(Duration::from_secs(5), options.handle())
-        .await?
-        .expect_err("a missing peer must not keep the ceremony running indefinitely");
+    let error =
+        tokio::time::timeout(Duration::from_secs(5), options.handle(CancellationToken::new()))
+            .await?
+            .expect_err("a missing peer must not keep the ceremony running indefinitely");
     assert!(started.elapsed() >= Duration::from_millis(100));
     assert_eq!(error.to_string(), "DKG ceremony timed out after 100ms");
     assert!(!output_file.exists());

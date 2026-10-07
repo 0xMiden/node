@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use miden_node_utils::shutdown::CancellationToken;
 use miden_validator::EncodedGoldenOperatorKey;
 use zeroize::Zeroizing;
 
@@ -19,7 +20,7 @@ async fn committed_fixture_has_one_valid_share_per_participant() -> anyhow::Resu
                 expected_participant: participant,
             },
         }
-        .handle()
+        .handle(CancellationToken::new())
         .await?;
         let bytes = Zeroizing::new(fs_err::read(bundle_file)?);
         shares.push(EncodedGoldenOperatorKey::from_bytes(&bytes)?.into_parts().3);
@@ -38,7 +39,7 @@ async fn fixture_rejects_another_participants_bundle() -> anyhow::Result<()> {
     let error = DkgOptions {
         command: DkgCommand::ValidateFixture { bundle_file, expected_participant: 2 },
     }
-    .handle()
+    .handle(CancellationToken::new())
     .await
     .expect_err("a valid bundle from another participant must not be accepted");
 

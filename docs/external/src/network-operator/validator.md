@@ -33,6 +33,10 @@ current block.
 The distributed key generation (DKG) ceremony creates the key material used to protect stored private inputs. Every
 validator must participate, and each produces its own private bundle for starting the validator service.
 
+The ceremony assumes all validators are trusted to follow the protocol. It is not designed to handle Byzantine
+participants or equivocation, where a validator sends conflicting messages to different peers. Transcript comparisons
+abort on detected mismatches; they do not provide Byzantine fault tolerance.
+
 The threshold determines how many validators must cooperate to decrypt stored data, not how many must join the ceremony.
 A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators cannot.
 

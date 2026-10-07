@@ -1,7 +1,8 @@
-//! Runs live storage-key ceremonies over a direct mesh of authenticated validator connections.
+//! Runs live storage-key ceremonies over a direct mesh of authenticated, trusted validators.
 //!
-//! Each validator sends its own messages to every peer. Transcript comparisons establish
-//! consistency without a coordinator, and completion follows local bundle persistence.
+//! The ceremony assumes that all participants follow the protocol. It does not handle Byzantine
+//! participants or equivocation. Transcript comparisons abort on detected mismatches but do not
+//! provide Byzantine fault tolerance. Completion follows local bundle persistence.
 
 use std::io::Write;
 use std::net::SocketAddr;
@@ -14,6 +15,7 @@ use fs_err::PathExt;
 use golden_core::ParticipantIndex;
 use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
+use miden_node_utils::shutdown::CancellationToken;
 use zeroize::Zeroizing;
 
 use self::ceremony::completion::Completion;
@@ -79,7 +81,8 @@ struct ParticipateOptions {
     #[arg(long)]
     enable_public_relay: bool,
 
-    /// Local UDP listening address. Defaults to randomly assigned ports on all interfaces.
+    /// Local UDP listening address. Direct-mode participants that accept peers require a nonzero
+    /// port. Other participants default to randomly assigned ports on all interfaces.
     #[arg(long, value_name = "IP:PORT")]
     bind_address: Option<SocketAddr>,
 
@@ -109,7 +112,7 @@ struct ParticipateOptions {
 
 impl DkgOptions {
     /// Handles one peer-to-peer DKG command.
-    pub async fn handle(self) -> anyhow::Result<()> {
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self.command {
             DkgCommand::GenerateEndpoint { output_file } => {
                 let secret_key = IrohSecretKey::generate();
@@ -130,7 +133,7 @@ impl DkgOptions {
                 println!("Iroh endpoint ID: {}", secret_key.public());
                 Ok(())
             },
-            DkgCommand::Participate(options) => Box::pin(options.handle()).await,
+            DkgCommand::Participate(options) => Box::pin(options.handle(shutdown)).await,
             DkgCommand::ValidateFixture { bundle_file, expected_participant } => {
                 let expected_participant = ParticipantIndex::new(expected_participant)?;
                 let operator_key = ValidatorStorageKey { file: bundle_file }.load()?;
@@ -170,11 +173,11 @@ impl ParticipateOptions {
         Ok(endpoint)
     }
 
-    /// Runs one ceremony attempt and closes the endpoint on success, error, or timeout.
+    /// Runs one ceremony attempt and closes the endpoint on success, error, timeout, or cancellation.
     ///
     /// Attempt state is not saved for resumption. A single validator follows the same steps with
     /// no peer exchanges, so it still generates and persists a one-of-one storage key.
-    async fn handle(self) -> anyhow::Result<()> {
+    async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let timeout = self.timeout;
         let output_file = self.output_file.clone();
         let parent = output_file
@@ -191,9 +194,16 @@ impl ParticipateOptions {
             "storage key bundle already exists: {}",
             output_file.display(),
         );
-        let ceremony = self.validate().await?;
-        let endpoint = ceremony.bind_endpoint().await?;
-        let result = tokio::time::timeout(timeout, async {
+        let (ceremony, endpoint) = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => anyhow::bail!("DKG ceremony cancelled"),
+            result = async {
+                let ceremony = self.validate().await?;
+                let endpoint = ceremony.bind_endpoint().await?;
+                Ok::<_, anyhow::Error>((ceremony, endpoint))
+            } => result?,
+        };
+        let attempt = tokio::time::timeout(timeout, async {
             let peers = ceremony.authenticate_peers(&endpoint).await?;
             let peers = ceremony.exchange_configs(peers).await?;
             let session = ceremony.exchange_nonces(peers).await?;
@@ -258,13 +268,16 @@ impl ParticipateOptions {
                 "Every validator confirmed storage key bundle persistence"
             );
             Ok::<_, anyhow::Error>(())
-        })
-        .await
-        .with_context(|| {
-            format!("DKG ceremony timed out after {}", humantime::format_duration(timeout))
         });
+        let result = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => Err(anyhow::anyhow!("DKG ceremony cancelled")),
+            result = attempt => result.with_context(|| {
+                format!("DKG ceremony timed out after {}", humantime::format_duration(timeout))
+            }).and_then(|result| result),
+        };
 
         endpoint.close().await;
-        result?
+        result
     }
 }

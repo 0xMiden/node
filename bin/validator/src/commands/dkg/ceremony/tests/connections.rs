@@ -5,6 +5,46 @@ use tokio::sync::mpsc;
 
 use super::*;
 use crate::commands::dkg::ceremony::peer::ConnectedPeer;
+use crate::commands::dkg::tests::relay::LocalRelay;
+
+#[tokio::test]
+async fn relay_enabled_endpoints_authenticate_using_discovered_addresses() -> TestResult {
+    let relay = LocalRelay::start().await?;
+    let secret_a = IrohSecretKey::generate();
+    let secret_b = IrohSecretKey::generate();
+    let key_a = SigningKey::new();
+    let key_b = SigningKey::new();
+    let mut ceremony_a =
+        test_ceremony(&key_a, secret_a.clone(), vec![(secret_b.public(), key_b.public_key())]);
+    let mut ceremony_b =
+        test_ceremony(&key_b, secret_b, vec![(secret_a.public(), key_a.public_key())]);
+    ceremony_a.enable_public_relay = true;
+    ceremony_b.enable_public_relay = true;
+    ceremony_a.bind_address = None;
+    ceremony_b.bind_address = None;
+
+    // Use the production endpoint configuration with local relay and discovery services.
+    let endpoint_a = ceremony_a.endpoint_builder(&relay)?.bind().await?;
+    let endpoint_b = ceremony_b.endpoint_builder(&relay)?.bind().await?;
+    for endpoint in [&endpoint_a, &endpoint_b] {
+        relay.lookup.add_endpoint_info(
+            iroh::EndpointAddr::new(endpoint.id()).with_relay_url(relay.url.clone()),
+        );
+    }
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::try_join!(
+            ceremony_a.authenticate_peers(&endpoint_a),
+            ceremony_b.authenticate_peers(&endpoint_b),
+        )
+    })
+    .await;
+    endpoint_a.close().await;
+    endpoint_b.close().await;
+    let (peers_a, peers_b) = result??;
+    assert_eq!(peers_a.authenticated_peers[0].validator_public_key(), &key_b.public_key());
+    assert_eq!(peers_b.authenticated_peers[0].validator_public_key(), &key_a.public_key());
+    Ok(())
+}
 
 #[rstest::rstest]
 #[case::failed_connection(b"unsupported-protocol")]
