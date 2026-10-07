@@ -35,6 +35,9 @@ struct CompletedValidator {
 }
 
 impl TestCeremony {
+    // Allow proof generation and verification to share CPU time with other test processes.
+    const PROOF_TIMEOUT: Duration = Duration::from_secs(120);
+
     async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
         let relay = LocalRelay::start().await?;
         let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
@@ -95,13 +98,14 @@ impl TestCeremony {
             });
         }
         let mut validators = Vec::new();
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(Self::PROOF_TIMEOUT, async {
             while let Some(result) = exchanges.join_next().await {
                 validators.push(result??);
             }
             Ok::<_, anyhow::Error>(())
         })
-        .await??;
+        .await
+        .context("DKG test peer setup and proof generation timed out")??;
         Ok(Self { _relay: relay, endpoints, validators })
     }
 
@@ -126,14 +130,15 @@ impl TestCeremony {
                 })
             });
         }
-        tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::time::timeout(Self::PROOF_TIMEOUT, async {
             let mut validators = Vec::new();
             while let Some(result) = completions.join_next().await {
                 validators.push(result??);
             }
             Ok(validators)
         })
-        .await?
+        .await
+        .context("DKG test dealing exchange and proof verification timed out")?
     }
 }
 
@@ -251,8 +256,7 @@ async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Resu
                 Ok::<_, anyhow::Error>((ceremony, participants, dealings))
             });
         }
-        // Allow the same budget as DKG completion for verifying every dealer's proofs.
-        let mut validators = tokio::time::timeout(Duration::from_secs(30), async {
+        let mut validators = tokio::time::timeout(TestCeremony::PROOF_TIMEOUT, async {
             let mut validators = Vec::new();
             while let Some(result) = exchanges.join_next().await {
                 validators.push(result??);

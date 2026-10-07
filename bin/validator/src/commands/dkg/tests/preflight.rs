@@ -105,7 +105,7 @@ async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
             "--epoch".to_owned(),
             "09".repeat(32),
             "--timeout".to_owned(),
-            "30s".to_owned(),
+            "2m".to_owned(),
         ];
         // Rotate peer order to check that argument order does not change the shared result.
         for offset in 1..3 {
