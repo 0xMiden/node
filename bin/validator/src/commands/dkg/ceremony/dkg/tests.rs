@@ -1,0 +1,329 @@
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use std::time::Duration;
+
+use golden_core::verify_dealing_for_receiver;
+use golden_ehtdh1::{Combiner, Ehtdh1Material, UnsealingShare};
+use golden_evrf::paper::secp_secq::SecpSecqBackend;
+use iroh::endpoint::presets;
+use iroh::{Endpoint, EndpointAddr, SecretKey as IrohSecretKey};
+use itertools::Itertools;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_validator::{StorageKeyEpoch, ValidatorSigner};
+use tokio::task::JoinSet;
+
+use super::super::completion::Completion;
+use super::super::peer::AuthenticatedPeer;
+use super::*;
+use crate::commands::dkg::tests::relay::LocalRelay;
+
+mod completion;
+mod rejection;
+
+struct TestCeremony {
+    _relay: LocalRelay,
+    endpoints: Vec<Endpoint>,
+    validators: Vec<(Ceremony, DkgParticipants, LocalDealings)>,
+}
+
+struct CompletedValidator {
+    ceremony: Ceremony,
+    participants: DkgParticipants,
+    output: Ehtdh1Material<StorageGroup>,
+    dealings_commitment: DkgDealingsCommitment,
+    completion: Completion,
+}
+
+impl TestCeremony {
+    // Allow proof generation and verification to share CPU time with other test processes.
+    const PROOF_TIMEOUT: Duration = Duration::from_secs(120);
+
+    async fn create_dealings(threshold: usize, validator_count: usize) -> anyhow::Result<Self> {
+        let relay = LocalRelay::start().await?;
+        let signing_keys = (0..validator_count).map(|_| SigningKey::new()).collect::<Vec<_>>();
+        let validator_set = signing_keys.iter().map(SigningKey::public_key).collect::<Vec<_>>();
+        let mut endpoints = Vec::new();
+        let mut endpoint_secrets = Vec::new();
+        for _ in 0..validator_count {
+            let secret = IrohSecretKey::generate();
+            // Disable direct UDP paths so the full ceremony must work through the local relay.
+            let endpoint = Endpoint::builder(presets::Minimal)
+                .secret_key(secret.clone())
+                .alpns(vec![Ceremony::ALPN.to_vec()])
+                .preset(&relay)
+                .bind()
+                .await?;
+            endpoints.push(endpoint);
+            endpoint_secrets.push(secret);
+        }
+
+        let configured_peers = endpoints
+            .iter()
+            .zip(&validator_set)
+            .map(|(endpoint, key)| {
+                (
+                    endpoint.id(),
+                    (
+                        EndpointAddr::new(endpoint.id()).with_relay_url(relay.url.clone()),
+                        key.clone(),
+                    ),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut exchanges = JoinSet::new();
+        for ((signing_key, endpoint_secret), endpoint) in
+            signing_keys.into_iter().zip(endpoint_secrets).zip(endpoints.clone())
+        {
+            let mut peers = configured_peers.clone();
+            peers.remove(&endpoint.id());
+            let ceremony = Ceremony {
+                validator_set: validator_set.clone(),
+                endpoint_secret,
+                enable_public_relay: false,
+                bind_address: None,
+                peers,
+                threshold: NonZeroUsize::new(threshold).unwrap(),
+                epoch: StorageKeyEpoch::new([9; 32]),
+                signer: Arc::new(ValidatorSigner::new_local(signing_key)),
+            };
+            exchanges.spawn(async move {
+                let peers = ceremony.authenticate_peers(&endpoint).await?;
+                let peers = ceremony.exchange_configs(peers).await?;
+                let session = ceremony.exchange_nonces(peers).await?;
+                let session = ceremony.confirm_session(session).await?;
+                let participants = ceremony.exchange_dkg_public_keys(session).await?;
+                let participants = ceremony.confirm_dkg_registry(participants).await?;
+                let dealings = ceremony.create_dealings(&participants)?;
+                Ok::<_, anyhow::Error>((ceremony, participants, dealings))
+            });
+        }
+        let mut validators = Vec::new();
+        tokio::time::timeout(Self::PROOF_TIMEOUT, async {
+            while let Some(result) = exchanges.join_next().await {
+                validators.push(result??);
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await
+        .context("DKG test peer setup and proof generation timed out")??;
+        Ok(Self { _relay: relay, endpoints, validators })
+    }
+
+    async fn complete_dkg(&mut self) -> anyhow::Result<Vec<CompletedValidator>> {
+        let validator_count = self.validators.len();
+        let mut completions = JoinSet::new();
+        for (ceremony, mut participants, dealings) in std::mem::take(&mut self.validators) {
+            completions.spawn(async move {
+                let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
+                let dealings = ceremony.confirm_dealings(&mut participants, dealings).await?;
+                assert_eq!(dealings.decryption_dealing_count(), validator_count);
+                assert_eq!(dealings.context_dealing_count(), validator_count);
+                let dealings_commitment = dealings.commitment();
+                let output = ceremony.complete_dkg(&participants, dealings)?;
+                let completion = Completion::new(&participants, dealings_commitment, &output);
+                Ok::<_, anyhow::Error>(CompletedValidator {
+                    ceremony,
+                    participants,
+                    output,
+                    dealings_commitment,
+                    completion,
+                })
+            });
+        }
+        tokio::time::timeout(Self::PROOF_TIMEOUT, async {
+            let mut validators = Vec::new();
+            while let Some(result) = completions.join_next().await {
+                validators.push(result??);
+            }
+            Ok(validators)
+        })
+        .await
+        .context("DKG test dealing exchange and proof verification timed out")?
+    }
+}
+
+#[rstest::rstest]
+#[case::one_of_one(1, 1)]
+#[case::one_of_two(1, 2)]
+#[case::two_of_two(2, 2)]
+#[case::one_of_three(1, 3)]
+#[case::two_of_three(2, 3)]
+#[case::three_of_three(3, 3)]
+#[tokio::test]
+async fn ceremony_succeeds(
+    #[case] threshold: usize,
+    #[case] validator_count: usize,
+) -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let mut network = TestCeremony::create_dealings(threshold, validator_count).await?;
+    let validators = network.complete_dkg().await?;
+    let expected = validators[0].completion;
+    let mut completions = JoinSet::new();
+    for CompletedValidator {
+        ceremony,
+        mut participants,
+        output,
+        completion,
+        ..
+    } in validators
+    {
+        assert_eq!(completion, expected);
+        assert_eq!(output.secret_share.participant, participants.local_index);
+        assert_eq!(output.setup_context.epoch, *ceremony.epoch.as_bytes());
+        let output_file = root.path().join(format!("{}.bundle", participants.local_index.get()));
+        let endpoint = network
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id() == ceremony.endpoint_secret.public())
+            .unwrap()
+            .clone();
+        completions.spawn(async move {
+            ceremony.persist(&output_file, output.clone())?;
+            tokio::time::timeout(
+                Duration::from_secs(10),
+                ceremony.confirm_completion(&mut participants, completion),
+            )
+            .await
+            .context("DKG test completion exchange timed out")??;
+            // Endpoint shutdown can wait for QUIC close timers after ceremony completion. Keep it
+            // separate from the completion exchange deadline.
+            tokio::time::timeout(Duration::from_secs(60), endpoint.close())
+                .await
+                .context("DKG test endpoint shutdown timed out")?;
+            let streams = participants
+                .session
+                .authenticated_peers
+                .into_iter()
+                .map(AuthenticatedPeer::into_streams)
+                .collect::<Vec<_>>();
+            Ok::<_, anyhow::Error>((output, streams))
+        });
+    }
+    let mut outputs = Vec::new();
+    let mut streams = Vec::new();
+    while let Some(result) = completions.join_next().await {
+        let (output, peer_streams) = result??;
+        outputs.push(output);
+        streams.extend(peer_streams);
+    }
+
+    tokio::time::timeout(Duration::from_secs(10), async {
+        for (_, send, receive) in &mut streams {
+            // Check that the ceremony uses one bidirectional stream and leaves no unread bytes.
+            assert_eq!(send.id().index(), 0);
+            assert_eq!(receive.id(), send.id());
+            assert_eq!(receive.read(&mut [0]).await?, None);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .context("DKG test stream EOF check timed out")??;
+    for output in &outputs {
+        assert_eq!(output.sealing_key, outputs[0].sealing_key);
+        assert_eq!(output.public_key_set, outputs[0].public_key_set);
+        assert_eq!(output.setup_context, outputs[0].setup_context);
+    }
+
+    let plaintext = b"private record encrypted with the P2P ceremony's public key";
+    let ciphertext = outputs[0].sealing_key.seal_bytes(&mut OsRng, plaintext)?;
+    let decryption_context = b"test record access";
+    let combiner =
+        Combiner::new(outputs[0].public_key_set.clone(), outputs[0].setup_context.clone())?;
+    let shares = outputs
+        .into_iter()
+        .map(|output| {
+            UnsealingShare::new(output.secret_share).decrypt_share(
+                &mut OsRng,
+                &output.setup_context,
+                &ciphertext,
+                decryption_context,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    for selected in shares.into_iter().combinations(threshold) {
+        assert_eq!(combiner.combine_exact(&ciphertext, decryption_context, &selected)?, plaintext,);
+    }
+    for endpoint in network.endpoints {
+        endpoint.close().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn dealing_confirmation_rejects_different_valid_dealings() -> anyhow::Result<()> {
+    for round in ["decryption", "context"] {
+        let TestCeremony { _relay, endpoints, validators } = TestCeremony::create_dealings(2, 3)
+            .await
+            .with_context(|| format!("failed to set up {round} dealing mismatch"))?;
+        let mut exchanges = JoinSet::new();
+        for (ceremony, mut participants, dealings) in validators {
+            exchanges.spawn(async move {
+                let dealings = ceremony.exchange_dealings(&mut participants, dealings).await?;
+                Ok::<_, anyhow::Error>((ceremony, participants, dealings))
+            });
+        }
+        let mut validators = tokio::time::timeout(TestCeremony::PROOF_TIMEOUT, async {
+            let mut validators = Vec::new();
+            while let Some(result) = exchanges.join_next().await {
+                validators.push(result??);
+            }
+            Ok::<_, anyhow::Error>(validators)
+        })
+        .await
+        .with_context(|| format!("dealer exchange timed out before {round} dealing mismatch"))??;
+        let (dealer_ceremony, dealer, _) = &validators[2];
+        let alternate = dealer_ceremony.create_dealings(dealer)?;
+        let dealer_index = dealer.local_index;
+        let (_, receiver, dealings) = &mut validators[0];
+        let (message, config, peer_dealings) = match round {
+            "decryption" => (
+                alternate.decryption_dealing.message,
+                &dealings.local.decryption_config,
+                &mut dealings.peer_decryption_dealings,
+            ),
+            "context" => (
+                alternate.context_dealing.message,
+                &dealings.local.context_config,
+                &mut dealings.peer_context_dealings,
+            ),
+            _ => unreachable!(),
+        };
+        // Give one receiver a different, valid contribution from the same dealer.
+        //
+        // This tests transcript agreement after the contribution passes individual verification.
+        verify_dealing_for_receiver::<StorageGroup, SecpSecqBackend>(
+            receiver.local_index,
+            &receiver.secret_key.0,
+            &message,
+            config,
+        )?;
+        peer_dealings.insert(dealer_index, message);
+
+        let mut confirmations = JoinSet::new();
+        for (ceremony, mut participants, dealings) in validators {
+            confirmations
+                .spawn(async move { ceremony.confirm_dealings(&mut participants, dealings).await });
+        }
+        let errors = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut errors = Vec::new();
+            while let Some(result) = confirmations.join_next().await {
+                let error = result?.err().expect("different dealings must be rejected");
+                errors.push(format!("{error:#}"));
+            }
+            Ok::<_, anyhow::Error>(errors)
+        })
+        .await
+        .with_context(|| format!("confirmation timed out after {round} dealing mismatch"))??;
+        // Require at least one validator to report a transcript mismatch.
+        //
+        // Its abort can disconnect other peers before they compare commitments.
+        assert!(
+            errors.iter().any(|error| error.contains("received different DKG dealings")),
+            "expected a {round} dealing mismatch: {errors:?}",
+        );
+        for endpoint in endpoints {
+            endpoint.close().await;
+        }
+    }
+    Ok(())
+}

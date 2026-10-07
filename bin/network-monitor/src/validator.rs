@@ -12,21 +12,22 @@ use crate::service::{Service, build_tls_client};
 use crate::status::{ServiceDetails, ServiceStatus, ValidatorStatusDetails};
 
 pub struct ValidatorService {
+    name: String,
     url: Url,
     client: ValidatorClient,
     interval: Duration,
 }
 
 impl ValidatorService {
-    pub fn new(url: Url, interval: Duration, timeout: Duration) -> Self {
+    pub fn new(name: String, url: Url, interval: Duration, timeout: Duration) -> Self {
         let client = build_tls_client::<ValidatorClient>(url.clone(), timeout);
-        Self { url, client, interval }
+        Self { name, url, client, interval }
     }
 }
 
 impl Service for ValidatorService {
-    fn name(&self) -> &'static str {
-        "Validator"
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn interval(&self) -> Duration {
@@ -36,7 +37,10 @@ impl Service for ValidatorService {
     fn initial_status(&self) -> ServiceStatus {
         ServiceStatus::unknown(
             self.name(),
-            ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+            ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                url: self.url.to_string(),
+                ..Default::default()
+            }),
         )
     }
 
@@ -63,7 +67,14 @@ impl Service for ValidatorService {
                     }),
                 )
             },
-            Err(e) => ServiceStatus::error(self.name(), e),
+            Err(e) => ServiceStatus::unhealthy(
+                self.name(),
+                e,
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                    url: self.url.to_string(),
+                    ..Default::default()
+                }),
+            ),
         }
     }
 }

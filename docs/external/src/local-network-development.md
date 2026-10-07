@@ -200,8 +200,16 @@ Delete the existing local chain with `make local-network-delete` before changing
 
 ## Storage Key Setup
 
-The Compose bootstrap service runs the two-of-three storage key ceremony and validates each validator's output before
-starting the network. This can take several minutes. For a faster local start, set
+The Compose bootstrap service runs three concurrent `dkg participate` processes for a two-of-three storage key ceremony.
+They use the configured local validator signing keys and connect directly over loopback UDP inside the bootstrap
+container, which has no external network access. The ceremony does not need KMS, a relay, or public Iroh services.
+
+Bootstrap generates the persistent endpoint identities before genesis and keeps them under `/data/validators/endpoints`
+in the `node-data` volume. Each participant writes its own `/data/validators/<n>/storage-key.bundle`. Bootstrap marks
+the validators ready only after all three participants confirm completion. A failed ceremony stops bootstrap; delete the
+local network data before starting a new ceremony.
+
+The ceremony can take several minutes and has a five-minute timeout. For a faster local start, set
 `MIDEN_VALIDATOR_USE_STORAGE_KEY_FIXTURE=true` to use the committed insecure fixture instead. The fixture is public test
 data and must never be used outside local development.
 

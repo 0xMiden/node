@@ -9,6 +9,9 @@ mod runtime;
 pub(crate) mod section;
 mod store;
 
+#[cfg(test)]
+mod tests;
+
 pub use admin::AdminCommand;
 use clap::Subcommand;
 pub use fee_collector::FeeCollectorCommand;

@@ -26,8 +26,6 @@ use crate::{COMPONENT, LOG_TARGET};
 
 /// Maximum number of attempts to solve a `PoW` challenge.
 const MAX_CHALLENGE_ATTEMPTS: u64 = 100_000_000;
-/// Amount of tokens to mint.
-const MINT_AMOUNT: u64 = 1_000_000; // 1 token with 6 decimals
 
 // FAUCET TEST TYPES
 // ================================================================================================
@@ -103,6 +101,8 @@ pub struct FaucetService {
     /// A valid public account ID used as the recipient for faucet token requests. Generated once at
     /// construction from a throwaway wallet account; the minted tokens are never spent.
     account_id: String,
+    /// Amount of tokens, in base units, requested by each check.
+    mint_amount: u64,
     success_count: u64,
     failure_count: u64,
     last_note_id: Option<String>,
@@ -110,13 +110,14 @@ pub struct FaucetService {
 }
 
 impl FaucetService {
-    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration, mint_amount: u64) -> Self {
         let (wallet_account, _secret_key) =
             create_wallet_account().expect("failed to create faucet recipient account");
         Self {
             faucet: FaucetClient::new(url, request_timeout),
             interval,
             account_id: wallet_account.id().to_string(),
+            mint_amount,
             success_count: 0,
             failure_count: 0,
             last_note_id: None,
@@ -164,7 +165,8 @@ impl Service for FaucetService {
             ),
         }
 
-        let last_error = match self.faucet.request_tokens(&self.account_id, MINT_AMOUNT).await {
+        let mint_result = self.faucet.request_tokens(&self.account_id, self.mint_amount).await;
+        let last_error = match mint_result {
             Ok(minted_tokens) => {
                 self.success_count += 1;
                 self.last_note_id = Some(minted_tokens.note_id.to_hex());

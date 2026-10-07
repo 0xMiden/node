@@ -3,6 +3,7 @@
 //! This module contains the configuration structures and constants for the network monitor.
 //! Configuration for the monitor.
 
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -16,6 +17,8 @@ use url::Url;
 
 const DEFAULT_RPC_URL: &str = "http://0.0.0.0:57291";
 const DEFAULT_PORT: u16 = 3000;
+/// Amount of tokens, in base units, requested by each faucet check by default.
+const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
 
 /// Configuration for the monitor.
 ///
@@ -94,6 +97,17 @@ pub struct MonitorConfig {
         help = "The interval at which to test the faucet services"
     )]
     pub faucet_test_interval: Duration,
+
+    /// Amount of tokens, in base units, that each faucet check requests.
+    #[arg(
+        long = "faucet-mint-amount",
+        env = "MIDEN_MONITOR_FAUCET_MINT_AMOUNT",
+        default_value_t = DEFAULT_FAUCET_MINT_AMOUNT,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Amount of tokens, in base units, that each faucet check requests. It must not \
+                exceed the faucet's maximum claimable amount"
+    )]
+    pub faucet_mint_amount: u64,
 
     /// The interval at which to check the status of the services.
     #[arg(
@@ -199,7 +213,17 @@ pub struct MonitorConfig {
     )]
     pub note_transport_url: Option<Url>,
 
-    /// The URL of the validator service.
+    /// Named validators, as repeated arguments or a comma-separated list of NAME=URL pairs.
+    #[arg(
+        long = "validators",
+        env = "MIDEN_MONITOR_VALIDATORS",
+        value_delimiter = ',',
+        value_name = "NAME=URL",
+        conflicts_with = "validator_url"
+    )]
+    pub validators: Vec<ValidatorConfig>,
+
+    /// The URL of a single validator service. Use `--validators` to provide display names.
     #[arg(
         long = "validator-url",
         env = "MIDEN_MONITOR_VALIDATOR_URL",
@@ -231,6 +255,29 @@ pub struct MonitorConfig {
     pub stale_chain_tip_threshold: Duration,
 }
 
+/// A validator endpoint identified by an operator-provided display name.
+#[derive(Debug, Clone)]
+pub struct ValidatorConfig {
+    pub name: String,
+    pub url: Url,
+}
+
+impl FromStr for ValidatorConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let (name, url) = value.split_once('=').context("expected a NAME=URL pair")?;
+        let name = name.trim();
+        anyhow::ensure!(!name.is_empty(), "validator name must not be empty");
+        let url = Url::parse(url).context("invalid validator URL")?;
+        anyhow::ensure!(
+            matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+            "validator URL must use http or https and include a host"
+        );
+        Ok(Self { name: name.to_string(), url })
+    }
+}
+
 impl MonitorConfig {
     /// Decodes the validator signing keys required by transaction submission checks.
     pub fn trusted_validator_signing_keys(&self) -> Result<Vec<ValidatorPublicKey>> {
@@ -256,6 +303,64 @@ mod tests {
     use miden_protocol::utils::serde::Serializable;
 
     use super::*;
+
+    #[test]
+    fn accepts_named_validators_as_a_list_or_repeated_arguments() {
+        for args in [
+            vec!["--validators", "Miden=https://miden.example,Gateway=https://gateway.example"],
+            vec![
+                "--validators",
+                "Miden=https://miden.example",
+                "--validators",
+                "Gateway=https://gateway.example",
+            ],
+        ] {
+            let config =
+                MonitorConfig::try_parse_from(["miden-network-monitor"].into_iter().chain(args))
+                    .unwrap();
+            assert_eq!(config.validators.len(), 2);
+            assert_eq!(config.validators[0].name, "Miden");
+            assert_eq!(config.validators[0].url.as_str(), "https://miden.example/");
+            assert_eq!(config.validators[1].name, "Gateway");
+            assert_eq!(config.validators[1].url.as_str(), "https://gateway.example/");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_named_validators() {
+        for value in [
+            "https://validator.example",
+            "=https://validator.example",
+            "  =https://validator.example",
+            "Miden=",
+            "Miden=invalid",
+            "Miden=file:///tmp/validator",
+        ] {
+            assert!(MonitorConfig::try_parse_from(["monitor", "--validators", value]).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_validator_configuration_remains_supported() {
+        let config = MonitorConfig::try_parse_from([
+            "monitor",
+            "--validator-url",
+            "https://validator.example",
+        ])
+        .unwrap();
+        assert_eq!(config.validator_url.unwrap().as_str(), "https://validator.example/");
+        assert!(config.validators.is_empty());
+        assert!(
+            MonitorConfig::try_parse_from([
+                "monitor",
+                "--validator-url",
+                "https://validator.example",
+                "--validators",
+                "Miden=https://miden.example",
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn accepts_all_configured_validator_keys() {

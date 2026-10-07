@@ -20,6 +20,7 @@ pub mod explorer;
 pub mod faucet;
 pub mod frontend;
 pub mod funding;
+pub mod funding_service;
 mod monitor;
 pub mod note_transport;
 pub mod remote_prover;

@@ -9,7 +9,11 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 
 # Operation
 
-Start a full node with an upstream RPC source:
+Start a full node with an upstream RPC source after [bootstrapping](/full-node/bootstrap) its data directory. For an
+official network, use `--network mainnet`, `--network testnet`, or `--network devnet` in place of
+`--sync.block-source.url`. Choose the same network used for bootstrap; the two source options are mutually exclusive.
+
+To follow a custom upstream RPC source:
 
 <Tabs groupId="full-node-runtime" defaultValue="native">
   <TabItem value="native" label="Native binary">
