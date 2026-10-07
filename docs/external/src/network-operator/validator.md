@@ -268,3 +268,7 @@ a transaction, and a share over the ciphertext of one validator does not combine
 another validator. Read the record from one validator, then send the `encrypted_record_key` of that record as
 `ciphertext`, with its `decryption_context`, to each validator. A validator therefore issues a share over a ciphertext
 that it does not store.
+
+A validator issues a share only when the `decryption_context` names a transaction that it validated. Otherwise it
+returns `404`. It returns `400` when the context is not a canonical record context, or when the context names a key
+epoch other than the `--storage-key.epoch` of the validator.
