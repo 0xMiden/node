@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
-use miden_node_store::state::State;
+use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{
     ErrorSpanExt,
@@ -18,11 +18,17 @@ use miden_node_tracing::{
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
-use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_protocol::block::BlockNumber;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::note::{Note, NoteId, NoteInclusionProof};
+use miden_protocol::transaction::{
+    ExecutedTransaction,
+    PartialBlockchain,
+    ProvenTransaction,
+    TransactionId,
+};
+use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 
@@ -309,7 +315,7 @@ impl BatchJob {
         selected: SelectedBatch,
     ) -> Result<ProposedBatch, BuildBatchError> {
         let fee_notes = selected.collectible_fee_notes().to_vec();
-        let mut block_numbers: BTreeSet<_> = selected
+        let block_numbers: BTreeSet<_> = selected
             .transactions()
             .iter()
             .map(Deref::deref)
@@ -324,7 +330,57 @@ impl BatchJob {
             .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
             .collect();
 
-        let view = self.state.view();
+        // The view pins a state snapshot. Only the store reads and the fee collection execution use
+        // the view, so the proof and the validator request run after the view is released.
+        let (inputs, executed_fee_collection) = self
+            .state
+            .with_view(async |view| {
+                let inputs =
+                    Self::read_batch_inputs(view, reference_block, block_numbers, note_ids).await?;
+                // A deployed collector must consume at least one note to prevent replay.
+                let executed_fee_collection = if fee_notes.is_empty() {
+                    None
+                } else {
+                    Some(self.execute_fee_collection(view, fee_notes, &inputs).await?)
+                };
+                Ok::<_, BuildBatchError>((inputs, executed_fee_collection))
+            })
+            .await?;
+        let BatchInputs {
+            note_inclusion_proofs,
+            partial_blockchain,
+            reference_block_header,
+        } = inputs;
+
+        let mut transactions: Vec<_> = selected
+            .into_transactions()
+            .into_iter()
+            .map(|tx| tx.proven_transaction())
+            .collect();
+
+        if let Some((executed, genesis)) = executed_fee_collection {
+            let fee_collection_tx =
+                self.prove_fee_collection(executed, genesis, &reference_block_header).await?;
+            transactions.push(Arc::new(fee_collection_tx));
+        }
+
+        ProposedBatch::new(
+            transactions,
+            reference_block_header,
+            partial_blockchain,
+            note_inclusion_proofs,
+            MIN_PROOF_SECURITY_LEVEL,
+        )
+        .map_err(BuildBatchError::ProposeBatchError)
+    }
+
+    /// Reads the store data that a [`ProposedBatch`] requires.
+    async fn read_batch_inputs(
+        view: &StateView,
+        reference_block: BlockNumber,
+        mut block_numbers: BTreeSet<BlockNumber>,
+        note_ids: BTreeSet<NoteId>,
+    ) -> Result<BatchInputs, BuildBatchError> {
         let note_inclusion_proofs = view
             .get_note_inclusion_proofs(reference_block, note_ids)
             .await
@@ -345,67 +401,76 @@ impl BatchJob {
             .0
             .expect("reference block header should exist");
 
-        let mut transactions: Vec<_> = selected
-            .into_transactions()
-            .into_iter()
-            .map(|tx| tx.proven_transaction())
-            .collect();
-
-        // A deployed collector must consume at least one note to prevent replay.
-        if !fee_notes.is_empty() {
-            let protocol_config = view
-                .get_protocol_config(reference_block_header.protocol_config_commitment())
-                .await
-                .map_err(StoreError::GetProtocolConfigFailed)
-                .map_err(BuildBatchError::FetchBatchInputsFailed)?
-                .expect("the reference block's protocol configuration should exist");
-            let genesis = view
-                .get_block_header(Some(BlockNumber::GENESIS), false)
-                .await
-                .map_err(StoreError::GetBlockHeaderFailed)
-                .map_err(BuildBatchError::FetchBatchInputsFailed)?
-                .0
-                .expect("the genesis block header should exist")
-                .commitment();
-
-            let fee_collector = self.fee_collector.clone();
-            let executed_fee_collection_tx = fee_collector
-                .execute(
-                    fee_notes,
-                    reference_block_header.clone(),
-                    protocol_config,
-                    partial_blockchain.clone(),
-                    &view,
-                )
-                .await
-                .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-            let inputs = executed_fee_collection_tx.tx_inputs().clone();
-            let fee_collection_tx = spawn_blocking_in_current_span(move || {
-                FeeCollectorTransactionBuilder::prove(executed_fee_collection_tx)
-            })
-            .await
-            .map_err(BuildBatchError::JoinError)?
-            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-            self.validator
-                .validate_transaction(
-                    &fee_collection_tx,
-                    &inputs,
-                    genesis,
-                    reference_block_header.validator_config(),
-                )
-                .await
-                .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
-            transactions.push(Arc::new(fee_collection_tx));
-        }
-
-        ProposedBatch::new(
-            transactions,
-            reference_block_header,
-            partial_blockchain,
+        Ok(BatchInputs {
             note_inclusion_proofs,
-            MIN_PROOF_SECURITY_LEVEL,
-        )
-        .map_err(BuildBatchError::ProposeBatchError)
+            partial_blockchain,
+            reference_block_header,
+        })
+    }
+
+    /// Executes the transaction that collects the fee notes.
+    ///
+    /// Returns the executed transaction and the genesis block commitment.
+    async fn execute_fee_collection(
+        &self,
+        view: &StateView,
+        fee_notes: Vec<Note>,
+        inputs: &BatchInputs,
+    ) -> Result<(ExecutedTransaction, Word), BuildBatchError> {
+        let protocol_config = view
+            .get_protocol_config(inputs.reference_block_header.protocol_config_commitment())
+            .await
+            .map_err(StoreError::GetProtocolConfigFailed)
+            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .expect("the reference block's protocol configuration should exist");
+        let genesis = view
+            .get_block_header(Some(BlockNumber::GENESIS), false)
+            .await
+            .map_err(StoreError::GetBlockHeaderFailed)
+            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .0
+            .expect("the genesis block header should exist")
+            .commitment();
+
+        let executed = self
+            .fee_collector
+            .execute(
+                fee_notes,
+                inputs.reference_block_header.clone(),
+                protocol_config,
+                inputs.partial_blockchain.clone(),
+                view,
+            )
+            .await
+            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+
+        Ok((executed, genesis))
+    }
+
+    /// Proves the fee collection transaction and submits the proof to the validator.
+    async fn prove_fee_collection(
+        &self,
+        executed: ExecutedTransaction,
+        genesis: Word,
+        reference_block_header: &BlockHeader,
+    ) -> Result<ProvenTransaction, BuildBatchError> {
+        let inputs = executed.tx_inputs().clone();
+        let fee_collection_tx =
+            spawn_blocking_in_current_span(move || FeeCollectorTransactionBuilder::prove(executed))
+                .await
+                .map_err(BuildBatchError::JoinError)?
+                .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+        self.validator
+            .validate_transaction(
+                &fee_collection_tx,
+                &inputs,
+                genesis,
+                reference_block_header.validator_config(),
+            )
+            .await
+            .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
+
+        Ok(fee_collection_tx)
     }
 
     #[miden_instrument(
@@ -431,6 +496,13 @@ impl BatchJob {
             .rollback_batch(batch_id);
         Ok(())
     }
+}
+
+/// The store data that a [`ProposedBatch`] requires.
+struct BatchInputs {
+    note_inclusion_proofs: BTreeMap<NoteId, NoteInclusionProof>,
+    partial_blockchain: PartialBlockchain,
+    reference_block_header: BlockHeader,
 }
 
 // TELEMETRY
