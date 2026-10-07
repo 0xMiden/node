@@ -988,11 +988,13 @@ async fn sign_block_links_transactions_to_the_signed_block() {
             start: Some((BlockNumber::from(1u32), 0)),
             block_to: Some(BlockNumber::from(1u32)),
             limit: 10,
+            include_records: false,
         })
         .await
         .unwrap();
     assert_eq!(
         listed
+            .transactions
             .iter()
             .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
             .collect::<Vec<_>>(),

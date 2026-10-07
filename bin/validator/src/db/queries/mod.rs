@@ -40,11 +40,9 @@ mod list_validated_transactions;
 pub use list_validated_transactions::{
     ListTransactionsParams,
     ListedTransaction,
+    ListedTransactionsPage,
     list_validated_transactions,
 };
-
-mod load_all_transactions;
-pub use load_all_transactions::load_all_transactions;
 
 mod load_block_header;
 pub use load_block_header::load_block_header;

@@ -174,3 +174,97 @@ validation, it stores only the transaction ID and the threshold-encrypted record
 ciphertext.
 
 Use `miden-validator start --help` for the complete current option list.
+
+## Administration API
+
+The validator can serve a private JSON administration API. Operators use it to find the stored records of validated
+transactions and to request the decryption shares that open them. The listener is disabled by default. Configure its
+address to enable it:
+
+```bash
+--admin.listen 127.0.0.1:50102
+```
+
+The corresponding environment variable is `MIDEN_VALIDATOR_ADMIN_LISTEN`. The API does not authenticate requests.
+Enforce authentication and authorization externally, and prevent direct access to this listener. Keep it on an isolated
+operator network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for
+remote access.
+
+| Method | Path                                      | Request                                               | Result                                                                                          |
+| ------ | ----------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/v1/transactions`                  | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
+| `GET`  | `/admin/v1/transactions/{transaction_id}` | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
+| `POST` | `/admin/v1/decryption-share`              | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
+
+Byte values are hexadecimal strings without a `0x` prefix. Errors from request handlers have the form
+`{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return `500`. Requests rejected
+before reaching a handler return a plain-text error body. These include malformed query parameters or malformed JSON
+(`400`), a JSON body with the wrong shape (`422`), and a missing or unsupported JSON content type (`415`).
+
+### List Transactions
+
+The listing returns the transactions that a signed block includes, in the order of the chain: by block number, then by
+index within the block. A validated transaction that is not in a signed block is not listed. A transaction that a block
+included before the validator database recorded block positions is also not listed. Use the single-transaction endpoint
+to read those records.
+
+| Parameter         | Default     | Description                                                                                       |
+| ----------------- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `block_from`      | First block | First block to list, inclusive.                                                                   |
+| `tx_index_from`   | `0`         | First index to list within `block_from`. Requires `block_from`.                                   |
+| `block_to`        | None        | Last block to list, inclusive.                                                                    |
+| `limit`           | `100`       | Maximum number of transactions in the page. At most `1000`, or `100` with `include_records=true`. |
+| `include_records` | `false`     | Adds the stored record to each transaction.                                                       |
+
+Each transaction has `transaction_id`, `block_num`, `block_tx_index`, `key_epoch`, and `setup_context_id`. With
+`include_records=true`, it also has a `record` object with `final_ciphertext`, `cipher_nonce`, `encrypted_record_key`,
+and `decryption_context`.
+
+The `pagination` object has `chain_tip`, `block_num`, and `block_tx_index`. `chain_tip` is the highest block that this
+validator has signed. The transactions, optional records, and chain tip in each response describe the same database
+snapshot. `block_num` and `block_tx_index` are the position of the last transaction in the page. To read the next page,
+repeat the request with `block_from` set to `block_num` and `tx_index_from` set to `block_tx_index + 1`. Both values are
+`null` when the page is empty, which ends the sweep.
+
+```bash
+curl 'http://127.0.0.1:50102/admin/v1/transactions?block_from=1&limit=2'
+```
+
+```json
+{
+  "transactions": [
+    {
+      "transaction_id": "<hex>",
+      "block_num": 1,
+      "block_tx_index": 0,
+      "key_epoch": "<hex>",
+      "setup_context_id": "<hex>"
+    },
+    {
+      "transaction_id": "<hex>",
+      "block_num": 1,
+      "block_tx_index": 1,
+      "key_epoch": "<hex>",
+      "setup_context_id": "<hex>"
+    }
+  ],
+  "pagination": { "chain_tip": 12, "block_num": 1, "block_tx_index": 1 }
+}
+```
+
+The block at `chain_tip` can still be replaced, and the replacement can include other transactions. To read only final
+transactions, set `block_to` below `chain_tip`, or read the tip block again from index `0` after the tip advances.
+
+### Get a Transaction
+
+The response has `transaction_id`, `final_ciphertext`, `cipher_nonce`, `encrypted_record_key`, and `decryption_context`
+for one validated transaction. The `transaction_id` in the path is 64 hexadecimal characters. This endpoint also serves
+a transaction that is not in a signed block.
+
+### Issue a Decryption Share
+
+To open a record, collect decryption shares from a threshold of validators. Each validator stores its own ciphertext for
+a transaction, and a share over the ciphertext of one validator does not combine with a share over the ciphertext of
+another validator. Read the record from one validator, then send the `encrypted_record_key` of that record as
+`ciphertext`, with its `decryption_context`, to each validator. A validator therefore issues a share over a ciphertext
+that it does not store.
