@@ -16,6 +16,8 @@ use url::Url;
 
 const DEFAULT_RPC_URL: &str = "http://0.0.0.0:57291";
 const DEFAULT_PORT: u16 = 3000;
+/// Amount of tokens, in base units, requested by each faucet check by default.
+const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
 
 /// Configuration for the monitor.
 ///
@@ -94,6 +96,17 @@ pub struct MonitorConfig {
         help = "The interval at which to test the faucet services"
     )]
     pub faucet_test_interval: Duration,
+
+    /// Amount of tokens, in base units, that each faucet check requests.
+    #[arg(
+        long = "faucet-mint-amount",
+        env = "MIDEN_MONITOR_FAUCET_MINT_AMOUNT",
+        default_value_t = DEFAULT_FAUCET_MINT_AMOUNT,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Amount of tokens, in base units, that each faucet check requests. It must not \
+                exceed the faucet's maximum claimable amount"
+    )]
+    pub faucet_mint_amount: u64,
 
     /// The interval at which to check the status of the services.
     #[arg(

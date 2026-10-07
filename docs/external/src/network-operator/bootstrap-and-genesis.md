@@ -22,8 +22,8 @@ https://genesis.<network>.miden.io
 ```
 
 which provides an easy method to obtain this data. This is directly supported by service bootstrap commands by passing
-`--network testnet` or `--network devnet`. Bootstrap commands also support passing a file directly to cover custom
-networks, or if the official URLs are not trusted.
+`--network mainnet`, `--network testnet`, or `--network devnet`. Bootstrap commands also support passing a file directly
+to cover custom networks, or if the official URLs are not trusted.
 
 Before starting the sequencer, create and deploy its [fee collector account](./sequencer.md#fee-collection).
 
@@ -97,8 +97,8 @@ miden-ntx-builder bootstrap \
   --network testnet
 ```
 
-For `devnet`, use `--network devnet` instead. The `--network` flag is shorthand for downloading the genesis block from
-`https://genesis.<network>.miden.io`.
+For other official networks, use `--network mainnet` or `--network devnet` instead. The `--network` flag is shorthand
+for downloading the genesis block from `https://genesis.<network>.miden.io`.
 
 Each validator operator's own KMS key ID must be used when that operator starts their validator for this network.
 

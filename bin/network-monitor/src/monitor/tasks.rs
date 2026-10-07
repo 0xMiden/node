@@ -142,8 +142,12 @@ impl Tasks {
     /// Spawn the faucet testing task.
     pub fn spawn_faucet(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
         let faucet_url = config.faucet_url.clone().expect("faucet URL exists");
-        let svc =
-            FaucetService::new(faucet_url, config.faucet_test_interval, config.request_timeout);
+        let svc = FaucetService::new(
+            faucet_url,
+            config.faucet_test_interval,
+            config.request_timeout,
+            config.faucet_mint_amount,
+        );
         self.spawn_service(svc)
     }
 
