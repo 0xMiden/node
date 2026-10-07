@@ -16,8 +16,8 @@ use url::Url;
 
 const DEFAULT_RPC_URL: &str = "http://0.0.0.0:57291";
 const DEFAULT_PORT: u16 = 3000;
-/// One token of a faucet with 6 decimals.
-const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000_000;
+/// Amount of tokens, in base units, requested by each faucet check by default.
+const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
 
 /// Configuration for the monitor.
 ///
