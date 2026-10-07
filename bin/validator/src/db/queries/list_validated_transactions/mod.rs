@@ -9,8 +9,9 @@ use miden_node_db::sqlite::ReadTx;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
 
-use crate::StorageKeyEpoch;
 use crate::db::queries::private_record_row::fixed_32;
+use crate::db::queries::{load_chain_tip, load_private_record};
+use crate::{StorageKeyEpoch, StoredPrivateRecord};
 
 const SQL: &str = include_str!("list_validated_transactions.sql");
 
@@ -25,6 +26,8 @@ pub struct ListTransactionsParams {
     pub block_to: Option<BlockNumber>,
     /// Maximum number of rows to return.
     pub limit: usize,
+    /// Whether to attach each transaction's sealed private record.
+    pub include_records: bool,
 }
 
 /// One listed transaction: identifying metadata and its position in the chain.
@@ -37,31 +40,59 @@ pub struct ListedTransaction {
     pub block_num: BlockNumber,
     /// Index of this transaction within its block.
     pub block_tx_index: u32,
+    pub record: Option<StoredPrivateRecord>,
 }
 
-/// Loads one page of committed validated transactions according to `params`.
+/// A page of committed transactions and the chain tip from the same database snapshot.
+#[derive(Debug)]
+pub struct ListedTransactionsPage {
+    pub transactions: Vec<ListedTransaction>,
+    pub chain_tip: BlockNumber,
+}
+
+/// Loads the page, chain tip, and optional records from a single database snapshot.
+///
+/// A tip replacement followed by a new block must not make replaced transactions appear final by
+/// pairing them with a newer chain tip.
 pub fn list_validated_transactions(
     tx: &ReadTx<'_>,
     params: &ListTransactionsParams,
-) -> Result<Vec<ListedTransaction>, DatabaseError> {
+) -> Result<ListedTransactionsPage, DatabaseError> {
     let (start_block, start_index) = params
         .start
         .map_or((0, 0), |(block_num, index)| (i64::from(block_num.as_u32()), i64::from(index)));
     let block_to = params.block_to.map_or(i64::from(u32::MAX), |b| i64::from(b.as_u32()));
     let limit = i64::try_from(params.limit).unwrap_or(i64::MAX);
 
-    tx.query(SQL, &[&start_block, &start_index, &block_to, &limit], |row| {
-        let transaction_id = row.get::<TransactionId>(0)?;
-        let key_epoch = StorageKeyEpoch::new(fixed_32(row.get(1)?, "private record key epoch")?);
-        let setup_context_id = fixed_32(row.get(2)?, "private record setup context id")?;
-        let block_num = BlockNumber::from(row.get::<u32>(3)?);
-        let block_tx_index = row.get::<u32>(4)?;
-        Ok(ListedTransaction {
-            transaction_id,
-            key_epoch,
-            setup_context_id,
-            block_num,
-            block_tx_index,
-        })
-    })
+    let mut transactions =
+        tx.query(SQL, &[&start_block, &start_index, &block_to, &limit], |row| {
+            let transaction_id = row.get::<TransactionId>(0)?;
+            let key_epoch =
+                StorageKeyEpoch::new(fixed_32(row.get(1)?, "private record key epoch")?);
+            let setup_context_id = fixed_32(row.get(2)?, "private record setup context id")?;
+            let block_num = BlockNumber::from(row.get::<u32>(3)?);
+            let block_tx_index = row.get::<u32>(4)?;
+            Ok(ListedTransaction {
+                transaction_id,
+                key_epoch,
+                setup_context_id,
+                block_num,
+                block_tx_index,
+                record: None,
+            })
+        })?;
+    let chain_tip = load_chain_tip(tx)?.map_or(BlockNumber::GENESIS, |header| header.block_num());
+    if params.include_records {
+        for item in &mut transactions {
+            // The block link's foreign key requires a stored record for every listed transaction.
+            let record = load_private_record(tx, item.transaction_id)?.ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("listed transaction {} has no stored record", item.transaction_id),
+                )
+            })?;
+            item.record = Some(record);
+        }
+    }
+    Ok(ListedTransactionsPage { transactions, chain_tip })
 }

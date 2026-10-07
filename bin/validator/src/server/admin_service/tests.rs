@@ -586,3 +586,57 @@ async fn router_exposes_only_the_json_admin_routes() {
     let response = app.oneshot(Request::get("/").body(Body::empty()).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+/// Request parsing errors use plain text, while handler validation errors use the JSON envelope.
+#[tokio::test]
+async fn router_distinguishes_extractor_and_handler_errors() {
+    let (_directory, _writer, reader) = test_database().await;
+    let app = router(operator_keys().remove(0), reader);
+    let cases = [
+        (
+            Request::get(format!("{LIST_TRANSACTIONS_PATH}?limit=abc"))
+                .body(Body::empty())
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+        ),
+        (
+            Request::post(ISSUE_SHARE_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from("{"))
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "text/plain; charset=utf-8",
+        ),
+        (
+            Request::post(ISSUE_SHARE_PATH)
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "text/plain; charset=utf-8",
+        ),
+        (
+            Request::post(ISSUE_SHARE_PATH).body(Body::from("{}")).unwrap(),
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "text/plain; charset=utf-8",
+        ),
+        (
+            Request::get(format!("{LIST_TRANSACTIONS_PATH}?limit=0"))
+                .body(Body::empty())
+                .unwrap(),
+            StatusCode::BAD_REQUEST,
+            "application/json",
+        ),
+    ];
+    for (request, status, content_type) in cases {
+        let response = app.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), status);
+        assert_eq!(response.headers().get("content-type").unwrap(), content_type);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(!body.is_empty());
+        if content_type == "application/json" {
+            assert_eq!(body.as_ref(), br#"{"error":"limit must be between 1 and 1000"}"#);
+        }
+    }
+}

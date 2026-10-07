@@ -40,6 +40,7 @@ mod list_validated_transactions;
 pub use list_validated_transactions::{
     ListTransactionsParams,
     ListedTransaction,
+    ListedTransactionsPage,
     list_validated_transactions,
 };
 

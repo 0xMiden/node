@@ -67,7 +67,7 @@ impl From<ListedTransaction> for ListedValidatedTransaction {
             block_tx_index: item.block_tx_index,
             key_epoch: hex::encode(item.key_epoch.as_bytes()),
             setup_context_id: hex::encode(item.setup_context_id),
-            record: None,
+            record: item.record.map(Into::into),
         }
     }
 }
@@ -138,50 +138,23 @@ pub(super) async fn list_validated_private_transactions(
     let start = query
         .block_from
         .map(|from| (BlockNumber::from(from), query.tx_index_from.unwrap_or(0)));
-    let transactions = service
+    let page = service
         .reader
         .list_validated_transactions(ListTransactionsParams {
             start,
             block_to: query.block_to.map(BlockNumber::from),
             limit,
+            include_records: query.include_records,
         })
         .await
         .map_err(|_error| ApiError::internal("failed to list validated private transactions"))?;
 
-    // Read the tip after the page, so it can never come back older than a block the page lists. A
-    // validator that has signed nothing reports 0, matching how `load_initial_metrics` treats it.
-    let chain_tip = service
-        .reader
-        .load_chain_tip()
-        .await
-        .map_err(|_error| ApiError::internal("failed to load the chain tip"))?
-        .map_or(0, |header| header.block_num().as_u32());
-    // The position of the last row is exactly what the next page resumes one past.
-    let block_num = transactions.last().map(|item| item.block_num.as_u32());
-    let block_tx_index = transactions.last().map(|item| item.block_tx_index);
-
-    let mut listed = Vec::with_capacity(transactions.len());
-    for item in transactions {
-        let transaction_id = item.transaction_id;
-        let mut listed_item = ListedValidatedTransaction::from(item);
-        if query.include_records {
-            // Every listed transaction references a validated record via a foreign key and records
-            // are never deleted, so a missing record is an internal inconsistency.
-            let record = service
-                .reader
-                .load_private_record(transaction_id)
-                .await
-                .map_err(|_error| ApiError::internal("failed to load a private record"))?
-                .ok_or_else(|| {
-                    ApiError::internal("a listed transaction's private record is missing")
-                })?;
-            listed_item.record = Some(record.into());
-        }
-        listed.push(listed_item);
-    }
+    let chain_tip = page.chain_tip.as_u32();
+    let block_num = page.transactions.last().map(|item| item.block_num.as_u32());
+    let block_tx_index = page.transactions.last().map(|item| item.block_tx_index);
 
     Ok(Json(ListValidatedPrivateTransactionsResponse {
-        transactions: listed,
+        transactions: page.transactions.into_iter().map(Into::into).collect(),
         pagination: PaginationInfo { chain_tip, block_num, block_tx_index },
     }))
 }

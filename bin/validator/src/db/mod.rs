@@ -152,11 +152,11 @@ impl ValidatorDbReader {
     }
 
     /// Loads one page of committed transactions in chronological order i.e. `(block_num,
-    /// block_tx_index)`.
+    /// block_tx_index)`, with the chain tip and optional records from the same snapshot.
     pub(crate) async fn list_validated_transactions(
         &self,
         params: queries::ListTransactionsParams,
-    ) -> Result<Vec<queries::ListedTransaction>, DatabaseError> {
+    ) -> Result<queries::ListedTransactionsPage, DatabaseError> {
         self.reader
             .read("list_validated_transactions", move |tx| {
                 queries::list_validated_transactions(tx, &params)
@@ -859,8 +859,13 @@ mod tests {
                 .unwrap();
         }
 
-        let params = ListTransactionsParams { start: None, block_to: None, limit: 10 };
-        assert!(db.list_validated_transactions(params).await.unwrap().is_empty());
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        };
+        assert!(db.list_validated_transactions(params).await.unwrap().transactions.is_empty());
         // They remain reachable by transaction id.
         assert!(db.load_private_record(transaction_ids[0]).await.unwrap().is_some());
     }
@@ -889,8 +894,13 @@ mod tests {
         .await
         .unwrap();
 
-        let params = ListTransactionsParams { start: None, block_to: None, limit: 10 };
-        let listed = db.list_validated_transactions(params).await.unwrap();
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        };
+        let listed = db.list_validated_transactions(params).await.unwrap().transactions;
         assert_eq!(
             listed
                 .iter()
@@ -909,7 +919,7 @@ mod tests {
             .await
             .unwrap();
 
-        let listed = db.list_validated_transactions(params).await.unwrap();
+        let listed = db.list_validated_transactions(params).await.unwrap().transactions;
         assert_eq!(
             listed
                 .iter()
@@ -917,6 +927,64 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(transaction_ids[2], BlockNumber::from(7u32), 0)],
         );
+    }
+
+    /// A listing keeps its records and chain tip consistent even when the tip is replaced and
+    /// advanced while its read snapshot is open.
+    #[tokio::test]
+    async fn listing_snapshot_survives_tip_replacement_and_advance() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = setup(directory.path().join("validator.sqlite3")).await.unwrap();
+        let original_id = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
+        let replacement_id = TransactionId::from_raw(Word::from([2u32, 0, 0, 0]));
+        let original_record = private_record(original_id, 1);
+        let replacement_record = private_record(replacement_id, 2);
+        for record in [&original_record, &replacement_record] {
+            db.insert_validated_private_transaction(record.clone()).await.unwrap();
+        }
+        let header = BlockHeader::mock(1, None, None, &[]);
+        db.insert_signed_block(header.clone(), ProtocolConfig::mock(), vec![original_id])
+            .await
+            .unwrap();
+
+        let snapshot = db.reader.reader.begin_read().await.unwrap();
+        let tip = snapshot.run("pin_listing_snapshot", queries::load_chain_tip).await.unwrap();
+        assert_eq!(tip.unwrap().block_num(), BlockNumber::from(1u32));
+
+        db.replace_signed_block(header, ProtocolConfig::mock(), vec![replacement_id])
+            .await
+            .unwrap();
+        db.insert_signed_block(
+            BlockHeader::mock(2, None, None, &[]),
+            ProtocolConfig::mock(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: true,
+        };
+        let page = snapshot
+            .run("list_snapshot", move |tx| queries::list_validated_transactions(tx, &params))
+            .await
+            .unwrap();
+        assert_eq!(page.chain_tip, BlockNumber::from(1u32));
+        assert_eq!(page.transactions.len(), 1);
+        assert_eq!(page.transactions[0].transaction_id, original_id);
+        assert_eq!(page.transactions[0].block_num, page.chain_tip);
+        assert_eq!(page.transactions[0].record.as_ref(), Some(&original_record));
+        snapshot.close().await.unwrap();
+
+        let current = db.list_validated_transactions(params).await.unwrap();
+        assert_eq!(current.chain_tip, BlockNumber::from(2u32));
+        assert_eq!(current.transactions.len(), 1);
+        assert_eq!(current.transactions[0].transaction_id, replacement_id);
+        assert_eq!(current.transactions[0].block_num, BlockNumber::from(1u32));
+        assert_eq!(current.transactions[0].record.as_ref(), Some(&replacement_record));
     }
 
     /// A full sweep pages through committed transactions in committed order, honoring the row limit
@@ -960,8 +1028,13 @@ mod tests {
         let mut swept = Vec::new();
         let mut start = None;
         loop {
-            let params = ListTransactionsParams { start, block_to: None, limit: 3 };
-            let page = db.list_validated_transactions(params).await.unwrap();
+            let params = ListTransactionsParams {
+                start,
+                block_to: None,
+                limit: 3,
+                include_records: false,
+            };
+            let page = db.list_validated_transactions(params).await.unwrap().transactions;
             let Some(last) = page.last() else { break };
             assert!(page.len() <= 3, "a page must honor the row limit");
             start = Some((last.block_num, last.block_tx_index + 1));
@@ -975,11 +1048,16 @@ mod tests {
                 start: Some((BlockNumber::from(2u32), 0)),
                 block_to: None,
                 limit: 10,
+                include_records: false,
             })
             .await
             .unwrap();
         assert_eq!(
-            from_block_2.iter().map(|item| item.transaction_id).collect::<Vec<_>>(),
+            from_block_2
+                .transactions
+                .iter()
+                .map(|item| item.transaction_id)
+                .collect::<Vec<_>>(),
             vec![transaction_ids[1], transaction_ids[2]],
         );
         let up_to_block_1 = db
@@ -987,11 +1065,16 @@ mod tests {
                 start: None,
                 block_to: Some(BlockNumber::from(1u32)),
                 limit: 10,
+                include_records: false,
             })
             .await
             .unwrap();
         assert_eq!(
-            up_to_block_1.iter().map(|item| item.transaction_id).collect::<Vec<_>>(),
+            up_to_block_1
+                .transactions
+                .iter()
+                .map(|item| item.transaction_id)
+                .collect::<Vec<_>>(),
             vec![transaction_ids[3], transaction_ids[0]],
         );
     }
