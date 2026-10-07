@@ -21,6 +21,30 @@ for use by trusted internal nodes.
 
 It supports local development keys and KMS-backed signing for deployments that need external key management.
 
+## Peer-to-peer DKG
+
+Validators compare ceremony transcript commitments and abort on a mismatch, including when a participant sends
+conflicting contributions to different peers (equivocation).
+
+Completion requires every configured validator. Any participant can prevent completion by withholding messages or
+sending conflicting contributions. Run the ceremony with validators you trust to cooperate; it cannot exclude a faulty
+participant and continue with a smaller set.
+
+Supply each peer to `miden-validator dkg participate` as `--peer <PUBLIC_KEY> <ENDPOINT_ID>[@<IP:PORT>]`. The socket
+address is required unless `--enable-public-relay` is set. By default, peers connect directly without public relays or
+address discovery. Use `--bind-address <IP:PORT>` to select the local UDP listening address. A nonzero port is required
+without public relays when any peer has a smaller endpoint ID, because those peers connect to you. Loopback addresses
+allow a local ceremony without internet access.
+
+Use `--enable-public-relay` on each participant to opt into n0's public Iroh relays and address discovery. Peer socket
+addresses then become optional: `--peer <PUBLIC_KEY> <ENDPOINT_ID>` is sufficient. Direct connections remain available,
+with encrypted relay transport as a fallback. The public relays are intended for development and testing, not guaranteed
+production availability.
+
+Each participant supplies its persistent identity with `--endpoint-secret <FILE>`. Regardless of the connection route,
+each endpoint must authenticate with its configured validator public key. Obtain these keys from a trusted source. All
+participants must configure the same validator set.
+
 ## License
 
 This project is [MIT licensed](../../LICENSE).

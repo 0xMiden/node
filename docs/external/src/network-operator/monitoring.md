@@ -27,6 +27,10 @@ On a chain that charges fees, those checks also need the native asset, because t
 transaction fees. Set `MIDEN_MONITOR_FUNDING_SERVICE_URL` to the [funding service](./funding-service.md), which is the
 only source the monitor pays fees from. `MIDEN_MONITOR_FAUCET_URL` configures the faucet checks and does not fund fees.
 
+Each faucet check requests `MIDEN_MONITOR_FAUCET_MINT_AMOUNT` base units, which defaults to `1_000`. Keep this amount at
+or below the faucet's maximum claimable amount, otherwise the faucet rejects every request and the faucet card stays
+unhealthy.
+
 Use the binary help output for the current configuration surface:
 
 ```bash

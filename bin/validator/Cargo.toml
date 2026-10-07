@@ -29,11 +29,14 @@ base64                 = { version = "0.22" }
 chacha20poly1305       = { workspace = true }
 clap                   = { features = ["env", "string"], workspace = true }
 fs-err                 = { workspace = true }
+futures                = { workspace = true }
 golden-core            = { workspace = true }
 golden-ehtdh1          = { workspace = true }
 golden-evrf            = { workspace = true }
 golden-halo2curves     = { workspace = true }
 hex                    = { workspace = true }
+humantime              = { workspace = true }
+iroh                   = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
@@ -46,12 +49,10 @@ miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
 rand_core_06           = { workspace = true }
 serde                  = { workspace = true }
-sha2                   = { workspace = true }
 tempfile               = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }
-toml                   = { workspace = true }
 tonic                  = { default-features = true, features = ["transport"], workspace = true }
 tonic-reflection       = { workspace = true }
 tower-http             = { features = ["util"], workspace = true }
@@ -62,6 +63,8 @@ build-rs      = { workspace = true }
 miden-node-db = { workspace = true }
 
 [dev-dependencies]
+iroh-relay       = { features = ["server"], version = "=1.3.0" }
+itertools        = { workspace = true }
 miden-node-store = { workspace = true }
 miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
@@ -69,5 +72,6 @@ miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }
 rand_chacha_03   = { workspace = true }
+rstest           = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "sync"], workspace = true }
 tower            = { features = ["util"], workspace = true }

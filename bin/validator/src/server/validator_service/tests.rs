@@ -683,6 +683,37 @@ async fn chain_tip_replacement_succeeds() {
     );
 }
 
+/// A replacement of the tip block stores no additional block, so it does not change the signed
+/// block count. The count in memory then stays equal to the growth of the count that a restart
+/// reads from the database.
+#[tokio::test]
+async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
+    let mut tv = TestValidator::new().await;
+    let genesis_header = tv.chain_tip.clone();
+    let chain_at_genesis = tv.chain.clone();
+    let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    tv.apply_empty_block().await;
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        chain_at_genesis,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let replacement =
+        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
+            .unwrap();
+    tv.call_sign_block(&replacement)
+        .await
+        .expect("chain tip replacement should succeed");
+
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+    let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    assert_eq!(stored - stored_at_genesis, 1);
+}
+
 /// A block at chain tip + 2 (skipping a block number) should be rejected.
 #[tokio::test]
 async fn chain_tip_plus_two_rejected() {
@@ -879,6 +910,97 @@ async fn unknown_transactions_rejected() {
         },
         other => panic!("expected UnvalidatedTransactions error, got: {other}"),
     }
+}
+
+/// Signing a block records which block includes each of its transactions, so the administration API
+/// can filter validated transactions by block range.
+#[tokio::test]
+async fn sign_block_links_transactions_to_the_signed_block() {
+    use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
+    use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
+    use rand_chacha_03::rand_core::SeedableRng;
+
+    use crate::db::ListTransactionsParams;
+    use crate::private_record::test_private_record_sealer;
+    use crate::{PrivateRecordChainId, PrivateRecordContext, PrivateRecordId, StorageKeyEpoch};
+
+    let tv = TestValidator::new().await;
+    let genesis_header = tv.chain_tip.clone();
+
+    // Build a dummy transaction and record it as validated, as `submit_proven_transaction` would.
+    let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
+    let tx_header = TransactionHeader::new(
+        account_id,
+        Word::default(),
+        Word::default(),
+        InputNotes::<InputNoteCommitment>::default(),
+        vec![],
+    )
+    .unwrap();
+    let tx_id = tx_header.id();
+    let key_epoch = StorageKeyEpoch::new([2; 32]);
+    let record = test_private_record_sealer(key_epoch, [4; 32])
+        .seal(
+            &mut rand_chacha_03::ChaCha20Rng::from_seed([1; 32]),
+            PrivateRecordId::new(tx_id, &random_secret_key().public_key()),
+            PrivateRecordContext::new(PrivateRecordChainId::new([1; 32]), key_epoch, tx_id),
+            b"private transaction inputs",
+        )
+        .unwrap();
+    tv.server.db.insert_validated_private_transaction(record).await.unwrap();
+
+    // Build a block containing the transaction and have the validator sign it.
+    let batch = ProvenBatch::new_unchecked(
+        BatchId::from_ids(std::iter::once((tx_id, account_id))),
+        genesis_header.commitment(),
+        BlockNumber::GENESIS,
+        BTreeMap::from([(
+            account_id,
+            BatchAccountUpdate::new_unchecked(
+                account_id,
+                Word::default(),
+                Word::default(),
+                AccountUpdateDetails::Private,
+            ),
+        )]),
+        InputNotes::default(),
+        vec![],
+        BlockNumber::MAX,
+        OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        miden_protocol::testing::dummy_execution_proof(),
+    )
+    .unwrap();
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        PartialBlockchain::default(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
+    tv.call_sign_block(&proposed).await.expect("block should be signed");
+
+    // The signed block links its transaction to block 1 at index 0.
+    let listed = tv
+        .server
+        .db
+        .list_validated_transactions(ListTransactionsParams {
+            start: Some((BlockNumber::from(1u32), 0)),
+            block_to: Some(BlockNumber::from(1u32)),
+            limit: 10,
+            include_records: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .transactions
+            .iter()
+            .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+            .collect::<Vec<_>>(),
+        vec![(tx_id, BlockNumber::from(1u32), 0)],
+        "the signed block's transaction should be linked to block 1 at index 0"
+    );
 }
 
 /// After replacing the chain tip, a new block built against the pre-replacement tip should be

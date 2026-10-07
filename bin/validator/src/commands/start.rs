@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -29,12 +28,10 @@ pub async fn start(
     admin_address: Option<SocketAddr>,
     grpc_options: GrpcOptions,
     keys: ValidatorKeys,
-    data_directory: PathBuf,
+    data_directory: DataDirectory,
     sqlite_connection_pool_size: NonZeroUsize,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    let data_directory =
-        DataDirectory::load(data_directory).context("failed to load validator data directory")?;
     // The pool is opened once here and shared: the public API owns the sole writer, and both
     // servers read through cloned read handles.
     let db = miden_validator::db::load_with_pool_size(
