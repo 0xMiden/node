@@ -30,124 +30,79 @@ current block.
 
 ## Storage Key Setup
 
-The DKG creates the storage key used to re-encrypt validated private inputs. Run one ceremony for the validator set
-committed in genesis. Participant indexes follow the order of validator signing keys in the genesis block.
+The distributed key generation (DKG) ceremony creates the key material used to protect stored private inputs. Every
+validator must participate, and each produces its own private bundle for starting the validator service.
 
-The threshold is network policy. A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators
-cannot. Choose it from the network's confidentiality and availability needs before the ceremony starts.
+Validators compare ceremony transcript commitments and abort on a mismatch, including when a participant sends
+conflicting contributions to different peers (equivocation).
 
-This flow supports initial storage-key bootstrap only. The validator loads one storage-key epoch. Rotation, creating new
-shares, and validator-set changes are not yet supported. Keep each operator bundle available for as long as records from
-its epoch may need to be decrypted.
+Completion requires every configured validator. Any participant can prevent completion by withholding messages or
+sending conflicting contributions. Run the ceremony with validators you trust to cooperate; it cannot exclude a faulty
+participant and continue with a smaller set.
 
-First, each operator creates a DKG identity for the agreed storage-key epoch and sends `registration.toml` to the
-coordinator. The registration proves ownership of the DKG identity secret. The signing key must match one key in
-genesis. Use `--signing-key.hex` instead of KMS only for local or private deployments.
+The threshold determines how many validators must cooperate to decrypt stored data, not how many must join the ceremony.
+A threshold of `t` lets any `t` validators decrypt a stored record; fewer validators cannot.
+
+This procedure supports initial storage-key setup only. Storage-key rotation and validator-set changes are not yet
+supported. Keep each validator's bundle for as long as stored records may need to be decrypted.
+
+Before starting, all operators must agree on the participating validators, threshold, and storage-key epoch. Exchange
+validator public keys through a trusted channel. The ceremony uses these keys to authenticate peers and does not require
+a genesis block. For initial network setup, use the same validator keys as the network's genesis configuration.
+
+Generate a persistent Iroh endpoint identity for each validator:
 
 ```bash
-miden-validator dkg identity \
-  --genesis genesis.dat \
-  --epoch <32-byte-hex-epoch> \
-  --signing-key.kms-id <validator-kms-key-id> \
-  --output-directory identity
+miden-validator dkg generate-endpoint --output-file endpoint.secret
 ```
 
-The coordinator collects every registration and prepares one common ceremony directory. The setup coefficient is fixed
-by the validator backend. The session ID is derived from genesis, the epoch, the threshold, and the ordered
-registrations, so every operator can reproduce the same files.
+Keep the endpoint secret private and share the printed public endpoint ID with the other operators. Reuse the endpoint
+secret across ceremonies.
+
+Run the following command for each validator using its own signing key. Repeat `--peer` once per other validator, with
+that validator's public key followed by its endpoint ID. Do not include the local validator. This example opts into n0's
+public Iroh relays and address discovery, so no peer socket addresses are needed. The public relays are intended for
+development and testing; do not rely on them for guaranteed production availability.
 
 ```bash
-miden-validator dkg prepare \
-  --genesis genesis.dat \
+miden-validator dkg participate \
+  --endpoint-secret endpoint.secret \
+  --enable-public-relay \
+  --peer <other-validator-public-key> <other-validator-endpoint-id> \
+  --peer <another-validator-public-key> <another-validator-endpoint-id> \
   --threshold 2 \
   --epoch <32-byte-hex-epoch> \
-  --registration validator-1-registration.toml \
-  --registration validator-2-registration.toml \
-  --registration validator-3-registration.toml \
-  --output-directory ceremony
-```
-
-Each operator checks the ceremony directory over the authenticated bootstrap channel, then creates its dealings.
-
-```bash
-miden-validator dkg deal \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --identity-secret identity/identity-secret.wire \
-  --output-directory dealing
-```
-
-After all dealings are exchanged, every operator signs the same transcript. Repeat both dealing options once per
-validator.
-
-```bash
-miden-validator dkg accept \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
   --signing-key.kms-id <validator-kms-key-id> \
-  --decryption-dealing validator-1-decryption-dealing.wire \
-  --decryption-dealing validator-2-decryption-dealing.wire \
-  --decryption-dealing validator-3-decryption-dealing.wire \
-  --context-dealing validator-1-context-dealing.wire \
-  --context-dealing validator-2-context-dealing.wire \
-  --context-dealing validator-3-context-dealing.wire \
-  --output-directory acceptance
+  --output-file storage-key.bundle
 ```
 
-Compare `transcript.toml` byte for byte across all operators. Collect one signed `transcript-acceptance.toml` from each
-operator. Each operator can then create and validate its own startup bundle.
+For a local or private network with direct UDP connectivity, omit `--enable-public-relay`. Set a local listening address
+with `--bind-address <IP:PORT>` and supply each peer as `--peer <PUBLIC_KEY> <ENDPOINT_ID>@<IP:PORT>`. For example,
+local participants can listen on `127.0.0.1:9001` and `127.0.0.1:9002`. This mode uses no public relay or address
+discovery and works without internet access. IPv6 peer addresses use brackets, such as `<ENDPOINT_ID>@[::1]:9002`.
 
-```bash
-miden-validator dkg finalize \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --identity-secret identity/identity-secret.wire \
-  --private-state dealing/private-state.wire \
-  --decryption-dealing validator-1-decryption-dealing.wire \
-  --decryption-dealing validator-2-decryption-dealing.wire \
-  --decryption-dealing validator-3-decryption-dealing.wire \
-  --context-dealing validator-1-context-dealing.wire \
-  --context-dealing validator-2-context-dealing.wire \
-  --context-dealing validator-3-context-dealing.wire \
-  --transcript transcript.toml \
-  --transcript-acceptance validator-1-transcript-acceptance.toml \
-  --transcript-acceptance validator-2-transcript-acceptance.toml \
-  --transcript-acceptance validator-3-transcript-acceptance.toml \
-  --output-directory storage-key
+Validators can start at different times; the ceremony waits for all participants to join. The entire ceremony must
+finish within `--timeout`, which defaults to `30m`. For a single validator, omit `--peer` and use `--threshold 1`.
 
-miden-validator dkg validate \
-  --genesis genesis.dat \
-  --ceremony-directory ceremony \
-  --validator-public-key <validator-public-key-hex> \
-  --bundle-directory storage-key
-```
+The command reports success only after every validator confirms it has saved its bundle. Only then is the bundle safe to
+use. Each bundle belongs to one validator and must remain private.
 
-The files have these handling rules:
-
-| Files                                                                  | Handling                                                     |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `registration.toml`, `manifest.toml`, and both DKG configuration files | Public; send through an authenticated channel.               |
-| Both dealing files, `transcript.toml`, and transcript acceptances      | Public; send through an authenticated channel.               |
-| `identity-secret.wire` and `private-state.wire`                        | Private to one operator; never send.                         |
-| `epoch.hex`, `setup-context.wire`, and `public-key-set.wire`           | Public final output; all operators must get identical bytes. |
-| `secret-share.wire`                                                    | Private final output; each operator gets a different share.  |
-
-Every operator must confirm matching public output hashes before activation. Once the final bundle is secured,
-`identity-secret.wire` and `private-state.wire` are no longer needed. A failed ceremony cannot resume with a partial or
-changed participant set; start a new ceremony instead.
+A failed or timed-out ceremony cannot resume. Do not use any bundles from that attempt. Restart the ceremony with all
+participants and new output paths, reusing the endpoint secrets.
 
 ## Start
+
+Pass the bundle produced for this validator using `--storage-key.file <FILE>` or `MIDEN_VALIDATOR_STORAGE_KEY_FILE`. The
+validator will not start without a valid bundle. To use a text-only secret store, base64-encode the bundle for upload
+and decode it back to the original bytes before loading it.
 
 ```bash
 miden-validator start \
   --listen 0.0.0.0:50101 \
   --data-directory validator-data \
+  --storage-key.file storage-key.bundle \
   --signing-key.kms-id <validator-kms-key-id> \
-  --encryption-key.kms-ciphertext <encryption-key-ciphertext-base64> \
-  --storage-key.epoch <32-byte-hex-epoch> \
-  --storage-key.setup-context <setup-context-file> \
-  --storage-key.public-key-set <public-key-set-file> \
-  --storage-key.secret-share <secret-share-file>
+  --encryption-key.kms-ciphertext <encryption-key-ciphertext-base64>
 ```
 
 A signing key is required — the validator has no default key. Pass either a hex-encoded secret (`--signing-key.hex`) or
@@ -168,10 +123,8 @@ is the supported provisioning path.
 Each validator must run inside its trusted execution environment. If transaction proving uses a remote prover, that
 prover also receives the plaintext inputs and must run inside the same trusted boundary.
 
-The files contain canonical wire bytes. Every validator uses the same setup context and public key set, but uses its own
-secret share. The validator will not start if any storage key option is missing or the key material is invalid. After
-validation, it stores only the transaction ID and the threshold-encrypted record. It does not store the client
-ciphertext.
+After validation, the validator stores only the transaction ID and the threshold-encrypted record. It does not store the
+client ciphertext.
 
 Use `miden-validator start --help` for the complete current option list.
 
