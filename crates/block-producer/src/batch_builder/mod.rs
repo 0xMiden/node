@@ -269,6 +269,13 @@ struct BatchJob {
     mempool: SharedMempool,
 }
 
+/// The store data that a [`ProposedBatch`] requires.
+struct BatchInputs {
+    note_inclusion_proofs: BTreeMap<NoteId, NoteInclusionProof>,
+    partial_blockchain: PartialBlockchain,
+    reference_block_header: BlockHeader,
+}
+
 impl BatchJob {
     #[miden_instrument(
         target = COMPONENT,
@@ -496,13 +503,6 @@ impl BatchJob {
             .rollback_batch(batch_id);
         Ok(())
     }
-}
-
-/// The store data that a [`ProposedBatch`] requires.
-struct BatchInputs {
-    note_inclusion_proofs: BTreeMap<NoteId, NoteInclusionProof>,
-    partial_blockchain: PartialBlockchain,
-    reference_block_header: BlockHeader,
 }
 
 // TELEMETRY
