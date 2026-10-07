@@ -466,7 +466,7 @@ impl FullNodeCommand {
             node.role = "full",
             rpc.listen = self.runtime.rpc.listen.to_string(),
             data.directory = self.runtime.data_directory.as_path(),
-            sync.block_source.endpoint = format_endpoint(&self.sync.block_source_url),
+            sync.block_source.endpoint = format_endpoint(&self.sync.block_source_url()),
             sync.ready_threshold = self.sync.readiness_threshold,
             validator.endpoints = if self.validator_urls.is_empty() {
                 "disabled".to_owned()
@@ -484,7 +484,7 @@ impl FullNodeCommand {
 
 impl SyncOptions {
     fn source_rpc_client(&self) -> anyhow::Result<RpcClient> {
-        Ok(Builder::new(self.block_source_url.clone())
+        Ok(Builder::new(self.block_source_url())
             .with_tls()?
             .without_timeout()
             .without_metadata_version()

@@ -75,6 +75,26 @@ pub enum ValidatorError {
     EncryptionKeyAttestationFailed(String),
 }
 
+/// Maps a `Result`'s error into a `tonic::Status` carrying `context` and the error's full source
+/// chain, collapsing the `map_err(|err| Status::<code>(err.as_report_context(...)))` boilerplate
+/// every handler repeats.
+trait StatusResultExt<T> {
+    /// Maps the error to [`tonic::Status::internal`].
+    fn or_internal(self, context: &'static str) -> tonic::Result<T>;
+    /// Maps the error to [`tonic::Status::invalid_argument`].
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T>;
+}
+
+impl<T, E: miden_node_tracing::ErrorReport> StatusResultExt<T> for Result<T, E> {
+    fn or_internal(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::internal(err.as_report_context(context)))
+    }
+
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::invalid_argument(err.as_report_context(context)))
+    }
+}
+
 // VALIDATOR SERVICE
 // ================================================================================
 
@@ -121,7 +141,8 @@ pub(crate) struct ValidatorService {
     committed_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
-    /// In-memory count of signed blocks, incremented after each signed block.
+    /// In-memory count of signed blocks, incremented after each signed block that extends the
+    /// chain. A replacement of the tip block does not change it.
     signed_blocks_count: AtomicU64,
 }
 

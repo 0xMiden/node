@@ -16,6 +16,8 @@ use crate::{COMPONENT, LOG_TARGET, StorageKeyEpoch, StoredPrivateRecord};
 mod migrations;
 mod queries;
 
+pub(crate) use queries::{ListTransactionsParams, ListedTransaction};
+
 // VALIDATOR DATABASE
 // ================================================================================================
 
@@ -149,11 +151,17 @@ impl ValidatorDbReader {
             .await
     }
 
-    /// Loads all validated private transactions in insertion order.
-    pub(crate) async fn load_all_transactions(
+    /// Loads one page of committed transactions in chronological order i.e. `(block_num,
+    /// block_tx_index)`, with the chain tip and optional records from the same snapshot.
+    pub(crate) async fn list_validated_transactions(
         &self,
-    ) -> Result<Vec<StoredPrivateRecord>, DatabaseError> {
-        self.reader.read("load_all_transactions", queries::load_all_transactions).await
+        params: queries::ListTransactionsParams,
+    ) -> Result<queries::ListedTransactionsPage, DatabaseError> {
+        self.reader
+            .read("list_validated_transactions", move |tx| {
+                queries::list_validated_transactions(tx, &params)
+            })
+            .await
     }
 }
 
@@ -200,12 +208,14 @@ impl ValidatorDbWriter {
 
     /// Persists a block header and its configuration activation in one transaction.
     ///
-    /// Records an activation if the configuration differs from the preceding activation.
-    /// A replacement at the current tip must retain its active configuration.
+    /// See [`record_protocol_config_activation`] for how the activation is recorded.
     /// Callers must validate block order before this method runs.
     ///
-    /// If `protocol_config` is absent, the configuration must already be stored
-    /// otherwise an error is returned.
+    /// The write replaces the header row. If the height holds a block, the `ON DELETE CASCADE` on
+    /// `block_transactions` deletes the links of that block, and this method does not link the
+    /// transactions of the new block. Only tests use this method. Server code uses
+    /// [`Self::insert_signed_block`] and [`Self::replace_signed_block`].
+    #[cfg(test)]
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -216,34 +226,104 @@ impl ValidatorDbWriter {
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("upsert_block_header_with_protocol_config", move |tx| {
-                let commitment = header.protocol_config_commitment();
-                let config = if let Some(config) = protocol_config {
-                    let calculated = config.to_commitment();
-                    if calculated != commitment {
-                        return Err(invalid_protocol_config(format!(
-                            "protocol config commitment mismatch: expected {commitment}, got \
-                             {calculated}"
-                        )));
-                    }
-                    config
-                } else {
-                    queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
-                        invalid_protocol_config(format!(
-                            "protocol config {commitment} is not stored"
-                        ))
-                    })?
-                };
-
-                let block_number = header.block_num();
-                let previous = queries::load_protocol_config_commitment_before(tx, block_number)?;
-                if previous != Some(commitment) {
-                    queries::insert_protocol_config(tx, &config, block_number)?;
-                }
-
+                record_protocol_config_activation(tx, &header, protocol_config)?;
                 queries::upsert_block_header(tx, &header)
             })
             .await
     }
+
+    /// Persists a signed block's header, its configuration activation, and the links from the
+    /// block's transactions to their in-block positions, all in one database transaction so the
+    /// three stay consistent.
+    ///
+    /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
+    /// one.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn insert_signed_block(
+        &self,
+        header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("insert_signed_block", move |tx| {
+                persist_signed_block(tx, &header, protocol_config, &transactions)
+            })
+            .await
+    }
+
+    /// Replaces the block signed at `header`'s height, in one database transaction: deletes the
+    /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
+    /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
+    /// then persists the new header and links exactly as [`Self::insert_signed_block`] does.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
+    pub(crate) async fn replace_signed_block(
+        &self,
+        header: BlockHeader,
+        protocol_config: ProtocolConfig,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("replace_signed_block", move |tx| {
+                queries::delete_block(tx, header.block_num())?;
+                persist_signed_block(tx, &header, protocol_config, &transactions)
+            })
+            .await
+    }
+}
+
+/// Persists a signed block's header, records its configuration activation, and links its
+/// transactions, within the caller's database transaction: the shared tail of
+/// [`ValidatorDbWriter::insert_signed_block`] and [`ValidatorDbWriter::replace_signed_block`].
+fn persist_signed_block(
+    tx: &miden_node_db::sqlite::WriteTx<'_>,
+    header: &BlockHeader,
+    protocol_config: ProtocolConfig,
+    transactions: &[TransactionId],
+) -> Result<(), DatabaseError> {
+    record_protocol_config_activation(tx, header, Some(protocol_config))?;
+    queries::insert_block_header(tx, header)?;
+    queries::link_block_transactions(tx, header.block_num(), transactions)
+}
+
+/// Records the configuration activation for a block, within the caller's database transaction.
+///
+/// An activation is recorded only if the configuration differs from the preceding activation.
+/// A replacement at the current tip therefore retains its active configuration.
+///
+/// If `protocol_config` is absent, the configuration must already be stored, otherwise an error is
+/// returned.
+fn record_protocol_config_activation(
+    tx: &miden_node_db::sqlite::WriteTx<'_>,
+    header: &BlockHeader,
+    protocol_config: Option<ProtocolConfig>,
+) -> Result<(), DatabaseError> {
+    let commitment = header.protocol_config_commitment();
+    let config = if let Some(config) = protocol_config {
+        let calculated = config.to_commitment();
+        if calculated != commitment {
+            return Err(invalid_protocol_config(format!(
+                "protocol config commitment mismatch: expected {commitment}, got {calculated}"
+            )));
+        }
+        config
+    } else {
+        queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
+            invalid_protocol_config(format!("protocol config {commitment} is not stored"))
+        })?
+    };
+
+    let block_number = header.block_num();
+    let previous = queries::load_protocol_config_commitment_before(tx, block_number)?;
+    if previous != Some(commitment) {
+        queries::insert_protocol_config(tx, &config, block_number)?;
+    }
+
+    Ok(())
 }
 
 fn invalid_protocol_config(message: String) -> DatabaseError {
@@ -330,8 +410,7 @@ pub async fn bootstrap(
 ) -> Result<(), DatabaseError> {
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
 
-    db.upsert_block_header_with_protocol_config(genesis_header, Some(protocol_config))
-        .await
+    db.insert_signed_block(genesis_header, protocol_config, Vec::new()).await
 }
 
 /// Applies all pending migrations to an existing DB.
@@ -483,7 +562,7 @@ mod tests {
 
         let db = load(db_path).await.unwrap();
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(header.clone()));
-        assert_eq!(db.load_all_transactions().await.unwrap(), vec![record]);
+        assert_eq!(db.load_private_record(transaction_id).await.unwrap(), Some(record));
         let migrated = db.load_private_record(transaction_id).await.unwrap().unwrap();
         assert_eq!(migrated.context().format_version(), PrivateRecordFormatVersion::V1);
         migrated.verify_encrypted_record_key().unwrap();
@@ -764,28 +843,253 @@ mod tests {
         }
     }
 
+    /// Validated transactions that are not part of a signed block have no position in the committed
+    /// order, so the listing does not surface them at all.
     #[tokio::test]
-    async fn validated_private_transactions_are_loaded_in_insertion_order() {
+    async fn uncommitted_transactions_are_not_listed() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
         let transaction_ids = [
             TransactionId::from_raw(Word::from([9u32, 0, 0, 0])),
             TransactionId::from_raw(Word::from([1u32, 0, 0, 0])),
-            TransactionId::from_raw(Word::from([5u32, 0, 0, 0])),
         ];
-        let records = transaction_ids
-            .into_iter()
-            .zip([1u8, 2, 3])
-            .map(|(transaction_id, seed)| private_record(transaction_id, seed))
-            .collect::<Vec<_>>();
-
-        for record in records.clone() {
-            db.insert_validated_private_transaction(record).await.unwrap();
+        for (transaction_id, seed) in transaction_ids.into_iter().zip([1u8, 2]) {
+            db.insert_validated_private_transaction(private_record(transaction_id, seed))
+                .await
+                .unwrap();
         }
 
-        let loaded = db.load_all_transactions().await.unwrap();
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        };
+        assert!(db.list_validated_transactions(params).await.unwrap().transactions.is_empty());
+        // They remain reachable by transaction id.
+        assert!(db.load_private_record(transaction_ids[0]).await.unwrap().is_some());
+    }
 
-        assert_eq!(loaded, records);
+    /// A signed block links its transactions in block order; replacing the block at the same height
+    /// deletes the replaced block's links along with its header.
+    #[tokio::test]
+    async fn insert_signed_block_links_and_relinks_transactions() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_ids = (1u64..=3)
+            .map(|i| TransactionId::from_raw(Word::try_from([i, i, i, i]).unwrap()))
+            .collect::<Vec<_>>();
+        for (seed, transaction_id) in [1u8, 2, 3].into_iter().zip(&transaction_ids) {
+            db.insert_validated_private_transaction(private_record(*transaction_id, seed))
+                .await
+                .unwrap();
+        }
+
+        let header = BlockHeader::mock(7, None, None, &[]);
+        db.insert_signed_block(
+            header.clone(),
+            ProtocolConfig::mock(),
+            vec![transaction_ids[0], transaction_ids[1]],
+        )
+        .await
+        .unwrap();
+
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        };
+        let listed = db.list_validated_transactions(params).await.unwrap().transactions;
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+                .collect::<Vec<_>>(),
+            vec![
+                (transaction_ids[0], BlockNumber::from(7u32), 0),
+                (transaction_ids[1], BlockNumber::from(7u32), 1),
+            ],
+        );
+
+        // Replace the block at the same height with one that only includes the third transaction.
+        // The two transactions the replacement drops go back to being uncommitted, and stop being
+        // listed.
+        db.replace_signed_block(header, ProtocolConfig::mock(), vec![transaction_ids[2]])
+            .await
+            .unwrap();
+
+        let listed = db.list_validated_transactions(params).await.unwrap().transactions;
+        assert_eq!(
+            listed
+                .iter()
+                .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+                .collect::<Vec<_>>(),
+            vec![(transaction_ids[2], BlockNumber::from(7u32), 0)],
+        );
+    }
+
+    /// A listing keeps its records and chain tip consistent even when the tip is replaced and
+    /// advanced while its read snapshot is open.
+    #[tokio::test]
+    async fn listing_snapshot_survives_tip_replacement_and_advance() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = setup(directory.path().join("validator.sqlite3")).await.unwrap();
+        let original_id = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
+        let replacement_id = TransactionId::from_raw(Word::from([2u32, 0, 0, 0]));
+        let original_record = private_record(original_id, 1);
+        let replacement_record = private_record(replacement_id, 2);
+        for record in [&original_record, &replacement_record] {
+            db.insert_validated_private_transaction(record.clone()).await.unwrap();
+        }
+        let header = BlockHeader::mock(1, None, None, &[]);
+        db.insert_signed_block(header.clone(), ProtocolConfig::mock(), vec![original_id])
+            .await
+            .unwrap();
+
+        let snapshot = db.reader.reader.begin_read().await.unwrap();
+        let tip = snapshot.run("pin_listing_snapshot", queries::load_chain_tip).await.unwrap();
+        assert_eq!(tip.unwrap().block_num(), BlockNumber::from(1u32));
+
+        db.replace_signed_block(header, ProtocolConfig::mock(), vec![replacement_id])
+            .await
+            .unwrap();
+        db.insert_signed_block(
+            BlockHeader::mock(2, None, None, &[]),
+            ProtocolConfig::mock(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+        let params = ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: true,
+        };
+        let page = snapshot
+            .run("list_snapshot", move |tx| queries::list_validated_transactions(tx, &params))
+            .await
+            .unwrap();
+        assert_eq!(page.chain_tip, BlockNumber::from(1u32));
+        assert_eq!(page.transactions.len(), 1);
+        assert_eq!(page.transactions[0].transaction_id, original_id);
+        assert_eq!(page.transactions[0].block_num, page.chain_tip);
+        assert_eq!(page.transactions[0].record.as_ref(), Some(&original_record));
+        snapshot.close().await.unwrap();
+
+        let current = db.list_validated_transactions(params).await.unwrap();
+        assert_eq!(current.chain_tip, BlockNumber::from(2u32));
+        assert_eq!(current.transactions.len(), 1);
+        assert_eq!(current.transactions[0].transaction_id, replacement_id);
+        assert_eq!(current.transactions[0].block_num, BlockNumber::from(1u32));
+        assert_eq!(current.transactions[0].record.as_ref(), Some(&replacement_record));
+    }
+
+    /// A full sweep pages through committed transactions in committed order, honoring the row limit
+    /// exactly, with each page resuming one position past the last row of the previous one.
+    #[tokio::test]
+    async fn list_validated_transactions_pages_in_committed_order() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let transaction_ids = (1u64..=5)
+            .map(|i| TransactionId::from_raw(Word::try_from([i, i, i, i]).unwrap()))
+            .collect::<Vec<_>>();
+        for (seed, transaction_id) in (1u8..=5).zip(&transaction_ids) {
+            db.insert_validated_private_transaction(private_record(*transaction_id, seed))
+                .await
+                .unwrap();
+        }
+        // Blocks 1 and 2 include two transactions each; the fifth is never committed. The later
+        // insertion is committed in the earlier block, to prove the listing follows committed order
+        // rather than insertion order.
+        let block_1 = BlockHeader::mock(1, None, None, &[]);
+        let block_2 = BlockHeader::mock(2, None, None, &[]);
+        db.insert_signed_block(
+            block_1,
+            ProtocolConfig::mock(),
+            vec![transaction_ids[3], transaction_ids[0]],
+        )
+        .await
+        .unwrap();
+        db.insert_signed_block(
+            block_2,
+            ProtocolConfig::mock(),
+            vec![transaction_ids[1], transaction_ids[2]],
+        )
+        .await
+        .unwrap();
+        let expected_order =
+            [transaction_ids[3], transaction_ids[0], transaction_ids[1], transaction_ids[2]];
+
+        // Sweep with a limit of three: the first page ends mid-block, and the next page resumes one
+        // position past the last row returned.
+        let mut swept = Vec::new();
+        let mut start = None;
+        loop {
+            let params = ListTransactionsParams {
+                start,
+                block_to: None,
+                limit: 3,
+                include_records: false,
+            };
+            let page = db.list_validated_transactions(params).await.unwrap().transactions;
+            let Some(last) = page.last() else { break };
+            assert!(page.len() <= 3, "a page must honor the row limit");
+            start = Some((last.block_num, last.block_tx_index + 1));
+            swept.extend(page.into_iter().map(|item| item.transaction_id));
+        }
+        assert_eq!(swept, expected_order);
+
+        // Bounding by block number: `start` excludes block 1, `block_to` excludes block 2.
+        let from_block_2 = db
+            .list_validated_transactions(ListTransactionsParams {
+                start: Some((BlockNumber::from(2u32), 0)),
+                block_to: None,
+                limit: 10,
+                include_records: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            from_block_2
+                .transactions
+                .iter()
+                .map(|item| item.transaction_id)
+                .collect::<Vec<_>>(),
+            vec![transaction_ids[1], transaction_ids[2]],
+        );
+        let up_to_block_1 = db
+            .list_validated_transactions(ListTransactionsParams {
+                start: None,
+                block_to: Some(BlockNumber::from(1u32)),
+                limit: 10,
+                include_records: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            up_to_block_1
+                .transactions
+                .iter()
+                .map(|item| item.transaction_id)
+                .collect::<Vec<_>>(),
+            vec![transaction_ids[3], transaction_ids[0]],
+        );
+    }
+
+    /// Linking a transaction this validator never validated fails the foreign key on
+    /// `block_transactions`, so a signed block cannot silently reference unknown transactions.
+    #[tokio::test]
+    async fn insert_signed_block_rejects_unvalidated_transactions() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
+        let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
+        let header = BlockHeader::mock(1, None, None, &[]);
+        let unknown = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
+
+        let result = db.insert_signed_block(header, ProtocolConfig::mock(), vec![unknown]).await;
+        assert!(result.is_err(), "linking an unvalidated transaction must fail");
     }
 
     #[tokio::test]
@@ -833,7 +1137,8 @@ mod tests {
             .read("private_record_schema", |tx| {
                 tx.query(
                     "SELECT sql FROM sqlite_schema \
-                     WHERE tbl_name = 'validated_transactions' AND sql IS NOT NULL \
+                     WHERE tbl_name IN ('validated_transactions', 'block_transactions') \
+                       AND sql IS NOT NULL \
                      ORDER BY name",
                     &[],
                     |row| row.get::<String>(0),
@@ -847,5 +1152,6 @@ mod tests {
         assert!(schema.contains("id                    BLOB NOT NULL UNIQUE"));
         assert!(schema.contains("idx_validated_transactions_key_epoch"));
         assert!(schema.contains("idx_validated_transactions_setup_context_id"));
+        assert!(schema.contains("PRIMARY KEY (block_num, block_tx_index)"));
     }
 }

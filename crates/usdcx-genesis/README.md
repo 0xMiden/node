@@ -10,6 +10,10 @@ The config names the five role holders the `XReserveStablecoinBuilder` seeds —
 as the bootstrap `ADMIN`: put its id in `accounts.owner` and leave the operational roles empty; they are assigned once
 the network runs.
 
+The faucet uses the V2 token policy manager. The faucet issues the network's fee asset, so every fee payment transfers
+its asset. With V2, a pause stops mints and burns, but transfers and fee payments continue under the send and receive
+policies. Without this, a paused faucet blocks every transaction, including the one that unpauses it.
+
 ## Install
 
 ```sh
