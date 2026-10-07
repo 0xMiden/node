@@ -1,14 +1,8 @@
-use std::process::Command;
-
-use anyhow::{Context, Result, ensure};
-use diesel::connection::SimpleConnection;
-use diesel::query_dsl::methods::{OrderDsl, SelectDsl};
-use diesel::{Connection, ExpressionMethods, RunQueryDsl, SqliteConnection};
+use anyhow::Result;
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
 
 use super::*;
-use crate::db::models::queries::VALID_FOREVER;
-use crate::db::schema;
+use crate::db::queries::VALID_FOREVER;
 
 const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
     SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
@@ -35,17 +29,15 @@ fn migration_schema_hashes_are_stable() -> Result<()> {
 fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let database_filepath = temp_dir.path().join("store.sqlite3");
-    let database_path_str =
-        database_filepath.to_str().context("database path should be valid UTF-8")?;
 
     {
-        let mut conn = SqliteConnection::establish(database_path_str)?;
-        conn.batch_execute(include_str!("../001_initial.sql"))?;
-        conn.batch_execute(include_str!("../002_index_optimizations.sql"))?;
-        conn.batch_execute(include_str!("../003_block_headers_without_rowid.sql"))?;
+        let conn = rusqlite::Connection::open(&database_filepath)?;
+        conn.execute_batch(include_str!("../001_initial.sql"))?;
+        conn.execute_batch(include_str!("../002_index_optimizations.sql"))?;
+        conn.execute_batch(include_str!("../003_block_headers_without_rowid.sql"))?;
         // One account updated at block 5, a vault key updated at block 5, a vault key written once,
         // and a storage-map key updated at block 5.
-        conn.batch_execute(
+        conn.execute_batch(
             "INSERT INTO accounts \
                  (account_id, network_account_type, block_num, account_commitment, is_latest, \
                   created_at_block) \
@@ -63,33 +55,23 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
 
     migrate_database(&database_filepath)?;
 
-    let mut conn = SqliteConnection::establish(database_path_str)?;
+    let conn = rusqlite::Connection::open(&database_filepath)?;
 
-    let accounts: Vec<(i64, i64)> = OrderDsl::order(
-        SelectDsl::select(
-            schema::accounts::table,
-            (schema::accounts::block_num, schema::accounts::valid_until),
-        ),
-        schema::accounts::block_num.asc(),
-    )
-    .load(&mut conn)?;
+    let accounts = conn
+        .prepare("SELECT block_num, valid_until FROM accounts ORDER BY block_num ASC")?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
     pretty_assertions::assert_eq!(accounts, vec![(1, 5), (5, VALID_FOREVER)]);
 
-    let vault: Vec<(Vec<u8>, i64, i64)> = OrderDsl::order(
-        SelectDsl::select(
-            schema::account_vault_assets::table,
-            (
-                schema::account_vault_assets::vault_key,
-                schema::account_vault_assets::block_num,
-                schema::account_vault_assets::valid_until,
-            ),
-        ),
-        (
-            schema::account_vault_assets::vault_key.asc(),
-            schema::account_vault_assets::block_num.asc(),
-        ),
-    )
-    .load(&mut conn)?;
+    let vault = conn
+        .prepare(
+            "SELECT vault_key, block_num, valid_until FROM account_vault_assets \
+             ORDER BY vault_key ASC, block_num ASC",
+        )?
+        .query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
     pretty_assertions::assert_eq!(
         vault,
         vec![
@@ -99,47 +81,13 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
         ]
     );
 
-    let storage: Vec<(i64, i64)> = OrderDsl::order(
-        SelectDsl::select(
-            schema::account_storage_map_values::table,
-            (
-                schema::account_storage_map_values::block_num,
-                schema::account_storage_map_values::valid_until,
-            ),
-        ),
-        schema::account_storage_map_values::block_num.asc(),
-    )
-    .load(&mut conn)?;
+    let storage = conn
+        .prepare(
+            "SELECT block_num, valid_until FROM account_storage_map_values ORDER BY block_num ASC",
+        )?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
     pretty_assertions::assert_eq!(storage, vec![(1, 5), (5, VALID_FOREVER)]);
 
-    Ok(())
-}
-
-#[test]
-#[ignore = "requires diesel CLI; CI runs this in the diesel-schema job"]
-fn diesel_schema_is_in_sync_with_migrations() -> Result<()> {
-    let temp_dir = tempfile::tempdir()?;
-    let database_filepath = temp_dir.path().join("store.sqlite3");
-    bootstrap_database(&database_filepath)?;
-
-    let output = Command::new("diesel")
-        .arg("print-schema")
-        .arg("--database-url")
-        .arg(&database_filepath)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .context(
-            "failed to run diesel CLI; install it with \
-             `cargo install diesel_cli --no-default-features --features sqlite`",
-        )?;
-
-    ensure!(
-        output.status.success(),
-        "diesel print-schema failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let generated = String::from_utf8(output.stdout).context("diesel CLI output is not UTF-8")?;
-    assert_eq!(generated, include_str!("../../schema.rs"));
     Ok(())
 }

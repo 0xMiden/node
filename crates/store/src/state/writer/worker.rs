@@ -636,7 +636,6 @@ mod tests {
     use std::sync::Arc;
 
     use assert_matches::assert_matches;
-    use diesel::{ExpressionMethods, QueryDsl, RunQueryDsl};
     use miden_node_utils::clap::StorageOptions;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_node_utils::shutdown::CancellationToken;
@@ -655,7 +654,6 @@ mod tests {
     use miden_protocol::transaction::OrderedTransactionHeaders;
     use tempfile::TempDir;
 
-    use crate::db::schema::protocol_configs;
     use crate::errors::{ApplyBlockError, DatabaseError};
     use crate::genesis::GenesisState;
     use crate::state::{BlockWriter, State, WriterTask};
@@ -776,12 +774,13 @@ mod tests {
         }
         let activations: Vec<i64> = state
             .db
-            .query("activation history", |conn| {
-                protocol_configs::table
-                    .select(protocol_configs::block_number)
-                    .order(protocol_configs::block_number.asc())
-                    .load(conn)
-                    .map_err(DatabaseError::from)
+            .writer()
+            .write::<_, DatabaseError, _>("activation history", |tx| {
+                Ok(tx.query(
+                    "SELECT block_number FROM protocol_configs ORDER BY block_number ASC",
+                    &[],
+                    |row| row.get::<i64>(0),
+                )?)
             })
             .await
             .unwrap();
