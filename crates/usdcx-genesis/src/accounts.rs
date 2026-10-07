@@ -18,7 +18,11 @@ use miden_protocol::{Felt, Word, ZERO};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
-use miden_usdcx::account::xreserve::{XReserveStablecoinBuilder, XReserveStablecoinBuilderError};
+use miden_usdcx::account::xreserve::{
+    PolicyManagerVersion,
+    XReserveStablecoinBuilder,
+    XReserveStablecoinBuilderError,
+};
 use miden_usdcx::xreserve::encoding::DepositNonce;
 
 use crate::config::GenesisToolConfig;
@@ -49,6 +53,10 @@ fn placeholder_fee_faucet_id() -> AccountId {
 }
 
 /// Builds the genesis faucet from the config, with the supply cap at [`AssetAmount::MAX`].
+///
+/// The faucet uses the V2 token policy manager. The faucet issues the network's fee asset, so its
+/// send callback runs on every fee payment. The V1 callbacks fail while the faucet is paused, which
+/// blocks every transaction, including the one that unpauses the faucet.
 pub fn build_faucet(config: &GenesisToolConfig) -> Result<Account> {
     let faucet_config = &config.faucet;
     let fee_parameters = FeeParameters::new(faucet_config.verification_base_fee);
@@ -69,6 +77,7 @@ pub fn build_faucet(config: &GenesisToolConfig) -> Result<Account> {
         .domain(faucet_config.domain)
         .attesters(faucet_config.attesters.clone())
         .maybe_min_burn_amount(min_burn_amount)
+        .policy_manager(PolicyManagerVersion::V2)
         .build()
         .context("composing the xUSDC faucet builder")?
         .build_genesis_account(faucet_config.seed)
