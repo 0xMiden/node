@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use clap::Parser;
 use iroh::{EndpointId, SecretKey as IrohSecretKey};
 use miden_node_utils::shutdown::CancellationToken;
@@ -249,9 +250,7 @@ async fn direct_acceptors_require_a_fixed_listening_port(
 #[case::dialer(true)]
 #[case::acceptor(false)]
 #[tokio::test]
-async fn cancellation_closes_endpoint_while_waiting_for_a_peer(
-    #[case] local_is_dialer: bool,
-) -> TestResult {
+async fn cancellation_releases_listening_socket(#[case] local_is_dialer: bool) -> TestResult {
     let root = tempfile::tempdir()?;
     let output_file = root.path().join("operator-key.bundle");
     let mut endpoints =
@@ -276,7 +275,7 @@ async fn cancellation_closes_endpoint_while_waiting_for_a_peer(
 
     let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(command.handle(shutdown.clone()), async {
-            // Cancel only after the ceremony owns its listening socket.
+            // Cancel as soon as the socket is bound, even if endpoint setup is still in progress.
             loop {
                 match UdpSocket::bind(address) {
                     Ok(socket) => drop(socket),
@@ -294,7 +293,21 @@ async fn cancellation_closes_endpoint_while_waiting_for_a_peer(
         result.expect_err("cancellation must abort the ceremony").to_string(),
         "DKG ceremony cancelled"
     );
-    let _released_socket = UdpSocket::bind(address)?;
+    // Iroh releases its last socket references in background tasks. Let those tasks finish before
+    // checking that cancellation released the port.
+    let _released_socket = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match UdpSocket::bind(address) {
+                Ok(socket) => break Ok(socket),
+                Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                },
+                Err(error) => break Err(error),
+            }
+        }
+    })
+    .await
+    .context("cancelled ceremony did not release its listening socket")??;
     assert!(!output_file.exists());
     Ok(())
 }
