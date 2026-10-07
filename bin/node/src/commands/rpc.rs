@@ -2,7 +2,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use anyhow::Context;
+use clap::ArgGroup;
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::genesis::OfficialNetwork;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
@@ -60,6 +62,12 @@ pub struct GrpcOptions {
 }
 
 #[derive(clap::Args, Clone, Debug)]
+#[command(group(
+    ArgGroup::new("block_sync_source")
+        .required(true)
+        .multiple(false)
+        .args(["block_source_url", "network"])
+))]
 pub struct SyncOptions {
     /// Upstream block sync source.
     ///
@@ -69,7 +77,11 @@ pub struct SyncOptions {
         env = "MIDEN_NODE_SYNC_BLOCK_SOURCE_URL",
         value_name = "URL"
     )]
-    pub block_source_url: Url,
+    pub block_source_url: Option<Url>,
+
+    /// Sync from an official Miden network's public RPC endpoint.
+    #[arg(long, value_enum, value_name = "NETWORK")]
+    pub network: Option<OfficialNetwork>,
 
     // Number of blocks that this RPC server must be within that of the sync source to be considered
     // ready.
@@ -80,4 +92,14 @@ pub struct SyncOptions {
         default_value_t = 10
     )]
     pub readiness_threshold: u32,
+}
+
+impl SyncOptions {
+    pub fn block_source_url(&self) -> Url {
+        match (&self.block_source_url, self.network) {
+            (Some(url), None) => url.clone(),
+            (None, Some(network)) => network.rpc_url(),
+            _ => unreachable!("clap requires exactly one block sync source"),
+        }
+    }
 }
