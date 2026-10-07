@@ -24,8 +24,8 @@ cannot reach a validator or its upstream source can no longer serve submitting c
 
 ## Account Registration
 
-Full nodes forward `RegisterAccount` requests to their configured upstream RPC source. The sequencer stores the
-registration. Full nodes do not maintain a local allowlist. This also applies when pre-authenticated transaction
+Full nodes forward `RegisterAccount`, `IsAccountAllowed`, and `IsInvitationCodeValid` requests to their configured
+upstream RPC source. The sequencer stores the registration. Full nodes do not maintain a local allowlist. This also applies when pre-authenticated transaction
 submission is configured.
 
 ## Transaction Submission
