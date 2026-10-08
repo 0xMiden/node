@@ -52,7 +52,10 @@ impl AccountAdmission {
         self.allowlist.contains_account(account_id).await
     }
 
-    /// Returns true if enforcement is disabled or the invitation code exists and is unused.
+    /// Returns true if the invitation code can be used to register an account. The code must be
+    /// registered in the invitation registry and unused.
+    ///
+    /// Always returns true when account allowlist enforcement is disabled.
     pub(crate) async fn is_invitation_code_valid(
         &self,
         invitation_code: InvitationCode,

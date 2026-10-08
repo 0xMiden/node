@@ -56,9 +56,12 @@ invitation codes over a network. Do not log invitation codes. Full nodes forward
 `IsAccountAllowed` takes an account ID in `account_id` and returns `true` if allowlist enforcement is disabled or the
 account is allowlisted. Full nodes forward this query to the sequencer.
 
-`IsInvitationCodeValid` takes an invitation code in `invitation_code` and returns `true` if allowlist enforcement is
-disabled or the code exists and no account has registered with it. It does not consume the code. With enforcement
-enabled, an empty code is rejected with `INVALID_ARGUMENT`. Full nodes forward this query to the sequencer.
+`IsInvitationCodeValid` returns `true` if the invitation code can be used to register an account. The code must be
+registered in the invitation registry and unused. Send the code in `invitation_code`. This check does not consume the
+code.
+
+When account allowlist enforcement is disabled, this method always returns `true`. With enforcement enabled, an empty
+code is rejected with `INVALID_ARGUMENT`. Full nodes forward this query to the sequencer.
 
 ## Transaction Submission
 
