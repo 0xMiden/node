@@ -49,15 +49,15 @@ The RPC server supports:
 
 ## Endpoint Groups
 
-| Group                  | Methods                                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Status and limits      | `Status`, `GetLimits`                                                                                           |
-| State queries          | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`               |
-| Transaction submission | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                          |
-| Account registration   | `RegisterAccount`                                                                                               |
-| State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncChainMmr` |
-| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                        |
-| Network note debugging | `GetNetworkNoteStatus`                                                                                          |
+| Group                  | Methods                                                                                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status and limits      | `Status`, `GetLimits`                                                                                                                                                      |
+| State queries          | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`                                                                          |
+| Transaction submission | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                                                                                     |
+| Account registration   | `RegisterAccount`                                                                                                                                                          |
+| State synchronization  | `SyncChainMmr`, `SyncAccountCommitments`, `SyncNotesV2`, `SyncNullifiersV2`, `SyncAccountVaultV2`, `SyncAccountStorageMapsV2`, `GetTransactionsById`, `SyncTransactionsV2` |
+| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                                                                                   |
+| Network note debugging | `GetNetworkNoteStatus`                                                                                                                                                     |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
 [Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.

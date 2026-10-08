@@ -104,3 +104,41 @@ fn descriptors_embed_their_dependencies() {
         }
     }
 }
+
+/// Legacy synchronization methods must remain supported unary methods alongside their streams.
+#[test]
+fn legacy_sync_methods_remain_non_deprecated_alongside_streams() {
+    let descriptor = miden_node_proto_build::rpc_api_descriptor();
+    let service = descriptor
+        .file
+        .iter()
+        .flat_map(|file| &file.service)
+        .find(|service| service.name() == "NodeService")
+        .unwrap();
+    for (old, new) in [
+        ("SyncNotes", "SyncNotesV2"),
+        ("SyncAccountVault", "SyncAccountVaultV2"),
+        ("SyncAccountStorageMaps", "SyncAccountStorageMapsV2"),
+        ("SyncTransactions", "SyncTransactionsV2"),
+        ("SyncNullifiers", "SyncNullifiersV2"),
+    ] {
+        let legacy = service.method.iter().find(|method| method.name() == old).unwrap();
+        assert!(
+            !legacy
+                .options
+                .as_ref()
+                .is_some_and(|options| options.deprecated.unwrap_or_default())
+        );
+        assert!(!legacy.client_streaming());
+        assert!(!legacy.server_streaming());
+        let replacement = service.method.iter().find(|method| method.name() == new).unwrap();
+        assert!(replacement.server_streaming());
+        assert!(!replacement.client_streaming());
+        assert!(
+            !replacement
+                .options
+                .as_ref()
+                .is_some_and(|options| options.deprecated.unwrap_or_default())
+        );
+    }
+}

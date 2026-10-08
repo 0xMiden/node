@@ -92,7 +92,7 @@ impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService 
 // HELPERS
 // ================================================================================================
 
-fn transaction_record_to_proto(
+pub(super) fn transaction_record_to_proto(
     record: TransactionRecord,
 ) -> proto::miden::node::v1::TransactionRecord {
     let output_note_proofs = record

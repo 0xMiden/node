@@ -133,3 +133,10 @@ impl QueryParamLimiter for QueryParamStorageMapSlotLimit {
     const PARAM_NAME: &str = "storage_maps";
     const LIMIT: usize = miden_protocol::account::AccountStorage::MAX_NUM_STORAGE_SLOTS;
 }
+
+/// Maximum transaction IDs in a target-pinned lookup, bounding SQL IN clauses and server work.
+pub struct QueryParamTransactionIdLimit;
+impl QueryParamLimiter for QueryParamTransactionIdLimit {
+    const PARAM_NAME: &str = "transaction_id";
+    const LIMIT: usize = GENERAL_REQUEST_LIMIT;
+}

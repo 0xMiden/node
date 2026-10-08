@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamTransactionIdLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -89,20 +90,30 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod get_transactions_by_id;
 mod is_account_allowed;
 mod register_account;
 mod status;
+mod stream_settings;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription;
+mod sync_account_commitments;
 mod sync_account_storage_maps;
+mod sync_account_storage_maps_v2;
 mod sync_account_vault;
+mod sync_account_vault_v2;
 mod sync_chain_mmr;
 mod sync_notes;
+mod sync_notes_v2;
 mod sync_nullifiers;
+mod sync_nullifiers_v2;
+mod sync_stream;
 mod sync_transactions;
+mod sync_transactions_v2;
+mod transaction_stream;
 
 // ================================================================================================
 
@@ -277,6 +288,9 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
+        DatabaseError::RangeBeyondTip(_) | DatabaseError::BlockPruned { .. } => {
+            Status::invalid_argument(message)
+        },
         _ => internal_error(message),
     }
 }
@@ -326,18 +340,36 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
+    use QueryParamTransactionIdLimit as TransactionId;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
+            (
+                "GetTransactionsById".into(),
+                endpoint_limits(&[(TransactionId::PARAM_NAME, TransactionId::LIMIT)]),
+            ),
+            (
+                "SyncNullifiersV2".into(),
+                endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),
+            ),
             (
                 "SyncNullifiers".into(),
                 endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),
             ),
             (
+                "SyncTransactionsV2".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
+            ),
+            (
                 "SyncTransactions".into(),
                 endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
             ),
+            (
+                "SyncAccountCommitments".into(),
+                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
+            ),
             ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
+            ("SyncNotesV2".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
             ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
             (
                 "GetAccount".into(),
@@ -353,6 +385,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
 #[cfg(test)]
 mod tests {
     use miden_node_proto::generated::server::miden_node_v1_node_service::GetLimits;
+    use miden_protocol::block::BlockNumber;
 
     use super::*;
 
@@ -402,5 +435,17 @@ mod tests {
         let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
         assert_eq!(status.code(), tonic::Code::Internal);
         assert_eq!(status.details(), &[0]);
+    }
+
+    /// Unavailable retained history must remain a client target failure instead of an internal
+    /// failure.
+    #[test]
+    fn block_pruned_database_error_is_invalid_argument() {
+        let status = database_error_to_status(&DatabaseError::BlockPruned {
+            block_num: BlockNumber::from(49),
+            oldest_available: BlockNumber::from(50),
+        });
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 }

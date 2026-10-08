@@ -4,7 +4,7 @@ use miden_node_db::migration::{SchemaHash, SchemaHashes};
 use super::*;
 use crate::db::queries::VALID_FOREVER;
 
-const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
+const EXPECTED_SCHEMA_HASHES: [SchemaHash; 8] = [
     SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
     SchemaHash::from_hex("7c783947d0bb2c9745d28f4bdcf329f84ad970c36aa07ea85441e62718d8bbbb"),
     SchemaHash::from_hex("e026a70464e897ae9a217f45c80d72341b1bfb757200e57e41145348473a9961"),
@@ -12,6 +12,7 @@ const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
     SchemaHash::from_hex("34bd293251a2647715dd91fa245bcd98d635e8070871b4f8335b3a3db364fc1e"),
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
+    SchemaHash::from_hex("9713d28fcaa02c14c26f8c16e3162153de555f7a833c4ed79c1a225fde27ed26"),
 ];
 
 #[test]

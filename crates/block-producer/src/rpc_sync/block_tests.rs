@@ -355,3 +355,193 @@ impl miden_node_v1_node_service::ProofSubscription for Upstream {
         Err(tonic::Status::unimplemented("unused test endpoint"))
     }
 }
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncAccountVaultV2 for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncAccountVaultV2Response;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncAccountVaultV2Request,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountVaultV2Response> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncAccountStorageMapsV2 for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncAccountStorageMapsV2Response;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncAccountStorageMapsV2Request,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountStorageMapsV2Response> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncNotesV2 for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncNotesV2Response;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(_request: proto::miden::node::v1::SyncNotesV2Request) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::SyncNotesV2Response> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncAccountCommitments for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncAccountCommitmentsResponse;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncAccountCommitmentsRequest,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncAccountCommitmentsResponse> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::GetTransactionsById for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::GetTransactionsByIdResponse;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::GetTransactionsByIdRequest,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::GetTransactionsByIdResponse> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncTransactionsV2 for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncTransactionsV2Response;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncTransactionsV2Request,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::SyncTransactionsV2Response> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}
+
+#[tonic::async_trait]
+impl miden_node_v1_node_service::SyncNullifiersV2 for Upstream {
+    type Input = ();
+    type Item = proto::miden::node::v1::SyncNullifiersV2Response;
+    type ItemStream = tokio_stream::Empty<tonic::Result<Self::Item>>;
+
+    fn decode(
+        _request: proto::miden::node::v1::SyncNullifiersV2Request,
+    ) -> tonic::Result<Self::Input> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+
+    fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::SyncNullifiersV2Response> {
+        Ok(item)
+    }
+
+    async fn handle(
+        &self,
+        (): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        Err(tonic::Status::unimplemented("unused test endpoint"))
+    }
+}

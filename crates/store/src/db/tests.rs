@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -167,6 +168,19 @@ fn upsert_accounts(
             &precomputed_public_states,
             &new_account_ids,
         )
+    })
+}
+
+/// Loads one vault page from the test database to inspect target squashing and continuation.
+fn select_account_vault_updates_v2(
+    db: &TestDb,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+    cursor: Option<super::AccountVaultCursor>,
+    page_size: NonZeroUsize,
+) -> Result<super::AccountVaultValuesPage> {
+    db.read(move |tx| {
+        queries::select_account_vault_updates_v2(tx, account_id, block_range, cursor, page_size)
     })
 }
 
@@ -723,6 +737,171 @@ fn sync_account_vault_basic_validation() {
         values.iter().find(|v| v.vault_key == vault_key_1 && v.block_num == block_to);
     assert!(vault_key_1_asset.is_some(), "should find updated vault asset");
     assert_eq!(vault_key_1_asset.unwrap().asset, Some(updated_fungible_asset_1));
+}
+
+/// Vault history must select one target value per changed key and preserve removal markers.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let blocks: Vec<BlockNumber> = (1..=6).map(BlockNumber::from).collect();
+
+    for block in &blocks {
+        create_block(db, *block);
+        upsert_mock_account(db, account_id, 0, *block).unwrap();
+    }
+
+    let faucet_a = account_id;
+    let faucet_b = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_c = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    let faucet_d = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
+
+    let asset_a_1 = Asset::from(FungibleAsset::new(faucet_a, 100).unwrap());
+    let asset_a_3 = Asset::from(FungibleAsset::new(faucet_a, 300).unwrap());
+    let asset_a_6 = Asset::from(FungibleAsset::new(faucet_a, 600).unwrap());
+    let asset_b_2 = Asset::from(FungibleAsset::new(faucet_b, 200).unwrap());
+    let asset_c_1 = Asset::from(FungibleAsset::new(faucet_c, 100).unwrap());
+    let asset_d_4 = Asset::from(FungibleAsset::new(faucet_d, 400).unwrap());
+
+    for (block, asset) in [
+        (blocks[0], asset_a_1),
+        (blocks[0], asset_c_1),
+        (blocks[1], asset_b_2),
+        (blocks[2], asset_a_3),
+        (blocks[3], asset_d_4),
+    ] {
+        insert_vault_asset(db, account_id, block, asset.id(), Some(asset)).unwrap();
+    }
+
+    // Remove D at the inclusive target and update A after the target. The V2 query must return D's
+    // tombstone and A's block-3 value, whose validity interval is finite but covers block 5.
+    insert_vault_asset(db, account_id, blocks[4], asset_d_4.id(), None).unwrap();
+    insert_vault_asset(db, account_id, blocks[5], asset_a_6.id(), Some(asset_a_6)).unwrap();
+
+    let range = blocks[1]..=blocks[4];
+    let page_size = NonZeroUsize::new(1).unwrap();
+    let mut cursor = None;
+    let mut values = Vec::new();
+    loop {
+        let page =
+            select_account_vault_updates_v2(db, account_id, range.clone(), cursor, page_size)
+                .unwrap();
+        values.extend(page.values);
+        let Some(next_cursor) = page.next_cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+
+    assert_eq!(values.len(), 3);
+    assert_eq!(values[0].block_num, blocks[1]);
+    assert_eq!(values[0].vault_key, asset_b_2.id());
+    assert_eq!(values[0].asset, Some(asset_b_2));
+    assert_eq!(values[1].block_num, blocks[2]);
+    assert_eq!(values[1].vault_key, asset_a_3.id());
+    assert_eq!(values[1].asset, Some(asset_a_3));
+    assert_eq!(values[2].block_num, blocks[4]);
+    assert_eq!(values[2].vault_key, asset_d_4.id());
+    assert_eq!(values[2].asset, None);
+
+    // C changed before the inclusive range and A's block-1/block-6 values lie outside it.
+    assert!(values.iter().all(|value| value.vault_key != asset_c_1.id()));
+
+    let invalid =
+        select_account_vault_updates_v2(db, account_id, blocks[4]..=blocks[1], None, page_size);
+    assert_matches!(invalid, Err(DatabaseError::InvalidBlockRange { .. }));
+
+    let private_account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let private = select_account_vault_updates_v2(db, private_account, range, None, page_size);
+    assert_matches!(private, Err(DatabaseError::AccountNotPublic(id)) if id == private_account);
+}
+
+/// Pruning between page reads must fail the attempt instead of returning a partial vault update.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let target = BlockNumber::from(5);
+
+    for block in 1..=target.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_mock_account(db, account_id, 0, block).unwrap();
+    }
+
+    let asset_a_at_target = Asset::from(FungibleAsset::new(account_id, 300).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
+    insert_vault_asset(db, account_id, BlockNumber::from(2), asset_b.id(), Some(asset_b)).unwrap();
+    insert_vault_asset(
+        db,
+        account_id,
+        BlockNumber::from(3),
+        asset_a_at_target.id(),
+        Some(asset_a_at_target),
+    )
+    .unwrap();
+
+    let page_size = NonZeroUsize::new(1).unwrap();
+    let first_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        None,
+        page_size,
+    )
+    .unwrap();
+    assert_eq!(first_page.values.len(), 1);
+    let cursor = first_page.next_cursor.expect("two updates require another page");
+
+    // Supersede A immediately after the target, then advance far enough that the target falls one
+    // block below the pruning horizon. Pruning removes A's value at the target, so the next page
+    // must fail instead of silently omitting it.
+    let oldest_available = target + 1;
+    let chain_tip = oldest_available + HISTORICAL_BLOCK_RETENTION;
+    for block in oldest_available.as_u32()..=chain_tip.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_mock_account(db, account_id, 0, block).unwrap();
+    }
+    let asset_a_after_target = Asset::from(FungibleAsset::new(account_id, 600).unwrap());
+    insert_vault_asset(
+        db,
+        account_id,
+        oldest_available,
+        asset_a_after_target.id(),
+        Some(asset_a_after_target),
+    )
+    .unwrap();
+    prune_history(db, chain_tip).unwrap();
+
+    let next_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        Some(cursor),
+        page_size,
+    );
+    assert_matches!(
+        next_page,
+        Err(DatabaseError::BlockPruned {
+            block_num,
+            oldest_available: cutoff,
+        }) if block_num == target && cutoff == oldest_available
+    );
+
+    // The cutoff block itself remains queryable because pruning keeps rows whose validity extends
+    // beyond it.
+    let boundary = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=oldest_available,
+        None,
+        page_size,
+    );
+    assert!(boundary.is_ok(), "the pruning cutoff should remain queryable");
 }
 
 #[test]
@@ -4074,12 +4253,36 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     let expected = TransactionRecord {
         block_num,
-        header: tx,
+        header: tx.clone(),
         output_note_proofs: vec![],
         consumed_note_refs: vec![],
     };
 
     assert_eq!(*record, expected);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::select_transactions_by_id(
+                tx_db,
+                &[tx.id()],
+                block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, vec![expected]);
+    let history = db
+        .read(move |tx_db| {
+            queries::select_transactions_records_page(
+                tx_db,
+                &[bob],
+                BlockNumber::GENESIS..=block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(history.records, lookup.records);
 }
 
 /// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
@@ -4130,6 +4333,30 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
     let record = retrieved.1.first().expect("entry should exist");
 
     assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::select_transactions_by_id(
+                tx_db,
+                &[tx.id()],
+                block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, retrieved.1);
+    let history = db
+        .read(move |tx_db| {
+            queries::select_transactions_records_page(
+                tx_db,
+                &[bob],
+                BlockNumber::GENESIS..=block_num,
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(history.records, retrieved.1);
 }
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
@@ -4460,4 +4687,491 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     // Verify map_a block 1 is no longer accessible
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
+}
+
+/// Repeated map changes must collapse to target values without losing keys at same-block page
+/// boundaries.
+#[test]
+fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for n in 1..=6 {
+        create_block(db, n.into());
+        upsert_mock_account(db, account, 0, n.into()).unwrap();
+    }
+    let slot = StorageSlotName::mock(1);
+    let other_slot = StorageSlotName::mock(2);
+    let key = StorageMapKey::new(num_to_word(1));
+    let deleted = StorageMapKey::new(num_to_word(2));
+    let unchanged = StorageMapKey::new(num_to_word(3));
+    for (block, name, map_key, value) in [
+        (1, slot.clone(), key, 10),
+        (1, slot.clone(), unchanged, 30),
+        (2, slot.clone(), deleted, 20),
+        (3, slot.clone(), key, 40),
+        (3, other_slot.clone(), key, 50),
+        (5, slot.clone(), deleted, 0),
+        (6, slot.clone(), key, 60),
+    ] {
+        insert_storage_map_value(db, account, block.into(), name, map_key, num_to_word(value))
+            .unwrap();
+    }
+    let mut cursor = None;
+    let mut values = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_account_storage_map_updates_v2(
+                    tx,
+                    account,
+                    2.into()..=5.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        values.extend(page.values);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(values.len(), 3);
+    assert!(
+        values
+            .iter()
+            .any(|v| v.slot_name == slot && v.key == key && v.value == num_to_word(40))
+    );
+    assert!(
+        values
+            .iter()
+            .any(|v| v.slot_name == other_slot && v.key == key && v.value == num_to_word(50))
+    );
+    assert!(values.iter().any(|v| v.key == deleted && v.value == Word::empty()));
+    assert!(values.iter().all(|v| v.key != unchanged));
+}
+
+/// Storage-map continuation must recheck target retention after history pruning.
+#[test]
+fn storage_map_stream_rechecks_retention_between_pages() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    create_block(db, 5.into());
+    upsert_mock_account(db, account, 0, 5.into()).unwrap();
+    for key in 1..=2 {
+        insert_storage_map_value(
+            db,
+            account,
+            5.into(),
+            StorageSlotName::mock(1),
+            StorageMapKey::new(num_to_word(key)),
+            num_to_word(key),
+        )
+        .unwrap();
+    }
+    let first = db
+        .read(move |tx| {
+            queries::select_account_storage_map_updates_v2(
+                tx,
+                account,
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    let cursor = first.next_cursor.expect("must continue within block five");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    let at_cutoff = cursor.clone();
+    assert!(
+        db.read(move |tx| queries::select_account_storage_map_updates_v2(
+            tx,
+            account,
+            0.into()..=5.into(),
+            Some(at_cutoff),
+            NonZeroUsize::MIN
+        ))
+        .is_ok()
+    );
+    create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
+    prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
+    assert_matches!(
+        db.read(move |tx| queries::select_account_storage_map_updates_v2(
+            tx,
+            account,
+            0.into()..=5.into(),
+            Some(cursor),
+            NonZeroUsize::MIN
+        )),
+        Err(DatabaseError::BlockPruned { .. })
+    );
+}
+
+/// Note-page cursors must retain exact tag matches when one block spans several pages.
+#[test]
+fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
+    let db = &TestDb::new();
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let mut expected = vec![];
+    for block in 1_u32..=3 {
+        create_block(db, block.into());
+        for index in 0..5 {
+            let note = Note::mock_noop(Word::from([block, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            let metadata = NoteMetadata::new(
+                PartialNoteMetadata::new(sender, kind)
+                    .with_tag((if block == 2 { 99 } else { 42 }).into()),
+                note.attachments(),
+            );
+            let record = NoteRecord {
+                block_num: block.into(),
+                note_index: BlockNoteIndex::new(0, index as usize).unwrap(),
+                note_id: note.id().as_word(),
+                metadata,
+                details: None,
+                attachments: note.attachments().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            };
+            insert_notes(db, &[(record.clone(), None)]).unwrap();
+            if block != 2 {
+                expected.push((record.block_num, record.note_index, note.id(), kind));
+            }
+        }
+    }
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_note_sync_page(
+                    tx,
+                    &[42, 42],
+                    0.into()..=3.into(),
+                    cursor,
+                    NonZeroUsize::new(2).unwrap(),
+                )
+            })
+            .unwrap();
+        actual.extend(
+            page.notes
+                .into_iter()
+                .map(|n| (n.block_num, n.note_index, n.note_id, n.metadata.note_type())),
+        );
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(actual, expected);
+    for tags in [vec![], vec![100]] {
+        assert!(
+            db.read(move |tx| queries::select_note_sync_page(
+                tx,
+                &tags,
+                0.into()..=3.into(),
+                None,
+                NonZeroUsize::MIN
+            ))
+            .unwrap()
+            .notes
+            .is_empty()
+        );
+    }
+    let before_second_block = db
+        .read(|tx| {
+            queries::select_note_sync_page(
+                tx,
+                &[42],
+                0.into()..=1.into(),
+                None,
+                NonZeroUsize::new(10).unwrap(),
+            )
+        })
+        .unwrap();
+    assert_eq!(before_second_block.notes.len(), 5);
+}
+
+/// Account discovery must select the version valid at the target and exclude later changes.
+#[test]
+fn account_commitment_stream_selects_changed_accounts_at_target() {
+    let db = &TestDb::new();
+    let public = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let private = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let unchanged = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let unknown = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    for height in 1..=6 {
+        create_block(db, height.into());
+    }
+    for (id, height) in
+        [(public, 1), (unchanged, 1), (public, 2), (private, 3), (public, 4), (public, 6)]
+    {
+        upsert_mock_account(db, id, u64::from(height), height.into()).unwrap();
+    }
+    let ids = vec![public, private, unchanged, unknown, public];
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let requested = ids.clone();
+        let page = db
+            .read(move |tx| {
+                queries::select_account_commitment_changes(
+                    tx,
+                    &requested,
+                    2.into()..=5.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.changes);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let mut expected = vec![(public, 4.into()), (private, 3.into())];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(actual, expected);
+    let absent = db
+        .read(move |tx| {
+            queries::select_account_commitment_changes(
+                tx,
+                &[unknown],
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert!(absent.changes.is_empty());
+    let first = db
+        .read(move |tx| {
+            queries::select_account_commitment_changes(
+                tx,
+                &[public, private],
+                0.into()..=5.into(),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    let cursor = first.next_cursor.expect("two changed accounts require continuation");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    assert!(
+        db.read(move |tx| queries::select_account_commitment_changes(
+            tx,
+            &[public, private],
+            0.into()..=5.into(),
+            Some(cursor),
+            NonZeroUsize::MIN
+        ))
+        .is_ok()
+    );
+    create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
+    prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
+    assert_matches!(
+        db.read(move |tx| queries::select_account_commitment_changes(
+            tx,
+            &[public],
+            0.into()..=5.into(),
+            None,
+            NonZeroUsize::MIN
+        )),
+        Err(DatabaseError::BlockPruned { .. })
+    );
+}
+
+/// Lookup must exclude unrequested and post-target transactions while preserving full record
+/// contents.
+#[test]
+fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let transactions: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
+    for height in 1..=2 {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+    }
+    insert_transactions(
+        db,
+        1.into(),
+        &OrderedTransactionHeaders::new_unchecked(transactions[..3].to_vec()),
+    )
+    .unwrap();
+    insert_transactions(
+        db,
+        2.into(),
+        &OrderedTransactionHeaders::new_unchecked(vec![transactions[3].clone()]),
+    )
+    .unwrap();
+    let missing = mock_block_transaction(account, 9).id();
+    let ids = vec![
+        transactions[0].id(),
+        transactions[2].id(),
+        transactions[3].id(),
+        missing,
+        transactions[0].id(),
+    ];
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let requested = ids.clone();
+        let page = db
+            .read(move |tx| {
+                queries::select_transactions_by_id(
+                    tx,
+                    &requested,
+                    1.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.records.into_iter().map(|r| {
+            assert_eq!(r.block_num, 1.into());
+            r.header
+        }));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let mut expected = vec![transactions[0].clone(), transactions[2].clone()];
+    expected.sort_by_key(TransactionHeader::id);
+    actual.sort_by_key(TransactionHeader::id);
+    assert_eq!(actual, expected);
+    let page = db
+        .read(move |tx| {
+            queries::select_transactions_by_id(tx, &ids, 0.into(), None, NonZeroUsize::MIN)
+        })
+        .unwrap();
+    assert!(page.records.is_empty());
+}
+
+/// Same-block event pages must remain complete even when stored aggregate byte estimates are large.
+#[test]
+fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_estimates() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let headers: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
+    for height in 1..=2 {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+    }
+    insert_transactions(
+        db,
+        1.into(),
+        &OrderedTransactionHeaders::new_unchecked(headers[..3].to_vec()),
+    )
+    .unwrap();
+    insert_transactions(
+        db,
+        2.into(),
+        &OrderedTransactionHeaders::new_unchecked(vec![headers[3].clone()]),
+    )
+    .unwrap();
+    db.write(|tx| -> Result<usize> {
+        Ok(tx.execute("UPDATE transactions SET size_in_bytes = 10000000", &[])?)
+    })
+    .unwrap();
+    let mut cursor = None;
+    let mut actual = vec![];
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_transactions_records_page(
+                    tx,
+                    &[account, account],
+                    0.into()..=1.into(),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        actual.extend(page.records.into_iter().map(|r| {
+            assert_eq!(r.block_num, 1.into());
+            r.header
+        }));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    actual.sort_by_key(TransactionHeader::id);
+    let mut expected = headers[..3].to_vec();
+    expected.sort_by_key(TransactionHeader::id);
+    assert_eq!(actual, expected);
+}
+
+/// Prefix discovery must preserve same-block page boundaries and exclude post-target insertions.
+#[test]
+fn nullifier_updates_page_preserves_partial_blocks_and_target() {
+    let db = &TestDb::new();
+    create_block(db, 1.into());
+    create_block(db, 2.into());
+    let expected: Vec<_> = (0..7).map(|i| num_to_nullifier((1 << 48) + i)).collect();
+    insert_nullifiers_for_block(db, &expected, 1.into()).unwrap();
+    insert_nullifiers_for_block(db, &[num_to_nullifier(2 << 48)], 1.into()).unwrap();
+    let mut cursor = None;
+    let mut found = std::collections::HashSet::new();
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_nullifier_updates_page(
+                    tx,
+                    &[1, 1],
+                    0.into()..=1.into(),
+                    cursor,
+                    std::num::NonZeroUsize::new(2).unwrap(),
+                )
+            })
+            .unwrap();
+        for row in page.records {
+            assert_eq!(row.block_num, BlockNumber::from(1));
+            assert!(found.insert(row.nullifier));
+        }
+        if cursor.is_none() {
+            insert_nullifiers_for_block(db, &[num_to_nullifier((1 << 48) + 99)], 2.into()).unwrap();
+            let earlier_cursor = page.next_cursor;
+            let later = db
+                .read(move |tx| {
+                    queries::select_nullifier_updates_page(
+                        tx,
+                        &[1],
+                        2.into()..=2.into(),
+                        earlier_cursor,
+                        NonZeroUsize::MIN,
+                    )
+                })
+                .unwrap();
+            assert_eq!(later.records.len(), 1);
+            assert_eq!(later.records[0].block_num, BlockNumber::from(2));
+            assert_eq!(later.records[0].nullifier, num_to_nullifier((1 << 48) + 99));
+            assert!(later.next_cursor.is_none());
+        }
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(found, expected.into_iter().collect());
+    for prefixes in [vec![], vec![3]] {
+        let page = db
+            .read(move |tx| {
+                queries::select_nullifier_updates_page(
+                    tx,
+                    &prefixes,
+                    0.into()..=1.into(),
+                    None,
+                    std::num::NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        assert!(page.records.is_empty());
+        assert!(page.next_cursor.is_none());
+    }
 }

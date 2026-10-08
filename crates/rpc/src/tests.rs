@@ -65,6 +65,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::{
+    BlockNumber,
     BlockSignatures,
     FeeParameters,
     ProvenBlock,
@@ -73,12 +74,18 @@ use miden_protocol::block::{
 };
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_SENDER,
+};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
+    InputNotes,
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    TransactionHeader,
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::Deserializable;
@@ -103,6 +110,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod sync_streams;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
 /// can always flush on drop regardless of test outcome or drop ordering.
@@ -2235,11 +2243,24 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
-    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id, not a repeated
+    assert_eq!(
+        limits.endpoints["SyncNotesV2"].parameters[QueryParamNoteTagLimit::PARAM_NAME],
+        QueryParamNoteTagLimit::LIMIT as u32
+    );
+    assert_eq!(
+        limits.endpoints["SyncAccountCommitments"].parameters[QueryParamAccountIdLimit::PARAM_NAME],
+        QueryParamAccountIdLimit::LIMIT as u32
+    );
+
+    // The account vault and storage-map endpoints accept a singular account_id, not a repeated
     // list, so they do not have list parameter limits.
     assert!(
         !limits.endpoints.contains_key("SyncAccountVault"),
         "SyncAccountVault should not have list parameter limits"
+    );
+    assert!(
+        !limits.endpoints.contains_key("SyncAccountVaultV2"),
+        "SyncAccountVaultV2 should not have list parameter limits"
     );
     assert!(
         !limits.endpoints.contains_key("SyncAccountStorageMaps"),
@@ -2499,6 +2520,17 @@ async fn next_block_with_protocol_config(
     store: &TestStore,
     config: &ProtocolConfig,
 ) -> SignedBlock {
+    next_block_with_notes(store, config, vec![]).await
+}
+
+/// Builds the next signed block with real note commitments and the preceding chain MMR.
+///
+/// Keeps account state unchanged so note-stream tests can verify paths on a committed chain.
+async fn next_block_with_notes(
+    store: &TestStore,
+    config: &ProtocolConfig,
+    notes: Vec<OutputNote>,
+) -> SignedBlock {
     use miden_protocol::block::{BlockBody, BlockHeader};
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::transaction::OrderedTransactionHeaders;
@@ -2511,8 +2543,13 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
+    let batches = if notes.is_empty() {
+        vec![]
+    } else {
+        vec![notes.into_iter().enumerate().collect()]
+    };
     let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
+        BlockBody::new(vec![], batches, vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
             .unwrap();
 
     let header = BlockHeader::new(
@@ -2752,6 +2789,16 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_eq!(status.details(), &[4]);
 
     let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: block_range(),
+            account_id: account_id(),
+            range: None,
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "sync_account_vault_v2");
+
+    let status = rpc_client
         .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
             block_range: block_range(),
             account_ids: vec![],
@@ -2760,4 +2807,1145 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
     assert_eq!(status.details(), &[5]);
+}
+
+/// Malformed requests and private accounts must fail before streaming. Empty public results must
+/// complete.
+#[tokio::test]
+async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
+    let (mut rpc_client, _rpc_addr, _store, _guard) = start_rpc().await;
+    let public_account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+
+    let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: None,
+            range: None,
+            account_id: Some(public_account.into()),
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should require a block range");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let private_account = AccountId::dummy(
+        [1; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let status = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(private_account.into()),
+            range: None,
+        })
+        .await
+        .expect_err("sync_account_vault_v2 should reject private accounts");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(public_account.into()),
+            range: None,
+        })
+        .await
+        .expect("sync_account_vault_v2 should accept a public account at the chain tip")
+        .into_inner();
+    assert_eq!(stream.message().await.expect("stream should complete successfully"), None);
+}
+
+/// A changed vault key must expose its final target value, including deletion.
+#[tokio::test]
+async fn sync_account_vault_v2_streams_squashed_updates() {
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let asset_a = Asset::from(FungibleAsset::new(account_id, 100).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &[(asset_a.id(), Some(asset_a)), (asset_b.id(), Some(asset_b))],
+    )
+    .await;
+
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(account_id.into()),
+            range: None,
+        })
+        .await
+        .expect("sync_account_vault_v2 should return a stream")
+        .into_inner();
+
+    let mut assets = Vec::new();
+    while let Some(update) = stream.message().await.expect("stream should complete successfully") {
+        assert_eq!(update.block_num, 0);
+        assets.push(
+            update
+                .asset
+                .expect("seeded values are additions")
+                .decode_fields()
+                .unwrap()
+                .verify()
+                .unwrap(),
+        );
+    }
+    assets.sort_by_key(Asset::id);
+
+    let mut expected = vec![asset_a, asset_b];
+    expected.sort_by_key(Asset::id);
+    assert_eq!(assets, expected);
+}
+
+/// The response must retain every changed key when one block exceeds the database page size.
+#[tokio::test]
+async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let values = vault_stream_values(300);
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &values,
+    )
+    .await;
+    let mut stream = rpc_client
+        .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            account_id: Some(account_id.into()),
+            range: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = Vec::new();
+    while let Some(update) = stream.message().await.unwrap() {
+        assert_eq!(update.block_num, 0);
+        actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+    }
+    actual.sort_by_key(Asset::id);
+    let mut expected: Vec<_> = values.into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    assert_eq!(actual, expected);
+}
+
+/// Builds distinct vault keys so stream tests can detect missing rows across database pages.
+fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
+    (0_u32..count)
+        .map(|index| {
+            let mut bytes = [0; 15];
+            bytes[5..9].copy_from_slice(&index.to_le_bytes());
+            let issuer = AccountId::dummy(
+                bytes,
+                AccountIdVersion::Version1,
+                AccountType::Public,
+                AssetCallbackFlag::Disabled,
+            );
+            let asset = Asset::from(FungibleAsset::new(issuer, u64::from(index) + 1).unwrap());
+            (asset.id(), Some(asset))
+        })
+        .collect()
+}
+
+/// Bootstrap must include genesis. An already synchronized target must return an empty delta.
+#[tokio::test]
+async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(2),
+    )
+    .await;
+    for (from, expected) in [(None, 2), (Some(0), 0)] {
+        let mut stream = client
+            .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: from,
+                    to_block_inclusive: Some(0),
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut count = 0;
+        while stream.message().await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, expected);
+    }
+}
+
+/// Range aliases must not produce ambiguous requests or let empty deltas bypass target validation.
+#[tokio::test]
+async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for (request, expected_detail) in [
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: Some(proto::miden::node::v1::BlockRange {
+                    block_from: 0,
+                    block_to: 0,
+                }),
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: Some(0),
+                }),
+            },
+            2,
+        ),
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: Some(1),
+                    to_block_inclusive: Some(1),
+                }),
+            },
+            3,
+        ),
+        (
+            proto::miden::node::v1::SyncAccountVaultV2Request {
+                block_range: None,
+                account_id: Some(account_id.into()),
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: None,
+                }),
+            },
+            2,
+        ),
+    ] {
+        let error = client.sync_account_vault_v2(request).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.details(), &[expected_detail]);
+    }
+}
+
+/// Concurrent vault streams must return complete results without a client or global limit.
+#[tokio::test]
+async fn sync_account_vault_v2_accepts_many_concurrent_streams() {
+    use tokio_stream::StreamExt;
+    let store = TestStore::start().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(300),
+    )
+    .await;
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    );
+    let request = proto::miden::node::v1::SyncAccountVaultV2Request {
+        block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+        account_id: Some(account_id.into()),
+        range: None,
+    };
+    let mut expected: Vec<_> =
+        vault_stream_values(300).into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    let mut streams = Vec::new();
+    for _ in 0..40 {
+        streams
+            .push(service.sync_account_vault_v2(Request::new(request)).await.unwrap().into_inner());
+    }
+    for mut stream in streams {
+        let mut actual = Vec::new();
+        while let Some(item) = stream.next().await {
+            let update = item.unwrap();
+            assert_eq!(update.block_num, 0);
+            actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+        }
+        actual.sort_by_key(Asset::id);
+        assert_eq!(actual, expected);
+    }
+}
+
+/// Storage-map streaming must preserve complete key sets and validate empty-delta targets.
+#[tokio::test]
+async fn storage_map_stream_returns_every_key_and_handles_empty_ranges() {
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let db_path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(
+        &db_path,
+        account_id,
+        BlockNumber::GENESIS,
+        &[],
+    )
+    .await;
+    let values: Vec<_> = (0_u32..300)
+        .map(|n| {
+            (
+                miden_protocol::account::StorageSlotName::mock(1),
+                miden_protocol::account::StorageMapKey::new(Word::from([n, 0, 0, 0])),
+                Word::from([n + 1, 0, 0, 0]),
+            )
+        })
+        .collect();
+    miden_node_store::test_support::seed_storage_map(
+        &db_path,
+        account_id,
+        BlockNumber::GENESIS,
+        &values,
+    )
+    .await;
+    for (from, expected_count) in [(None, 300), (Some(0), 0)] {
+        let mut stream = client
+            .sync_account_storage_maps_v2(proto::miden::node::v1::SyncAccountStorageMapsV2Request {
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: from,
+                    to_block_inclusive: Some(0),
+                }),
+                account_id: Some(account_id.into()),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut actual = std::collections::BTreeMap::new();
+        while let Some(item) = stream.message().await.unwrap() {
+            assert_eq!(item.last_updated_at, 0);
+            assert_eq!(item.slot_name, values[0].0.to_string());
+            let key: Word = item.key.unwrap().decode_fields().unwrap();
+            let value: Word = item.value.unwrap().decode_fields().unwrap();
+            assert!(actual.insert(key, value).is_none());
+        }
+        assert_eq!(actual.len(), expected_count);
+        if from.is_none() {
+            for (_, key, value) in &values {
+                assert_eq!(actual.get(&key.as_word()), Some(value));
+            }
+        }
+    }
+}
+
+/// Missing targets and private-account requests must fail before map data is returned.
+#[tokio::test]
+async fn storage_map_stream_validates_target_presence_and_account_visibility() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let public = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let private = AccountId::dummy(
+        [1; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    for (account_id, range, detail) in [
+        (public, None, 1),
+        (
+            public,
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: None,
+            }),
+            2,
+        ),
+        (
+            public,
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            3,
+        ),
+        (
+            private,
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+            6,
+        ),
+    ] {
+        let status = client
+            .sync_account_storage_maps_v2(proto::miden::node::v1::SyncAccountStorageMapsV2Request {
+                range,
+                account_id: Some(account_id.into()),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
+/// Builds tagged public and private notes with distinct identities for exact stream reconciliation.
+fn note_stream_fixture(
+    sender: AccountId,
+    height: u32,
+    count: u32,
+) -> Vec<miden_protocol::note::Note> {
+    use miden_protocol::note::{Note, PartialNoteMetadata};
+    (0..count)
+        .map(|index| {
+            let base = Note::mock_noop(Word::from([height, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            Note::with_attachments(
+                base.assets().clone(),
+                PartialNoteMetadata::new(sender, kind).with_tag(42.into()),
+                base.recipient().clone(),
+                base.attachments().clone(),
+            )
+        })
+        .collect()
+}
+
+/// Note frames must preserve every match and authenticate against the selected target after later
+/// commits.
+#[tokio::test(flavor = "multi_thread")]
+async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
+    use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::note::Note;
+    use proto::miden::node::v1::sync_notes_v2_response::Item;
+    let (mut client, _, mut store, _guard) = start_rpc().await;
+    let (genesis, _) = store.state.view().get_block_header(Some(0.into()), false).await.unwrap();
+    let genesis = genesis.unwrap();
+    let config = store
+        .state
+        .view()
+        .get_protocol_config(genesis.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let sender = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let mut mmr = Mmr::new();
+    mmr.add(genesis.commitment()).unwrap();
+    let mut expected = vec![];
+    for (height, count) in [(1_u32, 300_u32), (2, 0), (3, 2)] {
+        let notes = note_stream_fixture(sender, height, count);
+        let outputs = notes
+            .iter()
+            .map(|note| match note.metadata().note_type() {
+                NoteType::Public => {
+                    OutputNote::Public(PublicOutputNote::new(note.clone()).unwrap())
+                },
+                NoteType::Private => OutputNote::Private(
+                    miden_protocol::transaction::PrivateOutputNote::new(
+                        *note.header(),
+                        note.attachments().clone(),
+                    )
+                    .unwrap(),
+                ),
+            })
+            .collect();
+        let block = next_block_with_notes(&store, &config, outputs).await;
+        mmr.add(block.header().commitment()).unwrap();
+        expected.extend(notes);
+        store.writer.apply_block(block, None).await.unwrap();
+    }
+    let mut stream = client
+        .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(3),
+            }),
+            note_tags: vec![42, 42],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let block = next_block_with_protocol_config(&store, &config).await;
+    store.writer.apply_block(block, None).await.unwrap();
+    let mut blocks = vec![];
+    let mut actual = vec![];
+    let mut current_header = None;
+    while let Some(frame) = stream.message().await.unwrap() {
+        match frame.item.unwrap() {
+            Item::Block(block) => {
+                let header: miden_protocol::block::BlockHeader =
+                    block.block_header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+                let path = block.mmr_path.unwrap().decode_fields().unwrap().verify().unwrap();
+                let proof =
+                    mmr.open_at(header.block_num().as_u32() as usize, mmr.forest()).unwrap();
+                assert_eq!(path, *proof.merkle_path());
+                mmr.peaks().verify(header.commitment(), proof).unwrap();
+                blocks.push(header.block_num().as_u32());
+                current_header = Some(header);
+            },
+            Item::Note(note) => {
+                let (id, proof) =
+                    note.inclusion_proof.unwrap().decode_fields().unwrap().verify().unwrap();
+                let header = current_header.as_ref().unwrap();
+                assert_eq!(header.block_num(), proof.location().block_num());
+                let expected_note = &expected[actual.len()];
+                assert_eq!(id, expected_note.id());
+                proof
+                    .note_path()
+                    .verify(
+                        u64::from(proof.location().block_note_tree_index()),
+                        expected_note.id().as_word(),
+                        &header.note_root(),
+                    )
+                    .unwrap();
+                actual.push(id);
+            },
+        }
+    }
+    assert_eq!(blocks, vec![1, 3]);
+    assert_eq!(actual, expected.iter().map(Note::id).collect::<Vec<_>>());
+}
+
+/// A gRPC-Web client must receive a successful terminal trailer for a completed empty stream.
+#[tokio::test]
+async fn note_stream_web_reports_successful_terminal_status() {
+    use miden_node_proto::prost::Message;
+    let (_, address, _store, _guard) = start_rpc().await;
+    let request = proto::miden::node::v1::SyncNotesV2Request {
+        range: Some(proto::miden::node::v1::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+        note_tags: vec![],
+    }
+    .encode_to_vec();
+    let mut framed = vec![0];
+    framed.extend_from_slice(&u32::try_from(request.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(&request);
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/miden.node.v1.NodeService/SyncNotesV2"))
+        .header(CONTENT_TYPE, "application/grpc-web+proto")
+        .header(ACCEPT, concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION")))
+        .body(framed)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.bytes().await.unwrap();
+    assert_eq!(body[0], 0x80, "empty successful stream ends with web trailers");
+    let size = usize::try_from(u32::from_be_bytes(body[1..5].try_into().unwrap())).unwrap();
+    assert_eq!(size, body.len() - 5);
+    let trailers = std::str::from_utf8(&body[5..]).unwrap();
+    assert!(
+        trailers
+            .lines()
+            .any(|line| line.trim() == "grpc-status:0" || line.trim() == "grpc-status: 0")
+    );
+}
+
+/// Duplicate tags must not bypass request limits. Missing or future targets must fail before
+/// streaming.
+#[tokio::test]
+async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request {
+            range: None,
+            note_tags: vec![42; 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    for (range, detail) in [
+        (None, 1),
+        (
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: None,
+            }),
+            2,
+        ),
+        (
+            Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            3,
+        ),
+    ] {
+        let status = client
+            .sync_notes_v2(proto::miden::node::v1::SyncNotesV2Request { range, note_tags: vec![] })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
+/// Changed public and private accounts must expose witnesses for the target, despite later account
+/// changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn account_commitment_stream_returns_authenticated_public_and_private_witnesses() {
+    use tokio_stream::StreamExt;
+    let mut builder = MockChainBuilder::new();
+    let public = builder.add_existing_wallet(Auth::IncrNonce).unwrap();
+    let private = AccountBuilder::new([9; 32])
+        .account_type(AccountType::Private)
+        .with_component(BasicWallet)
+        .with_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap();
+    builder.add_account(private.clone()).unwrap();
+    let chain = builder.build().unwrap();
+    let mut store =
+        TestStore::start_from_mock_genesis(&chain.latest_block(), chain.protocol_config()).await;
+    let root = chain.latest_block().header().account_root();
+    let later = account_commitment_later_block(
+        &store,
+        &chain.latest_block(),
+        chain.protocol_config(),
+        private.id(),
+    )
+    .await;
+    assert_ne!(later.header().account_root(), root);
+    store.writer.apply_block(later, None).await.unwrap();
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let unknown = AccountId::dummy(
+        [8; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    let mut stream = service
+        .sync_account_commitments(Request::new(
+            proto::miden::node::v1::SyncAccountCommitmentsRequest {
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: None,
+                    to_block_inclusive: Some(0),
+                }),
+                account_ids: vec![
+                    public.id().into(),
+                    private.id().into(),
+                    unknown.into(),
+                    public.id().into(),
+                ],
+            },
+        ))
+        .await
+        .unwrap()
+        .into_inner();
+    let mut found = HashMap::new();
+    while let Some(item) = stream.next().await {
+        let item = item.unwrap();
+        assert_eq!(item.last_updated_at, 0);
+        let witness = item.witness.unwrap().decode_fields().unwrap().verify().unwrap();
+        let leaf = witness.leaf();
+        witness.path().verify(leaf.index().position(), leaf.hash(), &root).unwrap();
+        assert!(found.insert(witness.id(), witness.state_commitment()).is_none());
+    }
+    assert_eq!(
+        found,
+        HashMap::from([
+            (public.id(), public.to_commitment()),
+            (private.id(), private.to_commitment())
+        ])
+    );
+}
+
+/// Builds a later private-account update to test witness authentication against an earlier target.
+async fn account_commitment_later_block(
+    store: &TestStore,
+    genesis: &ProvenBlock,
+    config: &ProtocolConfig,
+    account: AccountId,
+) -> SignedBlock {
+    use miden_protocol::account::AccountUpdateDetails;
+    use miden_protocol::block::account_tree::AccountTree;
+    use miden_protocol::block::{BlockAccountUpdate, BlockBody, BlockHeader};
+    use miden_protocol::transaction::OrderedTransactionHeaders;
+    let replacement = Word::from([123_u32, 0, 0, 0]);
+    let entries = genesis.body().updated_accounts().iter().map(|update| {
+        (
+            update.account_id(),
+            if update.account_id() == account {
+                replacement
+            } else {
+                update.final_state_commitment()
+            },
+        )
+    });
+    let root = AccountTree::with_entries(entries).unwrap().root();
+    let update =
+        BlockAccountUpdate::new(account, replacement, AccountUpdateDetails::Private).unwrap();
+    let body = BlockBody::new(
+        vec![update],
+        vec![],
+        vec![],
+        OrderedTransactionHeaders::new_unchecked(vec![]),
+    )
+    .unwrap();
+    let base = next_block_with_protocol_config(store, config).await;
+    let h = base.header();
+    let header = BlockHeader::new(
+        h.prev_block_commitment(),
+        h.block_num(),
+        h.chain_commitment(),
+        root,
+        h.nullifier_root(),
+        body.compute_block_note_tree().root(),
+        body.transaction_commitment(),
+        h.validator_config().clone(),
+        h.fee_parameters().clone(),
+        h.protocol_config_commitment(),
+        None,
+        h.timestamp(),
+    );
+    SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap())
+}
+
+/// Account request limits and target validation must apply even when the delta is empty.
+#[tokio::test]
+async fn account_commitment_stream_validates_lists_and_future_empty_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: None,
+            account_ids: vec![proto::account::AccountId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    let status = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.details(), &[3]);
+    let mut stream = client
+        .sync_account_commitments(proto::miden::node::v1::SyncAccountCommitmentsRequest {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(0),
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}
+
+/// Builds distinct empty-note transaction headers for target and ID reconciliation tests.
+fn transaction_stream_fixture(account: AccountId, number: u32) -> TransactionHeader {
+    TransactionHeader::new(
+        account,
+        Word::from([number, 0, 0, 0]),
+        Word::from([number + 1, 0, 0, 0]),
+        InputNotes::new_unchecked(vec![]),
+        vec![],
+    )
+    .unwrap()
+}
+
+/// Successful lookup completion must distinguish committed requested IDs from absent IDs at the
+/// target.
+#[tokio::test]
+async fn transaction_lookup_stream_reconciles_ids_and_empty_success() {
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    let headers: Vec<_> = (1..=3).map(|n| transaction_stream_fixture(account, n)).collect();
+    miden_node_store::test_support::seed_transactions(&path, BlockNumber::GENESIS, headers.clone())
+        .await;
+    let missing = transaction_stream_fixture(account, 9).id();
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![
+                headers[0].id().into(),
+                headers[2].id().into(),
+                missing.into(),
+                headers[0].id().into(),
+            ],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = vec![];
+    while let Some(item) = stream.message().await.unwrap() {
+        let record = item.transaction.unwrap();
+        assert_eq!(record.block_num, 0);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        actual.push(header.id());
+    }
+    actual.sort_unstable();
+    let mut expected = vec![headers[0].id(), headers[2].id()];
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![missing.into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}
+
+/// Transaction lookup must enforce raw-list limits and require a target, including empty requests.
+#[tokio::test]
+async fn transaction_lookup_stream_validates_raw_ids_and_target_presence() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: None,
+            transaction_ids: vec![proto::transaction::TransactionId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    for (target, detail) in [(None, 2), (Some(1), 3)] {
+        let status = client
+            .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+                target_block_num: target,
+                transaction_ids: vec![],
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
+/// A malformed record after valid data must fail the stream instead of completing an incomplete
+/// lookup.
+#[tokio::test]
+async fn transaction_lookup_stream_reports_a_late_invalid_record_as_error() {
+    use miden_protocol::note::{
+        NoteAttachments,
+        NoteDetailsCommitment,
+        NoteHeader,
+        NoteMetadata,
+        PartialNoteMetadata,
+    };
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(account, NoteType::Public),
+        &NoteAttachments::empty(),
+    );
+    let outputs = (0..=miden_protocol::MAX_OUTPUT_NOTES_PER_TX)
+        .map(|index| {
+            NoteHeader::new(
+                NoteDetailsCommitment::from_raw(Word::from([
+                    u32::try_from(index).unwrap(),
+                    8,
+                    0,
+                    0,
+                ])),
+                metadata,
+            )
+        })
+        .collect();
+    let invalid = TransactionHeader::new(
+        account,
+        Word::from([99_u32, 0, 0, 0]),
+        Word::from([100_u32, 0, 0, 0]),
+        InputNotes::new_unchecked(vec![]),
+        outputs,
+    )
+    .unwrap();
+    let valid = (1..1000)
+        .map(|number| transaction_stream_fixture(account, number))
+        .find(|header| header.id().as_bytes() < invalid.id().as_bytes())
+        .unwrap();
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    miden_node_store::test_support::seed_transactions(
+        &path,
+        BlockNumber::GENESIS,
+        vec![valid.clone(), invalid.clone()],
+    )
+    .await;
+    let mut stream = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: vec![valid.id().into(), invalid.id().into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let first = stream.message().await.unwrap().unwrap().transaction.unwrap();
+    assert_eq!(first.header.unwrap().transaction_id, Some(valid.id().into()));
+    let error = stream.message().await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert_eq!(error.details(), &[0]);
+}
+
+/// Builds full transaction records whose combined block exceeds the transport message limit.
+///
+/// Uses complete output proof shapes to test transport bounds independently of proof authentication.
+fn large_transaction_stream_fixture(
+    account: AccountId,
+) -> (Vec<TransactionHeader>, Vec<miden_node_store::NoteRecord>) {
+    use miden_protocol::block::BlockNoteIndex;
+    use miden_protocol::crypto::merkle::SparseMerklePath;
+    use miden_protocol::note::{
+        NoteAttachments,
+        NoteDetailsCommitment,
+        NoteHeader,
+        NoteMetadata,
+        PartialNoteMetadata,
+    };
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(account, NoteType::Public),
+        &NoteAttachments::empty(),
+    );
+    let mut records = vec![];
+    let headers = (0_u32..10)
+        .map(|number| {
+            let notes: Vec<_> = (0..miden_protocol::MAX_OUTPUT_NOTES_PER_TX)
+                .map(|index| {
+                    let header = NoteHeader::new(
+                        NoteDetailsCommitment::from_raw(Word::from([
+                            number,
+                            u32::try_from(index).unwrap(),
+                            5,
+                            0,
+                        ])),
+                        metadata,
+                    );
+                    records.push(miden_node_store::NoteRecord {
+                        block_num: BlockNumber::GENESIS,
+                        note_index: BlockNoteIndex::new(number as usize, index).unwrap(),
+                        note_id: header.id().as_word(),
+                        metadata,
+                        details: None,
+                        attachments: NoteAttachments::empty(),
+                        inclusion_path: SparseMerklePath::from_parts(
+                            0,
+                            vec![Word::from([miden_protocol::Felt::MAX; 4]); 16],
+                        )
+                        .unwrap(),
+                    });
+                    header
+                })
+                .collect();
+            TransactionHeader::new(
+                account,
+                Word::from([number + 1, 0, 0, 0]),
+                Word::from([number + 2, 0, 0, 0]),
+                InputNotes::new_unchecked(vec![]),
+                notes,
+            )
+            .unwrap()
+        })
+        .collect();
+    (headers, records)
+}
+
+/// Aggregate block size must not omit transaction events while each individual message stays
+/// bounded.
+#[tokio::test]
+async fn transaction_history_stream_returns_a_whole_block_larger_than_four_mebibytes() {
+    use miden_node_proto::prost::Message;
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let (headers, notes) = large_transaction_stream_fixture(account);
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    miden_node_store::test_support::seed_notes(&path, notes).await;
+    miden_node_store::test_support::seed_transactions(&path, BlockNumber::GENESIS, headers.clone())
+        .await;
+    let mut stream = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![account.into(), account.into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = HashSet::new();
+    let mut total_bytes = 0;
+    while let Some(item) = stream.message().await.unwrap() {
+        assert!(item.encoded_len() < 4 * 1024 * 1024);
+        total_bytes += item.encoded_len();
+        let record = item.transaction.unwrap();
+        assert_eq!(record.block_num, 0);
+        assert_eq!(record.output_note_proofs.len(), 1024);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        assert!(actual.insert(header.id()));
+    }
+    assert!(total_bytes > 4 * 1024 * 1024);
+    assert_eq!(actual, headers.iter().map(TransactionHeader::id).collect());
+    let mut lookup = client
+        .get_transactions_by_id(proto::miden::node::v1::GetTransactionsByIdRequest {
+            target_block_num: Some(0),
+            transaction_ids: headers.iter().map(|header| header.id().into()).collect(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut found = HashSet::new();
+    while let Some(item) = lookup.message().await.unwrap() {
+        let record = item.transaction.unwrap();
+        assert_eq!(record.output_note_proofs.len(), 1024);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        assert!(found.insert(header.id()));
+    }
+    assert_eq!(found, actual);
+}
+
+/// Event discovery must enforce account limits and validate the target of an empty delta.
+#[tokio::test]
+async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
+    let (mut client, _, _store, _guard) = start_rpc().await;
+    let status = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: None,
+            account_ids: vec![proto::account::AccountId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    let status = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.details(), &[3]);
+    let mut stream = client
+        .sync_transactions_v2(proto::miden::node::v1::SyncTransactionsV2Request {
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: Some(0),
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}
+
+/// Consumption discovery must retain every matching identity and reject invalid or oversized prefix
+/// lists.
+#[tokio::test]
+async fn nullifier_stream_reconciles_every_record_and_validates_prefixes() {
+    use miden_protocol::note::Nullifier;
+    use miden_protocol::{Felt, Word};
+    let (mut client, _, store, _guard) = start_rpc().await;
+    let expected: HashSet<_> = (0..600)
+        .map(|i| {
+            Nullifier::from_raw(Word::from([
+                Felt::ZERO,
+                Felt::ZERO,
+                Felt::ZERO,
+                Felt::new_unchecked((1 << 48) + i),
+            ]))
+        })
+        .collect();
+    miden_node_store::test_support::seed_nullifiers(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        0.into(),
+        expected.iter().copied().collect(),
+    )
+    .await;
+    let request = proto::miden::node::v1::SyncNullifiersV2Request {
+        range: Some(proto::miden::node::v1::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+        prefix_len: 16,
+        nullifiers: vec![1, 1],
+    };
+    let mut stream = client.sync_nullifiers_v2(request.clone()).await.unwrap().into_inner();
+    let mut found = HashSet::new();
+    while let Some(item) = stream.message().await.unwrap() {
+        assert_eq!(item.block_num, 0);
+        let word = item.nullifier.unwrap().decode_fields().unwrap();
+        assert!(found.insert(Nullifier::from_raw(word)));
+    }
+    assert_eq!(found, expected);
+    for prefixes in [vec![], vec![2]] {
+        let mut stream = client
+            .sync_nullifiers_v2(proto::miden::node::v1::SyncNullifiersV2Request {
+                nullifiers: prefixes,
+                ..request.clone()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(stream.message().await.unwrap().is_none());
+    }
+    for (bad, code) in [
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request { prefix_len: 15, ..request.clone() },
+            6,
+        ),
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request {
+                nullifiers: vec![65536],
+                ..request.clone()
+            },
+            1,
+        ),
+        (
+            proto::miden::node::v1::SyncNullifiersV2Request {
+                range: Some(proto::miden::node::v1::StateDeltaRange {
+                    from_block_exclusive: Some(1),
+                    to_block_inclusive: Some(1),
+                }),
+                ..request.clone()
+            },
+            3,
+        ),
+    ] {
+        let status = client.sync_nullifiers_v2(bad).await.unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[code]);
+    }
+    let status = client
+        .sync_nullifiers_v2(proto::miden::node::v1::SyncNullifiersV2Request {
+            range: None,
+            nullifiers: vec![65536; 1001],
+            ..request
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
 }

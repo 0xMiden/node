@@ -104,11 +104,71 @@ service NodeService {
     // Note that only 16-bit prefixes are supported at this time.
     rpc SyncNullifiers(SyncNullifiersRequest) returns (SyncNullifiersResponse) {}
 
+    // Streams every consumption matching the requested 16-bit nullifier prefixes in a fixed delta.
+    //
+    // Use prefixes from tracked notes to discover their consumption without disclosing full nullifiers.
+    // Filter returned matches against local nullifiers. Every matching identity is emitted separately.
+    // Pin the target to SyncChainMmr and apply results only after successful stream completion.
+    rpc SyncNullifiersV2(SyncNullifiersV2Request) returns (stream SyncNullifiersV2Response) {}
+
+    // Streams matching note records, preceded by one block frame for each block with matches.
+    //
+    // Use note tags to discover new notes through the target authenticated by SyncChainMmr.
+    // Verify each note path against its block's note root. Verify block paths against the MMR with
+    // target + 1 leaves, which includes the authenticated target header.
+    // Fetch public note bodies and missing attachment content with GetNotesById.
+    // Apply results only after successful stream completion.
+    rpc SyncNotesV2(SyncNotesV2Request) returns (stream SyncNotesV2Response) {}
+
     // Returns account vault updates for specified account within a block range.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (SyncAccountVaultResponse) {}
 
+    // Streams the final target asset for each public account vault key changed in the requested range.
+    //
+    // Use this endpoint to update a local vault after its authenticated account state changes.
+    // Repeated changes to a key produce one target value. An absent asset marks deletion.
+    // Pin the target to SyncChainMmr and verify the resulting vault against authenticated account details.
+    // Apply results only after successful stream completion.
+    rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream SyncAccountVaultV2Response) {}
+
     // Returns storage map updates for specified account and storage slots within a block range.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (SyncAccountStorageMapsResponse) {}
+
+    // Streams the final target value for each changed public account storage-map key.
+    //
+    // Use this endpoint to update local storage maps after an authenticated account state change.
+    // Repeated changes to a key produce one target value. A zero word marks deletion.
+    // GetAccount supplies account-level slot changes, including removed slots.
+    // Pin the target to SyncChainMmr and verify the resulting storage commitments against account details.
+    // Apply results only after successful stream completion.
+    rpc SyncAccountStorageMapsV2(SyncAccountStorageMapsV2Request) returns (stream SyncAccountStorageMapsV2Response) {}
+
+    // Streams target account-tree witnesses for requested accounts changed in the synchronization delta.
+    //
+    // Use this endpoint to discover divergent public or private accounts without scanning their transactions.
+    // Verify each witness against the target header's account root, then compare it with the local header.
+    // Fetch GetAccount at the same target only for divergent accounts.
+    // Unchanged and unknown IDs are omitted. Private account details are not disclosed.
+    // Treat omitted IDs as complete only after successful stream completion.
+    rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
+
+    // Streams requested transactions committed at or before an explicit target block.
+    //
+    // Use this endpoint to reconcile locally pending or unconfirmed transaction IDs.
+    // An ID absent from a successfully completed stream was not committed by the target.
+    // Absence alone does not establish expiration, conflict, or permanent rejection.
+    // The endpoint does not discover unknown transaction IDs or add transaction inclusion proofs.
+    // Discard partial lookup conclusions if the stream fails.
+    rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
+
+    // Streams complete transaction events for requested accounts within a fixed synchronization delta.
+    //
+    // Use this endpoint for account event discovery, including externally submitted transactions whose
+    // IDs are unknown locally. Records preserve erased output commitments and consumed public-note references.
+    // These references support recovery of previously untracked public notes consumed by an account.
+    // Use GetTransactionsById when only known pending transaction IDs need reconciliation.
+    // Pin the target to SyncChainMmr and apply results only after successful stream completion.
+    rpc SyncTransactionsV2(SyncTransactionsV2Request) returns (stream SyncTransactionsV2Response) {}
 
     // Returns MMR delta needed to synchronize the chain MMR within the requested block range.
     rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
@@ -553,6 +613,26 @@ message SyncAccountVaultRequest {
     account.AccountId account_id = 2;
 }
 
+// Account vault synchronization request with squashed, server-streaming responses.
+//
+// Pin the target to the block authenticated by SyncChainMmr. Apply updates only after an OK
+// end-of-stream; discard partial updates on error and retry the same target while retained.
+message SyncAccountVaultV2Request {
+    // Inclusive range of vault updates to consider.
+    //
+    // A client whose state includes block C and which is synchronizing to block N should request
+    // [C + 1, N]. The server emits at most one update per vault key: the value of that key at
+    // `block_to`, provided the key changed within this range. `block_to` must be within the
+    // server's retained account-history window; `block_from` may be older.
+    optional BlockRange block_range = 1;
+
+    // Public account whose asset vault should be synchronized.
+    account.AccountId account_id = 2;
+
+    // Explicit synchronization delta. Specify exactly one range representation.
+    optional StateDeltaRange range = 3;
+}
+
 message SyncAccountVaultResponse {
     // Pagination information.
     PaginationInfo pagination_info = 1;
@@ -562,6 +642,19 @@ message SyncAccountVaultResponse {
     // Multiple updates can be returned for a single asset, and the one with a higher `block_num`
     // is expected to be retained by the caller.
     repeated AccountVaultUpdate updates = 2;
+}
+
+// One final vault value emitted by the streaming account vault sync endpoint.
+message SyncAccountVaultV2Response {
+    // Vault key associated with the asset.
+    primitives.Word vault_key = 1;
+
+    // Asset value related to the vault key.
+    // If not present, the asset was removed from the vault.
+    optional asset.Asset asset = 2;
+
+    // Block number at which the above asset was updated in the account vault.
+    fixed32 block_num = 3;
 }
 
 message AccountVaultUpdate {
@@ -769,6 +862,15 @@ message BlockRange {
     fixed32 block_to = 2;
 }
 
+// Changes after the client's current block, materialized at an explicit target.
+message StateDeltaRange {
+    // Absence includes genesis. A present value excludes that block.
+    optional fixed32 from_block_exclusive = 1;
+
+    // Required by validation. Zero selects genesis.
+    optional fixed32 to_block_inclusive = 2;
+}
+
 // PAGINATION INFO
 // ================================================================================================
 
@@ -917,4 +1019,84 @@ message SubmitProvenTxBatchRequest {
 
 message SubmitProvenTxBatchResponse {
     fixed32 block_num = 1;
+}
+
+// Pin the target to SyncChainMmr. Apply the complete stream only after OK termination.
+message SyncAccountStorageMapsV2Request {
+    StateDeltaRange range = 1;
+    account.AccountId account_id = 2;
+}
+
+// One changed key's value at the target. A zero word represents deletion.
+// Other account changes, including removed slots, are conveyed by GetAccount at the target.
+message SyncAccountStorageMapsV2Response {
+    string slot_name = 1;
+    primitives.Word key = 2;
+    primitives.Word value = 3;
+    fixed32 last_updated_at = 4;
+}
+
+// Pin the target to SyncChainMmr. An absent target is invalid; absent lower bound bootstraps.
+// Preserve tag-list limits; duplicates do not cause repeated notes.
+message SyncNotesV2Request {
+    StateDeltaRange range = 1;
+    repeated fixed32 note_tags = 2;
+}
+
+// A block frame precedes that block's notes exactly once. Apply only after OK termination.
+// Block paths use the MMR at target + 1 leaves, including the authenticated target header.
+message SyncNotesV2Response {
+    oneof item {
+        NoteBlockStart block = 1;
+        NoteSyncRecord note = 2;
+    }
+}
+message NoteBlockStart {
+    blockchain.BlockHeader block_header = 1;
+    primitives.MerklePath mmr_path = 2;
+}
+
+// Compare returned commitments with local account headers. Fetch GetAccount at the same target
+// only for divergent accounts. Unknown and unchanged IDs are omitted after successful completion.
+message SyncAccountCommitmentsRequest {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+// Verify this witness against the TARGET header's account root, not last_updated_at.
+// Private accounts have witnesses too. No private account details are disclosed.
+message SyncAccountCommitmentsResponse {
+    fixed32 last_updated_at = 1;
+    account.AccountWitness witness = 2;
+}
+
+// Zero selects genesis. Absence is invalid. IDs omitted from an OK-completed stream were not
+// committed by the target. A failed stream gives no conclusion about absent IDs.
+message GetTransactionsByIdRequest {
+    optional fixed32 target_block_num = 1;
+    repeated transaction.TransactionId transaction_ids = 2;
+}
+// One complete bounded record per message; aggregate stream size is unrestricted.
+// This lookup does not add a transaction inclusion proof.
+message GetTransactionsByIdResponse { TransactionRecord transaction = 1; }
+
+// Complete event discovery for requested accounts, including externally submitted transactions.
+// Zero target selects genesis; absence is invalid. Individual records are bounded, the stream is not.
+message SyncTransactionsV2Request {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+// Preserve transaction input/output order, erased output commitments and public consumed-note refs.
+// Apply the complete result only after OK termination; a failed stream is incomplete.
+message SyncTransactionsV2Response { TransactionRecord transaction = 1; }
+
+// Prefix queries preserve the privacy of individual tracked note nullifiers.
+message SyncNullifiersV2Request {
+    StateDeltaRange range = 1;
+    uint32 prefix_len = 2;
+    repeated uint32 nullifiers = 3;
+}
+// Every nullifier is an append-only identity. OK end-of-stream completes the requested range.
+message SyncNullifiersV2Response {
+    primitives.Word nullifier = 1;
+    fixed32 block_num = 2;
 }

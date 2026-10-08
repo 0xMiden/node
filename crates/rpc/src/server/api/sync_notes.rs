@@ -89,7 +89,9 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::miden::node::v1::NoteSyncRecord {
+pub(super) fn note_sync_record_to_proto(
+    note: NoteSyncRecord,
+) -> proto::miden::node::v1::NoteSyncRecord {
     let attachments = note
         .attachments
         .iter()
@@ -139,7 +141,8 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
         NoteSyncError::DeserializationFailed(err) => {
             SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
         },
-        NoteSyncError::UnderlyingDatabaseError(_)
+        NoteSyncError::TargetOverflow
+        | NoteSyncError::UnderlyingDatabaseError(_)
         | NoteSyncError::EmptyBlockHeadersTable
         | NoteSyncError::MmrError(_) => internal_error(message),
     }
@@ -409,5 +412,21 @@ mod tests {
         let record_size = response.encoded_len() - overhead;
         assert!(record_size <= RECORD_BUDGET, "compact note record adds {record_size} bytes");
         assert!(response.encoded_len() <= BLOCK_OVERHEAD_BUDGET + RECORD_BUDGET);
+        let block = response.blocks.pop().unwrap();
+        let block_frame = proto::miden::node::v1::SyncNotesV2Response {
+            item: Some(proto::miden::node::v1::sync_notes_v2_response::Item::Block(
+                proto::miden::node::v1::NoteBlockStart {
+                    block_header: block.block_header,
+                    mmr_path: block.mmr_path,
+                },
+            )),
+        };
+        let note_frame = proto::miden::node::v1::SyncNotesV2Response {
+            item: Some(proto::miden::node::v1::sync_notes_v2_response::Item::Note(
+                block.notes.into_iter().next().unwrap(),
+            )),
+        };
+        assert!(block_frame.encoded_len() < 4 * 1024 * 1024);
+        assert!(note_frame.encoded_len() < 4 * 1024 * 1024);
     }
 }

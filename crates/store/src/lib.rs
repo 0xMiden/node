@@ -17,9 +17,22 @@ pub use accounts::PersistentAccountTree;
 pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
-pub use db::queries::StorageMapValuesPage;
+pub use db::queries::{
+    NoteSyncCursor,
+    NoteSyncPage,
+    NullifierCursor,
+    NullifierUpdatesPage,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
+    StorageMapValue,
+    StorageMapValuesPage,
+    TransactionCursor,
+    TransactionRecordsPage,
+};
 pub use db::{
+    AccountVaultCursor,
     AccountVaultValue,
+    AccountVaultValuesPage,
     DatabaseOptions,
     Db,
     NoteRecord,
@@ -76,9 +89,10 @@ pub mod test_support {
 
     use miden_protocol::Word;
     use miden_protocol::account::AccountId;
+    use miden_protocol::asset::{Asset, AssetId};
     use miden_protocol::block::BlockNumber;
 
-    use crate::db::queries::{AccountRow, NetworkAccountType};
+    use crate::db::queries::{AccountRow, NetworkAccountType, insert_vault_asset};
     use crate::errors::DatabaseError;
 
     /// Opens a fresh connection to the store's SQLite database and inserts a private
@@ -106,8 +120,110 @@ pub mod test_support {
             .await
             .expect("insert network account row");
     }
-}
 
+    /// Inserts a public account row and vault values for downstream RPC integration tests.
+    pub async fn seed_account_vault(
+        db_path: &Path,
+        account_id: AccountId,
+        block_num: BlockNumber,
+        values: &[(AssetId, Option<Asset>)],
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        let values = values.to_vec();
+        writer
+            .write::<_, DatabaseError, _>("seed account vault", move |tx| {
+                AccountRow::new_private(
+                    account_id,
+                    NetworkAccountType::None,
+                    Word::default(),
+                    block_num,
+                    block_num,
+                )
+                .upsert(tx)?;
+                for (vault_key, asset) in values {
+                    insert_vault_asset(tx, account_id, block_num, vault_key, asset)?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("insert test account vault values");
+    }
+    /// Inserts storage-map values for downstream RPC stream tests.
+    pub async fn seed_storage_map(
+        db_path: &Path,
+        account_id: AccountId,
+        block_num: BlockNumber,
+        values: &[(
+            miden_protocol::account::StorageSlotName,
+            miden_protocol::account::StorageMapKey,
+            Word,
+        )],
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        let values = values.to_vec();
+        writer
+            .write::<_, DatabaseError, _>("seed storage map", move |tx| {
+                for (slot, key, value) in values {
+                    crate::db::queries::insert_storage_map_value(
+                        tx, account_id, block_num, &slot, key, value,
+                    )?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("insert test storage-map values");
+    }
+    /// Inserts transaction headers for downstream reconciliation tests.
+    pub async fn seed_transactions(
+        db_path: &Path,
+        block: BlockNumber,
+        headers: Vec<miden_protocol::transaction::TransactionHeader>,
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed transactions", move |tx| {
+                crate::db::queries::insert_transactions(
+                    tx,
+                    block,
+                    &miden_protocol::transaction::OrderedTransactionHeaders::new_unchecked(headers),
+                )
+            })
+            .await
+            .expect("insert test transactions");
+    }
+    /// Inserts nullifiers for downstream prefix-discovery tests.
+    pub async fn seed_nullifiers(
+        db_path: &Path,
+        block: BlockNumber,
+        nullifiers: Vec<miden_protocol::note::Nullifier>,
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed nullifiers", move |tx| {
+                crate::db::queries::insert_nullifiers_for_block(tx, &nullifiers, block)
+            })
+            .await
+            .expect("insert test nullifiers");
+    }
+    /// Inserts note records for transaction transport tests.
+    pub async fn seed_notes(db_path: &Path, notes: Vec<crate::NoteRecord>) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed notes", move |tx| {
+                crate::db::queries::insert_notes(
+                    tx,
+                    &notes.into_iter().map(|note| (note, None)).collect::<Vec<_>>(),
+                )
+            })
+            .await
+            .expect("insert test note records");
+    }
+}
 // CONSTANTS
 // =================================================================================================
 const COMPONENT: &str = "miden-store";

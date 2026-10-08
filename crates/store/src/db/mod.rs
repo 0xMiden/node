@@ -39,14 +39,24 @@ use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 pub use crate::db::queries::{
+    AccountCommitmentChangesPage,
     AccountCommitmentsPage,
     HISTORICAL_BLOCK_RETENTION,
+    NoteSyncCursor,
+    NoteSyncPage,
+    NullifierCursor,
+    NullifierUpdatesPage,
     NullifiersPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     PublicAccountIdsPage,
     PublicAccountStateRootsPage,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
     StorageMapValuesPage,
+    TransactionCursor,
+    TransactionRecordsPage,
+    TransactionsByIdPage,
 };
 use crate::errors::{DatabaseError, NoteSyncError};
 use crate::genesis::GenesisBlock;
@@ -145,12 +155,26 @@ impl BlockHeaderCommitment {
 /// Describes the value of an asset for an account ID at `block_num` specifically.
 ///
 /// If `asset` is `None`, the asset was removed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountVaultValue {
     pub block_num: BlockNumber,
     pub vault_key: AssetId,
     /// None if the asset was removed
     pub asset: Option<Asset>,
+}
+
+/// Stable cursor used to read a squashed account-vault delta in bounded database pages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultCursor {
+    pub(crate) block_num: BlockNumber,
+    pub(crate) vault_key: AssetId,
+}
+
+/// A bounded page of squashed account-vault updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultValuesPage {
+    pub values: Vec<AccountVaultValue>,
+    pub next_cursor: Option<AccountVaultCursor>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -890,6 +914,125 @@ impl Db {
         self.reader
             .read("account vault sync", move |tx| {
                 queries::select_account_vault_assets(tx, account_id, block_range)
+            })
+            .await
+    }
+
+    /// Selects one final update per vault key changed in `block_range`.
+    pub async fn select_account_vault_updates_v2(
+        &self,
+        account_id: AccountId,
+        block_range: ScopedBlockRange,
+        cursor: Option<AccountVaultCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountVaultValuesPage> {
+        let block_range = block_range.into_inner();
+        self.reader
+            .read("account vault sync v2", move |tx| {
+                queries::select_account_vault_updates_v2(
+                    tx,
+                    account_id,
+                    block_range,
+                    cursor,
+                    page_size,
+                )
+            })
+            .await
+    }
+
+    /// Selects one target value per changed storage-map key in a bounded page.
+    pub async fn select_account_storage_map_updates_v2(
+        &self,
+        account_id: AccountId,
+        block_range: ScopedBlockRange,
+        cursor: Option<StorageMapCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<StorageMapUpdatesPage> {
+        let range = block_range.into_inner();
+        self.reader
+            .read("account storage map sync v2", move |tx| {
+                queries::select_account_storage_map_updates_v2(
+                    tx, account_id, range, cursor, page_size,
+                )
+            })
+            .await
+    }
+
+    /// Loads a bounded page of matching notes, including a partial block.
+    pub async fn select_note_sync_page(
+        &self,
+        tags: Vec<u32>,
+        range: ScopedBlockRange,
+        cursor: Option<NoteSyncCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<NoteSyncPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("note sync page", move |tx| {
+                queries::select_note_sync_page(tx, &tags, range, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads changed account identities and their last update at a pinned target.
+    pub async fn select_account_commitment_changes(
+        &self,
+        ids: Vec<AccountId>,
+        range: ScopedBlockRange,
+        cursor: Option<AccountId>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountCommitmentChangesPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("account commitment changes", move |tx| {
+                queries::select_account_commitment_changes(tx, &ids, range, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads one bounded page of requested transaction records committed by the target.
+    pub async fn select_transactions_by_id(
+        &self,
+        ids: Vec<miden_protocol::transaction::TransactionId>,
+        target: ScopedBlockNum,
+        cursor: Option<miden_protocol::transaction::TransactionId>,
+        page_size: NonZeroUsize,
+    ) -> Result<TransactionsByIdPage> {
+        self.reader
+            .read("transactions by id", move |tx| {
+                queries::select_transactions_by_id(tx, &ids, *target, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads a bounded prefix-filtered nullifier page.
+    pub async fn select_nullifier_updates_page(
+        &self,
+        prefixes: Vec<u16>,
+        range: ScopedBlockRange,
+        cursor: Option<NullifierCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<NullifierUpdatesPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("nullifier updates page", move |tx| {
+                queries::select_nullifier_updates_page(tx, &prefixes, range, cursor, page_size)
+            })
+            .await
+    }
+
+    /// Loads a bounded transaction event page without aggregate byte truncation.
+    pub async fn select_transactions_records_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: ScopedBlockRange,
+        cursor: Option<TransactionCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<TransactionRecordsPage> {
+        let range = range.into_inner();
+        self.reader
+            .read("transaction history page", move |tx| {
+                queries::select_transactions_records_page(tx, &ids, range, cursor, page_size)
             })
             .await
     }
