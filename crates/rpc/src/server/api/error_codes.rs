@@ -30,6 +30,8 @@ error_codes!(GetAccountErrorCode {
     AccountNotPublic = 3,
     UnknownBlock = 4,
     BlockPruned = 5,
+    StorageSlotNotFound = 6,
+    StorageSlotNotMap = 7,
 });
 
 error_codes!(GetNotesByIdErrorCode { DeserializationFailed = 1 });
