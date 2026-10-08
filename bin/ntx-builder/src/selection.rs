@@ -17,7 +17,6 @@ use miden_protocol::account::Account;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionArgs;
-use miden_standards::account::fees::FeePolicyManager;
 use miden_standards::tx_script::ExpirationTransactionScript;
 use miden_tx::FailedNote;
 
@@ -68,7 +67,7 @@ pub(crate) struct Selection {
 /// filtering and the later execution all agree on one chain tip.
 pub(crate) async fn select_candidate(
     db: &NtxDbReader,
-    account: &Arc<Account>,
+    account: &Account,
     chain_state: ChainState,
     max_notes_per_tx: NonZeroUsize,
     max_note_attempts: usize,
@@ -83,7 +82,7 @@ pub(crate) async fn select_candidate(
         .context("failed to query DB for available notes")?;
     let stale_eligibility = availability.stale_eligibility;
 
-    let partitioned_notes = partition_by_allowlist(account.as_ref(), availability.eligible)
+    let partitioned_notes = partition_by_allowlist(account, availability.eligible)
         .context("failed to read network account note allowlist")?;
 
     let rejected = partitioned_notes
@@ -114,10 +113,9 @@ pub(crate) async fn select_candidate(
     };
     // A bundle must leave room for its feature note within the per-tx note budget.
     let max_sponsorships = MAX_SPONSORSHIPS_PER_NOTE.min(max_notes - 1);
-    let fee_asset_id = account
-        .storage()
-        .get_item(FeePolicyManager::fee_asset_id_slot())
-        .context("failed to read network account fee asset ID")?;
+    // Execution rejects an account whose fee asset differs from the protocol's, so the protocol fee
+    // asset is the only one a sponsorship can usefully carry.
+    let fee_asset_id = chain_state.protocol_config.fee_asset_id();
 
     let mut selected: Vec<SponsoredFeatureNote> = Vec::new();
     let mut selected_notes = 0_usize;
@@ -151,12 +149,7 @@ pub(crate) async fn select_candidate(
     }
 
     Ok(Selection {
-        candidate: Some(TransactionCandidate {
-            // Cheap: bumps the `Arc` refcount instead of deep-copying the account/storage.
-            account: Arc::clone(account),
-            notes: selected,
-            chain_state,
-        }),
+        candidate: Some(TransactionCandidate { notes: selected, chain_state }),
         rejected,
         stale_eligibility,
     })
@@ -289,20 +282,16 @@ end";
 
     /// Seeds a committed network account (with a populated allowlist) and returns its id together
     /// with the account itself.
-    async fn seed_selection_account(db: &crate::db::NtxDbWriter) -> (AccountId, Arc<Account>) {
+    async fn seed_selection_account(db: &crate::db::NtxDbWriter) -> (AccountId, Account) {
         let (account, _) = mock_network_account_update();
         db.upsert_account_for_test(account.id(), account.clone(), mock_transaction_id(1))
             .await
             .unwrap();
-        (account.id(), Arc::new(account))
+        (account.id(), account)
     }
 
     /// Runs selection with a 20-note budget, which is the production default.
-    async fn select(
-        db: &crate::db::NtxDbWriter,
-        account: &Arc<Account>,
-        max_notes: usize,
-    ) -> Selection {
+    async fn select(db: &crate::db::NtxDbWriter, account: &Account, max_notes: usize) -> Selection {
         select_candidate(
             &db.reader(),
             account,

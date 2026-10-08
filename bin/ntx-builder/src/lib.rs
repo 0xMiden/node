@@ -138,6 +138,10 @@ const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
 
+/// Number of accounts whose code is cached between transactions.
+const ACCOUNT_CODE_CACHE_SIZE: NonZeroUsize =
+    NonZeroUsize::new(1_000).expect("literal is non-zero");
+
 /// Default per-request timeout for node RPC requests.
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -521,6 +525,7 @@ impl NtxBuilderConfig {
             },
             db,
             script_cache: LruCache::new(self.script_cache_size),
+            code_cache: LruCache::new(ACCOUNT_CODE_CACHE_SIZE),
             tx_args: selection::build_tx_args(self.tx_expiration_delta),
             config: NetworkTransactionConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
