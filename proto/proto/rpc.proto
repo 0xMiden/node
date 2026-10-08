@@ -46,6 +46,13 @@ service NodeService {
     // Returns true if account allowlist enforcement is disabled or the account is allowlisted.
     rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
 
+    // Returns true if the invitation code can be used to register an account. The code must be
+    // registered in the invitation registry and unused. This check does not consume the code.
+    //
+    // Always returns true when account allowlist enforcement is disabled. When enforcement is
+    // enabled, an empty code returns INVALID_ARGUMENT.
+    rpc IsInvitationCodeValid(IsInvitationCodeValidRequest) returns (IsInvitationCodeValidResponse) {}
+
     // Returns block data for the specified block number, optionally including the block proof.
     rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
 
@@ -162,6 +169,19 @@ message IsAccountAllowedRequest {
 
 message IsAccountAllowedResponse {
     bool allowed = 1;
+}
+
+// IS INVITATION CODE VALID
+// ================================================================================================
+
+message IsInvitationCodeValidRequest {
+    // The original, nonempty invitation code. Codes are case-sensitive.
+    // Ignored when allowlist enforcement is disabled.
+    string invitation_code = 1;
+}
+
+message IsInvitationCodeValidResponse {
+    bool valid = 1;
 }
 
 // BLOCK SUBSCRIPTION

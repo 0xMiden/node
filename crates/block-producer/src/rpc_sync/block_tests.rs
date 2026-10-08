@@ -323,6 +323,11 @@ unused_rpc!(
     proto::miden::node::v1::IsAccountAllowedResponse
 );
 unused_rpc!(
+    IsInvitationCodeValid,
+    proto::miden::node::v1::IsInvitationCodeValidRequest,
+    proto::miden::node::v1::IsInvitationCodeValidResponse
+);
+unused_rpc!(
     GetNetworkNoteStatus,
     proto::miden::node::v1::GetNetworkNoteStatusRequest,
     proto::miden::node::v1::GetNetworkNoteStatusResponse

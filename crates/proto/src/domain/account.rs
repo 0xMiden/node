@@ -128,6 +128,54 @@ impl Verify for proto::miden::node::v1::DecodedIsAccountAllowedRequest {
     }
 }
 
+// IS INVITATION CODE VALID REQUEST
+// ================================================================================================
+
+impl Debug for proto::miden::node::v1::IsInvitationCodeValidRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IsInvitationCodeValidRequest").finish_non_exhaustive()
+    }
+}
+
+/// Decoded invitation check fields. The invitation code remains unvalidated.
+#[must_use = "decoded fields have not been verified"]
+pub struct DecodedIsInvitationCodeValidRequest {
+    pub invitation_code: String,
+}
+
+impl Debug for DecodedIsInvitationCodeValidRequest {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecodedIsInvitationCodeValidRequest").finish_non_exhaustive()
+    }
+}
+
+impl DecodeMessage for proto::miden::node::v1::IsInvitationCodeValidRequest {
+    type Decoded = DecodedIsInvitationCodeValidRequest;
+}
+
+impl TryFrom<proto::miden::node::v1::IsInvitationCodeValidRequest>
+    for DecodedIsInvitationCodeValidRequest
+{
+    type Error = ConversionError;
+
+    fn try_from(
+        request: proto::miden::node::v1::IsInvitationCodeValidRequest,
+    ) -> Result<Self, Self::Error> {
+        Ok(Self { invitation_code: request.invitation_code })
+    }
+}
+
+/// Returns the raw invitation code. The handler validates the code because an empty code is
+/// accepted when allowlist enforcement is disabled.
+impl Verify for DecodedIsInvitationCodeValidRequest {
+    type Verified = String;
+    type Error = ConversionError;
+
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        Ok(self.invitation_code)
+    }
+}
+
 // ACCOUNT REQUEST
 // ================================================================================================
 
