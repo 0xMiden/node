@@ -72,7 +72,8 @@ pub(crate) fn complete_blocks_page<T>(
     Ok(Page { items: rows, next: Some(last_block) })
 }
 
-/// Encodes the cursor of a query ordered by a key stored as a raw blob. `None` starts at the first key.
+/// Encodes the cursor of a query ordered by a key stored as a raw blob. `None` starts at the first
+/// key.
 pub(crate) fn key_cursor<K: Serializable>(next: Option<&K>) -> Vec<u8> {
     next.map(Serializable::to_bytes).unwrap_or_default()
 }
