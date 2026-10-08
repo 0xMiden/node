@@ -1,7 +1,6 @@
 //! Returns the vault updates of an account within a block range.
 
 use std::mem::size_of;
-use std::ops::RangeInclusive;
 
 use miden_node_db::sqlite::ReadTx;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
@@ -13,29 +12,25 @@ use miden_protocol::block::BlockNumber;
 use crate::db::AccountVaultValue;
 use crate::db::pagination::{Page, Paginated, complete_blocks_page};
 use crate::errors::DatabaseError;
-use crate::state::ScopedBlockRange;
+use crate::state::ScopedBlockNum;
 
 const SQL: &str = include_str!("select_account_vault_assets.sql");
 
-/// Paginated query over the vault updates of an account within an inclusive block range, ordered by
-/// block number.
+/// Paginated query over the vault updates of an account up to `block_to`, ordered by block number.
 ///
-/// The row limit of a page derives from the response payload limit. A page never splits a block,
-/// so the block number can serve as the cursor, and a block with more updates than the row limit
+/// The cursor is the block where a page starts. The row limit of a page derives from the response
+/// payload limit. A page never splits a block, so a block with more updates than the row limit
 /// fails with [`DatabaseError::BlockExceedsPageLimit`] instead of being skipped.
 #[derive(Debug, Clone)]
 pub(crate) struct AccountVaultAssets {
     account_id: AccountId,
-    block_range: RangeInclusive<BlockNumber>,
+    block_to: BlockNumber,
 }
 
 impl AccountVaultAssets {
-    /// Creates the query for `account_id` within `block_range`.
-    pub(crate) fn new(account_id: AccountId, block_range: ScopedBlockRange) -> Self {
-        Self {
-            account_id,
-            block_range: block_range.into_inner(),
-        }
+    /// Creates the query for `account_id` up to and including `block_to`.
+    pub(crate) fn new(account_id: AccountId, block_to: ScopedBlockNum) -> Self {
+        Self { account_id, block_to: *block_to }
     }
 }
 
@@ -46,7 +41,7 @@ impl Paginated for AccountVaultAssets {
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&BlockNumber>,
+        next: &BlockNumber,
     ) -> Result<Page<AccountVaultValue, BlockNumber>, DatabaseError> {
         // The protocol does not define these limits. Derive a conservative row limit from the
         // response payload limit.
@@ -57,8 +52,7 @@ impl Paginated for AccountVaultAssets {
             return Err(DatabaseError::AccountNotPublic(self.account_id));
         }
 
-        let block_from = after.map_or(*self.block_range.start(), |block| block.child());
-        let block_to = *self.block_range.end();
+        let (block_from, block_to) = (*next, self.block_to);
         if block_from > block_to {
             return Err(DatabaseError::InvalidBlockRange { from: block_from, to: block_to });
         }

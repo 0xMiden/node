@@ -6,12 +6,11 @@ use miden_node_db::sqlite::{ReadTx, Row};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountStorageHeader};
 
-use crate::db::pagination::{Page, Paginated};
+use crate::db::pagination::{Page, Paginated, key_cursor};
 use crate::db::queries::VALID_FOREVER;
 use crate::errors::DatabaseError;
 
-const SQL_FIRST_PAGE: &str = include_str!("select_public_account_state_roots_page.sql");
-const SQL_AFTER_CURSOR: &str = include_str!("select_public_account_state_roots_page_after.sql");
+const SQL: &str = include_str!("select_public_account_state_roots_page.sql");
 
 /// Latest account state forest roots for a public account.
 #[derive(Debug)]
@@ -25,7 +24,7 @@ pub struct PublicAccountStateRoots {
 type StateRootsRow = (AccountId, Option<Word>, Option<AccountStorageHeader>);
 
 /// Paginated query over the latest vault root and storage header of every public account, ordered
-/// by account ID.
+/// by account ID. The cursor is the account ID where a page starts, or `None` for the first account.
 ///
 /// Public accounts are recognized by their stored `code_commitment`, because private accounts only
 /// store an `account_commitment`. Both columns are nullable in the schema, but a public account
@@ -38,22 +37,21 @@ pub(crate) struct PublicAccountStateRootsPaged {
 
 impl Paginated for PublicAccountStateRootsPaged {
     type Item = PublicAccountStateRoots;
-    type Cursor = AccountId;
+    type Cursor = Option<AccountId>;
 
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&AccountId>,
-    ) -> Result<Page<PublicAccountStateRoots, AccountId>, DatabaseError> {
+        next: &Option<AccountId>,
+    ) -> Result<Page<PublicAccountStateRoots, Option<AccountId>>, DatabaseError> {
         // Fetch one extra to determine if there are more results
         let limit = i64::try_from(self.page_size.get() + 1).expect("page size fits within i64");
 
-        let rows = match after {
-            Some(cursor) => {
-                tx.query(SQL_AFTER_CURSOR, &[&limit, &VALID_FOREVER, cursor], state_roots_from_row)?
-            },
-            None => tx.query(SQL_FIRST_PAGE, &[&limit, &VALID_FOREVER], state_roots_from_row)?,
-        };
+        let rows = tx.query(
+            SQL,
+            &[&limit, &VALID_FOREVER, &key_cursor(next.as_ref())],
+            state_roots_from_row,
+        )?;
 
         // The columns are nullable in the schema, but a public account always has both.
         let accounts = rows
@@ -75,7 +73,9 @@ impl Paginated for PublicAccountStateRootsPaged {
             })
             .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-        Ok(Page::from_overflow(accounts, self.page_size, |account| account.account_id))
+        Ok(Page::from_overflow(accounts, self.page_size, |account| {
+            Some(account.account_id)
+        }))
     }
 }
 

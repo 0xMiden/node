@@ -9,7 +9,7 @@ use crate::db::NoteSyncUpdate;
 use crate::db::pagination::{Page, Paginated};
 use crate::db::queries::{select_block_header_by_block_num, select_notes_since_block_by_tag};
 use crate::errors::DatabaseError;
-use crate::state::ScopedBlockRange;
+use crate::state::ScopedBlockNum;
 
 /// Estimated byte size of a [`NoteSyncUpdate`] excluding its notes.
 ///
@@ -23,29 +23,30 @@ pub(crate) const NOTE_SYNC_BLOCK_OVERHEAD_BYTES: usize = 1800;
 /// Merkle path with 16 siblings.
 pub(crate) const NOTE_SYNC_RECORD_BYTES: usize = 900;
 
-/// Paginated query over note sync data within an inclusive block range: one [`NoteSyncUpdate`] for
-/// each block with at least one note matching the requested tags, ordered by block number.
+/// Paginated query over note sync data up to `block_to`: one [`NoteSyncUpdate`] for each block with
+/// at least one note matching the requested tags, ordered by block number.
 ///
-/// A page holds as many blocks as fit within `max_response_payload_bytes`. It always holds at least
-/// one block, even when that block alone exceeds the limit, so that pagination keeps moving.
+/// The cursor is the block where a page starts. A page holds as many blocks as fit within
+/// `max_response_payload_bytes`. It always holds at least one block, even when that block alone
+/// exceeds the limit, so that pagination keeps moving.
 #[derive(Debug, Clone)]
 pub(crate) struct NoteSyncMulti {
     note_tags: Vec<u32>,
-    block_range: RangeInclusive<BlockNumber>,
+    block_to: BlockNumber,
     max_response_payload_bytes: usize,
 }
 
 impl NoteSyncMulti {
-    /// Creates the query for `note_tags` within `block_range`, with pages limited to
+    /// Creates the query for `note_tags` up to and including `block_to`, with pages limited to
     /// `max_response_payload_bytes`.
     pub(crate) fn new(
         note_tags: Vec<u32>,
-        block_range: ScopedBlockRange,
+        block_to: ScopedBlockNum,
         max_response_payload_bytes: usize,
     ) -> Self {
         Self {
             note_tags,
-            block_range: block_range.into_inner(),
+            block_to: *block_to,
             max_response_payload_bytes,
         }
     }
@@ -58,13 +59,12 @@ impl Paginated for NoteSyncMulti {
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&BlockNumber>,
+        next: &BlockNumber,
     ) -> Result<Page<NoteSyncUpdate, BlockNumber>, DatabaseError> {
-        let block_from = after.map_or(*self.block_range.start(), |block| block.child());
         get_note_sync_multi(
             tx,
             &self.note_tags,
-            block_from..=*self.block_range.end(),
+            *next..=self.block_to,
             self.max_response_payload_bytes,
         )
     }
@@ -95,7 +95,7 @@ fn get_note_sync_multi(
         if let Some(last_update) = updates.last()
             && accumulated_size > max_response_payload_bytes
         {
-            let next = last_update.block_header.block_num();
+            let next = last_update.block_header.block_num().child();
             return Ok(Page { items: updates, next: Some(next) });
         }
 

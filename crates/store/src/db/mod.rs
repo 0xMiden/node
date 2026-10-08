@@ -319,7 +319,7 @@ impl Db {
         Ok(())
     }
 
-    /// Reads the page of `query` after `after`, or the first page when `after` is `None`.
+    /// Reads the page of `query` that starts at `next`.
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
@@ -328,15 +328,15 @@ impl Db {
     pub(crate) async fn page<Q: Paginated>(
         &self,
         query: Q,
-        after: Option<Q::Cursor>,
+        next: Q::Cursor,
     ) -> Result<Page<Q::Item, Q::Cursor>> {
         self.reader
-            .read(std::any::type_name::<Q>(), move |tx| query.page(tx, after.as_ref()))
+            .read(std::any::type_name::<Q>(), move |tx| query.page(tx, &next))
             .await
     }
 
-    /// Streams the items of every non-empty page of `query` in order, ending after the page whose
-    /// `next` is `None`.
+    /// Streams the items of every non-empty page of `query` in order, starting at `start` and
+    /// ending after the page whose `next` is `None`.
     ///
     /// Each page runs in its own read transaction, so no reader connection stays checked out
     /// between pages. As a consequence, different pages can observe different snapshots of the
@@ -344,25 +344,25 @@ impl Db {
     pub(crate) fn pages<Q: Paginated>(
         &self,
         query: Q,
+        start: Q::Cursor,
     ) -> impl Stream<Item = Result<Vec<Q::Item>>> + Send + use<Q> {
         let reader = self.reader.clone();
         let query = Arc::new(query);
-        // The state holds the `after` cursor of the next page, or `None` once the last page is
-        // read.
-        futures::stream::try_unfold(Some(None), move |state: Option<Option<Q::Cursor>>| {
+        // The state holds where the next page starts, or `None` once the last page is read.
+        futures::stream::try_unfold(Some(start), move |state: Option<Q::Cursor>| {
             let reader = reader.clone();
             let query = Arc::clone(&query);
             async move {
-                let Some(after) = state else {
+                let Some(next) = state else {
                     return Ok(None);
                 };
                 let page = reader
-                    .read(std::any::type_name::<Q>(), move |tx| query.page(tx, after.as_ref()))
+                    .read(std::any::type_name::<Q>(), move |tx| query.page(tx, &next))
                     .await?;
                 if page.items.is_empty() {
                     return Ok(None);
                 }
-                Ok::<_, DatabaseError>(Some((page.items, page.next.map(Some))))
+                Ok::<_, DatabaseError>(Some((page.items, page.next)))
             }
         })
     }
@@ -686,14 +686,11 @@ impl Db {
         // TODO this remains expensive with a large history until we implement pruning for DB
         // columns
         let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
-        let query = queries::AccountStorageMapValuesPaged::new(
-            account_id,
-            block_num.range_from(BlockNumber::GENESIS),
-            entries_limit,
-        );
+        let query =
+            queries::AccountStorageMapValuesPaged::new(account_id, block_num, entries_limit);
 
         let mut values = Vec::new();
-        let mut pages = pin!(self.pages(query));
+        let mut pages = pin!(self.pages(query, BlockNumber::GENESIS));
         loop {
             match pages.try_next().await {
                 Ok(Some(page)) => values.extend(page),

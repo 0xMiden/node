@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 
 use miden_node_db::sqlite::ReadTx;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::utils::serde::Serializable;
 
 use crate::errors::DatabaseError;
 
@@ -15,7 +16,7 @@ use crate::errors::DatabaseError;
 pub(crate) struct Page<T, C> {
     /// The items in this page, in cursor order.
     pub items: Vec<T>,
-    /// The cursor to pass as `after` to read the next page, or `None` if this is the last page.
+    /// Where the next page starts, or `None` if this is the last page.
     pub next: Option<C>,
 }
 
@@ -23,27 +24,34 @@ impl<T, C> Page<T, C> {
     /// Builds a page from up to `page_size + 1` rows in cursor order.
     ///
     /// Queries fetch one row beyond the page size to learn whether another page exists without a
-    /// separate count. The extra row is dropped, and the last remaining row becomes the cursor.
+    /// separate count. The extra row is dropped, and its cursor becomes the start of the next page.
     pub fn from_overflow(
         mut rows: Vec<T>,
         page_size: NonZeroUsize,
         cursor_of: impl Fn(&T) -> C,
     ) -> Self {
-        let next = if rows.len() > page_size.get() {
-            rows.truncate(page_size.get());
-            rows.last().map(cursor_of)
-        } else {
-            None
-        };
+        let next = rows.get(page_size.get()).map(cursor_of);
+        rows.truncate(page_size.get());
         Self { items: rows, next }
+    }
+}
+
+impl<T> Page<T, BlockNumber> {
+    /// Returns the last block that the page covers completely, for a query whose range ends at
+    /// `block_to`.
+    pub fn last_block_included(&self, block_to: BlockNumber) -> BlockNumber {
+        self.next.map_or(block_to, |next| {
+            next.parent()
+                .expect("a page that is not the last one starts before its next page")
+        })
     }
 }
 
 /// Builds a page from up to `limit + 1` rows in block order, keeping only complete blocks.
 ///
 /// Block range queries use the block number as the cursor, so a page must never split a block.
-/// When the rows exceed `limit`, the last block may be incomplete, so its rows are dropped and
-/// `next` becomes the block before it. If every row belongs to that last block, the block alone
+/// When the rows exceed `limit`, the last block may be incomplete, so its rows are dropped and the
+/// next page starts at that block. If every row belongs to that last block, the block alone
 /// exceeds `limit` and can never fit in a page, so this returns
 /// [`DatabaseError::BlockExceedsPageLimit`] instead of an empty page that would stall pagination.
 pub(crate) fn complete_blocks_page<T>(
@@ -61,10 +69,12 @@ pub(crate) fn complete_blocks_page<T>(
         return Err(DatabaseError::BlockExceedsPageLimit { block_num: last_block });
     }
 
-    let next = last_block
-        .parent()
-        .expect("the page holds rows of a block before the last block");
-    Ok(Page { items: rows, next: Some(next) })
+    Ok(Page { items: rows, next: Some(last_block) })
+}
+
+/// Encodes the cursor of a query ordered by a key stored as a raw blob. `None` starts at the first key.
+pub(crate) fn key_cursor<K: Serializable>(next: Option<&K>) -> Vec<u8> {
+    next.map(Serializable::to_bytes).unwrap_or_default()
 }
 
 // PAGINATED
@@ -72,22 +82,22 @@ pub(crate) fn complete_blocks_page<T>(
 
 /// A read query that returns its results one page at a time.
 ///
-/// Implementations return items in cursor order, and `page(tx, Some(cursor))` returns only items
-/// after `cursor`. A non-empty page must move the cursor forward, and an empty page must set `next`
-/// to `None`, because [`Db::pages`](super::Db::pages) relies on both to terminate. When no item can
-/// fit in a page, such as a block with more rows than the page limit, `page` returns an error
-/// instead of an empty page that would stall pagination.
+/// Implementations return items in cursor order, and `page(tx, next)` returns only items at or
+/// after `next`. The `next` of a non-empty page must be past the cursor the page started at, and an
+/// empty page must set `next` to `None`, because [`Db::pages`](super::Db::pages) relies on both to
+/// terminate. When no item can fit in a page, such as a block with more rows than the page limit,
+/// `page` returns an error instead of an empty page that would stall pagination.
 pub(crate) trait Paginated: Send + Sync + 'static {
     /// One result of the query.
     type Item: Send + 'static;
     /// The position of an item in the query order.
     type Cursor: Send + 'static;
 
-    /// Returns the page after `after`, or the first page when `after` is `None`.
+    /// Returns the page that starts at `next`.
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&Self::Cursor>,
+        next: &Self::Cursor,
     ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError>;
 }
 
@@ -113,11 +123,11 @@ mod tests {
     }
 
     #[test]
-    fn from_overflow_drops_the_extra_row_and_points_at_the_last_item() {
+    fn from_overflow_drops_the_extra_row_and_starts_the_next_page_at_it() {
         let page =
             Page::from_overflow(vec![1, 2, 3, 4], NonZeroUsize::new(3).unwrap(), |row| *row * 10);
 
-        assert_eq!(page, Page { items: vec![1, 2, 3], next: Some(30) });
+        assert_eq!(page, Page { items: vec![1, 2, 3], next: Some(40) });
     }
 
     #[test]
@@ -131,14 +141,22 @@ mod tests {
     fn complete_blocks_page_drops_the_incomplete_last_block() {
         let page = complete_blocks_page(blocks(&[1, 2, 5, 5]), 3, |block| *block).unwrap();
 
-        // Blocks 3 and 4 have no rows, so the page covers them completely.
         assert_eq!(
             page,
             Page {
                 items: blocks(&[1, 2]),
-                next: Some(4.into())
+                next: Some(5.into())
             }
         );
+        // Blocks 3 and 4 have no rows, so the page covers them completely.
+        assert_eq!(page.last_block_included(10.into()), 4.into());
+    }
+
+    #[test]
+    fn last_block_included_of_the_last_page_is_the_range_end() {
+        let page = complete_blocks_page(blocks(&[1, 2]), 3, |block| *block).unwrap();
+
+        assert_eq!(page.last_block_included(10.into()), 10.into());
     }
 
     #[test]

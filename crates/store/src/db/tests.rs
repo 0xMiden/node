@@ -1,8 +1,10 @@
 use std::collections::{BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use assert_matches::assert_matches;
+use futures::TryStreamExt;
 use miden_node_db::sqlite::WriteTx;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
@@ -87,6 +89,7 @@ use rand::RngExt;
 use tempfile::tempdir;
 
 use super::{AccountInfo, NoteRecord, NoteSyncRecord, NullifierInfo, TransactionRecord};
+use crate::ScopedBlockNum;
 use crate::account_state_forest::{
     AccountStorageMapResult,
     HISTORICAL_BLOCK_RETENTION,
@@ -104,7 +107,6 @@ use crate::db::queries::{
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
-use crate::{ScopedBlockNum, ScopedBlockRange};
 
 // QUERY DRIVERS
 // ================================================================================================
@@ -208,14 +210,15 @@ fn select_nullifiers_by_prefix(
     nullifier_prefixes: &[u16],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-    let block_end = *block_range.end();
+    let (block_from, block_to) = block_range.into_inner();
     let query = queries::NullifiersByPrefix::new(
         prefix_len,
         nullifier_prefixes.to_vec(),
-        ScopedBlockRange::new_unchecked(block_range),
+        ScopedBlockNum::new_unchecked(block_to),
     );
-    let page = db.read(move |tx| query.page(tx, None))?;
-    Ok((page.items, page.next.unwrap_or(block_end)))
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let last_block_included = page.last_block_included(block_to);
+    Ok((page.items, last_block_included))
 }
 
 fn select_notes_since_block_by_tag(
@@ -251,12 +254,13 @@ fn get_note_sync_multi(
     block_range: RangeInclusive<BlockNumber>,
     max_response_payload_bytes: usize,
 ) -> Result<Page<NoteSyncUpdate, BlockNumber>> {
+    let (block_from, block_to) = block_range.into_inner();
     let query = queries::NoteSyncMulti::new(
         note_tags.to_vec(),
-        ScopedBlockRange::new_unchecked(block_range),
+        ScopedBlockNum::new_unchecked(block_to),
         max_response_payload_bytes,
     );
-    db.read(move |tx| query.page(tx, None))
+    db.read(move |tx| query.page(tx, &block_from))
 }
 
 fn select_block_header_by_block_num(
@@ -306,15 +310,15 @@ fn select_account_storage_map_values_paged(
     block_range: RangeInclusive<BlockNumber>,
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
-    let block_end = *block_range.end();
+    let (block_from, block_to) = block_range.into_inner();
     let query = queries::AccountStorageMapValuesPaged::new(
         account_id,
-        ScopedBlockRange::new_unchecked(block_range),
+        ScopedBlockNum::new_unchecked(block_to),
         limit,
     );
-    let page = db.read(move |tx| query.page(tx, None))?;
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
     Ok(StorageMapValuesPage {
-        last_block_included: page.next.unwrap_or(block_end),
+        last_block_included: page.last_block_included(block_to),
         values: page.items,
     })
 }
@@ -324,11 +328,11 @@ fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-    let block_end = *block_range.end();
+    let (block_from, block_to) = block_range.into_inner();
     let query =
-        queries::AccountVaultAssets::new(account_id, ScopedBlockRange::new_unchecked(block_range));
-    let page = db.read(move |tx| query.page(tx, None))?;
-    Ok((page.next.unwrap_or(block_end), page.items))
+        queries::AccountVaultAssets::new(account_id, ScopedBlockNum::new_unchecked(block_to));
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    Ok((page.last_block_included(block_to), page.items))
 }
 
 fn select_vault_at_block(
@@ -344,13 +348,13 @@ fn select_transactions_records(
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-    let block_end = *block_range.end();
+    let (block_from, block_to) = block_range.into_inner();
     let query = queries::TransactionsRecords::new(
         account_ids.to_vec(),
-        ScopedBlockRange::new_unchecked(block_range),
+        ScopedBlockNum::new_unchecked(block_to),
     );
-    let page = db.read(move |tx| query.page(tx, None))?;
-    Ok((page.next.unwrap_or(block_end), page.items))
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    Ok((page.last_block_included(block_to), page.items))
 }
 
 // TEST HELPERS
@@ -543,6 +547,37 @@ fn sql_select_nullifiers() {
         let nullifiers = select_all_nullifiers(db).unwrap();
         assert_eq!(nullifiers, state);
     }
+}
+
+/// Tests that streaming nullifiers in pages smaller than the table returns every nullifier exactly
+/// once.
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn nullifier_pages_return_every_nullifier_once() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
+    let db = crate::db::Db::load(db_path).await.unwrap();
+
+    let block_num = BlockNumber::from(1);
+    let nullifiers: Vec<Nullifier> = (0..5).map(num_to_nullifier).collect();
+    let inserted = nullifiers.clone();
+    db.writer()
+        .write::<_, DatabaseError, _>("insert nullifiers", move |tx| {
+            create_block_in(tx, block_num)?;
+            queries::insert_nullifiers_for_block(tx, &inserted, block_num)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let query = queries::NullifiersPaged { page_size: NonZeroUsize::new(2).unwrap() };
+    let pages: Vec<Vec<NullifierInfo>> = db.pages(query, None).try_collect().await.unwrap();
+
+    assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 1]);
+    let paged: HashSet<Nullifier> =
+        pages.into_iter().flatten().map(|info| info.nullifier).collect();
+    assert_eq!(paged, nullifiers.into_iter().collect());
 }
 
 pub fn create_note(account_id: AccountId) -> Note {
@@ -1334,7 +1369,7 @@ fn note_sync_multi_respects_payload_limit() {
         vec![BlockNumber::from(1)],
         "the first block is always included, but the second block would exceed the payload cap",
     );
-    assert_eq!(page.next, Some(BlockNumber::from(1)), "the next page starts after block 1");
+    assert_eq!(page.next, Some(BlockNumber::from(2)), "the next page starts at block 2");
 }
 
 /// Tests that note sync returns an empty result when no notes match the requested tags.

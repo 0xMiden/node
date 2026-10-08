@@ -199,8 +199,9 @@ impl TreeStorageLoader for MemoryStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load account commitments in pages to avoid loading millions of entries at once
-        let mut pages =
-            pin!(db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }));
+        let mut pages = pin!(
+            db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }, None)
+        );
         while let Some(commitments) = pages.try_next().await? {
             let entries = commitments
                 .into_iter()
@@ -230,7 +231,7 @@ impl TreeStorageLoader for MemoryStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load nullifiers in pages to avoid loading millions of entries at once
-        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }));
+        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }, None));
         while let Some(nullifiers) = pages.try_next().await? {
             let entries = nullifiers.into_iter().map(|info| {
                 (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
@@ -297,8 +298,9 @@ impl TreeStorageLoader for RocksDbStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load account commitments in pages to avoid loading millions of entries at once
-        let mut pages =
-            pin!(db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }));
+        let mut pages = pin!(
+            db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }, None)
+        );
         while let Some(commitments) = pages.try_next().await? {
             let entries = commitments
                 .into_iter()
@@ -337,7 +339,7 @@ impl TreeStorageLoader for RocksDbStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load nullifiers in pages to avoid loading millions of entries at once
-        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }));
+        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }, None));
         while let Some(nullifiers) = pages.try_next().await? {
             let entries = nullifiers.into_iter().map(|info| {
                 (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
@@ -519,7 +521,7 @@ pub async fn rebuild_account_state_forest(
     use miden_protocol::account::AccountPatch;
 
     let mut pages =
-        pin!(db.pages(PublicAccountIdsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }));
+        pin!(db.pages(PublicAccountIdsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }, None));
     while let Some(account_ids) = pages.try_next().await? {
         let mut patches = Vec::with_capacity(account_ids.len());
         for account_id in account_ids {
@@ -614,8 +616,9 @@ pub async fn verify_account_state_forest_consistency(
 ) -> Result<(), StateInitializationError> {
     use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-    let mut pages =
-        pin!(db.pages(PublicAccountStateRootsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }));
+    let mut pages = pin!(
+        db.pages(PublicAccountStateRootsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }, None)
+    );
     while let Some(accounts) = pages.try_next().await? {
         // Per-account checks are independent, so verify each page in parallel.
         accounts.into_par_iter().try_for_each(|account| {

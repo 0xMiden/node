@@ -7,14 +7,14 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
 use crate::db::NullifierInfo;
-use crate::db::pagination::{Page, Paginated};
+use crate::db::pagination::{Page, Paginated, key_cursor};
 use crate::errors::DatabaseError;
 
-const SQL_FIRST_PAGE: &str = include_str!("select_nullifiers_page.sql");
-const SQL_AFTER_CURSOR: &str = include_str!("select_nullifiers_page_after.sql");
+const SQL: &str = include_str!("select_nullifiers_page.sql");
 
-/// Paginated query over all nullifiers, ordered by nullifier so that the last nullifier of a page
-/// is an unambiguous cursor for the next one.
+/// Paginated query over all nullifiers, ordered by nullifier.
+///
+/// The cursor is the nullifier where a page starts, or `None` for the first nullifier.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct NullifiersPaged {
     /// Maximum number of nullifiers in a page.
@@ -23,24 +23,20 @@ pub(crate) struct NullifiersPaged {
 
 impl Paginated for NullifiersPaged {
     type Item = NullifierInfo;
-    type Cursor = Nullifier;
+    type Cursor = Option<Nullifier>;
 
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&Nullifier>,
-    ) -> Result<Page<NullifierInfo, Nullifier>, DatabaseError> {
+        next: &Option<Nullifier>,
+    ) -> Result<Page<NullifierInfo, Option<Nullifier>>, DatabaseError> {
         // Fetch one extra to determine if there are more results
         let limit = i64::try_from(self.page_size.get() + 1).expect("page size fits within i64");
 
-        let nullifiers = match after {
-            Some(cursor) => {
-                tx.query(SQL_AFTER_CURSOR, &[&limit, cursor], nullifier_info_from_row)?
-            },
-            None => tx.query(SQL_FIRST_PAGE, &[&limit], nullifier_info_from_row)?,
-        };
+        let nullifiers =
+            tx.query(SQL, &[&limit, &key_cursor(next.as_ref())], nullifier_info_from_row)?;
 
-        Ok(Page::from_overflow(nullifiers, self.page_size, |info| info.nullifier))
+        Ok(Page::from_overflow(nullifiers, self.page_size, |info| Some(info.nullifier)))
     }
 }
 

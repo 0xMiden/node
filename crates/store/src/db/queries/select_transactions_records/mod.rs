@@ -25,7 +25,7 @@ use crate::db::TransactionRecord;
 use crate::db::pagination::{Page, Paginated};
 use crate::db::queries::{select_note_ids_by_nullifier, select_note_sync_records};
 use crate::errors::DatabaseError;
-use crate::state::ScopedBlockRange;
+use crate::state::ScopedBlockNum;
 
 const SQL_FIRST_CHUNK: &str = include_str!("select_transactions_records_chunk.sql");
 const SQL_AFTER_CURSOR: &str = include_str!("select_transactions_records_chunk_after.sql");
@@ -42,24 +42,21 @@ struct TransactionRow {
     size_in_bytes: i64,
 }
 
-/// Paginated query over the complete transaction records of a set of accounts within an inclusive
-/// block range, ordered by block number.
+/// Paginated query over the complete transaction records of a set of accounts up to `block_to`,
+/// ordered by block number.
 ///
-/// Pages are limited by payload size rather than by row count. See [`select_transactions_records`]
-/// for how a page is filled.
+/// The cursor is the block where a page starts. Pages are limited by payload size rather than by
+/// row count. See [`select_transactions_records`] for how a page is filled.
 #[derive(Debug, Clone)]
 pub(crate) struct TransactionsRecords {
     account_ids: Vec<AccountId>,
-    block_range: RangeInclusive<BlockNumber>,
+    block_to: BlockNumber,
 }
 
 impl TransactionsRecords {
-    /// Creates the query for `account_ids` within `block_range`.
-    pub(crate) fn new(account_ids: Vec<AccountId>, block_range: ScopedBlockRange) -> Self {
-        Self {
-            account_ids,
-            block_range: block_range.into_inner(),
-        }
+    /// Creates the query for `account_ids` up to and including `block_to`.
+    pub(crate) fn new(account_ids: Vec<AccountId>, block_to: ScopedBlockNum) -> Self {
+        Self { account_ids, block_to: *block_to }
     }
 }
 
@@ -70,10 +67,9 @@ impl Paginated for TransactionsRecords {
     fn page(
         &self,
         tx: &ReadTx<'_>,
-        after: Option<&BlockNumber>,
+        next: &BlockNumber,
     ) -> Result<Page<TransactionRecord, BlockNumber>, DatabaseError> {
-        let block_from = after.map_or(*self.block_range.start(), |block| block.child());
-        select_transactions_records(tx, &self.account_ids, block_from..=*self.block_range.end())
+        select_transactions_records(tx, &self.account_ids, *next..=self.block_to)
     }
 }
 
@@ -169,32 +165,26 @@ fn select_transactions_records(
         });
     };
 
-    // We stopped within `truncation_block`, so that block may be partial. Block-based pagination
-    // can only report fully-included blocks, so drop every transaction belonging to the truncation
-    // block and report the previous block as the cursor. Transactions are ordered ascending by
-    // block number, so the truncation block's transactions form a contiguous suffix:
-    // `partition_point` locates the boundary and `truncate` drops the suffix in place, without
-    // allocating a new vector, with O(log n) complexity.
+    // We stopped within `truncation_block`, so that block may be partial. A page never splits a
+    // block, so drop every transaction belonging to the truncation block and start the next page at
+    // it. Transactions are ordered ascending by block number, so the truncation block's
+    // transactions form a contiguous suffix: `partition_point` locates the boundary and `truncate`
+    // drops the suffix in place, without allocating a new vector, with O(log n) complexity.
     let complete_len = transactions.partition_point(|row| row.block_num < truncation_block);
     transactions.truncate(complete_len);
 
     if transactions.is_empty() {
-        // A single block's transactions exceed the payload cap. Reporting `truncation_block - 1`
-        // here would tell the client to resume from `truncation_block`, which can never fit, so
-        // pagination would loop forever. Surface the condition instead of silently looping.
+        // A single block's transactions exceed the payload cap. Starting the next page at
+        // `truncation_block` would return this same empty page, so pagination would loop forever.
+        // Surface the condition instead of silently looping.
         return Err(DatabaseError::TransactionPageExceedsPayloadLimit {
             block_num: truncation_block,
         });
     }
 
-    // The remaining transactions are in blocks before `truncation_block`, so it is not the genesis
-    // block.
-    let last_included_block = truncation_block
-        .parent()
-        .expect("transactions exist in a block before the truncation block");
     Ok(Page {
         items: with_output_note_proofs(tx, transactions)?,
-        next: Some(last_included_block),
+        next: Some(truncation_block),
     })
 }
 

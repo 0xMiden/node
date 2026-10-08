@@ -39,9 +39,9 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(BlockNumber, Vec<crate::db::TransactionRecord>), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        let block_end = block_range.end();
-        let page = self.db.page(TransactionsRecords::new(account_ids, block_range), None).await?;
-        Ok((page.next.unwrap_or(block_end), page.items))
+        let query = TransactionsRecords::new(account_ids, block_range.scoped_end());
+        let page = self.db.page(query, block_range.start()).await?;
+        Ok((page.last_block_included(block_range.end()), page.items))
     }
 
     /// Returns the chain MMR delta and the block header at the range's end for the specified
@@ -135,8 +135,10 @@ impl StateView {
         // view's blockchain MMR always has at least tip + 1 leaves.
         let mmr_checkpoint = block_end + 1;
 
-        let query = NoteSyncMulti::new(note_tags, block_range, MAX_RESPONSE_PAYLOAD_BYTES);
-        let page = self.db.page(query, None).await?;
+        let query =
+            NoteSyncMulti::new(note_tags, block_range.scoped_end(), MAX_RESPONSE_PAYLOAD_BYTES);
+        let page = self.db.page(query, block_range.start()).await?;
+        let last_block_included = page.last_block_included(block_end);
 
         let mut results = Vec::new();
 
@@ -146,7 +148,7 @@ impl StateView {
             results.push((note_sync, mmr_proof));
         }
 
-        Ok((results, page.next.unwrap_or(block_end)))
+        Ok((results, last_block_included))
     }
 
     /// Returns nullifiers matching the given prefixes that were created within a block range.
@@ -162,12 +164,13 @@ impl StateView {
         let block_range = self.scope_range(block_range)?;
         assert_eq!(prefix_len, 16, "Only 16-bit prefixes are supported");
 
-        let block_end = block_range.end();
         let nullifier_prefixes =
             nullifier_prefixes.into_iter().map(|prefix| prefix as u16).collect::<Vec<_>>();
-        let query = NullifiersByPrefix::new(prefix_len as u8, nullifier_prefixes, block_range);
-        let page = self.db.page(query, None).await?;
-        Ok((page.items, page.next.unwrap_or(block_end)))
+        let query =
+            NullifiersByPrefix::new(prefix_len as u8, nullifier_prefixes, block_range.scoped_end());
+        let page = self.db.page(query, block_range.start()).await?;
+        let last_block_included = page.last_block_included(block_range.end());
+        Ok((page.items, last_block_included))
     }
 
     // ACCOUNT STATE SYNCHRONIZATION
@@ -183,9 +186,9 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<(BlockNumber, Vec<AccountVaultValue>), DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        let block_end = block_range.end();
-        let page = self.db.page(AccountVaultAssets::new(account_id, block_range), None).await?;
-        Ok((page.next.unwrap_or(block_end), page.items))
+        let query = AccountVaultAssets::new(account_id, block_range.scoped_end());
+        let page = self.db.page(query, block_range.start()).await?;
+        Ok((page.last_block_included(block_range.end()), page.items))
     }
 
     /// Returns storage map values for syncing within a block range.
@@ -198,15 +201,14 @@ impl StateView {
         block_range: RangeInclusive<BlockNumber>,
     ) -> Result<StorageMapValuesPage, DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        let block_end = block_range.end();
         let query = AccountStorageMapValuesPaged::new(
             account_id,
-            block_range,
+            block_range.scoped_end(),
             default_storage_map_entries_limit(),
         );
-        let page = self.db.page(query, None).await?;
+        let page = self.db.page(query, block_range.start()).await?;
         Ok(StorageMapValuesPage {
-            last_block_included: page.next.unwrap_or(block_end),
+            last_block_included: page.last_block_included(block_range.end()),
             values: page.items,
         })
     }
