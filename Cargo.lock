@@ -4878,6 +4878,7 @@ dependencies = [
  "build-rs",
  "criterion",
  "fs-err",
+ "futures",
  "hex",
  "indexmap 2.14.2",
  "libsqlite3-sys",

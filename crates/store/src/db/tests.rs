@@ -1,8 +1,10 @@
 use std::collections::{BTreeSet, HashSet};
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use assert_matches::assert_matches;
+use futures::TryStreamExt;
 use miden_node_db::sqlite::WriteTx;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
@@ -93,6 +95,7 @@ use crate::account_state_forest::{
     HISTORICAL_BLOCK_RETENTION,
     TestAccountStateForestExt,
 };
+use crate::db::pagination::{Page, Paginated};
 use crate::db::queries::{
     self,
     NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
@@ -103,7 +106,7 @@ use crate::db::queries::{
     StorageMapValuesPage,
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
-use crate::errors::{DatabaseError, NoteSyncError};
+use crate::errors::DatabaseError;
 
 // QUERY DRIVERS
 // ================================================================================================
@@ -207,10 +210,15 @@ fn select_nullifiers_by_prefix(
     nullifier_prefixes: &[u16],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-    let nullifier_prefixes = nullifier_prefixes.to_vec();
-    db.read(move |tx| {
-        queries::select_nullifiers_by_prefix(tx, prefix_len, &nullifier_prefixes, block_range)
-    })
+    let (block_from, block_to) = block_range.into_inner();
+    let query = queries::NullifiersByPrefix::new(
+        prefix_len,
+        nullifier_prefixes.to_vec(),
+        ScopedBlockNum::new_unchecked(block_to),
+    );
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let last_block_included = page.last_block_included(block_to);
+    Ok((page.items, last_block_included))
 }
 
 fn select_notes_since_block_by_tag(
@@ -245,11 +253,14 @@ fn get_note_sync_multi(
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
     max_response_payload_bytes: usize,
-) -> std::result::Result<Vec<NoteSyncUpdate>, NoteSyncError> {
-    let note_tags = note_tags.to_vec();
-    db.read(move |tx| {
-        queries::get_note_sync_multi(tx, &note_tags, block_range, max_response_payload_bytes)
-    })
+) -> Result<Page<NoteSyncUpdate, BlockNumber>> {
+    let (block_from, block_to) = block_range.into_inner();
+    let query = queries::NoteSyncMulti::new(
+        note_tags.to_vec(),
+        ScopedBlockNum::new_unchecked(block_to),
+        max_response_payload_bytes,
+    );
+    db.read(move |tx| query.page(tx, &block_from))
 }
 
 fn select_block_header_by_block_num(
@@ -299,8 +310,16 @@ fn select_account_storage_map_values_paged(
     block_range: RangeInclusive<BlockNumber>,
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
-    db.read(move |tx| {
-        queries::select_account_storage_map_values_paged(tx, account_id, block_range, limit)
+    let (block_from, block_to) = block_range.into_inner();
+    let query = queries::AccountStorageMapValuesPaged::new(
+        account_id,
+        ScopedBlockNum::new_unchecked(block_to),
+        limit,
+    );
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    Ok(StorageMapValuesPage {
+        last_block_included: page.last_block_included(block_to),
+        values: page.items,
     })
 }
 
@@ -309,7 +328,11 @@ fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-    db.read(move |tx| queries::select_account_vault_assets(tx, account_id, block_range))
+    let (block_from, block_to) = block_range.into_inner();
+    let query =
+        queries::AccountVaultAssets::new(account_id, ScopedBlockNum::new_unchecked(block_to));
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    Ok((page.last_block_included(block_to), page.items))
 }
 
 fn select_vault_at_block(
@@ -325,8 +348,13 @@ fn select_transactions_records(
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-    let account_ids = account_ids.to_vec();
-    db.read(move |tx| queries::select_transactions_records(tx, &account_ids, block_range))
+    let (block_from, block_to) = block_range.into_inner();
+    let query = queries::TransactionsRecords::new(
+        account_ids.to_vec(),
+        ScopedBlockNum::new_unchecked(block_to),
+    );
+    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    Ok((page.last_block_included(block_to), page.items))
 }
 
 // TEST HELPERS
@@ -519,6 +547,37 @@ fn sql_select_nullifiers() {
         let nullifiers = select_all_nullifiers(db).unwrap();
         assert_eq!(nullifiers, state);
     }
+}
+
+/// Tests that streaming nullifiers in pages smaller than the table returns every nullifier exactly
+/// once.
+#[tokio::test]
+#[miden_node_test_macro::enable_logging]
+async fn nullifier_pages_return_every_nullifier_once() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("store.sqlite");
+    crate::db::migrations::bootstrap_database(&db_path).unwrap();
+    let db = crate::db::Db::load(db_path).await.unwrap();
+
+    let block_num = BlockNumber::from(1);
+    let nullifiers: Vec<Nullifier> = (0..5).map(num_to_nullifier).collect();
+    let inserted = nullifiers.clone();
+    db.writer()
+        .write::<_, DatabaseError, _>("insert nullifiers", move |tx| {
+            create_block_in(tx, block_num)?;
+            queries::insert_nullifiers_for_block(tx, &inserted, block_num)?;
+            Ok(())
+        })
+        .await
+        .unwrap();
+
+    let query = queries::NullifiersPaged { page_size: NonZeroUsize::new(2).unwrap() };
+    let pages: Vec<Vec<NullifierInfo>> = db.pages(query, None).try_collect().await.unwrap();
+
+    assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), [2, 2, 1]);
+    let paged: HashSet<Nullifier> =
+        pages.into_iter().flatten().map(|info| info.nullifier).collect();
+    assert_eq!(paged, nullifiers.into_iter().collect());
 }
 
 pub fn create_note(account_id: AccountId) -> Note {
@@ -1205,7 +1264,7 @@ fn note_sync_across_multiple_blocks() {
 
     // A single call to get_note_sync_multi should return all 3 blocks.
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(3);
-    let updates = get_note_sync_multi(
+    let page = get_note_sync_multi(
         db,
         &[tag],
         block_range,
@@ -1214,15 +1273,16 @@ fn note_sync_across_multiple_blocks() {
     .unwrap();
 
     let collected_block_nums: Vec<BlockNumber> =
-        updates.iter().map(|u| u.block_header.block_num()).collect();
+        page.items.iter().map(|u| u.block_header.block_num()).collect();
 
     assert_eq!(
         collected_block_nums,
         vec![BlockNumber::from(1), BlockNumber::from(2), BlockNumber::from(3)],
         "should return all 3 blocks with matching notes in a single query"
     );
+    assert_eq!(page.next, None, "the page covers the whole range");
 
-    for update in &updates {
+    for update in &page.items {
         let block_num = update.block_header.block_num();
         assert!(
             mmr.open_at(block_num.as_usize(), mmr_forest).is_ok(),
@@ -1293,7 +1353,7 @@ fn note_sync_multi_respects_payload_limit() {
     }
 
     let one_block_budget = NOTE_SYNC_BLOCK_OVERHEAD_BYTES + NOTE_SYNC_RECORD_BYTES;
-    let updates = get_note_sync_multi(
+    let page = get_note_sync_multi(
         db,
         &[tag],
         BlockNumber::GENESIS..=BlockNumber::from(3),
@@ -1302,13 +1362,14 @@ fn note_sync_multi_respects_payload_limit() {
     .unwrap();
 
     let collected_block_nums: Vec<BlockNumber> =
-        updates.iter().map(|u| u.block_header.block_num()).collect();
+        page.items.iter().map(|u| u.block_header.block_num()).collect();
 
     assert_eq!(
         collected_block_nums,
         vec![BlockNumber::from(1)],
         "the first block is always included, but the second block would exceed the payload cap",
     );
+    assert_eq!(page.next, Some(BlockNumber::from(2)), "the next page starts at block 2");
 }
 
 /// Tests that note sync returns an empty result when no notes match the requested tags.
@@ -1355,14 +1416,15 @@ fn note_sync_no_matching_tags() {
 
     // Query with a different tag should return empty vec.
     let range = BlockNumber::GENESIS..=BlockNumber::from(1);
-    let result = get_note_sync_multi(
+    let page = get_note_sync_multi(
         db,
         &[999],
         range,
         miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES,
     )
     .unwrap();
-    assert!(result.is_empty());
+    assert!(page.items.is_empty());
+    assert_eq!(page.next, None);
 }
 
 fn insert_account_patch(
@@ -1623,9 +1685,8 @@ fn select_storage_map_sync_values_paginates_until_last_block() {
     assert_eq!(page.values.len(), 1, "should include block 1 only");
 }
 
-/// Tests that `select_account_storage_map_values_paged` does not panic when all entries exceed the
-/// limit and are in genesis block (block 0). Previously, this caused
-/// `last_block_num.saturating_sub(1) = -1` which failed `BlockNumber::from_raw_sql`.
+/// Tests that the storage map query fails when the genesis block alone holds more entries than the
+/// page limit.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_genesis_block() {
     let db = &TestDb::new();
@@ -1650,24 +1711,17 @@ fn select_storage_map_sync_values_all_entries_in_genesis_block() {
         .unwrap();
     }
 
-    // Query with limit=1 so that raw.len() (3) > limit (1), triggering the pagination branch. All
-    // entries are in block 0, so take_while produces nothing and last_block_num.saturating_sub(1) =
-    // -1.
+    // With a limit of 1, the three entries of block 0 can never fit in one page.
     let result = select_account_storage_map_values_paged(db, account_id, genesis..=genesis, 1);
 
-    // Should not error - should return a valid page (possibly with empty values indicating no
-    // progress, which the caller interprets as limit_exceeded)
-    let page = result.expect("should not return an internal error for genesis block entries");
-    // The page should indicate no progress was made (stuck at genesis)
-    assert!(
-        page.values.is_empty() || page.last_block_included == genesis,
-        "should indicate pagination did not make progress"
+    assert_matches!(
+        result,
+        Err(DatabaseError::BlockExceedsPageLimit { block_num }) if block_num == genesis
     );
 }
 
-/// Tests that single-block overflow works for non-genesis blocks too. All entries are in block 5
-/// and exceed the limit. The function should signal no progress rather than returning incorrect
-/// data.
+/// Tests that the storage map query fails when a non-genesis block alone holds more entries than
+/// the page limit, instead of returning a page that skips the block.
 #[test]
 fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     let db = &TestDb::new();
@@ -1692,10 +1746,12 @@ fn select_storage_map_sync_values_all_entries_in_single_non_genesis_block() {
     }
 
     // limit=1, so 3 rows > 1 triggers pagination. All in block 5.
-    let page = select_account_storage_map_values_paged(db, account_id, block5..=block5, 1).unwrap();
+    let result = select_account_storage_map_values_paged(db, account_id, block5..=block5, 1);
 
-    assert!(page.values.is_empty(), "should have no values when single block exceeds limit");
-    assert_eq!(page.last_block_included, block5, "should signal no progress at block 5");
+    assert_matches!(
+        result,
+        Err(DatabaseError::BlockExceedsPageLimit { block_num }) if block_num == block5
+    );
 }
 
 /// Tests that normal multi-block pagination still works correctly: entries in blocks 1, 2, 3 with
@@ -1810,10 +1866,8 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     });
 }
 
-/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when the first block in the
-/// range has more entries than the limit allows. Previously this returned `AllEntries([])` because
-/// the pagination loop exited immediately (`last_block_included` == `block_num`) without checking
-/// that no values were actually returned.
+/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when a single block holds
+/// more entries than the page limit, instead of reporting an empty map.
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
 async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block_overflow() {
@@ -1850,8 +1904,7 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
         .await
         .unwrap();
 
-    // Use limit=1 so that 3 entries in a single block exceed the limit. block_range_start is block5
-    // (the first block with data), and the target is also block5.
+    // With a limit of 1, the three entries of block 5 can never fit in one page.
     let details = db
         .reconstruct_storage_map_from_db(
             account_id,
