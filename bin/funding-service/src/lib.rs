@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::info;
+use miden_node_tracing::{info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::asset::{AssetId, FungibleAsset};
@@ -185,6 +185,14 @@ impl FundingServiceConfig {
     }
 
     /// Connects to the node and builds the service.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.initialize",
+        fields(
+            funding_service.remote_prover = self.tx_prover_url.is_some(),
+        ),
+        err,
+    )]
     pub async fn build(self) -> anyhow::Result<FundingService> {
         anyhow::ensure!(
             self.max_notes_per_tx <= MAX_NOTES_PER_TX,
@@ -201,6 +209,7 @@ impl FundingServiceConfig {
         let funder_key = FunderKey::load(&self.account_file)
             .context("failed to load the funding account file")?;
 
+        miden_span_record!(account.id = funder_key.account_id());
         let node = RpcNodeClient::connect(
             &self.rpc_url,
             self.rpc_timeout,

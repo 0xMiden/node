@@ -4,6 +4,7 @@ use std::num::NonZeroU16;
 
 use anyhow::{Context, Result};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::{AssetId, FungibleAsset};
@@ -26,6 +27,7 @@ use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransacti
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
 
+use crate::COMPONENT;
 use crate::data_store::InMemoryDataStore;
 
 // NOTE CREATION
@@ -76,6 +78,17 @@ pub struct ExecutionInputs {
 }
 
 /// Executes one transaction which consumes `deposits` and creates `outputs`.
+#[miden_instrument(
+    target = COMPONENT,
+    name = "funding.execute",
+    fields(
+        account.id = inputs.funder.id(),
+        transaction.reference_block.number = inputs.reference_header.block_num(),
+        deposit.count = deposits.len(),
+        note.count = outputs.len(),
+    ),
+    err,
+)]
 pub async fn execute(
     inputs: ExecutionInputs,
     deposits: Vec<Note>,
@@ -144,6 +157,10 @@ pub async fn execute(
         executed_tx.expiration_block_num(),
     );
 
+    miden_span_record!(
+        transaction.id = executed_tx.id(),
+        transaction.expires_at = executed_tx.expiration_block_num()
+    );
     Ok(executed_tx)
 }
 
@@ -334,6 +351,53 @@ mod tests {
             assert_eq!(note.assets().num_assets(), 1);
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_prover_failure_exports_fallback_under_the_same_transaction() -> Result<()> {
+        use miden_node_tracing::Instrument as _;
+        use opentelemetry::trace::Status;
+
+        use crate::node::tests::{TestChain, TestServer};
+        use crate::prover::Prover;
+        use crate::test_utils::telemetry::{Telemetry, attribute};
+
+        let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([19_u32; 4]));
+        let notes = funding_notes(&fixture, &targets(&fixture)?[..1], &mut rng)?;
+        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let server = TestServer::start(TestChain::new(0)).await;
+        let prover = Prover::remote(server.url.clone(), std::time::Duration::from_secs(5))?;
+        let (telemetry, _guard) = Telemetry::capture();
+        let transaction = Box::pin(
+            async {
+                let executed = execute(inputs, Vec::new(), notes, &mut rng).await?;
+                Box::pin(prover.prove(executed)).await
+            }
+            .instrument(miden_node_tracing::info_span!("test_transaction")),
+        )
+        .await?;
+
+        let root = telemetry.span("test_transaction");
+        let execution = telemetry.span("funding.execute");
+        let proving = telemetry.span("funding.prove");
+        let remote = telemetry.span("funding.prove.remote");
+        let local = telemetry.span("funding.prove.local");
+        assert_eq!(execution.parent_span_id, root.span_context.span_id());
+        assert_eq!(proving.parent_span_id, root.span_context.span_id());
+        assert_eq!(remote.parent_span_id, proving.span_context.span_id());
+        assert_eq!(local.parent_span_id, proving.span_context.span_id());
+        assert!(matches!(remote.status, Status::Error { .. }));
+        assert!(!matches!(local.status, Status::Error { .. }));
+        assert!(!matches!(proving.status, Status::Error { .. }));
+        assert_eq!(attribute(&proving, "prover.fallback"), Some(true.into()));
+        assert_eq!(
+            attribute(&proving, "transaction.id"),
+            Some(transaction.id().to_string().into())
+        );
+        assert!(remote.end_time <= local.start_time);
+        assert!(local.end_time <= proving.end_time);
         Ok(())
     }
 

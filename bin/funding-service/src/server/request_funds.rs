@@ -77,6 +77,7 @@ pub(super) async fn request_funds(
     .map_err(RequestFundsError::Internal)?;
 
     let response = RequestFundsResponse::from(&note);
+    let note_id = note.id();
 
     state.requests.try_send(note).map_err(|err| match err {
         mpsc::error::TrySendError::Full(_) => RequestFundsError::Busy,
@@ -85,6 +86,7 @@ pub(super) async fn request_funds(
         },
     })?;
 
+    miden_node_tracing::miden_span_record!(note.id = note_id);
     Ok(Json(response))
 }
 
@@ -170,6 +172,7 @@ mod tests {
     /// The answer carries the note the worker will create, before any transaction exists.
     #[tokio::test]
     async fn the_answer_carries_the_queued_note() {
+        let (telemetry, _guard) = crate::test_utils::telemetry::Telemetry::capture();
         let (state, mut rx) = test_state(MAX_AMOUNT);
         let funder = state.status.account_id();
         let fee_asset_id = state.fee_asset_id;
@@ -207,6 +210,11 @@ mod tests {
         // The worker receives exactly the note the requester was answered with.
         let queued = rx.try_recv().expect("the note should be queued");
         assert_eq!(queued.id(), answered.id());
+        let span = telemetry.span("request_funds");
+        assert_eq!(
+            crate::test_utils::telemetry::attribute(&span, "note.id"),
+            Some(queued.id().to_string().into())
+        );
     }
 
     /// A request the balance cannot cover must not reach the worker.
