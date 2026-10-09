@@ -1056,6 +1056,7 @@ impl miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteSta
             last_error: output.last_error,
             attempt_count: output.attempt_count,
             last_attempt_block_num: output.last_attempt_block_num,
+            sponsorships: output.sponsorships,
         })
     }
 
@@ -1571,6 +1572,14 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
+        sponsorships: vec![proto::miden::node::v1::NetworkNoteSponsorship {
+            note_id: Some(Word::empty().into()),
+            fee_asset: None,
+            reclaim_height: Some(100),
+            committed_block_num: Some(41),
+            last_error: Some("sponsorship failed".to_string()),
+            last_attempt_block_num: Some(40),
+        }],
     };
     let (ntx_builder, ntx_builder_call_count, _last_accept, _ntx_builder_server) =
         start_ntx_builder(note_id.into(), expected.clone()).await;
@@ -1605,6 +1614,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         last_error: Some("execution failed".to_string()),
         attempt_count: 7,
         last_attempt_block_num: Some(42),
+        sponsorships: Vec::new(),
     };
     let (ntx_builder, _ntx_builder_call_count, last_accept, _ntx_builder_server) =
         start_ntx_builder(note_id.into(), expected.clone()).await;
