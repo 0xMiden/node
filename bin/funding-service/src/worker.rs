@@ -8,7 +8,7 @@ use std::num::{NonZeroU16, NonZeroUsize};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use miden_node_tracing::{info, warn};
+use miden_node_tracing::{ErrorSpanExt, Span, info, miden_instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
@@ -22,13 +22,13 @@ use miden_protocol::utils::serde::Serializable;
 use tokio::sync::mpsc;
 use tokio::time::{Instant, MissedTickBehavior};
 
-use crate::LOG_TARGET;
 use crate::account::FunderKey;
 use crate::deposit::{DepositScanner, native_amount};
 use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
+use crate::{COMPONENT, LOG_TARGET};
 
 #[cfg(test)]
 mod recovery_tests;
@@ -126,8 +126,7 @@ impl Funder {
             .await
             .context("failed to read the startup chain tip")?;
         let mut scanner = DepositScanner::new(self.account_id(), self.setup.fee_asset_id);
-        while let Err(err) = self.sync_initial_deposits(&mut scanner, tip).await {
-            warn!(&err, target: LOG_TARGET, "Failed to discover historical deposits; retrying");
+        while self.sync_initial_deposits(&mut scanner, tip).await.is_err() {
             tokio::time::sleep(self.setup.config.tick_interval).await;
         }
         let mut next_scan = Instant::now();
@@ -138,14 +137,7 @@ impl Funder {
             tick.tick().await;
 
             if Instant::now() >= next_scan {
-                let scan = async {
-                    let tip = self.node.committed_tip().await?;
-                    self.discover_deposits(&mut scanner, tip).await
-                }
-                .await;
-                if let Err(err) = scan {
-                    warn!(&err, target: LOG_TARGET, "Failed to scan for deposits");
-                }
+                let _ = self.scan_deposits(&mut scanner).await;
                 next_scan = Instant::now() + self.setup.config.deposit_scan_interval;
             }
 
@@ -163,13 +155,21 @@ impl Funder {
             }
 
             // Transaction execution requires a large future.
-            if let Err(err) = Box::pin(self.process_pending_notes()).await {
-                warn!(&err, target: LOG_TARGET, "Failed to process pending notes");
-            }
+            let _ = Box::pin(self.process_pending_notes()).await;
         }
     }
 
     /// Recovers unspent deposits through the startup chain tip.
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "funding.recover_deposits",
+        fields(
+            account.id = self.account_id(),
+            block_range.to = tip,
+        ),
+        err,
+    )]
     async fn sync_initial_deposits(
         &mut self,
         scanner: &mut DepositScanner,
@@ -177,22 +177,59 @@ impl Funder {
     ) -> Result<()> {
         self.discover_deposits(scanner, tip).await?;
         let nullifiers: Vec<_> = self.deposits.keys().copied().collect();
-        for nullifier in self.node.spent_nullifiers(&nullifiers, tip).await? {
+        miden_span_record!(deposit.discovered.count = self.deposits.len());
+        let spent = self.node.spent_nullifiers(&nullifiers, tip).await?;
+        miden_span_record!(deposit.spent.count = spent.len());
+        for nullifier in spent {
             self.deposits.remove(&nullifier);
         }
+        miden_span_record!(deposit.count = self.deposits.len());
         Ok(())
     }
 
+    /// Scans for new deposits at the current committed tip.
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "funding.scan_deposits",
+        fields(
+            account.id = self.account_id(),
+        ),
+        err,
+    )]
+    async fn scan_deposits(&mut self, scanner: &mut DepositScanner) -> Result<()> {
+        let tip = self.node.committed_tip().await?;
+        miden_span_record!(block_range.to = tip);
+        self.discover_deposits(scanner, tip).await
+    }
+
     /// Adds every page of deposits through a fixed chain tip.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.discover_deposits",
+        fields(
+            block_range.to = tip,
+        ),
+        err,
+    )]
     async fn discover_deposits(
         &mut self,
         scanner: &mut DepositScanner,
         tip: BlockNumber,
     ) -> Result<()> {
+        let mut pages = 0_usize;
+        let mut found_count = 0_usize;
         while !scanner.is_caught_up(tip) {
             let found = scanner.scan(&self.node, tip).await?;
+            pages += 1;
+            found_count += found.len();
             self.deposits.extend(found.into_iter().map(|note| (note.nullifier(), note)));
         }
+        miden_span_record!(
+            page.count = pages,
+            deposit.found.count = found_count,
+            deposit.count = self.deposits.len()
+        );
         Ok(())
     }
 
@@ -202,6 +239,22 @@ impl Funder {
             return Ok(());
         }
 
+        Box::pin(self.process_batch()).await
+    }
+
+    /// Selects affordable notes and completes one funding attempt.
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "funding.process_batch",
+        fields(
+            account.id = self.account_id(),
+            queued.count = self.queued.len(),
+            deposit.count = self.deposits.len(),
+        ),
+        err,
+    )]
+    async fn process_batch(&mut self) -> Result<()> {
         let inputs = self.read_chain_state().await?;
         let reference_block = inputs.reference_header.block_num();
         self.check_account_code(&inputs.funder)?;
@@ -214,6 +267,11 @@ impl Funder {
         );
 
         let reserve = self.fee_reserve();
+        miden_span_record!(
+            asset.balance = balance,
+            asset.reserve = reserve,
+            transaction.reference_block.number = reference_block
+        );
         let Some(selection) = Selection::choose(
             &self.deposits,
             &self.queued,
@@ -221,16 +279,31 @@ impl Funder {
             self.setup.fee_asset_id,
             reserve,
         ) else {
+            miden_span_record!(funding.selection = "unaffordable" #[nonstandard]);
             return Ok(());
         };
 
+        miden_span_record!(funding.selection = "selected" #[nonstandard]);
         Box::pin(self.submit(inputs, selection)).await
     }
 
     /// Submits one transaction and resolves its outcome.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.transaction",
+        fields(
+            account.id = self.account_id(),
+            note.count = selection.notes.len(),
+            deposit.count = usize::from(selection.deposit.is_some()),
+        ),
+        err,
+    )]
     async fn submit(&mut self, inputs: ChainState, selection: Selection) -> Result<()> {
         let ChainState { reference_header, blockchain, funder } = inputs;
         let reference_block = reference_header.block_num();
+        let note_ids: Vec<_> = selection.notes.iter().map(Note::id).collect();
+        miden_span_record!(note.ids = note_ids, transaction.reference_block.number = reference_block,
+                           deposit.note.id = selection.deposit.as_ref().map(Note::id) #[nonstandard]);
         let fee_faucet = self
             .node
             .public_account(self.setup.fee_asset_id.faucet_id(), reference_header.block_num())
@@ -251,27 +324,48 @@ impl Funder {
             Box::pin(tx::execute(inputs, deposits, selection.notes.clone(), &mut self.rng))
                 .await
                 .context("failed to execute the funding transaction")?;
+        miden_span_record!(
+            transaction.id = executed_tx.id(),
+            transaction.expires_at = executed_tx.expiration_block_num()
+        );
         let transaction_inputs = executed_tx.tx_inputs().to_bytes();
-        let transaction = self
-            .prover
-            .prove(executed_tx)
+        let transaction = Box::pin(self.prover.prove(executed_tx))
             .await
             .context("failed to prove the funding transaction")?;
 
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
         let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
-        self.resolve_submission(
-            outcome,
-            transaction_id,
-            reference_block,
-            expiration_block,
-            selection,
-        )
-        .await
+        miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
+        let resolution = self
+            .resolve_submission(
+                outcome,
+                transaction_id,
+                reference_block,
+                expiration_block,
+                selection,
+            )
+            .await?;
+        miden_span_record!(funding.outcome = resolution.as_str() #[nonstandard]);
+        if resolution != Resolution::Committed {
+            Span::current()
+                .set_error(anyhow::anyhow!("funding transaction {}", resolution.as_str()).as_ref());
+        }
+        Ok(())
     }
 
     /// Handles rejections immediately. Resolves accepted and uncertain submissions on chain.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.resolve_submission",
+        fields(
+            account.id = self.account_id(),
+            transaction.id = transaction_id,
+            transaction.reference_block.number = reference_block,
+            transaction.expires_at = expiration_block,
+        ),
+        err,
+    )]
     async fn resolve_submission(
         &mut self,
         outcome: SubmissionOutcome,
@@ -279,7 +373,8 @@ impl Funder {
         reference_block: BlockNumber,
         expiration_block: BlockNumber,
         selection: Selection,
-    ) -> Result<()> {
+    ) -> Result<Resolution> {
+        miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
         match outcome {
             SubmissionOutcome::Accepted => {
                 info!(
@@ -290,6 +385,7 @@ impl Funder {
                 );
             },
             SubmissionOutcome::Rejected(status) => {
+                Span::current().set_error(&status);
                 // With one writer and controlled outputs, a state conflict identifies the single
                 // selected deposit as invalid. Keep the payouts for the next attempt.
                 if status.code() == tonic::Code::InvalidArgument
@@ -303,8 +399,10 @@ impl Funder {
                         "Discarded a deposit rejected by the node",
                         note.id = note.id()
                     );
-                    return Ok(());
+                    miden_span_record!(funding.outcome = "deposit_discarded" #[nonstandard]);
+                    return Ok(Resolution::DepositDiscarded);
                 }
+                miden_span_record!(funding.outcome = "rejected" #[nonstandard]);
                 return Err(status).context("the node rejected the funding transaction");
             },
             SubmissionOutcome::Unknown(err) => {
@@ -318,7 +416,10 @@ impl Funder {
             },
         }
 
-        loop {
+        let mut polls = 0_usize;
+        let mut errors = 0_usize;
+        let resolution = loop {
+            polls += 1;
             match self
                 .node
                 .transaction_status(
@@ -335,7 +436,8 @@ impl Funder {
                         self.deposits.remove(&note.nullifier());
                     }
                     let _ = self.queued.drain(..selection.notes.len());
-                    return Ok(());
+                    miden_span_record!(funding.outcome = "committed" #[nonstandard]);
+                    break Resolution::Committed;
                 },
                 Ok(TransactionStatus::Expired) => {
                     warn!(
@@ -344,21 +446,29 @@ impl Funder {
                         transaction.id = transaction_id,
                         transaction.expires_at = expiration_block
                     );
-                    return Ok(());
+                    miden_span_record!(funding.outcome = "expired" #[nonstandard]);
+                    Span::current()
+                        .set_error(anyhow::anyhow!("funding transaction expired").as_ref());
+                    break Resolution::Expired;
                 },
                 Ok(TransactionStatus::Pending) => {},
-                Err(err) => warn!(
-                    &err,
-                    target: LOG_TARGET,
-                    "Failed to resolve the funding transaction; retrying",
-                    transaction.id = transaction_id
-                ),
+                Err(err) => {
+                    errors += 1;
+                    record_poll_failure(&err, transaction_id);
+                },
             }
             tokio::time::sleep(self.setup.config.tick_interval).await;
-        }
+        };
+        miden_span_record!(poll.count = polls, poll.error.count = errors);
+        Ok(resolution)
     }
 
     /// Reads the funding account and chain state at the current reference block.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.read_chain_state",
+        err,
+    )]
     async fn read_chain_state(&self) -> Result<ChainState> {
         let (reference_header, blockchain) =
             self.node.tip_chain_state().await.context("failed to read the chain state")?;
@@ -405,6 +515,46 @@ impl Funder {
 
     fn account_id(&self) -> AccountId {
         self.setup.key.account_id()
+    }
+}
+
+/// Records a failed status poll without changing the enclosing transaction's outcome.
+///
+/// Each failure has a separate span so repeated exceptions cannot exhaust the resolution span's
+/// attribute budget.
+#[miden_instrument(
+    target = COMPONENT,
+    name = "funding.poll_failure",
+    fields(transaction.id = transaction_id),
+)]
+fn record_poll_failure(err: &anyhow::Error, transaction_id: TransactionId) {
+    Span::current().set_error(err.as_ref());
+    warn!(
+        err,
+        target: LOG_TARGET,
+        "Failed to resolve the funding transaction; retrying",
+        transaction.id = transaction_id
+    );
+}
+
+// RESOLUTION
+// ================================================================================================
+
+/// The terminal result of a submitted transaction or a handled deposit rejection.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Resolution {
+    Committed,
+    Expired,
+    DepositDiscarded,
+}
+
+impl Resolution {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Committed => "committed",
+            Self::Expired => "expired",
+            Self::DepositDiscarded => "deposit_discarded",
+        }
     }
 }
 

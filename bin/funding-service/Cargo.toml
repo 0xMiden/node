@@ -42,14 +42,18 @@ tower-http         = { features = ["timeout"], workspace = true }
 url                = { workspace = true }
 
 [dev-dependencies]
-miden-protocol  = { features = ["std", "testing"], workspace = true }
-miden-standards = { workspace = true }
-miden-testing   = { workspace = true }
-miden-tx        = { features = ["concurrent", "std", "testing"], workspace = true }
-rand            = { workspace = true }
-rand_chacha     = { workspace = true }
-rstest          = { workspace = true }
-serde_json      = { workspace = true }
-tempfile        = { workspace = true }
-tonic-prost     = { workspace = true }
-tower           = { features = ["util"], workspace = true }
+miden-protocol        = { features = ["std", "testing"], workspace = true }
+miden-standards       = { workspace = true }
+miden-testing         = { workspace = true }
+miden-tx              = { features = ["concurrent", "std", "testing"], workspace = true }
+opentelemetry         = { workspace = true }
+opentelemetry_sdk     = { features = ["testing"], version = "0.31" }
+rand                  = { workspace = true }
+rand_chacha           = { workspace = true }
+rstest                = { workspace = true }
+serde_json            = { workspace = true }
+tempfile              = { workspace = true }
+tonic-prost           = { workspace = true }
+tower                 = { features = ["util"], workspace = true }
+tracing-opentelemetry = { version = "0.32" }
+tracing-subscriber    = { workspace = true }

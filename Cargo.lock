@@ -4517,6 +4517,8 @@ dependencies = [
  "miden-standards",
  "miden-testing",
  "miden-tx",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "rstest",
@@ -4529,6 +4531,8 @@ dependencies = [
  "tonic-prost",
  "tower",
  "tower-http",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "url",
 ]
 
