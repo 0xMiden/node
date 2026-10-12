@@ -407,6 +407,7 @@ mod tests {
                 explorer_url: Some("https://explorer.example".to_string()),
                 pow_load_difficulty: 4,
                 base_amount: 100,
+                token_amounts: vec![100, 500],
                 balance: Some(1_000_000),
             }),
         };
@@ -435,6 +436,7 @@ mod tests {
                 explorer_url: None,
                 pow_load_difficulty: 4,
                 base_amount: 100,
+                token_amounts: vec![100, 500],
                 balance: None,
             }),
         };
