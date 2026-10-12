@@ -132,12 +132,12 @@ fall into the ordinary-gRPC-status bucket described above:
 
 The new methods have independent detail-code namespaces. Their codes do not change legacy unary assignments.
 
-| Method                                           | Codes with `INVALID_ARGUMENT`                                                                              | Admission code            |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `SyncAccountVaultV2`, `SyncAccountStorageMapsV2` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account | `5`: `RESOURCE_EXHAUSTED` |
-| `SyncAccountCommitments`, `SyncNotesV2`          | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history                         | `5`: `RESOURCE_EXHAUSTED` |
-| `SyncTransactionsV2`                             | `1` malformed input, `2` invalid range, `3` future target                                                  | `5`: `RESOURCE_EXHAUSTED` |
-| `GetTransactionsById`                            | `1` malformed input, `2` missing target, `3` future target                                                 | `5`: `RESOURCE_EXHAUSTED` |
+| Method                                           | Codes with `INVALID_ARGUMENT`                                                                              |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `SyncAccountVaultV2`, `SyncAccountStorageMapsV2` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
+| `SyncAccountCommitments`, `SyncNotesV2`          | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history                         |
+| `SyncTransactionsV2`                             | `1` malformed input, `2` invalid range, `3` future target                                                  |
+| `GetTransactionsById`                            | `1` malformed input, `2` missing target, `3` future target                                                 |
 
 Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. `GetTransactionsById` accepts at most
 1000 IDs under `GetLimits.endpoints["GetTransactionsById"].parameters["transaction_id"]`. Limits apply to the raw lists
@@ -150,9 +150,9 @@ not interpret a partial response as an OK empty suffix or negative transaction l
 ## Nullifier stream errors
 
 `SyncNullifiersV2` uses detail codes `1` (malformed input or a prefix above `u16::MAX`), `2` (invalid or missing range),
-`3` (future target), and `6` (prefix length other than 16), with `INVALID_ARGUMENT`. Admission rejection uses code `5`
-with `RESOURCE_EXHAUSTED`. The request limit is 1000 prefixes, checked before decoding and deduplication. Discover it
-under `GetLimits.endpoints["SyncNullifiersV2"].parameters["nullifier_prefix"]`.
+`3` (future target), and `6` (prefix length other than 16), with `INVALID_ARGUMENT`. The request limit is 1000 prefixes,
+checked before decoding and deduplication. Discover it under
+`GetLimits.endpoints["SyncNullifiersV2"].parameters["nullifier_prefix"]`.
 
 ## Request Limits
 
