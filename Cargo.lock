@@ -4302,7 +4302,7 @@ dependencies = [
 
 [[package]]
 name = "miden-benchmark"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -4500,7 +4500,7 @@ dependencies = [
 
 [[package]]
 name = "miden-funding-service"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4538,7 +4538,7 @@ dependencies = [
 
 [[package]]
 name = "miden-large-account-benchmark"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -4650,7 +4650,7 @@ dependencies = [
 
 [[package]]
 name = "miden-network-monitor"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4683,7 +4683,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4714,7 +4714,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-block-producer"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4748,7 +4748,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-db"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4769,7 +4769,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-grpc-error-macro"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "quote",
  "syn 2.0.119",
@@ -4777,7 +4777,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-persistence"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "miden-objects",
  "miden-protobuf",
@@ -4790,7 +4790,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -4821,7 +4821,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-proto-build"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "build-rs",
  "codegen",
@@ -4834,7 +4834,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-rpc"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4875,7 +4875,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-store"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -4912,7 +4912,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-stress-test"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "clap",
  "fs-err",
@@ -4939,7 +4939,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-tracing"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "bytes",
@@ -4964,7 +4964,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-tracing-macro"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4973,7 +4973,7 @@ dependencies = [
 
 [[package]]
 name = "miden-node-utils"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "backon",
@@ -5005,7 +5005,7 @@ dependencies = [
 
 [[package]]
 name = "miden-note-transport"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -5037,7 +5037,7 @@ dependencies = [
 
 [[package]]
 name = "miden-ntx-builder"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "backon",
@@ -5298,7 +5298,7 @@ dependencies = [
 
 [[package]]
 name = "miden-remote-prover"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -5451,7 +5451,7 @@ dependencies = [
 
 [[package]]
 name = "miden-usdcx-genesis"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "assert_matches",
@@ -5517,7 +5517,7 @@ dependencies = [
 
 [[package]]
 name = "miden-validator"
-version = "0.17.3"
+version = "0.17.4"
 dependencies = [
  "anyhow",
  "aws-config",
