@@ -3,7 +3,6 @@ use std::sync::atomic::AtomicU64;
 
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::encryption::TransactionEncryptionKeyInfo;
-use miden_node_store::BlockStore;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
@@ -67,8 +66,6 @@ pub enum ValidatorError {
     ValidatorKeyNotInSet { actual: PublicKey },
     #[error("no chain tip exists")]
     NoChainTip,
-    #[error("failed to backup block")]
-    BlockBackupFailed(#[source] std::io::Error),
     #[error("no genesis block header exists")]
     NoGenesisHeader,
     #[error("failed to attest the transaction encryption key: {0}")]
@@ -119,7 +116,6 @@ pub(crate) struct ValidatorService {
     /// Signature by this validator's own signing key over the encryption key attestation
     /// commitment, computed once at construction.
     encryption_key_attestation: Signature,
-    block_store: BlockStore,
     /// Enforces mutual exclusion between backup block subscriptions and all other RPCs. Regular
     /// RPCs take the read side (any number may run concurrently); a backup subscription takes the
     /// exclusive write side for its entire lifetime. Acquired with `try_*` on both sides so that a
@@ -152,7 +148,6 @@ impl ValidatorService {
         db: ValidatorDbWriter,
         decrypter: Arc<dyn TransactionInputDecrypter>,
         private_record_sealer: PrivateRecordSealer,
-        block_store: BlockStore,
         initial_metrics: InitialMetrics,
     ) -> Result<Self, ValidatorError> {
         // The chain tip's header commits to the validator set authorized to sign the next block, so
@@ -200,7 +195,6 @@ impl ValidatorService {
             encryption_key_attestation,
             serve_lock: Arc::new(tokio::sync::RwLock::new(())),
             db,
-            block_store,
             sign_block_semaphore: Semaphore::new(1),
             tx_validation_semaphore: Semaphore::new(max_tx_concurrency()),
             committed_tip: watch::Sender::new(BlockNumber::from(initial_metrics.chain_tip)),
@@ -216,7 +210,7 @@ impl ValidatorService {
     ///    previous block commitment), or b. A replacement block at the same height as the current chain
     ///    tip, validated against the previous block header.
     ///
-    /// On success, returns the signature and the validated block header.
+    /// On success, returns the signature and validated signed block for persistence.
     #[miden_instrument(
         target = COMPONENT,
         err,
@@ -225,7 +219,7 @@ impl ValidatorService {
         &self,
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
-    ) -> Result<(Signature, BlockHeader), ValidatorError> {
+    ) -> Result<(Signature, SignedBlock), ValidatorError> {
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
@@ -297,7 +291,7 @@ impl ValidatorService {
 
         let signature = self.sign_header(&proposed_header).await?;
 
-        // Back up the signed block to disk.
+        // Prepare the signed block for persistence.
         //
         // Note that the backup only carries this validator's own signature: the complete,
         // positionally ordered signature set exists only at the block producer once it has
@@ -307,20 +301,7 @@ impl ValidatorService {
             .expect("a single signature is within the signature set bounds");
         let signed_block =
             SignedBlock::new_unchecked(proposed_header, proposed_body, own_signature);
-        // Serializing the full block also scales with its contents; run it on a blocking thread.
-        let (signed_block, signed_block_bytes) = spawn_blocking_in_current_span(move || {
-            let bytes = miden_node_persistence::encode(&signed_block);
-            (signed_block, bytes)
-        })
-        .await
-        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()));
-        self.block_store
-            .save_block(signed_block.header().block_num(), &signed_block_bytes)
-            .await
-            .map_err(ValidatorError::BlockBackupFailed)?;
-
-        let (header, ..) = signed_block.into_parts();
-        Ok((signature, header))
+        Ok((signature, signed_block))
     }
 
     /// Signs a block header using the validator's signer.

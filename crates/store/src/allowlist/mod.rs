@@ -169,7 +169,8 @@ impl AccountAllowlist {
             .map_err(miden_node_db::DatabaseError::migration)
             .map_err(DatabaseError::DatabaseError)?;
         migrator
-            .bootstrap(database_filepath)
+            .create_database(database_filepath)
+            .and_then(|mut database| database.migrate_to(migrator.latest_version()))
             .map_err(miden_node_db::DatabaseError::migration)
             .map_err(DatabaseError::DatabaseError)
     }
@@ -200,7 +201,8 @@ impl AccountAllowlist {
             .map_err(miden_node_db::DatabaseError::migration)
             .map_err(DatabaseError::DatabaseError)?;
         migrator
-            .migrate(database_filepath)
+            .open_database(database_filepath)
+            .and_then(|mut database| database.migrate_to(migrator.latest_version()))
             .map_err(miden_node_db::DatabaseError::migration)
             .map_err(DatabaseError::DatabaseError)
     }

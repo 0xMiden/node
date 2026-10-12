@@ -36,7 +36,7 @@ use super::list_transactions::{
     list_validated_private_transactions,
 };
 use super::{ISSUE_SHARE_PATH, LIST_TRANSACTIONS_PATH, ValidatorAdminService, router};
-use crate::db::{ValidatorDbReader, ValidatorDbWriter};
+use crate::db::{ValidatorDbReader, ValidatorDbWriter, block_with_header};
 use crate::storage_key::tests::operator_keys;
 use crate::{
     GoldenOperatorKey,
@@ -116,7 +116,7 @@ async fn list(
 async fn commit(writer: &ValidatorDbWriter, block_num: u32, transactions: &[TransactionId]) {
     writer
         .insert_signed_block(
-            BlockHeader::mock(block_num, None, None, &[]),
+            block_with_header(BlockHeader::mock(block_num, None, None, &[])),
             ProtocolConfig::mock(),
             transactions.to_vec(),
         )
@@ -354,7 +354,7 @@ async fn list_serves_a_replaced_tip_block_from_its_first_position() {
 
     writer
         .replace_signed_block(
-            BlockHeader::mock(1, None, None, &[]),
+            block_with_header(BlockHeader::mock(1, None, None, &[])),
             ProtocolConfig::mock(),
             vec![transaction_ids[2]],
         )

@@ -22,10 +22,6 @@ impl DataDirectory {
         self.data.join("validator.sqlite3")
     }
 
-    pub fn block_store_dir(&self) -> PathBuf {
-        self.data.join("blocks")
-    }
-
     pub fn display(&self) -> std::path::Display<'_> {
         self.data.display()
     }

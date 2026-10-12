@@ -21,6 +21,9 @@ for use by trusted internal nodes.
 
 It supports local development keys and KMS-backed signing for deployments that need external key management.
 
+For database upgrades and live snapshots, see
+[Storage and Snapshots](../../docs/external/src/network-operator/validator.md#storage-and-snapshots).
+
 ## Peer-to-peer DKG
 
 Validators compare ceremony transcript commitments and abort on a mismatch, including when a participant sends

@@ -21,6 +21,14 @@ inputs needed to independently check proposed blocks, which gives the network an
 block is committed. Those inputs arrive encrypted against the shared transaction encryption key, so the validator is the
 only component that can read them, and submissions that are not encrypted are rejected.
 
+## Storage and Snapshots
+
+Storage upgrades use the standard `miden-validator migrate` command. See
+[Upgrades and Migrations](/network-operator/upgrades-and-migrations).
+
+For live backups, take a volume snapshot that includes the complete validator data directory. Signing and storage key
+material must also remain available when restoring a validator.
+
 ## Key Rotation
 
 Each block header includes the validator key that must be used for the next block. Because the current validator signs
