@@ -26,15 +26,15 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMapsV2 for Rpc
     ) -> tonic::Result<Self::Input> {
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let account_id = request
             .account_id
             .verify()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let block_range = request
             .range
             .verify()
-            .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
 
         Ok((account_id, block_range))
     }
@@ -70,9 +70,8 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMapsV2 for Rpc
         tracing::debug!(target: LOG_TARGET, "Streaming account storage-map updates");
 
         if !account_id.is_public() {
-            return Err(
-                ErrorCode::AccountNotPublic.status(format!("account {account_id} is not public"))
-            );
+            return Err(ErrorCode::AccountNotPublic
+                .invalid_argument(format!("account {account_id} is not public")));
         }
 
         SyncStream::start(
@@ -124,9 +123,9 @@ impl Paginator for StorageMapPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 DatabaseError::BlockPruned { .. } => {
-                    ErrorCode::HistoryUnavailable.status(err.to_string())
+                    ErrorCode::HistoryUnavailable.invalid_argument(err)
                 },
                 _ => database_error_to_status(&err),
             })?;

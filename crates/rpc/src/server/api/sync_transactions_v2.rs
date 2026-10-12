@@ -29,15 +29,15 @@ impl proto::server::miden_node_v1_node_service::SyncTransactionsV2 for RpcServic
         check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let target = request
             .range
             .verify()
-            .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
         let mut ids = request
             .account_ids
             .verify()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         ids.sort_unstable();
         ids.dedup();
         Ok((target, ids))
@@ -104,7 +104,7 @@ impl Paginator for TransactionPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 _ => database_error_to_status(&err),
             })?;
         self.cursor = page.next_cursor;

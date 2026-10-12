@@ -27,26 +27,22 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
     ) -> tonic::Result<Self::Input> {
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let account_id = request
             .account_id
             .verify()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
-        let block_range = match (
-            request.block_range.map(std::convert::identity),
-            request.range.map(std::convert::identity),
-        ) {
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
+        let block_range = match (request.block_range.into_inner(), request.range.into_inner()) {
             (Some(range), None) => range
                 .verify()
-                .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?
+                .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?
                 .into(),
             (None, Some(range)) => {
-                range.verify().map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?
+                range.verify().map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?
             },
             _ => {
-                return Err(
-                    ErrorCode::InvalidRange.status("exactly one synchronization range is required")
-                );
+                return Err(ErrorCode::InvalidRange
+                    .invalid_argument("exactly one synchronization range is required"));
             },
         };
 
@@ -84,9 +80,8 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
         tracing::debug!(target: LOG_TARGET, "Streaming account vault updates");
 
         if !account_id.is_public() {
-            return Err(
-                ErrorCode::AccountNotPublic.status(format!("account {account_id} is not public"))
-            );
+            return Err(ErrorCode::AccountNotPublic
+                .invalid_argument(format!("account {account_id} is not public")));
         }
 
         SyncStream::start(
@@ -138,9 +133,9 @@ impl Paginator for VaultPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 DatabaseError::BlockPruned { .. } => {
-                    ErrorCode::HistoryUnavailable.status(err.to_string())
+                    ErrorCode::HistoryUnavailable.invalid_argument(err)
                 },
                 _ => database_error_to_status(&err),
             })?;
