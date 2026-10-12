@@ -2,12 +2,10 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-extern crate tracing as upstream_tracing;
-
 use miden_node_proto::generated::miden::validator::v1::SignBlockRequest;
-use upstream_tracing::instrument::WithSubscriber;
+use tracing_subscriber::util::SubscriberInitExt;
 
-use super::{BlockProducerValidatorClient, ValidatorError, sign_block};
+use super::{BlockProducerValidatorClient, ValidatorError};
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -25,18 +23,16 @@ impl Write for Capture {
 
 #[tokio::test]
 async fn connection_errors_identify_each_validator_endpoint() {
-    // Bound sockets reserve distinct ports without listening, so connections are refused.
-    let sockets = [
-        tokio::net::TcpSocket::new_v4().unwrap(),
-        tokio::net::TcpSocket::new_v4().unwrap(),
+    // Listeners reserve distinct ports and are closed before use, so connections are refused.
+    let listeners = [
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
+        std::net::TcpListener::bind("127.0.0.1:0").unwrap(),
     ];
-    for socket in &sockets {
-        socket.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    }
-    let endpoints: Vec<_> = sockets
+    let endpoints: Vec<_> = listeners
         .iter()
-        .map(|socket| format!("http://{}/", socket.local_addr().unwrap()))
+        .map(|listener| format!("http://{}/", listener.local_addr().unwrap()))
         .collect();
+    drop(listeners);
     let client = BlockProducerValidatorClient::new(
         endpoints.iter().map(|endpoint| endpoint.parse().unwrap()).collect(),
         Duration::from_secs(1),
@@ -44,16 +40,20 @@ async fn connection_errors_identify_each_validator_endpoint() {
     .unwrap();
     let capture = Capture::default();
     let writer = capture.clone();
-    let subscriber = tracing_subscriber::fmt()
+    // The test runtime is single-threaded, so the thread-local subscriber sees every span.
+    let _subscriber = tracing_subscriber::fmt()
         .without_time()
         .with_ansi(false)
         .with_writer(move || writer.clone())
-        .finish();
+        .finish()
+        .set_default();
 
-    let results = futures::future::join_all(client.clients.iter().map(|(endpoint, client)| {
-        sign_block(client.clone(), endpoint, SignBlockRequest::default())
-    }))
-    .with_subscriber(subscriber)
+    let results = futures::future::join_all(
+        client
+            .validators
+            .iter()
+            .map(|validator| validator.sign_block(SignBlockRequest::default())),
+    )
     .await;
 
     for result in results {

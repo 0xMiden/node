@@ -4738,7 +4738,6 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "tonic-health",
- "tracing",
  "tracing-subscriber",
  "url",
 ]
