@@ -44,7 +44,7 @@ pub enum ValidatorError {
 /// Essentially just a thin wrapper around the generated gRPC clients which improves type safety.
 #[derive(Clone, Debug)]
 pub struct BlockProducerValidatorClient {
-    clients: Vec<(String, ValidatorClient)>,
+    validators: Vec<Validator>,
 }
 
 impl BlockProducerValidatorClient {
@@ -54,7 +54,7 @@ impl BlockProducerValidatorClient {
     /// connection surfaces as a fast, retryable error instead of hanging on the OS-level TCP
     /// timeout and halting block production.
     pub fn new(validator_urls: Vec<Url>, timeout: Duration) -> anyhow::Result<Self> {
-        let clients = validator_urls
+        let validators = validator_urls
             .into_iter()
             .map(|validator_url| {
                 let endpoint = format_endpoint(&validator_url);
@@ -72,11 +72,11 @@ impl BlockProducerValidatorClient {
                     .without_metadata_genesis()
                     .with_otel_context_injection()
                     .connect_lazy::<ValidatorClient>();
-                Ok((endpoint, client))
+                Ok(Validator { endpoint, client })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
-        Ok(Self { clients })
+        Ok(Self { validators })
     }
 
     /// Validates a transaction with every validator before it can appear in a signed block.
@@ -88,10 +88,11 @@ impl BlockProducerValidatorClient {
         genesis: Word,
         validators: &ValidatorConfig,
     ) -> anyhow::Result<()> {
-        let (_, client) =
-            self.clients.first().context("transaction validation requires a validator")?;
+        let validator =
+            self.validators.first().context("transaction validation requires a validator")?;
         let key = (|| async {
-            client
+            validator
+                .client
                 .clone()
                 .get_transaction_encryption_key(
                     proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {},
@@ -115,28 +116,11 @@ impl BlockProducerValidatorClient {
             transaction: Some(transaction.into()),
             sealed_transaction_inputs: Some(sealed),
         };
-        futures::future::try_join_all(self.clients.iter().map(|(_, client)| {
-            let request = request.clone();
-            async move {
-                (|| async {
-                    client
-                        .clone()
-                        .submit_proven_transaction(
-                            proto::miden::validator::v1::SubmitProvenTransactionRequest {
-                                submission: Some(request.clone()),
-                            },
-                        )
-                        .await
-                })
-                .retry(retry::exponential_bounded(
-                    Duration::from_millis(100),
-                    Duration::from_secs(2),
-                    10,
-                ))
-                .when(|error| error.code() == tonic::Code::Unavailable)
-                .await
-            }
-        }))
+        futures::future::try_join_all(
+            self.validators
+                .iter()
+                .map(|validator| validator.submit_proven_transaction(request.clone())),
+        )
         .await?;
         Ok(())
     }
@@ -169,9 +153,7 @@ impl BlockProducerValidatorClient {
         };
 
         let responses = futures::future::try_join_all(
-            self.clients
-                .iter()
-                .map(|(endpoint, client)| sign_block(client.clone(), endpoint, message.clone())),
+            self.validators.iter().map(|validator| validator.sign_block(message.clone())),
         )
         .await?;
 
@@ -179,23 +161,68 @@ impl BlockProducerValidatorClient {
     }
 }
 
-/// Requests and decodes a block signature from one validator.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "validator.client.sign_block",
-    fields(dependency.name = "validator", dependency.endpoint = endpoint),
-    err,
-)]
-async fn sign_block(
-    mut client: ValidatorClient,
-    endpoint: &str,
-    message: proto::miden::validator::v1::SignBlockRequest,
-) -> Result<SignBlockResponse, ValidatorError> {
-    let request = tonic::Request::new(message);
-    let response = client.sign_block(request).await?.into_inner();
-    response
-        // SAFETY: The block builder matches the commitment to its proposed block and verifies the
-        // signatures against the trusted parent validator set.
-        .decode_and_build_unchecked()
-        .map_err(ValidatorError::Conversion)
+// VALIDATOR
+// ================================================================================================
+
+/// A single validator's gRPC client together with the endpoint it connects to.
+///
+/// Requests made through it run in their own span carrying the endpoint, so a failure in a
+/// concurrent fan-out can be attributed to the validator that caused it.
+#[derive(Clone, Debug)]
+struct Validator {
+    endpoint: String,
+    client: ValidatorClient,
+}
+
+impl Validator {
+    /// Submits a proven transaction to this validator, retrying while it is unavailable.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "validator.client.submit_proven_transaction",
+        fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
+        err,
+    )]
+    async fn submit_proven_transaction(
+        &self,
+        submission: proto::submission::ProvenTransactionSubmission,
+    ) -> Result<(), tonic::Status> {
+        (|| async {
+            self.client
+                .clone()
+                .submit_proven_transaction(
+                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                        submission: Some(submission.clone()),
+                    },
+                )
+                .await
+        })
+        .retry(retry::exponential_bounded(
+            Duration::from_millis(100),
+            Duration::from_secs(2),
+            10,
+        ))
+        .when(|error| error.code() == tonic::Code::Unavailable)
+        .await?;
+        Ok(())
+    }
+
+    /// Requests and decodes a block signature from this validator.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "validator.client.sign_block",
+        fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
+        err,
+    )]
+    async fn sign_block(
+        &self,
+        message: proto::miden::validator::v1::SignBlockRequest,
+    ) -> Result<SignBlockResponse, ValidatorError> {
+        let request = tonic::Request::new(message);
+        let response = self.client.clone().sign_block(request).await?.into_inner();
+        response
+            // SAFETY: The block builder matches the commitment to its proposed block and verifies
+            // the signatures against the trusted parent validator set.
+            .decode_and_build_unchecked()
+            .map_err(ValidatorError::Conversion)
+    }
 }
