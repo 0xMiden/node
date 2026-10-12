@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use anyhow::Context;
 use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto_build::validator_api_descriptor;
-use miden_node_store::BlockStore;
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::info;
 use miden_node_tracing::panic::catch_panic_layer_fn;
@@ -16,7 +15,6 @@ use tower_http::trace::TraceLayer;
 
 use crate::db::{ValidatorDbReader, ValidatorDbWriter};
 use crate::{
-    DataDirectory,
     GoldenOperatorKey,
     LOG_TARGET,
     PrivateRecordSealer,
@@ -52,9 +50,6 @@ pub struct ValidatorServer {
 
     /// The public Golden key used to seal private records.
     pub private_record_sealer: PrivateRecordSealer,
-
-    /// The data directory for the validator component's database files.
-    pub data_directory: DataDirectory,
 
     /// Handle to the shared validator database. Carrying the write handle makes the public API the
     /// database's single writer; reads reach the shared read handle through its `Deref`.
@@ -111,10 +106,6 @@ impl ValidatorServer {
         // takes the handle rather than opening its own connection.
         let db = self.db;
 
-        // Initialize block store.
-        let block_store = BlockStore::load(self.data_directory.block_store_dir())
-            .context("failed to load block store")?;
-
         // Load initial metrics from the database for the in-memory counters.
         let metrics = db.load_initial_metrics().await.context("failed to load initial metrics")?;
 
@@ -132,7 +123,6 @@ impl ValidatorServer {
             db,
             self.decrypter,
             self.private_record_sealer,
-            block_store,
             metrics,
         )
         .await

@@ -27,8 +27,8 @@ pub use delete_block::delete_block;
 mod find_unvalidated_transactions;
 pub use find_unvalidated_transactions::find_unvalidated_transactions;
 
-mod insert_block_header;
-pub use insert_block_header::insert_block_header;
+mod insert_block;
+pub use insert_block::insert_block;
 
 mod insert_validated_private_transaction;
 pub use insert_validated_private_transaction::insert_validated_private_transaction;
@@ -62,7 +62,5 @@ pub use load_private_records_by_setup_context::load_private_records_by_setup_con
 mod transaction_exists;
 pub use transaction_exists::transaction_exists;
 
-#[cfg(test)]
-mod upsert_block_header;
-#[cfg(test)]
-pub use upsert_block_header::upsert_block_header;
+mod load_block;
+pub use load_block::load_block;

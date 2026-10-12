@@ -48,7 +48,6 @@ pub async fn start(
         signer: keys.signer,
         decrypter: keys.decrypter,
         private_record_sealer,
-        data_directory,
         db,
     };
 

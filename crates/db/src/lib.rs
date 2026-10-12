@@ -7,6 +7,8 @@ use std::num::NonZeroUsize;
 
 pub use conv::{DatabaseTypeConversionError, SqlTypeConvert};
 pub use errors::{DatabaseError, SchemaVerificationError};
+/// Raw SQLite types for migrations and database setup outside the connection pool.
+pub use rusqlite::{Connection, Transaction};
 
 pub type Result<T, E = DatabaseError> = std::result::Result<T, E>;
 
