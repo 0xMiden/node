@@ -27,6 +27,7 @@ use crate::frontend::{ServerState, serve};
 use crate::funding::funding_client_from_config;
 use crate::funding_service::FundingService;
 use crate::note_transport::NoteTransportService;
+use crate::registration::RegistrationPool;
 use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
 use crate::status::{
@@ -244,7 +245,8 @@ fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
 /// channels after each failed attempt, so a network that is down at startup degrades the cards
 /// instead of aborting the monitor. The exception is an [`UnsupportedChainError`], which cannot
 /// resolve by retrying and ends this supervised task; [`Tasks::handle_failure`] treats that as
-/// fatal. Once bootstrapped, both services run on separate tasks with the same semantics.
+/// fatal. An unreadable or invalid registration file leaves both channels unhealthy without
+/// ending this task. Once bootstrapped, both services run on separate tasks with the same semantics.
 async fn run_ntx(
     config: MonitorConfig,
     increment_tx: watch::Sender<ServiceStatus>,
@@ -271,21 +273,39 @@ async fn run_ntx(
         ));
     };
 
-    let result = (|| async { Box::pin(bootstrap_ntx(&config)).await })
-        .retry(backoff)
-        .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
-        .notify(|err: &anyhow::Error, sleep: Duration| {
-            warn!(
-                err,
-                target: LOG_TARGET,
-                "NTX bootstrap failed; retrying after backoff",
-                retry.delay_ms = sleep.as_millis() as u64
-            );
-            publish_unhealthy(err);
-        })
-        .await;
+    let registration = match config
+        .registration_codes_file
+        .as_deref()
+        .map(RegistrationPool::load)
+        .transpose()
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            publish_unhealthy(&err);
+            std::future::pending::<()>().await;
+            return;
+        },
+    };
 
-    let (increment_svc, tracking_svc) = match result {
+    let registration = Mutex::new(registration);
+    let result = (|| async {
+        let mut pool = registration.lock().await;
+        Box::pin(bootstrap_ntx(&config, &mut pool)).await
+    })
+    .retry(backoff)
+    .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
+    .notify(|err: &anyhow::Error, sleep: Duration| {
+        warn!(
+            err,
+            target: LOG_TARGET,
+            "NTX bootstrap failed; retrying after backoff",
+            retry.delay_ms = sleep.as_millis() as u64
+        );
+        publish_unhealthy(err);
+    })
+    .await;
+
+    let (mut increment_svc, tracking_svc) = match result {
         Ok(services) => services,
         Err(err) => {
             error!(
@@ -301,20 +321,22 @@ async fn run_ntx(
     // Run the services on their own tasks (a shared task would serialize the increment service's
     // local proving with the tracking polls). The first one to finish ends this supervised task;
     // the JoinSet aborts the other on drop.
+    increment_svc.registration = registration.into_inner();
     let mut services = tokio::task::JoinSet::new();
     services.spawn(increment_svc.run(increment_tx));
     services.spawn(tracking_svc.run(tracking_tx));
     services.join_next().await;
 }
 
-/// One bootstrap attempt: create and deploy fresh accounts, then build both services.
+/// One bootstrap attempt: prepare and deploy accounts, then build both services.
 ///
-/// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and hands
+/// Prepares an in-memory wallet/counter pair, deploys the counter to the network, and hands
 /// the same counter account to both services via a [`watch::channel`]. The increment service
 /// publishes new counters on the channel when it regenerates accounts after persistent failures;
 /// the tracking service observes the channel to switch over.
 async fn bootstrap_ntx(
     config: &MonitorConfig,
+    registration: &mut Option<RegistrationPool>,
 ) -> Result<(IncrementService, CounterTrackingService)> {
     let prover = LocalTransactionProver::default();
     let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
@@ -326,8 +348,13 @@ async fn bootstrap_ntx(
     .await?;
     // The funding service pays fees; whether it is needed is decided during deployment.
     let funding = funding_client_from_config(config);
-    let accounts =
-        Box::pin(create_and_deploy_accounts(&submission_client, &prover, funding.as_ref())).await?;
+    let accounts = Box::pin(create_and_deploy_accounts(
+        &submission_client,
+        &prover,
+        funding.as_ref(),
+        registration.as_mut(),
+    ))
+    .await?;
 
     let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
         wallet: accounts.wallet.clone(),
@@ -357,6 +384,37 @@ mod tests {
 
     use super::*;
     use crate::status::Status;
+
+    /// A missing code file degrades transaction checks while their supervised task remains alive.
+    #[tokio::test]
+    async fn unreadable_registration_pool_keeps_transaction_checks_unhealthy() {
+        let config = MonitorConfig::parse_from([
+            "monitor",
+            "--registration-codes-file",
+            "/nonexistent/monitor-registration-codes.json",
+        ]);
+        let (increment_tx, increment_rx) = watch::channel(ntx_seed_status(
+            IncrementService::NAME,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        let (tracking_tx, tracking_rx) = watch::channel(ntx_seed_status(
+            CounterTrackingService::NAME,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
+        let task = tokio::spawn(run_ntx(config, increment_tx, tracking_tx));
+        for mut receiver in [increment_rx, tracking_rx] {
+            tokio::time::timeout(Duration::from_secs(5), receiver.changed())
+                .await
+                .unwrap()
+                .unwrap();
+            let status = receiver.borrow();
+            assert_eq!(status.status, Status::Unhealthy);
+            assert!(status.error.as_ref().unwrap().contains("registration codes file"));
+        }
+        assert!(!task.is_finished());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
 
     #[tokio::test]
     async fn named_validators_are_polled_independently() {

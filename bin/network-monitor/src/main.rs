@@ -23,6 +23,7 @@ pub mod funding;
 pub mod funding_service;
 mod monitor;
 pub mod note_transport;
+mod registration;
 pub mod remote_prover;
 pub mod service;
 pub mod service_status;

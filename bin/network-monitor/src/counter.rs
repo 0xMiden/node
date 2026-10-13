@@ -60,6 +60,7 @@ use crate::deploy::{
     refresh_counter_anchor,
 };
 use crate::funding::{FeeFunder, FundingClient, wallet_funding_amount, wallet_topup_threshold};
+use crate::registration::RegistrationPool;
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -190,6 +191,8 @@ impl FailureTracker {
 /// Periodically submits a network note that increments the counter account.
 pub struct IncrementService {
     config: MonitorConfig,
+    /// Registration budget transferred from bootstrap to account regeneration.
+    pub(crate) registration: Option<RegistrationPool>,
     rpc_client: RpcClient,
     tx: TxBuilder,
     prover: LocalTransactionProver,
@@ -232,6 +235,7 @@ impl IncrementService {
         )?;
         Ok(Self {
             config,
+            registration: None,
             rpc_client,
             tx,
             prover,
@@ -324,6 +328,7 @@ impl IncrementService {
             &self.submission_client,
             &self.prover,
             self.funding.as_ref(),
+            self.registration.as_mut(),
         ))
         .await
         .context("failed to regenerate accounts")?;
@@ -563,6 +568,8 @@ impl Service for IncrementService {
                         Ok(()) => self.failures.reset(),
                         Err(regen_err) => {
                             self.failures.mark_regeneration_failed();
+                            last_error =
+                                Some(format!("account regeneration failed: {regen_err:#}"));
                             error!(&regen_err, target: LOG_TARGET, "Account regeneration failed");
                         },
                     }
