@@ -61,7 +61,7 @@ a genesis block. For initial network setup, use the same validator keys as the n
 Generate a persistent Iroh endpoint identity for each validator:
 
 ```bash
-miden-validator dkg generate-endpoint --output-file endpoint.secret
+miden-validator privacy dkg generate-endpoint --output-file endpoint.secret
 ```
 
 Keep the endpoint secret private and share the printed public endpoint ID with the other operators. Reuse the endpoint
@@ -73,7 +73,7 @@ public Iroh relays and address discovery, so no peer socket addresses are needed
 development and testing; do not rely on them for guaranteed production availability.
 
 ```bash
-miden-validator dkg participate \
+miden-validator privacy dkg participate \
   --endpoint-secret endpoint.secret \
   --enable-public-relay \
   --peer <other-validator-public-key> <other-validator-endpoint-id> \
@@ -272,6 +272,10 @@ retrying. No plaintext is returned on failure.
 
 ### Recover a Record Offline
 
+Privacy operations are grouped under `miden-validator privacy`. Replace the former top-level `dkg` command with
+`privacy dkg`, `export-private-record` with `privacy record export`, and `issue-private-record-share` with
+`privacy record issue-share`. Existing flags and artifact formats are unchanged.
+
 Offline recovery uses an exported record bundle and binary share files. Operators need the transaction ID, the signing
 public key of the validator that stores the selected record, and storage-key bundles from the same epoch and setup.
 Coordinate a threshold of distinct participants before starting. The operator doing the final combination also needs a
@@ -280,7 +284,7 @@ matching storage-key bundle; the combination uses only its public setup informat
 Export the record once on its owning validator:
 
 ```bash
-miden-validator export-private-record \
+miden-validator privacy record export \
   --data-directory /var/lib/miden/validator \
   --transaction-id "$TRANSACTION_ID" --validator-id "$VALIDATOR_ID" \
   --output record.bin
@@ -289,14 +293,14 @@ miden-validator export-private-record \
 Distribute that exact `record.bin` to each participating operator. Each operator issues a share with their own bundle:
 
 ```bash
-miden-validator issue-private-record-share \
+miden-validator privacy record issue-share \
   --record record.bin --storage-key.file /secure/operator.bundle --output share.bin
 ```
 
 Collect exactly the threshold number of share files from distinct participants. For a threshold of two:
 
 ```bash
-miden-validator decrypt-private-record \
+miden-validator privacy record decrypt \
   --record record.bin --share share-1.bin --share share-2.bin \
   --storage-key.file /secure/operator.bundle --output plaintext.bin
 ```

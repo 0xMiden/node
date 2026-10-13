@@ -14,11 +14,11 @@ impossible even though each validator stores encrypted records.
 
 This key is public and must not be used outside tests.
 
-Compose checks each staged bundle with `miden-validator dkg validate-fixture --bundle-file <FILE>` before it marks the
-local network as bootstrapped. This fixture-only check binds the secret share to its expected participant index.
-Production bundles must come from a successful `miden-validator dkg participate` ceremony. That ceremony authenticates
-peers against their configured validator keys and confirms matching transcript and public output commitments before it
-reports success.
+Compose checks each staged bundle with `miden-validator privacy dkg validate-fixture --bundle-file <FILE>` before it
+marks the local network as bootstrapped. This fixture-only check binds the secret share to its expected participant
+index. Production bundles must come from a successful `miden-validator privacy dkg participate` ceremony. That ceremony
+authenticates peers against their configured validator keys and confirms matching transcript and public output
+commitments before it reports success.
 
 ## Regenerating
 
