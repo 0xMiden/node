@@ -6,10 +6,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::miden::node::v1::{
-    IsInvitationCodeValidRequest,
-    RegisterAccountRequest,
-};
+use miden_node_proto::generated::miden::node::v1::RegisterAccountRequest;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 
@@ -21,7 +18,6 @@ pub struct MonitorAccountPair {
 }
 
 pub(crate) trait RegistrationRpc {
-    fn code_valid(&mut self, code: &str) -> impl Future<Output = tonic::Result<bool>> + Send;
     fn register(
         &mut self,
         code: &str,
@@ -64,7 +60,7 @@ impl RegistrationPool {
     /// Registers the wallet, preserving the account pair and any unresolved code on failure.
     ///
     /// Retrying an unresolved registration directly is safe even if its previous response was
-    /// lost. A validity lookup would incorrectly discard a code consumed by that request.
+    /// lost. Unknown or consumed codes are skipped using the registration response.
     pub async fn register_accounts(
         &mut self,
         rpc: &mut impl RegistrationRpc,
@@ -86,20 +82,12 @@ impl RegistrationPool {
     ) -> Result<()> {
         loop {
             if self.pending_code.is_none() {
-                let code = self
-                    .codes
-                    .front()
-                    .ok_or_else(|| anyhow::anyhow!("registration code pool exhausted"))?;
-                let valid = rpc.code_valid(code).await.map_err(|status| {
-                    anyhow::anyhow!("registration code lookup failed ({})", status.code())
-                })?;
-                if !valid {
-                    self.codes.pop_front();
-                    continue;
-                }
                 self.pending_code = self.codes.pop_front();
             }
-            let code = self.pending_code.as_ref().expect("registration code selected");
+            let code = self
+                .pending_code
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("registration code pool exhausted"))?;
             match rpc.register(code, account).await {
                 Ok(()) => {
                     self.pending_code = None;
@@ -111,7 +99,7 @@ impl RegistrationPool {
                         tonic::Code::AlreadyExists | tonic::Code::NotFound
                     ) =>
                 {
-                    // Another client may have redeemed the code after the validity check.
+                    // Unknown codes and codes bound to other accounts cannot register this wallet.
                     self.pending_code = None;
                 },
                 Err(status) => {
@@ -124,16 +112,6 @@ impl RegistrationPool {
 }
 
 impl RegistrationRpc for RpcClient {
-    async fn code_valid(&mut self, code: &str) -> tonic::Result<bool> {
-        Ok(self
-            .is_invitation_code_valid(IsInvitationCodeValidRequest {
-                invitation_code: code.to_owned(),
-            })
-            .await?
-            .into_inner()
-            .valid)
-    }
-
     async fn register(&mut self, code: &str, account: AccountId) -> tonic::Result<()> {
         self.register_account(RegisterAccountRequest {
             invitation_code: code.to_owned(),
@@ -155,8 +133,7 @@ mod tests {
     struct Registry {
         codes: HashMap<String, Option<AccountId>>,
         lose_response: bool,
-        raced_account: Option<AccountId>,
-        fail_lookup: bool,
+        fail_registration: bool,
         requests: Vec<(String, AccountId)>,
     }
 
@@ -168,22 +145,12 @@ mod tests {
             }
         }
 
-        fn lookup(&mut self, code: &str) -> tonic::Result<bool> {
-            if self.fail_lookup {
-                self.fail_lookup = false;
-                return Err(tonic::Status::unavailable("lookup failed"));
-            }
-            let valid = self.codes.get(code).is_some_and(Option::is_none);
-            if code == "raced"
-                && let Some(account) = self.raced_account.take()
-            {
-                self.codes.insert(code.to_owned(), Some(account));
-            }
-            Ok(valid)
-        }
-
         fn redeem(&mut self, code: &str, account: AccountId) -> tonic::Result<()> {
             self.requests.push((code.to_owned(), account));
+            if self.fail_registration {
+                self.fail_registration = false;
+                return Err(tonic::Status::unavailable("registration temporarily unavailable"));
+            }
             let entry = self.codes.get_mut(code).ok_or(tonic::Status::not_found("unknown"))?;
             match entry {
                 Some(existing) if *existing != account => {
@@ -200,10 +167,6 @@ mod tests {
     }
 
     impl RegistrationRpc for Registry {
-        fn code_valid(&mut self, code: &str) -> impl Future<Output = tonic::Result<bool>> + Send {
-            std::future::ready(self.lookup(code))
-        }
-
         fn register(
             &mut self,
             code: &str,
@@ -257,11 +220,23 @@ mod tests {
         assert!(pool.register_accounts(&mut registry, pair).await.is_err());
     }
 
-    /// Failed validity lookups must leave the code available for the next attempt.
+    /// Registration must work even when the optional validity endpoint is unavailable.
     #[tokio::test]
-    async fn transient_lookup_does_not_consume_a_code() {
+    async fn registration_does_not_require_validity_endpoint() {
+        let mut registry = Registry::with_codes(&["wallet"]);
+        let accounts = RegistrationPool::from_json(r#"["wallet"]"#)
+            .unwrap()
+            .register_accounts(&mut registry, pair)
+            .await
+            .unwrap();
+        assert_eq!(registry.codes["wallet"], Some(accounts.wallet.id()));
+    }
+
+    /// A transient registration failure must retain the code and account for another attempt.
+    #[tokio::test]
+    async fn transient_registration_does_not_consume_a_code() {
         let mut registry = Registry::with_codes(&["a"]);
-        registry.fail_lookup = true;
+        registry.fail_registration = true;
         let mut pool = RegistrationPool::from_json(r#"["a"]"#).unwrap();
         assert!(pool.register_accounts(&mut registry, pair).await.is_err());
         let accounts = pool
@@ -281,16 +256,25 @@ mod tests {
         assert_ne!(accounts.wallet.id(), accounts.counter.id());
     }
 
-    /// Another client redeeming a code between lookup and registration must not strand the pair.
+    /// Unknown codes and codes belonging to other accounts must be skipped without changing the
+    /// wallet being registered.
     #[tokio::test]
-    async fn code_race_advances_to_an_unused_code() {
-        let mut registry = Registry::with_codes(&["raced", "wallet", "counter"]);
+    async fn unavailable_codes_advance_to_an_unused_code() {
+        let mut registry = Registry::with_codes(&["consumed", "wallet"]);
         let competitor = pair().unwrap().wallet.id();
-        registry.raced_account = Some(competitor);
-        let mut pool = RegistrationPool::from_json(r#"["raced", "wallet", "counter"]"#).unwrap();
+        registry.codes.insert("consumed".into(), Some(competitor));
+        let mut pool = RegistrationPool::from_json(r#"["unknown", "consumed", "wallet"]"#).unwrap();
         let accounts = pool.register_accounts(&mut registry, pair).await.unwrap();
-        assert_eq!(registry.codes["raced"], Some(competitor));
+        assert_eq!(registry.codes["consumed"], Some(competitor));
         assert_eq!(registry.codes["wallet"], Some(accounts.wallet.id()));
+        assert_eq!(
+            registry.requests,
+            vec![
+                ("unknown".into(), accounts.wallet.id()),
+                ("consumed".into(), accounts.wallet.id()),
+                ("wallet".into(), accounts.wallet.id()),
+            ]
+        );
     }
 
     /// Repeated deployments share one budget and preserve exact code text, including whitespace.

@@ -43,12 +43,12 @@ recovery use the same pool. Registration retries retain the same accounts and co
 failure after registration, during funding or deployment, can consume codes without producing a usable pair.
 Registration's automatic funding does not replace the monitor's configured funding service.
 
-After a restart, the monitor skips codes that the network registry reports as unavailable; it does not persist accounts
-or update the file. When no usable codes remain, transaction checks report an unhealthy status and the other checks
-continue. Obtain additional unused codes, update the file, and restart the monitor to reload it. A missing or invalid
-file also leaves transaction checks unhealthy until corrected and the monitor restarted. No file is required on networks
-with allowlist enforcement disabled. Remote prover probes do not submit their temporary accounts and do not consume
-registration codes.
+After a restart, the monitor tries codes in file order and skips any that registration reports as unknown or already
+consumed; it does not persist accounts or update the file. When no usable codes remain, transaction checks report an
+unhealthy status and the other checks continue. Obtain additional unused codes, update the file, and restart the monitor
+to reload it. A missing or invalid file also leaves transaction checks unhealthy until corrected and the monitor
+restarted. No file is required on networks with allowlist enforcement disabled. Remote prover probes do not submit their
+temporary accounts and do not consume registration codes.
 
 Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the
 hex-encoded validator key that signs transaction encryption key attestations. The monitor will not submit a transaction
