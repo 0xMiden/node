@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -41,6 +42,37 @@ pub(super) fn decrypt(
     let plaintext = combiner
         .open(&PrivateRecordShareRequest::for_record(&record), &record, &shares)
         .context("failed to decrypt private record")?;
-    fs_err::write(output, plaintext.as_slice())
+    write_plaintext(output, plaintext.as_slice())
         .with_context(|| format!("failed to write decrypted record to {}", output.display()))
+}
+
+/// Replaces the output with a complete, owner-only plaintext file.
+///
+/// The plaintext is private transaction data, so it must never be readable by other users or
+/// visible at the output path in part. Writing a temporary file in the destination directory
+/// keeps both files on one filesystem, which makes the final rename atomic.
+fn write_plaintext(output: &Path, plaintext: &[u8]) -> anyhow::Result<()> {
+    let parent = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new();
+    temporary.prefix(".private-record-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        temporary.permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    let mut temporary = temporary
+        .tempfile_in(parent)
+        .context("failed to create temporary plaintext file")?;
+    temporary
+        .write_all(plaintext)
+        .context("failed to write temporary plaintext file")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .context("failed to sync temporary plaintext file")?;
+    temporary.persist(output).context("failed to move plaintext file into place")?;
+    Ok(())
 }

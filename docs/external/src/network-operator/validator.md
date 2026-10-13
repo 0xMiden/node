@@ -305,9 +305,10 @@ miden-validator privacy record decrypt \
 
 The record bundle and shares use their existing binary encodings. Share files contain raw canonical share bytes, not the
 hexadecimal strings returned by the HTTP API. A successful decrypt command writes authenticated binary record bytes,
-currently serialized transaction inputs, to `plaintext.bin`. It does not write plaintext to the terminal. Keep
-storage-key bundles and recovered plaintext in access-controlled locations.
+currently serialized transaction inputs, to `plaintext.bin`. It does not write plaintext to the terminal. The output
+file is readable and writable only by its owner. Keep storage-key bundles and recovered plaintext in access-controlled
+locations.
 
-Malformed files, mismatched keys, invalid shares, and authentication failures leave an existing output file untouched.
-Successful recovery replaces the output file. If writing the output fails, the file can be incomplete; correct the
-filesystem problem and retry, preferably to a new output path. Do not consume the output of a failed command.
+Successful recovery replaces the output file with the complete plaintext. Any failure, including malformed files,
+mismatched keys, invalid shares, authentication failures, and filesystem errors, leaves an existing output file
+untouched and creates none if it did not exist.
