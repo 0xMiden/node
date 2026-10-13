@@ -4,7 +4,7 @@ use std::collections::{HashSet, VecDeque};
 use std::future::Future;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::RegisterAccountRequest;
 use miden_protocol::account::{Account, AccountId};
@@ -35,14 +35,18 @@ pub struct RegistrationPool {
 impl RegistrationPool {
     /// Loads exact, case-sensitive invitation codes from a JSON array of strings.
     pub fn load(path: &Path) -> Result<Self> {
-        let json = fs_err::read_to_string(path)
-            .map_err(|_| anyhow::anyhow!("failed to read registration codes file"))?;
+        let json =
+            fs_err::read_to_string(path).context("failed to read registration codes file")?;
         Self::from_json(&json)
     }
 
     fn from_json(json: &str) -> Result<Self> {
-        let codes: Vec<String> = serde_json::from_str(json).map_err(|_| {
-            anyhow::anyhow!("registration codes file must be a JSON array of strings")
+        let codes: Vec<String> = serde_json::from_str(json).map_err(|error| {
+            anyhow::anyhow!(
+                "registration codes file must be a JSON array of strings (line {}, column {})",
+                error.line(),
+                error.column()
+            )
         })?;
         anyhow::ensure!(
             codes.iter().all(|code| !code.is_empty()),
@@ -103,8 +107,7 @@ impl RegistrationPool {
                     self.pending_code = None;
                 },
                 Err(status) => {
-                    // Server error messages can contain secrets; expose only the status code.
-                    anyhow::bail!("account registration failed ({})", status.code());
+                    return Err(status).context("account registration failed");
                 },
             }
         }
@@ -134,6 +137,7 @@ mod tests {
         codes: HashMap<String, Option<AccountId>>,
         lose_response: bool,
         fail_registration: bool,
+        failure_message: Option<String>,
         requests: Vec<(String, AccountId)>,
     }
 
@@ -147,6 +151,9 @@ mod tests {
 
         fn redeem(&mut self, code: &str, account: AccountId) -> tonic::Result<()> {
             self.requests.push((code.to_owned(), account));
+            if let Some(message) = self.failure_message.take() {
+                return Err(tonic::Status::unavailable(message));
+            }
             if self.fail_registration {
                 self.fail_registration = false;
                 return Err(tonic::Status::unavailable("registration temporarily unavailable"));
@@ -160,7 +167,7 @@ mod tests {
             }
             if self.lose_response {
                 self.lose_response = false;
-                return Err(tonic::Status::unavailable(format!("lost response for {code}")));
+                return Err(tonic::Status::unavailable("lost registration response"));
             }
             Ok(())
         }
@@ -205,12 +212,11 @@ mod tests {
 
     /// A committed registration with a lost response must retry its original account and code.
     #[tokio::test]
-    async fn lost_response_retains_accounts_and_code_without_leaking_secrets() {
+    async fn lost_response_retains_accounts_and_code() {
         let mut registry = Registry::with_codes(&["secret-wallet"]);
         registry.lose_response = true;
         let mut pool = RegistrationPool::from_json(r#"["secret-wallet"]"#).unwrap();
-        let error = pool.register_accounts(&mut registry, pair).await.err().unwrap();
-        assert!(!format!("{error:#}").contains("secret-wallet"));
+        assert!(pool.register_accounts(&mut registry, pair).await.is_err());
         let accounts = pool
             .register_accounts(&mut registry, || panic!("accounts regenerated"))
             .await
@@ -307,6 +313,39 @@ mod tests {
             .err()
             .unwrap();
         assert!(error.to_string().contains("exhausted"));
+    }
+
+    /// Registration failures retain the server's explanation even when an invitation code happens
+    /// to match part of an ordinary diagnostic word.
+    #[tokio::test]
+    async fn registration_diagnostics_preserve_server_message() {
+        let mut registry = Registry::with_codes(&["fund"]);
+        let mut pool = RegistrationPool::from_json(r#"["fund"]"#).unwrap();
+        registry.failure_message = Some("funding service unavailable".into());
+        let error = pool.register_accounts(&mut registry, pair).await.err().unwrap();
+        assert!(format!("{error:#}").contains("funding service unavailable"));
+    }
+
+    /// Invalid JSON diagnostics should identify the location without echoing the code text.
+    #[test]
+    fn malformed_json_diagnostic_includes_location_without_input() {
+        let error = RegistrationPool::from_json("[\"secret\", 3]").err().unwrap();
+        let diagnostic = format!("{error:#}");
+        assert!(diagnostic.contains("line 1"));
+        assert!(diagnostic.contains("column"));
+        assert!(!diagnostic.contains("secret"));
+    }
+
+    /// File-read failures must retain the operating system error for diagnosis.
+    #[test]
+    fn unreadable_file_preserves_io_error() {
+        let error = RegistrationPool::load(Path::new("/nonexistent/monitor-codes.json"))
+            .err()
+            .unwrap();
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
     }
 
     /// Invalid files must produce useful diagnostics without echoing secret input.
