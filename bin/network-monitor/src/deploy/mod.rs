@@ -86,7 +86,7 @@ use url::Url;
 
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
-use crate::funding::{FeeFunder, FundingClient, counter_funding_amount, wallet_funding_amount};
+use crate::funding::{FeeFunder, FundingClient, counter_funding_amount};
 use crate::registration::{MonitorAccountPair, RegistrationPool};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -375,11 +375,13 @@ pub async fn create_genesis_aware_rpc_client(
 /// Used both at startup and by the increment task when accounts are fundamentally outdated
 /// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
 /// are never persisted to disk; the monitor re-creates them on every restart. When a registration
-/// pool is provided, unresolved registrations reuse their existing accounts and codes.
+/// pool is provided, unresolved registrations reuse their existing accounts and codes. On a
+/// fee-charging chain the wallet receives `wallet_funding_amount` base units of the fee asset.
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
+    wallet_funding_amount: u64,
     registration: Option<&mut RegistrationPool>,
 ) -> Result<DeployedMonitorAccounts> {
     info!(target: LOG_TARGET, "Preparing monitor accounts");
@@ -416,7 +418,7 @@ pub async fn create_and_deploy_accounts(
                 .await
                 .context("failed to fund the counter account")?;
             let wallet_note = funder
-                .fund(wallet_account.id(), wallet_funding_amount(verification_base_fee))
+                .fund(wallet_account.id(), wallet_funding_amount)
                 .await
                 .context("failed to fund the wallet account")?;
             (Some(counter_note), Some(wallet_note))

@@ -20,6 +20,8 @@ const DEFAULT_RPC_URL: &str = "http://0.0.0.0:57291";
 const DEFAULT_PORT: u16 = 3000;
 /// Amount of tokens, in base units, requested by each faucet check by default.
 const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
+/// Amount of the fee asset, in base units, requested by each wallet funding request by default.
+const DEFAULT_WALLET_FUNDING_AMOUNT: u64 = 1_000_000;
 
 /// Configuration for the monitor.
 ///
@@ -82,6 +84,17 @@ pub struct MonitorConfig {
         help = "Timeout for a funding request to the funding service"
     )]
     pub funding_request_timeout: Duration,
+
+    /// Amount of the fee asset, in base units, that each wallet funding request asks for.
+    #[arg(
+        long = "wallet-funding-amount",
+        env = "MIDEN_MONITOR_WALLET_FUNDING_AMOUNT",
+        default_value_t = DEFAULT_WALLET_FUNDING_AMOUNT,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Amount of the fee asset, in base units, that each wallet funding request asks for. \
+                It must not exceed the funding service's maximum request amount"
+    )]
+    pub wallet_funding_amount: u64,
 
     /// The interval at which to test the remote provers services.
     #[arg(
@@ -320,6 +333,18 @@ mod tests {
                 "/tmp/codes.json",
             ])
             .is_ok()
+        );
+    }
+
+    /// Operators can choose how much of the fee asset the wallet requests, but not a zero amount,
+    /// which would leave the wallet unable to pay fees.
+    #[test]
+    fn accepts_a_positive_wallet_funding_amount() {
+        let config =
+            MonitorConfig::try_parse_from(["monitor", "--wallet-funding-amount", "5000"]).unwrap();
+        assert_eq!(config.wallet_funding_amount, 5000);
+        assert!(
+            MonitorConfig::try_parse_from(["monitor", "--wallet-funding-amount", "0"]).is_err()
         );
     }
 
