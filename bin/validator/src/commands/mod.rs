@@ -990,7 +990,7 @@ mod tests {
         }
     }
 
-    /// Runs parsed decryption arguments against binary files, including all supplied shares.
+    /// Runs parsed decryption arguments against binary files and checks the output is owner-only.
     async fn decrypt_record_file(
         record: &Path,
         shares: &[PathBuf; 2],
@@ -1017,6 +1017,12 @@ mod tests {
         ])
         .unwrap();
         command.handle(CancellationToken::new()).await.unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            // Recovery must restrict the output even when it replaces a more permissive file.
+            assert_eq!(fs_err::metadata(output).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 
     /// Recovery failures preserve a previously written plaintext file.
