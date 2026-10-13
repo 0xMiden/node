@@ -157,6 +157,9 @@ remote access.
 | `GET`  | `/admin/v1/transactions/{transaction_id}` | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
 | `POST` | `/admin/v1/decryption-share`              | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
 
+| `POST` | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}` |
+`{"plaintext":"<hex>"}` |
+
 Byte values are hexadecimal strings without a `0x` prefix. Errors from request handlers have the form
 `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return `500`. Requests rejected
 before reaching a handler return a plain-text error body. These include malformed query parameters or malformed JSON
@@ -233,3 +236,36 @@ that it does not store.
 A validator issues a share only when the `decryption_context` names a transaction that it validated. Otherwise it
 returns `404`. It returns `400` when the context is not a canonical record context, or when the context names a key
 epoch other than the `--storage-key.epoch` of the validator.
+
+### Decrypt a Stored Record
+
+Decryption recovers the authenticated bytes stored for a validated transaction. Collect shares from exactly the
+configured threshold number of distinct validators, all for the same record's `encrypted_record_key` and
+`decryption_context`. Do not combine shares requested for different validators' copies of the transaction.
+
+Send the collected shares to the validator from which you retrieved the record. Its active storage-key bundle must match
+the record's epoch and setup. Create `decrypt-request.json` with the hexadecimal shares:
+
+```json
+{ "decryption_shares": ["<first-share-hex>", "<second-share-hex>"] }
+```
+
+The example assumes a threshold of two. Replace the transaction ID and use your authenticated admin endpoint:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header 'Content-Type: application/json' \
+  --data-binary @decrypt-request.json \
+  "${VALIDATOR_ADMIN_URL}/admin/v1/transactions/${TRANSACTION_ID}/decrypt" \
+  --output decrypted-record.json
+```
+
+A `200` response contains `{"plaintext":"<hex>"}`. Decode that hexadecimal string to obtain the original binary record
+(currently serialized transaction inputs). Success verifies the shares and authenticates the decrypted bytes; it does
+not change the stored record or issue another share. Protect the response as private transaction data.
+
+A `400` response means the identifier or shares are invalid, the share count is not exactly the threshold, or the record
+does not match the active storage-key setup. Check that every share targets the selected record and comes from a
+distinct participant. A `404` means the receiving validator has no such record; check the transaction ID and record
+owner. A `500` indicates a database, configuration, or stored-record failure; consult the validator's logs before
+retrying. No plaintext is returned on failure.
