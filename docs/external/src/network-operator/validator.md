@@ -270,10 +270,6 @@ retrying. No plaintext is returned on failure.
 
 ### Recover a Record Offline
 
-Privacy operations are grouped under `miden-validator privacy`. Replace the former top-level `dkg` command with
-`privacy dkg`, `export-private-record` with `privacy record export`, and `issue-private-record-share` with
-`privacy record issue-share`. Existing flags and artifact formats are unchanged.
-
 Offline recovery uses an exported record bundle and binary share files. Operators need the transaction ID, the signing
 public key of the validator that stores the selected record, and storage-key bundles from the same epoch and setup.
 Coordinate a threshold of distinct participants before starting. The operator doing the final combination also needs a

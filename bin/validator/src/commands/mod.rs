@@ -795,47 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn private_record_share_command_parses() {
-        let command = ValidatorCommand::try_parse_from([
-            "miden-validator",
-            "privacy",
-            "record",
-            "issue-share",
-            "--record",
-            "/tmp/record.bin",
-            "--output",
-            "/tmp/share.bin",
-            "--storage-key.file",
-            "/tmp/storage-key.bundle",
-        ])
-        .expect("the local share command must parse");
-
-        assert!(matches!(command.open_telemetry(), OpenTelemetry::Disabled));
-    }
-
-    #[test]
-    fn private_record_export_command_parses() {
-        let validator_id = SigningKey::read_from_bytes(&[7; 32]).unwrap().public_key().to_bytes();
-        let command = ValidatorCommand::try_parse_from([
-            "miden-validator",
-            "privacy",
-            "record",
-            "export",
-            "--data-directory",
-            "/tmp/validator-data",
-            "--transaction-id",
-            "0101010101010101010101010101010101010101010101010101010101010101",
-            "--validator-id",
-            &hex::encode(validator_id),
-            "--output",
-            "/tmp/record.bin",
-        ])
-        .expect("the private record export command must parse");
-
-        assert!(matches!(command.open_telemetry(), OpenTelemetry::Disabled));
-    }
-
-    #[test]
     fn private_record_share_output_is_required() {
         let result = ValidatorCommand::try_parse_from([
             "miden-validator",
@@ -947,12 +906,7 @@ mod tests {
                 assert!(help.to_string().contains(operation));
             }
         }
-        for removed in [
-            "dkg",
-            "export-private-record",
-            "issue-private-record-share",
-            "decrypt-private-record",
-        ] {
+        for removed in ["dkg", "export-private-record", "issue-private-record-share"] {
             let Err(error) = ValidatorCommand::try_parse_from(["miden-validator", removed]) else {
                 panic!("removed top-level command must be rejected");
             };
