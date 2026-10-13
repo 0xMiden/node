@@ -3,6 +3,7 @@
 //! This module contains the configuration structures and constants for the network monitor.
 //! Configuration for the monitor.
 
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -33,6 +34,10 @@ pub struct MonitorConfig {
         help = "The URL of the RPC service"
     )]
     pub rpc_url: Url,
+
+    /// JSON file containing a finite pool of invitation codes for monitor accounts.
+    #[arg(long = "registration-codes-file", env = "MIDEN_MONITOR_REGISTRATION_CODES_FILE")]
+    pub registration_codes_file: Option<PathBuf>,
 
     /// The display name of the network (e.g., "Testnet", "Devnet").
     #[arg(
@@ -303,6 +308,20 @@ mod tests {
     use miden_protocol::utils::serde::Serializable;
 
     use super::*;
+
+    /// Operators can supply the registration pool through a file without exposing its codes in
+    /// command-line arguments.
+    #[test]
+    fn accepts_registration_codes_file() {
+        assert!(
+            MonitorConfig::try_parse_from([
+                "monitor",
+                "--registration-codes-file",
+                "/tmp/codes.json",
+            ])
+            .is_ok()
+        );
+    }
 
     #[test]
     fn accepts_named_validators_as_a_list_or_repeated_arguments() {

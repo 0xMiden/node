@@ -26,6 +26,30 @@ configured.
 The monitor is an observer and test client, not a node component required for block production. Its network transaction
 checks create fresh in-memory accounts on startup and do not persist account state to disk.
 
+On a network with account allowlist enforcement enabled, give the monitor a finite pool of invitation codes. Obtain
+unused codes from the network operator and save their original text as a JSON array, for example:
+
+```json
+["first-invitation-code", "second-invitation-code"]
+```
+
+Set `MIDEN_MONITOR_REGISTRATION_CODES_FILE` to the file's path, or pass `--registration-codes-file /path/to/codes.json`.
+For containers, mount the file and use its path inside the container. Codes are case-sensitive and are not trimmed;
+empty strings and duplicates are rejected. Keep the file private and give each monitor instance its own pool.
+
+The monitor registers its wallet and counter before requesting funding or submitting transactions. Each fresh pair
+consumes two codes, so 100 unused codes support at most 50 pairs. Startup and recovery use the same pool. Registration
+retries retain the same accounts and code when a response is uncertain; a failure after registration, during funding or
+deployment, can consume codes without producing a usable pair. Registration's automatic funding does not replace the
+monitor's configured funding service.
+
+After a restart, the monitor skips codes that the network registry reports as unavailable; it does not persist accounts
+or update the file. When no usable codes remain, transaction checks report an unhealthy status and the other checks
+continue. Obtain additional unused codes, update the file, and restart the monitor to reload it. A missing or invalid
+file also leaves transaction checks unhealthy until corrected and the monitor restarted. No file is required on networks
+with allowlist enforcement disabled. Remote prover probes do not submit their temporary accounts and do not consume
+registration codes.
+
 Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the
 hex-encoded validator key that signs transaction encryption key attestations. The monitor will not submit a transaction
 unless it can verify the advertised encryption key. The monitor obtains the active fee asset from the protocol
