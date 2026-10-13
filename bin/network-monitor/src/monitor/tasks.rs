@@ -352,6 +352,7 @@ async fn bootstrap_ntx(
         &submission_client,
         &prover,
         funding.as_ref(),
+        config.wallet_funding_amount,
         registration.as_mut(),
     ))
     .await?;
