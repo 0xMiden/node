@@ -37,11 +37,11 @@ Set `MIDEN_MONITOR_REGISTRATION_CODES_FILE` to the file's path, or pass `--regis
 For containers, mount the file and use its path inside the container. Codes are case-sensitive and are not trimmed;
 empty strings and duplicates are rejected. Keep the file private and give each monitor instance its own pool.
 
-The monitor registers its wallet and counter before requesting funding or submitting transactions. Each fresh pair
-consumes two codes, so 100 unused codes support at most 50 pairs. Startup and recovery use the same pool. Registration
-retries retain the same accounts and code when a response is uncertain; a failure after registration, during funding or
-deployment, can consume codes without producing a usable pair. Registration's automatic funding does not replace the
-monitor's configured funding service.
+The monitor registers its wallet before requesting funding or submitting transactions. Its network counter account does
+not require registration. Each fresh pair consumes one code, so 100 unused codes support at most 100 pairs. Startup and
+recovery use the same pool. Registration retries retain the same accounts and code when a response is uncertain; a
+failure after registration, during funding or deployment, can consume codes without producing a usable pair.
+Registration's automatic funding does not replace the monitor's configured funding service.
 
 After a restart, the monitor skips codes that the network registry reports as unavailable; it does not persist accounts
 or update the file. When no usable codes remain, transaction checks report an unhealthy status and the other checks

@@ -33,7 +33,6 @@ pub(crate) trait RegistrationRpc {
 pub struct RegistrationPool {
     codes: VecDeque<String>,
     pending_accounts: Option<MonitorAccountPair>,
-    wallet_registered: bool,
     pending_code: Option<String>,
 }
 
@@ -58,12 +57,11 @@ impl RegistrationPool {
         Ok(Self {
             codes: codes.into(),
             pending_accounts: None,
-            wallet_registered: false,
             pending_code: None,
         })
     }
 
-    /// Registers both accounts, preserving their identities and any unresolved code on failure.
+    /// Registers the wallet, preserving the account pair and any unresolved code on failure.
     ///
     /// Retrying an unresolved registration directly is safe even if its previous response was
     /// lost. A validity lookup would incorrectly discard a code consumed by that request.
@@ -77,13 +75,7 @@ impl RegistrationPool {
         }
         let accounts = self.pending_accounts.as_ref().expect("pending accounts exist");
         let wallet_id = accounts.wallet.id();
-        let counter_id = accounts.counter.id();
-        if !self.wallet_registered {
-            self.register_one(rpc, wallet_id).await?;
-            self.wallet_registered = true;
-        }
-        self.register_one(rpc, counter_id).await?;
-        self.wallet_registered = false;
+        self.register_one(rpc, wallet_id).await?;
         Ok(self.pending_accounts.take().expect("registered accounts exist"))
     }
 
@@ -163,7 +155,6 @@ mod tests {
     struct Registry {
         codes: HashMap<String, Option<AccountId>>,
         lose_response: bool,
-        lose_counter_response: bool,
         raced_account: Option<AccountId>,
         fail_lookup: bool,
         requests: Vec<(String, AccountId)>,
@@ -200,9 +191,8 @@ mod tests {
                 },
                 _ => *entry = Some(account),
             }
-            if self.lose_response || (self.lose_counter_response && code == "counter") {
+            if self.lose_response {
                 self.lose_response = false;
-                self.lose_counter_response = false;
                 return Err(tonic::Status::unavailable(format!("lost response for {code}")));
             }
             Ok(())
@@ -232,8 +222,8 @@ mod tests {
     /// Restarting from the same file must skip codes already bound in the server's registry.
     #[tokio::test]
     async fn skips_consumed_codes_and_exhausts_across_restarts() {
-        let json = r#"["used", "wallet", "counter"]"#;
-        let mut registry = Registry::with_codes(&["used", "wallet", "counter"]);
+        let json = r#"["used", "wallet"]"#;
+        let mut registry = Registry::with_codes(&["used", "wallet"]);
         registry.codes.insert("used".into(), Some(pair().unwrap().wallet.id()));
         let accounts = RegistrationPool::from_json(json)
             .unwrap()
@@ -241,7 +231,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(registry.codes["wallet"], Some(accounts.wallet.id()));
-        assert_eq!(registry.codes["counter"], Some(accounts.counter.id()));
         let error = RegistrationPool::from_json(json)
             .unwrap()
             .register_accounts(&mut registry, pair)
@@ -254,10 +243,9 @@ mod tests {
     /// A committed registration with a lost response must retry its original account and code.
     #[tokio::test]
     async fn lost_response_retains_accounts_and_code_without_leaking_secrets() {
-        let mut registry = Registry::with_codes(&["secret-wallet", "secret-counter"]);
+        let mut registry = Registry::with_codes(&["secret-wallet"]);
         registry.lose_response = true;
-        let mut pool =
-            RegistrationPool::from_json(r#"["secret-wallet", "secret-counter"]"#).unwrap();
+        let mut pool = RegistrationPool::from_json(r#"["secret-wallet"]"#).unwrap();
         let error = pool.register_accounts(&mut registry, pair).await.err().unwrap();
         assert!(!format!("{error:#}").contains("secret-wallet"));
         let accounts = pool
@@ -266,45 +254,31 @@ mod tests {
             .unwrap();
         assert_eq!(registry.requests[0], registry.requests[1]);
         assert_eq!(registry.codes["secret-wallet"], Some(accounts.wallet.id()));
-        assert_eq!(registry.codes["secret-counter"], Some(accounts.counter.id()));
         assert!(pool.register_accounts(&mut registry, pair).await.is_err());
     }
 
     /// Failed validity lookups must leave the code available for the next attempt.
     #[tokio::test]
     async fn transient_lookup_does_not_consume_a_code() {
-        let mut registry = Registry::with_codes(&["a", "b"]);
+        let mut registry = Registry::with_codes(&["a"]);
         registry.fail_lookup = true;
-        let mut pool = RegistrationPool::from_json(r#"["a", "b"]"#).unwrap();
+        let mut pool = RegistrationPool::from_json(r#"["a"]"#).unwrap();
         assert!(pool.register_accounts(&mut registry, pair).await.is_err());
         let accounts = pool
             .register_accounts(&mut registry, || panic!("accounts regenerated"))
             .await
             .unwrap();
         assert_eq!(registry.codes["a"], Some(accounts.wallet.id()));
-        assert_eq!(registry.codes["b"], Some(accounts.counter.id()));
     }
 
-    /// A counter registration failure must retain the already registered wallet without another
-    /// redemption or account creation.
+    /// A fresh pair needs only its wallet registered; its network counter must not consume a code.
     #[tokio::test]
-    async fn partial_pair_registration_resumes_at_the_counter() {
-        let mut registry = Registry::with_codes(&["wallet", "counter"]);
-        registry.lose_counter_response = true;
-        let mut pool = RegistrationPool::from_json(r#"["wallet", "counter"]"#).unwrap();
-        assert!(pool.register_accounts(&mut registry, pair).await.is_err());
-        let accounts = pool
-            .register_accounts(&mut registry, || panic!("accounts regenerated"))
-            .await
-            .unwrap();
-        assert_eq!(
-            registry.requests,
-            vec![
-                ("wallet".into(), accounts.wallet.id()),
-                ("counter".into(), accounts.counter.id()),
-                ("counter".into(), accounts.counter.id()),
-            ]
-        );
+    async fn registers_only_the_wallet() {
+        let mut registry = Registry::with_codes(&["wallet"]);
+        let mut pool = RegistrationPool::from_json(r#"["wallet"]"#).unwrap();
+        let accounts = pool.register_accounts(&mut registry, pair).await.unwrap();
+        assert_eq!(registry.requests, vec![("wallet".into(), accounts.wallet.id())]);
+        assert_ne!(accounts.wallet.id(), accounts.counter.id());
     }
 
     /// Another client redeeming a code between lookup and registration must not strand the pair.
@@ -317,22 +291,18 @@ mod tests {
         let accounts = pool.register_accounts(&mut registry, pair).await.unwrap();
         assert_eq!(registry.codes["raced"], Some(competitor));
         assert_eq!(registry.codes["wallet"], Some(accounts.wallet.id()));
-        assert_eq!(registry.codes["counter"], Some(accounts.counter.id()));
     }
 
     /// Repeated deployments share one budget and preserve exact code text, including whitespace.
     #[tokio::test]
     async fn successive_pairs_share_the_budget() {
-        let mut registry = Registry::with_codes(&[" Wallet ", "Counter", "wallet", "counter"]);
-        let mut pool =
-            RegistrationPool::from_json(r#"[" Wallet ", "Counter", "wallet", "counter"]"#).unwrap();
+        let mut registry = Registry::with_codes(&[" Wallet ", "wallet"]);
+        let mut pool = RegistrationPool::from_json(r#"[" Wallet ", "wallet"]"#).unwrap();
         let first = pool.register_accounts(&mut registry, pair).await.unwrap();
         let second = pool.register_accounts(&mut registry, pair).await.unwrap();
         assert_ne!(first.wallet.id(), second.wallet.id());
         assert_eq!(registry.codes[" Wallet "], Some(first.wallet.id()));
-        assert_eq!(registry.codes["Counter"], Some(first.counter.id()));
         assert_eq!(registry.codes["wallet"], Some(second.wallet.id()));
-        assert_eq!(registry.codes["counter"], Some(second.counter.id()));
         assert!(
             pool.register_accounts(&mut registry, pair)
                 .await
