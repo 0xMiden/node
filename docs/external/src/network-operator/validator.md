@@ -269,3 +269,43 @@ does not match the active storage-key setup. Check that every share targets the 
 distinct participant. A `404` means the receiving validator has no such record; check the transaction ID and record
 owner. A `500` indicates a database, configuration, or stored-record failure; consult the validator's logs before
 retrying. No plaintext is returned on failure.
+
+### Recover a Record Offline
+
+Offline recovery uses an exported record bundle and binary share files. Operators need the transaction ID, the signing
+public key of the validator that stores the selected record, and storage-key bundles from the same epoch and setup.
+Coordinate a threshold of distinct participants before starting. The operator doing the final combination also needs a
+matching storage-key bundle; the combination uses only its public setup information.
+
+Export the record once on its owning validator:
+
+```bash
+miden-validator export-private-record \
+  --data-directory /var/lib/miden/validator \
+  --transaction-id "$TRANSACTION_ID" --validator-id "$VALIDATOR_ID" \
+  --output record.bin
+```
+
+Distribute that exact `record.bin` to each participating operator. Each operator issues a share with their own bundle:
+
+```bash
+miden-validator issue-private-record-share \
+  --record record.bin --storage-key.file /secure/operator.bundle --output share.bin
+```
+
+Collect exactly the threshold number of share files from distinct participants. For a threshold of two:
+
+```bash
+miden-validator decrypt-private-record \
+  --record record.bin --share share-1.bin --share share-2.bin \
+  --storage-key.file /secure/operator.bundle --output plaintext.bin
+```
+
+The record bundle and shares use their existing binary encodings. Share files contain raw canonical share bytes, not the
+hexadecimal strings returned by the HTTP API. A successful decrypt command writes authenticated binary record bytes,
+currently serialized transaction inputs, to `plaintext.bin`. It does not write plaintext to the terminal. Keep
+storage-key bundles and recovered plaintext in access-controlled locations.
+
+Malformed files, mismatched keys, invalid shares, and authentication failures leave an existing output file untouched.
+Successful recovery replaces the output file. If writing the output fails, the file can be incomplete; correct the
+filesystem problem and retry, preferably to a new output path. Do not consume the output of a failed command.

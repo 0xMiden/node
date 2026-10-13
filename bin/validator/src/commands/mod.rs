@@ -1,4 +1,5 @@
 mod bootstrap;
+mod decrypt_private_record;
 mod dkg;
 mod export_private_record;
 mod genesis;
@@ -54,6 +55,26 @@ pub struct PrivateRecordShareOptions {
     output: PathBuf,
 
     /// Canonical storage key material for this validator.
+    #[command(flatten)]
+    storage_key: ValidatorStorageKey,
+}
+
+/// Local inputs for recovering one private record with externally collected shares.
+#[derive(clap::Args)]
+pub struct PrivateRecordDecryptOptions {
+    /// Canonical private-record bundle to decrypt.
+    #[arg(long, value_name = "FILE")]
+    record: PathBuf,
+
+    /// Canonical share file from one participant; repeat for each required participant.
+    #[arg(long = "share", required = true, value_name = "FILE")]
+    shares: Vec<PathBuf>,
+
+    /// File that receives the authenticated plaintext bytes.
+    #[arg(long, value_name = "FILE")]
+    output: PathBuf,
+
+    /// Storage key bundle whose public setup matches the record.
     #[command(flatten)]
     storage_key: ValidatorStorageKey,
 }
@@ -148,6 +169,9 @@ pub enum ValidatorCommand {
     /// Exports one validator-qualified private-record bundle.
     ExportPrivateRecord(PrivateRecordExportOptions),
 
+    /// Combines externally collected shares and decrypts an exported private record.
+    DecryptPrivateRecord(PrivateRecordDecryptOptions),
+
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
@@ -224,6 +248,9 @@ impl ValidatorCommand {
                     .context("failed to apply validator database migrations")?;
                 Ok(())
             },
+            Self::DecryptPrivateRecord(options) => {
+                decrypt_private_record::decrypt_from_options(options)
+            },
             Self::Dkg(options) => options.handle(shutdown).await,
             Self::IssuePrivateRecordShare(options) => {
                 issue_private_record_share::issue_from_options(options)
@@ -286,6 +313,7 @@ impl ValidatorCommand {
             | Self::Pubkey { .. }
             | Self::Keygen
             | Self::Dkg(_)
+            | Self::DecryptPrivateRecord(_)
             | Self::ExportPrivateRecord(_)
             | Self::IssuePrivateRecordShare(_)
             | Self::Migrate { .. } => OpenTelemetry::Disabled,
@@ -861,6 +889,36 @@ mod tests {
         assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
     }
 
+    /// Offline recovery requires explicit input, shares, key material, and output paths.
+    #[test]
+    fn private_record_decrypt_arguments() {
+        let required = [
+            ["--record", "record.bin"],
+            ["--share", "share.bin"],
+            ["--storage-key.file", "operator.bundle"],
+            ["--output", "plaintext.bin"],
+        ];
+        let base = ["miden-validator", "decrypt-private-record"];
+        let args = base
+            .into_iter()
+            .chain(required.iter().flatten().copied())
+            .chain(["--share", "second.bin"]);
+        assert!(ValidatorCommand::try_parse_from(args).is_ok());
+        for omitted in 0..required.len() {
+            let args = base.into_iter().chain(
+                required
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| *index != omitted)
+                    .flat_map(|(_, pair)| *pair),
+            );
+            let Err(error) = ValidatorCommand::try_parse_from(args) else {
+                panic!("missing argument must be rejected");
+            };
+            assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        }
+    }
+
     #[tokio::test]
     async fn two_validators_issue_shares_for_third_validator_record() {
         let directory = tempfile::tempdir().unwrap();
@@ -923,12 +981,78 @@ mod tests {
             let decoded = from_wire_bytes::<DecryptionShare<TestStorageGroup>>(share).unwrap();
             assert_eq!(to_wire_bytes(&decoded), *share);
         }
-        let request = miden_validator::PrivateRecordShareRequest::for_record(&target);
-        let opened = miden_validator::PrivateRecordCombiner::from_operator_key(&operator_keys[2])
-            .unwrap()
-            .open(&request, &target, &shares)
-            .unwrap();
+        let output = directory.path().join("plaintext.bin");
+        decrypt_private_record::decrypt(
+            &target_file,
+            &[first_output.clone(), second_output.clone()],
+            &output,
+            &operator_keys[2],
+        )
+        .unwrap();
+        let opened = fs_err::read(&output).unwrap();
+        assert_eq!(opened, inputs.to_bytes());
         assert_eq!(TransactionInputs::read_from_bytes(&opened).unwrap(), inputs);
+
+        // A rejected share set must not truncate a previously recovered record.
+        let before = fs_err::read(&output).unwrap();
+        for paths in [
+            vec![],
+            vec![first_output.clone()],
+            vec![first_output.clone(), first_output.clone()],
+            vec![first_output.clone(), second_output.clone(), first_output.clone()],
+        ] {
+            assert!(
+                decrypt_private_record::decrypt(&target_file, &paths, &output, &operator_keys[2],)
+                    .is_err()
+            );
+            assert_eq!(fs_err::read(&output).unwrap(), before);
+        }
+
+        // Invalid artifacts and mismatched record/key inputs must preserve an existing output.
+        let invalid_file = directory.path().join("invalid.bin");
+        fs_err::write(&invalid_file, [0xff]).unwrap();
+        let missing_file = directory.path().join("missing.bin");
+        let other_file = directory.path().join("other-record.bin");
+        fs_err::write(&other_file, miden_node_persistence::encode(&records[0])).unwrap();
+        let other_share = directory.path().join("other-share.bin");
+        issue_share_file(&other_file, &other_share, &operator_keys[0]);
+        let valid_shares = vec![first_output.clone(), second_output.clone()];
+        for (record, paths, key) in [
+            (
+                &target_file,
+                vec![invalid_file.clone(), second_output.clone()],
+                &operator_keys[2],
+            ),
+            (&target_file, vec![missing_file, second_output.clone()], &operator_keys[2]),
+            (&invalid_file, valid_shares.clone(), &operator_keys[2]),
+            (&target_file, valid_shares.clone(), &test_operator_keys(10, 3)[2]),
+            (&target_file, vec![other_share, second_output.clone()], &operator_keys[2]),
+        ] {
+            assert!(decrypt_private_record::decrypt(record, &paths, &output, key).is_err());
+            assert_eq!(fs_err::read(&output).unwrap(), before);
+        }
+
+        // Dispatch through parsed arguments to verify that every supplied share reaches recovery.
+        let bundle_file = directory.path().join("operator.bundle");
+        fs_err::write(&bundle_file, operator_keys[2].encode().to_bytes()).unwrap();
+        fs_err::write(&output, b"replace on success").unwrap();
+        let command = ValidatorCommand::try_parse_from([
+            "miden-validator",
+            "decrypt-private-record",
+            "--record",
+            target_file.to_str().unwrap(),
+            "--share",
+            first_output.to_str().unwrap(),
+            "--share",
+            second_output.to_str().unwrap(),
+            "--storage-key.file",
+            bundle_file.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .unwrap();
+        command.handle(CancellationToken::new()).await.unwrap();
+        assert_eq!(fs_err::read(&output).unwrap(), before);
 
         let wrong_epoch = test_operator_keys(10, 3).remove(0);
         assert_issue_error(&target_file, &first_output, &wrong_epoch, "key epoch does not match");
