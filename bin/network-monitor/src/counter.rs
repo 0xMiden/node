@@ -499,7 +499,7 @@ impl IncrementService {
             asset.balance = balance
         );
         let mut funder = FeeFunder::new(funding, fee_faucet_id);
-        match funder.fund(self.tx.wallet_account.id(), funding_amount).await {
+        match funder.fund(self.tx.wallet_account.id(), funding_amount.get()).await {
             Ok(note) => {
                 self.pending_funding_note = Some(note);
                 self.details.fee_topup_error = None;
@@ -1550,7 +1550,7 @@ mod tests {
             BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
-        let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount;
+        let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount.get();
         let wallet_funding = funding_note(fee_faucet_id, wallet.id(), funded);
         let input_notes = InputNotes::new(vec![InputNote::unauthenticated(wallet_funding)])?;
 

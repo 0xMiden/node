@@ -9,6 +9,7 @@
 //! fees, because a network does not always run a public faucet. The monitor still talks to the
 //! faucet for its faucet checks, which is what [`FaucetClient`] is for.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -35,9 +36,9 @@ const MAX_FEE_VERIFICATION_CYCLES: u64 = 30;
 
 /// Divisor of the wallet funding amount that gives the wallet's top-up threshold.
 ///
-/// A quarter keeps a reserve for funding service outages while bounding the wallet's balance, and
-/// so what a restart abandons, to about 1.25 times the funding amount.
-const WALLET_TOPUP_THRESHOLD_DIVISOR: u64 = 4;
+/// A tenth keeps a reserve for funding service outages while bounding the wallet's balance, and so
+/// what a restart abandons, to about 1.1 times the funding amount.
+const WALLET_TOPUP_THRESHOLD_DIVISOR: u64 = 10;
 
 /// Transactions the counter is funded for at deployment. It only pays its own creation fee from
 /// this; later network transactions are paid by the sponsorship note each increment attaches. Kept
@@ -56,8 +57,8 @@ pub fn wallet_budget_per_increment(verification_base_fee: u32) -> u64 {
 }
 
 /// Wallet balance below which a top-up of `wallet_funding_amount` is requested.
-pub fn wallet_topup_threshold(wallet_funding_amount: u64) -> u64 {
-    wallet_funding_amount.div_ceil(WALLET_TOPUP_THRESHOLD_DIVISOR)
+pub fn wallet_topup_threshold(wallet_funding_amount: NonZeroU64) -> u64 {
+    wallet_funding_amount.get().div_ceil(WALLET_TOPUP_THRESHOLD_DIVISOR)
 }
 
 /// Amount requested when funding the counter account at deployment.
@@ -264,8 +265,9 @@ mod tests {
     /// request another one, whatever amount the operator configures.
     #[test]
     fn one_topup_clears_the_threshold() {
-        for amount in [1, 2, 3, 5, 1_000, 100_000_000, u64::MAX] {
-            let threshold = wallet_topup_threshold(amount);
+        for amount in [1, 2, 3, 9, 11, 1_000, 1_000_000, u64::MAX] {
+            let threshold =
+                wallet_topup_threshold(NonZeroU64::new(amount).expect("amounts are non-zero"));
             assert!(threshold > 0, "an empty wallet must request funds for amount {amount}");
             assert!(
                 amount >= threshold,

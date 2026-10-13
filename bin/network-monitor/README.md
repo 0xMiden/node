@@ -61,12 +61,12 @@ balance up automatically when it runs low. Without it the monitor refuses to sta
 such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
 Each wallet funding request asks for `MIDEN_MONITOR_WALLET_FUNDING_AMOUNT` base units of the native asset, which
-defaults to `1_000_000`. The wallet requests another top-up when its balance falls below a quarter of this amount.
-Because the accounts live only in memory, every restart abandons the wallet's remaining balance, which can reach about
-1.25 times the funding amount. The same happens when the monitor replaces its accounts after persistent transaction
-failures. Choose an amount you can afford to lose on each restart: a smaller amount only means more frequent funding
-requests. Keep the amount at or below the funding service's `--max-amount`, otherwise the service rejects every request
-and the network transaction checks report the error.
+defaults to `1_000_000`. The wallet requests another top-up when its balance falls below a tenth of this amount. Because
+the accounts live only in memory, every restart abandons the wallet's remaining balance, which can reach about 1.1 times
+the funding amount. The same happens when the monitor replaces its accounts after persistent transaction failures.
+Choose an amount you can afford to lose on each restart: a smaller amount only means more frequent funding requests.
+Keep the amount at or below the funding service's `--max-amount`, otherwise the service rejects every request and the
+network transaction checks report the error.
 
 Setting `MIDEN_MONITOR_FUNDING_SERVICE_URL` also enables a funding service card, even when network transaction checks
 are disabled. The monitor reads `GET /status` at the status-check interval and displays the funding account, native

@@ -3,6 +3,7 @@
 //! This module contains functionality for deploying Miden accounts to the network.
 
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -381,7 +382,7 @@ pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
-    wallet_funding_amount: u64,
+    wallet_funding_amount: NonZeroU64,
     registration: Option<&mut RegistrationPool>,
 ) -> Result<DeployedMonitorAccounts> {
     info!(target: LOG_TARGET, "Preparing monitor accounts");
@@ -418,7 +419,7 @@ pub async fn create_and_deploy_accounts(
                 .await
                 .context("failed to fund the counter account")?;
             let wallet_note = funder
-                .fund(wallet_account.id(), wallet_funding_amount)
+                .fund(wallet_account.id(), wallet_funding_amount.get())
                 .await
                 .context("failed to fund the wallet account")?;
             (Some(counter_note), Some(wallet_note))
