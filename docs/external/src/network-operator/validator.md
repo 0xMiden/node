@@ -151,14 +151,12 @@ Enforce authentication and authorization externally, and prevent direct access t
 operator network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for
 remote access.
 
-| Method | Path                                      | Request                                               | Result                                                                                          |
-| ------ | ----------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GET`  | `/admin/v1/transactions`                  | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
-| `GET`  | `/admin/v1/transactions/{transaction_id}` | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
-| `POST` | `/admin/v1/decryption-share`              | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
-
-| `POST` | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}` |
-`{"plaintext":"<hex>"}` |
+| Method | Path                                              | Request                                               | Result                                                                                          |
+| ------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/v1/transactions`                          | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
+| `GET`  | `/admin/v1/transactions/{transaction_id}`         | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
+| `POST` | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
+| `POST` | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                     | `{"plaintext":"<hex>"}`                                                                         |
 
 Byte values are hexadecimal strings without a `0x` prefix. Errors from request handlers have the form
 `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return `500`. Requests rejected
