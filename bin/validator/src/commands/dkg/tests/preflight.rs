@@ -91,6 +91,7 @@ async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
         let output = root.path().join(format!("{local}.bundle"));
         let mut args = vec![
             "miden-validator".to_owned(),
+            "privacy".to_owned(),
             "dkg".to_owned(),
             "participate".to_owned(),
             "--output-file".to_owned(),
@@ -117,13 +118,9 @@ async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
                 format!("{}@{}", endpoints[peer].1, sockets[peer].local_addr()?),
             ]);
         }
-        let ValidatorCommand::Dkg(options) = ValidatorCommand::try_parse_from(args)? else {
-            panic!("expected DKG command");
-        };
-        let DkgCommand::Participate(options) = options.command else {
-            panic!("expected participate command");
-        };
-        commands.push(options);
+        let command = ValidatorCommand::try_parse_from(args)?;
+        assert!(matches!(command.open_telemetry(), miden_node_tracing::OpenTelemetry::Disabled));
+        commands.push(command);
         outputs.push(output);
     }
     drop(sockets);
@@ -269,8 +266,10 @@ async fn cancellation_releases_listening_socket(#[case] local_is_dialer: bool) -
     options.bind_address = Some(address);
     drop(socket);
     let shutdown = CancellationToken::new();
-    let command = ValidatorCommand::Dkg(DkgOptions {
-        command: DkgCommand::Participate(Box::new(options)),
+    let command = ValidatorCommand::Privacy(crate::commands::privacy::PrivacyOptions {
+        command: crate::commands::privacy::PrivacyCommand::Dkg(DkgOptions {
+            command: DkgCommand::Participate(Box::new(options)),
+        }),
     });
 
     let (result, ()) = tokio::time::timeout(Duration::from_secs(5), async {

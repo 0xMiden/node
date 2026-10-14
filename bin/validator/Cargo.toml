@@ -77,5 +77,6 @@ miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }
 rand_chacha_03   = { workspace = true }
 rstest           = { workspace = true }
+serde_json       = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "sync"], workspace = true }
 tower            = { features = ["util"], workspace = true }
