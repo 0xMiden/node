@@ -2,14 +2,15 @@ use std::sync::Arc;
 
 use miden_node_proto::domain::block::SyncRange;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
-use miden_node_store::{DatabaseError, NoteSyncCursor, NoteSyncError, State};
+use miden_node_store::{NoteSyncCursor, NoteSyncError, State};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use miden_protocol::block::BlockNumber;
 use proto::miden::node::v1::sync_notes_v2_response::Item;
 use proto::miden::node::v1::{NoteBlockStart, SyncNotesV2Response};
+use tonic::Status;
 use tracing::miden_instrument;
 
-use super::error_codes::SyncNotesV2ErrorCode as ErrorCode;
+use super::error_codes::{SyncNotesV2ErrorCode as ErrorCode, internal_error};
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_notes::note_sync_record_to_proto;
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
@@ -95,16 +96,7 @@ impl Paginator for NotePaginator {
                 DB_PAGE_SIZE,
             )
             .await
-            .map_err(|err| match err {
-                NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
-                NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.status(err.to_string()),
-                NoteSyncError::MmrError(_)
-                | NoteSyncError::DatabaseError(DatabaseError::BlockPruned { .. }) => {
-                    ErrorCode::HistoryUnavailable.status(err.to_string())
-                },
-                NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
-                _ => super::error_codes::internal_error(err.to_string()),
-            })?;
+            .map_err(note_stream_error_to_status)?;
         self.cursor = page.next_cursor;
         self.done = page.next_cursor.is_none();
         let mut frames = Vec::new();
@@ -124,5 +116,38 @@ impl Paginator for NotePaginator {
             }));
         }
         Ok((!frames.is_empty()).then_some(frames))
+    }
+}
+
+/// Maps a note page failure to the status the client receives.
+///
+/// Notes are never pruned, so a missing block header or MMR opening for a block at or below the
+/// target is a fault in the node and not something the client can correct.
+fn note_stream_error_to_status(err: NoteSyncError) -> Status {
+    let message = err.to_string();
+    match err {
+        NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(message),
+        NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.status(message),
+        NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
+        _ => internal_error(message),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_store::{DatabaseError, NoteSyncError};
+
+    use super::note_stream_error_to_status;
+
+    /// A block header missing from the store is a node fault, so the client must not be told to
+    /// change its request.
+    #[test]
+    fn missing_block_header_is_an_internal_error() {
+        let status = note_stream_error_to_status(NoteSyncError::DatabaseError(
+            DatabaseError::DataCorrupted("block header 1 is missing for a stored note".into()),
+        ));
+
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
     }
 }

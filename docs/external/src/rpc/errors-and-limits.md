@@ -142,8 +142,8 @@ The new methods have independent detail-code namespaces. Their codes do not chan
 | Method                                           | Codes with `INVALID_ARGUMENT`                                                                              |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `SyncAccountVaultV2`, `SyncAccountStorageMapsV2` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
-| `SyncAccountCommitments`, `SyncNotesV2`          | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history                         |
-| `SyncTransactionsV2`                             | `1` malformed input, `2` invalid range, `3` future target                                                  |
+| `SyncAccountCommitments`                         | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history                         |
+| `SyncNotesV2`, `SyncTransactionsV2`              | `1` malformed input, `2` invalid range, `3` future target                                                  |
 | `GetTransactionsById`                            | `1` malformed input, `2` missing target, `3` future target                                                 |
 
 Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. `GetTransactionsById` accepts at most

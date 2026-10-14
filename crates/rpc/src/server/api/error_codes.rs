@@ -112,7 +112,6 @@ pub(super) enum SyncNotesV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
-    HistoryUnavailable = 4,
 }
 
 impl SyncNotesV2ErrorCode {
