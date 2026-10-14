@@ -29,15 +29,14 @@ impl proto::server::miden_node_v1_node_service::GetTransactionsById for RpcServi
         check::<QueryParamTransactionIdLimit>(request.transaction_ids.len())?;
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
-        let target = request
-            .target_block_num
-            .map(BlockNumber::from)
-            .ok_or_else(|| ErrorCode::MissingTarget.status("transaction target is required"))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
+        let target = request.target_block_num.map(BlockNumber::from).ok_or_else(|| {
+            ErrorCode::MissingTarget.invalid_argument("transaction target is required")
+        })?;
         let mut ids = request
             .transaction_ids
             .verify()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         ids.sort_unstable();
         ids.dedup();
         Ok((target, ids))
@@ -103,7 +102,7 @@ impl Paginator for LookupPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 _ => database_error_to_status(&err),
             })?;
         self.cursor = page.next_cursor;

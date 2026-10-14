@@ -24,13 +24,14 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
         check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let target = request
             .range
             .verify()
-            .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
         if request.prefix_len != 16 {
-            return Err(ErrorCode::InvalidPrefixLength.status("only 16-bit prefixes are supported"));
+            return Err(ErrorCode::InvalidPrefixLength
+                .invalid_argument("only 16-bit prefixes are supported"));
         }
         let mut ids = request
             .nullifiers
@@ -38,7 +39,8 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
             .into_iter()
             .map(|prefix| {
                 u16::try_from(prefix).map_err(|_| {
-                    ErrorCode::DeserializationFailed.status("nullifier prefix exceeds 16 bits")
+                    ErrorCode::DeserializationFailed
+                        .invalid_argument("nullifier prefix exceeds 16 bits")
                 })
             })
             .collect::<tonic::Result<Vec<_>>>()?;
@@ -56,7 +58,7 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
 
     #[miden_instrument(
         target = COMPONENT,
-        name = "sync_account_nullifiers_v2",
+        name = "sync_nullifiers_v2",
         err,
     )]
     async fn handle(
@@ -106,7 +108,7 @@ impl Paginator for NullifierPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 _ => database_error_to_status(&err),
             })?;
         self.cursor = page.next_cursor;

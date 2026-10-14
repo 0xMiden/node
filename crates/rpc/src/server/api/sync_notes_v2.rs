@@ -27,11 +27,11 @@ impl proto::server::miden_node_v1_node_service::SyncNotesV2 for RpcService {
         check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let range = request
             .range
             .verify()
-            .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
         let mut tags = request.note_tags.into_inner();
         tags.sort_unstable();
         tags.dedup();
@@ -126,8 +126,8 @@ impl Paginator for NotePaginator {
 fn note_stream_error_to_status(err: NoteSyncError) -> Status {
     let message = err.to_string();
     match err {
-        NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(message),
-        NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.status(message),
+        NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(message),
+        NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.invalid_argument(message),
         NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
         _ => internal_error(message),
     }
