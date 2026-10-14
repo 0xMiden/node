@@ -30,6 +30,8 @@ pub(crate) struct TestChain {
     pub transactions: Vec<(u32, AccountId, TransactionId)>,
     pub spent: Vec<(u32, Nullifier)>,
     pub unavailable: Option<&'static str>,
+    pub unavailable_for: Option<(&'static str, usize)>,
+    pub traceparents: Vec<String>,
     invalid_checked: Option<u32>,
 }
 
@@ -41,6 +43,8 @@ impl TestChain {
             transactions: vec![],
             spent: vec![],
             unavailable: None,
+            unavailable_for: None,
+            traceparents: Vec::new(),
             invalid_checked: None,
         }
     }
@@ -219,8 +223,23 @@ impl Service<http::Request<Body>> for RpcFixture {
     }
 
     fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        if let Some(value) = request.headers().get("traceparent") {
+            self.0.lock().unwrap().traceparents.push(value.to_str().unwrap().to_owned());
+        }
         let method = request.uri().path().rsplit('/').next().unwrap();
-        if self.0.lock().unwrap().unavailable == Some(method) {
+        let unavailable = {
+            let mut chain = self.0.lock().unwrap();
+            let transient = chain.unavailable_for.as_mut().is_some_and(|(name, remaining)| {
+                if *name == method && *remaining > 0 {
+                    *remaining -= 1;
+                    true
+                } else {
+                    false
+                }
+            });
+            transient || chain.unavailable == Some(method)
+        };
+        if unavailable {
             return Box::pin(async { Ok(tonic::Status::unavailable("retry").into_http()) });
         }
         match method {
@@ -243,6 +262,7 @@ impl Service<http::Request<Body>> for RpcFixture {
 
 pub(crate) struct TestServer {
     pub(crate) node: RpcNodeClient,
+    pub(crate) url: Url,
     pub(crate) chain: Arc<StdMutex<TestChain>>,
     task: JoinHandle<tonic::Result<()>>,
 }
@@ -263,13 +283,13 @@ impl TestServer {
                 .await
                 .map_err(|err| tonic::Status::internal(err.to_string()))
         });
-        let rpc_client = Builder::new(url)
+        let rpc_client = Builder::new(url.clone())
             .without_tls()
             .with_timeout(Duration::from_secs(5))
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()
-            .without_otel_context_injection()
+            .with_otel_context_injection()
             .connect::<RpcClient>()
             .await
             .unwrap();
@@ -283,7 +303,7 @@ impl TestServer {
             trusted_validator_signing_keys: Arc::from([]),
             sealer: Arc::new(Mutex::new(None)),
         };
-        Self { node, chain, task }
+        Self { node, url, chain, task }
     }
 
     async fn status(&self) -> Result<TransactionStatus> {

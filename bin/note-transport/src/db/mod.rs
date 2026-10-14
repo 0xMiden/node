@@ -76,13 +76,15 @@ pub struct FetchPage {
 /// Creates a database with the current schema. The path must not exist.
 #[miden_instrument(target = COMPONENT, err)]
 pub fn bootstrap(path: &Path) -> anyhow::Result<()> {
-    migrator()?.bootstrap(path)
+    let migrator = migrator()?;
+    migrator.create_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Applies pending migrations to an existing database.
 #[miden_instrument(target = COMPONENT, err)]
 pub fn migrate(path: &Path) -> anyhow::Result<()> {
-    migrator()?.migrate(path)
+    let migrator = migrator()?;
+    migrator.open_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Verifies the schema and opens the database handles.

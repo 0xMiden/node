@@ -20,7 +20,10 @@ pub fn bootstrap_database(database_filepath: &Path) -> Result<(), DatabaseError>
         migration.count = migrator.schema_hashes().len()
     );
 
-    migrator.bootstrap(database_filepath).map_err(DatabaseError::migration)?;
+    migrator
+        .create_database(database_filepath)
+        .and_then(|mut database| database.migrate_to(migrator.latest_version()))
+        .map_err(DatabaseError::migration)?;
     Ok(())
 }
 
@@ -37,7 +40,10 @@ pub fn migrate_database(database_filepath: &Path) -> Result<(), DatabaseError> {
         migration.count = migrator.schema_hashes().len()
     );
 
-    migrator.migrate(database_filepath).map_err(DatabaseError::migration)?;
+    migrator
+        .open_database(database_filepath)
+        .and_then(|mut database| database.migrate_to(migrator.latest_version()))
+        .map_err(DatabaseError::migration)?;
     Ok(())
 }
 

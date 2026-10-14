@@ -16,6 +16,7 @@ use crate::server::admin_service::error::ApiError;
 #[cfg(test)]
 mod tests;
 
+mod decrypt_transaction;
 mod error;
 mod get_transaction;
 mod issue_decryption_share;
@@ -23,13 +24,14 @@ mod list_transactions;
 
 const LIST_TRANSACTIONS_PATH: &str = "/admin/v1/transactions";
 const GET_TRANSACTION_PATH: &str = "/admin/v1/transactions/{transaction_id}";
+const DECRYPT_TRANSACTION_PATH: &str = "/admin/v1/transactions/{transaction_id}/decrypt";
 const ISSUE_SHARE_PATH: &str = "/admin/v1/decryption-share";
 
 #[derive(Clone)]
 struct ValidatorAdminService {
     operator_key: Arc<GoldenOperatorKey>,
-    /// Read-only handle: the administration API lists stored records and issues decryption shares,
-    /// and must never mutate validator state.
+    /// Read-only handle for record retrieval and recovery; administration never mutates validator
+    /// state.
     reader: ValidatorDbReader,
 }
 
@@ -50,6 +52,7 @@ pub(super) fn router(operator_key: GoldenOperatorKey, reader: ValidatorDbReader)
         )
         .route(GET_TRANSACTION_PATH, get(get_transaction::get_validated_private_transaction))
         .route(ISSUE_SHARE_PATH, post(issue_decryption_share::issue_decryption_share))
+        .route(DECRYPT_TRANSACTION_PATH, post(decrypt_transaction::decrypt_transaction))
         .with_state(ValidatorAdminService::new(operator_key, reader))
 }
 

@@ -1,6 +1,8 @@
 //! Test support: a funding account and a fee faucet shaped like the ones genesis creates, on a
 //! [`MockChain`].
 
+pub(crate) mod telemetry;
+
 use std::sync::Arc;
 
 use anyhow::Result;
