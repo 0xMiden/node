@@ -955,3 +955,5 @@ async fn decoding_override_receives_requests_over_four_mib() {
 }
 
 mod fetch_ranges;
+
+mod chunking;
