@@ -230,6 +230,7 @@ fn storage_status(error: db::StorageError) -> tonic::Status {
             "cursor belongs to another database generation; clear the cursor and retry",
         ),
         db::StorageError::InvalidCursor => tonic::Status::invalid_argument("invalid cursor"),
+        db::StorageError::InvalidSyncRange => tonic::Status::invalid_argument("invalid sync range"),
         error => {
             error!(error, target: LOG_TARGET, "Note storage operation failed");
             tonic::Status::internal("note storage operation failed")

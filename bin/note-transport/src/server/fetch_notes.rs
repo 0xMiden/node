@@ -56,7 +56,7 @@ impl FetchNotes for Server {
             sequence: cursor.sequence,
         });
 
-        let page = db::fetch_notes(&self.reader, request.tags, cursor)
+        let page = db::fetch_notes(&self.reader, request.tags, cursor, None)
             .await
             .map_err(storage_status)?;
 
