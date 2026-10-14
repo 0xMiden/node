@@ -73,107 +73,52 @@ pub(super) fn internal_error(message: impl Into<String>) -> Status {
     Status::with_details(Code::Internal, message, vec![0].into())
 }
 
-// New finite streams use an independent method namespace; existing unary assignments stay fixed.
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncAccountVaultV2ErrorCode {
+// Finite synchronization streams number their codes independently of the unary methods.
+
+error_codes!(SyncAccountVaultV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
     AccountNotPublic = 6,
-}
+});
 
-impl SyncAccountVaultV2ErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncAccountStorageMapsV2ErrorCode {
+error_codes!(SyncAccountStorageMapsV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
     AccountNotPublic = 6,
-}
+});
 
-impl SyncAccountStorageMapsV2ErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncNotesV2ErrorCode {
+error_codes!(SyncNotesV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
-}
+});
 
-impl SyncNotesV2ErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncAccountCommitmentsErrorCode {
+error_codes!(SyncAccountCommitmentsErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
     HistoryUnavailable = 4,
-}
+});
 
-impl SyncAccountCommitmentsErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum GetTransactionsByIdErrorCode {
+error_codes!(GetTransactionsByIdErrorCode {
     DeserializationFailed = 1,
     MissingTarget = 2,
     FutureTarget = 3,
-}
+});
 
-impl GetTransactionsByIdErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncTransactionsV2ErrorCode {
+error_codes!(SyncTransactionsV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
-}
+});
 
-impl SyncTransactionsV2ErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
-
-#[derive(Clone, Copy)]
-#[repr(u8)]
-pub(super) enum SyncNullifiersV2ErrorCode {
+error_codes!(SyncNullifiersV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,
     FutureTarget = 3,
     InvalidPrefixLength = 6,
-}
-
-impl SyncNullifiersV2ErrorCode {
-    pub(super) fn status(self, message: impl Into<String>) -> Status {
-        Status::with_details(Code::InvalidArgument, message.into(), vec![self as u8].into())
-    }
-}
+});

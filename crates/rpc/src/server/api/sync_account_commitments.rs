@@ -7,11 +7,13 @@ use miden_node_store::{DatabaseError, GetAccountError, State};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_protocol::account::AccountId;
 use proto::miden::node::v1::SyncAccountCommitmentsResponse;
+use tracing::miden_instrument;
 
 use super::error_codes::SyncAccountCommitmentsErrorCode as ErrorCode;
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
+use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcService {
@@ -25,15 +27,15 @@ impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcSe
         check::<QueryParamAccountIdLimit>(request.account_ids.len())?;
         let request = request
             .decode_fields()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         let range = request
             .range
             .verify()
-            .map_err(|err| ErrorCode::InvalidRange.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
         let mut ids = request
             .account_ids
             .verify()
-            .map_err(|err| ErrorCode::DeserializationFailed.status(err.to_string()))?;
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
         ids.sort_unstable();
         ids.dedup();
         Ok((range, ids))
@@ -41,6 +43,12 @@ impl proto::server::miden_node_v1_node_service::SyncAccountCommitments for RpcSe
     fn encode(item: Self::Item) -> tonic::Result<Self::Item> {
         Ok(item)
     }
+
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "sync_account_commitments",
+        err,
+    )]
     async fn handle(
         &self,
         (range, ids): Self::Input,
@@ -87,9 +95,9 @@ impl Paginator for AccountPaginator {
             )
             .await
             .map_err(|err| match err {
-                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
                 DatabaseError::BlockPruned { .. } => {
-                    ErrorCode::HistoryUnavailable.status(err.to_string())
+                    ErrorCode::HistoryUnavailable.invalid_argument(err)
                 },
                 _ => database_error_to_status(&err),
             })?;
@@ -104,10 +112,10 @@ impl Paginator for AccountPaginator {
                 .await
                 .map_err(|err| match err {
                     GetAccountError::UnknownBlock(_) => {
-                        ErrorCode::FutureTarget.status(err.to_string())
+                        ErrorCode::FutureTarget.invalid_argument(err)
                     },
                     GetAccountError::BlockPruned(_) => {
-                        ErrorCode::HistoryUnavailable.status(err.to_string())
+                        ErrorCode::HistoryUnavailable.invalid_argument(err)
                     },
                     _ => super::error_codes::internal_error(err.to_string()),
                 })?;
