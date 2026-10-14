@@ -53,6 +53,8 @@ pub enum StorageError {
     Capacity(String),
     #[error("invalid cursor")]
     InvalidCursor,
+    #[error("invalid sync range")]
+    InvalidSyncRange,
     #[error("cursor belongs to another database generation; clear the cursor and retry")]
     StaleCursor,
     #[error("{0}")]
@@ -69,6 +71,7 @@ pub struct Cursor {
 #[derive(Debug)]
 pub struct FetchPage {
     pub cursor: Cursor,
+    pub sync_to: Cursor,
     pub notes: Vec<StoredNote>,
     pub has_more: bool,
 }
@@ -155,22 +158,40 @@ pub async fn store_note(
         .await
 }
 
-/// Returns one page from a single database snapshot, in cursor order.
+/// Returns one bounded page from a single database snapshot, in cursor order.
 #[miden_instrument(target = COMPONENT, err)]
 pub async fn fetch_notes(
     reader: &DbReader,
     tags: Vec<u32>,
     cursor: Option<Cursor>,
+    sync_to: Option<Cursor>,
 ) -> Result<FetchPage, StorageError> {
+    // Check cursor and sync_to
     let sequence = cursor.map_or(0, |cursor| cursor.sequence);
-    let sequence = i64::try_from(sequence).map_err(|_| StorageError::InvalidCursor)?;
+    let sequence_i64 = i64::try_from(sequence).map_err(|_| StorageError::InvalidCursor)?;
+    if sync_to.is_some_and(|bound| bound.sequence > i64::MAX as u64) {
+        return Err(StorageError::InvalidSyncRange);
+    }
+
     reader
         .read("fetch_notes", move |tx| {
+            // Check nonce
             let nonce = queries::select_nonce(tx)?;
-            if cursor.is_some_and(|cursor| cursor.nonce != nonce) {
+            if [cursor, sync_to].into_iter().flatten().any(|bound| bound.nonce != nonce) {
                 return Err(StorageError::StaleCursor);
             }
-            queries::fetch_notes(tx, tags.into_iter().map(NoteTag::new).collect(), sequence, nonce)
+
+            let head = queries::select_head(tx)?;
+            let target = sync_to.unwrap_or(Cursor { nonce, sequence: head });
+            if sequence > target.sequence || sequence > head || target.sequence > head {
+                return Err(StorageError::InvalidSyncRange);
+            }
+            queries::fetch_notes(
+                tx,
+                tags.into_iter().map(NoteTag::new).collect(),
+                sequence_i64,
+                target,
+            )
         })
         .await
 }
