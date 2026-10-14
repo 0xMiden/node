@@ -834,3 +834,5 @@ fn test_config() -> Config {
 }
 
 mod fetch_ranges;
+
+mod chunking;
