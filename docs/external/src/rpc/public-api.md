@@ -146,6 +146,17 @@ authenticated target in that case.
 Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
 and request-list limits remain.
 
+The paginated unary methods remain supported alongside the streams. Each returns as much of the requested block range as
+fits in one response, and the caller repeats the request for the remainder.
+
+| Method                   | Purpose                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------- |
+| `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
+| `SyncNotes`              | Returns note metadata and inclusion proofs for matching note tags within a block range. |
+| `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
+| `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
+| `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
+
 ## Block Streaming
 
 | Method              | Purpose                                                                               |
