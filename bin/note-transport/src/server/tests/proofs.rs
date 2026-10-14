@@ -188,9 +188,16 @@ pub(super) fn fixture_for_note(
 }
 
 async fn fetched(server: &Server) -> FetchNotesResponse {
-    FetchNotes::full(server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-        .await
-        .unwrap()
+    FetchNotes::full(
+        server,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -374,7 +381,11 @@ async fn proof_submission_roundtrips_over_grpc_and_web() {
         SendNoteWithProofResponse {}
     );
     let page = client
-        .fetch_notes(FetchNotesRequest { tags: vec![7], cursor: None })
+        .fetch_notes(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        })
         .await
         .unwrap()
         .into_inner();
@@ -406,7 +417,11 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
     assert!(
         client
-            .fetch_notes(FetchNotesRequest { tags: vec![7], cursor: None })
+            .fetch_notes(FetchNotesRequest {
+                tags: vec![7],
+                cursor: None,
+                sync_to: None
+            })
             .await
             .unwrap()
             .into_inner()

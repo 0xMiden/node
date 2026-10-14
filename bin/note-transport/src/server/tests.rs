@@ -121,7 +121,11 @@ async fn send_fetch_preserves_inclusion_block() {
     }
     let page = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![8, 7, 7], cursor: None }),
+        Request::new(FetchNotesRequest {
+            tags: vec![8, 7, 7],
+            cursor: None,
+            sync_to: None,
+        }),
     )
     .await
     .unwrap();
@@ -130,7 +134,11 @@ async fn send_fetch_preserves_inclusion_block() {
     assert!(page.cursor.unwrap().sequence > 0);
     let empty = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![7, 8], cursor: page.cursor }),
+        Request::new(FetchNotesRequest {
+            tags: vec![7, 8],
+            cursor: page.cursor,
+            sync_to: None,
+        }),
     )
     .await
     .unwrap();
@@ -149,7 +157,11 @@ async fn duplicate_send_preserves_first_note_and_cursor() {
     )
     .await
     .unwrap();
-    let request = FetchNotesRequest { tags: vec![7], cursor: None };
+    let request = FetchNotesRequest {
+        tags: vec![7],
+        cursor: None,
+        sync_to: None,
+    };
     let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
 
     // A retry preserves the first inclusion block.
@@ -165,7 +177,11 @@ async fn duplicate_send_preserves_first_note_and_cursor() {
 #[tokio::test]
 async fn rejects_public_note_without_storage() {
     let (_dir, server) = server(test_config());
-    let request = FetchNotesRequest { tags: vec![7], cursor: None };
+    let request = FetchNotesRequest {
+        tags: vec![7],
+        cursor: None,
+        sync_to: None,
+    };
     let before = FetchNotes::full(&server, Request::new(request.clone())).await.unwrap();
     let error = SendNoteWithProof::full(
         &server,
@@ -195,6 +211,7 @@ async fn invalid_cursor_has_generic_message() {
         Request::new(FetchNotesRequest {
             tags: vec![7],
             cursor: Some(FetchNotesCursor { nonce: 0, sequence: u64::MAX }),
+            sync_to: None,
         }),
     )
     .await
@@ -260,10 +277,15 @@ async fn rejects_oversized_notes_and_invalid_fetches() {
             .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     for request in [
-        FetchNotesRequest { tags: vec![7; 129], cursor: None },
+        FetchNotesRequest {
+            tags: vec![7; 129],
+            cursor: None,
+            sync_to: None,
+        },
         FetchNotesRequest {
             tags: vec![],
             cursor: Some(FetchNotesCursor { nonce: 0, sequence: u64::MAX }),
+            sync_to: None,
         },
     ] {
         let error = FetchNotes::full(&server, Request::new(request)).await.unwrap_err();
@@ -282,10 +304,16 @@ async fn capacity_failure_does_not_store_the_note() {
             .await
             .unwrap_err();
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
-    let page =
-        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-            .await
-            .unwrap();
+    let page = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap();
     assert!(page.notes.is_empty());
 }
 
@@ -343,7 +371,11 @@ async fn grpc_health_reflection_web_and_shutdown() {
     let mut client = NoteTransportServiceClient::new(channel.clone());
     client.send_note_with_proof(request.clone()).await.unwrap();
     let response = client
-        .fetch_notes(FetchNotesRequest { tags: vec![123], cursor: None })
+        .fetch_notes(FetchNotesRequest {
+            tags: vec![123],
+            cursor: None,
+            sync_to: None,
+        })
         .await
         .unwrap()
         .into_inner();
@@ -465,7 +497,11 @@ async fn check_grpc_web(
     let web = grpc_web_request(
         address,
         "FetchNotes",
-        FetchNotesRequest { tags: vec![123], cursor: None },
+        FetchNotesRequest {
+            tags: vec![123],
+            cursor: None,
+            sync_to: response.sync_to,
+        },
     )
     .await;
     assert_eq!(web.status(), reqwest::StatusCode::OK);
@@ -475,6 +511,7 @@ async fn check_grpc_web(
     let length = u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize;
     let page = FetchNotesResponse::decode(&frame[5..5 + length]).unwrap();
     assert_eq!(page.notes.len(), 1);
+    assert!(page.sync_to.is_some());
     assert_eq!(page, response);
 }
 
@@ -517,17 +554,27 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
     .await
     .unwrap();
     let first = client
-        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: None })
+        .fetch_notes(FetchNotesRequest {
+            tags: vec![77],
+            cursor: None,
+            sync_to: None,
+        })
         .await
         .unwrap()
         .into_inner();
+    assert_eq!(first.sync_to.unwrap().sequence, 400);
     assert!(first.has_more);
     assert!(!first.notes.is_empty());
     let second = client
-        .fetch_notes(FetchNotesRequest { tags: vec![77], cursor: first.cursor })
+        .fetch_notes(FetchNotesRequest {
+            tags: vec![77],
+            cursor: first.cursor,
+            sync_to: first.sync_to,
+        })
         .await
         .unwrap()
         .into_inner();
+    assert_eq!(second.sync_to, first.sync_to);
     assert!(!second.has_more);
     assert_eq!(first.notes.len() + second.notes.len(), 400);
     let headers = first
@@ -549,14 +596,20 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
 async fn rejects_cursor_from_another_database() {
     let (_first_dir, first) = server(test_config());
     let (_second_dir, second) = server(test_config());
-    let page =
-        FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-            .await
-            .unwrap();
+    let page = FetchNotes::full(
+        &first,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap();
     for tags in [vec![7], vec![]] {
         let error = FetchNotes::full(
             &second,
-            Request::new(FetchNotesRequest { tags, cursor: page.cursor }),
+            Request::new(FetchNotesRequest { tags, cursor: page.cursor, sync_to: None }),
         )
         .await
         .unwrap_err();
@@ -570,10 +623,16 @@ async fn cursor_survives_reopening_database() {
     SendNoteWithProof::full(&server, Request::new(proof_request(&server, note(1, 7), 42)))
         .await
         .unwrap();
-    let first =
-        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-            .await
-            .unwrap();
+    let first = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap();
     drop(server);
     let path = dir.path().join("notes.sqlite3");
     db::migrate(&path).unwrap();
@@ -581,7 +640,11 @@ async fn cursor_survives_reopening_database() {
     let server = Server::new(test_config(), writer, reader).unwrap();
     let empty = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![7], cursor: first.cursor }),
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: first.cursor,
+            sync_to: None,
+        }),
     )
     .await
     .unwrap();
@@ -593,7 +656,11 @@ async fn cursor_survives_reopening_database() {
         .unwrap();
     let page = FetchNotes::full(
         &server,
-        Request::new(FetchNotesRequest { tags: vec![7], cursor: empty.cursor }),
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: empty.cursor,
+            sync_to: None,
+        }),
     )
     .await
     .unwrap();
@@ -607,10 +674,16 @@ async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
     SendNoteWithProof::full(&first, Request::new(proof_request(&first, note(1, 7), 42)))
         .await
         .unwrap();
-    let previous =
-        FetchNotes::full(&first, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-            .await
-            .unwrap();
+    let previous = FetchNotes::full(
+        &first,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap();
     for count in 0..=2 {
         if count > 0 {
             SendNoteWithProof::full(
@@ -622,16 +695,26 @@ async fn stale_cursor_fails_before_and_after_sequence_catches_up() {
         }
         let error = FetchNotes::full(
             &second,
-            Request::new(FetchNotesRequest { tags: vec![7], cursor: previous.cursor }),
+            Request::new(FetchNotesRequest {
+                tags: vec![7],
+                cursor: previous.cursor,
+                sync_to: None,
+            }),
         )
         .await
         .unwrap_err();
         assert_eq!(error.code(), tonic::Code::FailedPrecondition);
     }
-    let restarted =
-        FetchNotes::full(&second, Request::new(FetchNotesRequest { tags: vec![7], cursor: None }))
-            .await
-            .unwrap();
+    let restarted = FetchNotes::full(
+        &second,
+        Request::new(FetchNotesRequest {
+            tags: vec![7],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         restarted.notes,
         vec![fetched_note(note(1, 7), 42), fetched_note(note(2, 7), 42)]
@@ -657,7 +740,11 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
         for tags in [vec![7], vec![]] {
             let initial = FetchNotes::full(
                 &server,
-                Request::new(FetchNotesRequest { tags: tags.clone(), cursor: None }),
+                Request::new(FetchNotesRequest {
+                    tags: tags.clone(),
+                    cursor: None,
+                    sync_to: None,
+                }),
             )
             .await
             .unwrap();
@@ -668,6 +755,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
             let request = FetchNotesRequest {
                 tags: tags.clone(),
                 cursor: response.cursor,
+                sync_to: None,
             };
             let request = FetchNotesRequest::decode(request.encode_to_vec().as_slice()).unwrap();
             let next = FetchNotes::full(&server, Request::new(request)).await.unwrap();
@@ -678,6 +766,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
                 Request::new(FetchNotesRequest {
                     tags,
                     cursor: Some(FetchNotesCursor { nonce: nonce ^ 1, sequence: 0 }),
+                    sync_to: None,
                 }),
             )
             .await
@@ -698,10 +787,16 @@ async fn missing_metadata_fails_even_without_tags() {
         })
         .await
         .unwrap();
-    let error =
-        FetchNotes::full(&server, Request::new(FetchNotesRequest { tags: vec![], cursor: None }))
-            .await
-            .unwrap_err();
+    let error = FetchNotes::full(
+        &server,
+        Request::new(FetchNotesRequest {
+            tags: vec![],
+            cursor: None,
+            sync_to: None,
+        }),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
 }
 
@@ -775,7 +870,7 @@ async fn configured_decoding_limit_applies_to_requests_and_health() {
         );
         let mut client = NoteTransportServiceClient::new(channel);
         let response =
-            client.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None }).await;
+            client.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None, sync_to: None }).await;
         if limit == 64 {
             assert_eq!(response.unwrap_err().code(), tonic::Code::OutOfRange);
         } else {
@@ -808,7 +903,7 @@ async fn configured_decoding_limit_applies_to_requests_and_health() {
         let web = grpc_web_request(
             address,
             "FetchNotes",
-            FetchNotesRequest { tags: vec![1; 32], cursor: None },
+            FetchNotesRequest { tags: vec![1; 32], cursor: None, sync_to: None },
         )
         .await;
         let header_status =
@@ -832,7 +927,7 @@ async fn decoding_override_receives_requests_over_four_mib() {
     use std::num::NonZeroUsize;
 
     use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
-    let request = FetchNotesRequest { tags: vec![1; 1024 * 1024], cursor: None };
+    let request = FetchNotesRequest { tags: vec![1; 1024 * 1024], cursor: None, sync_to: None };
     assert!(request.encoded_len() > 4_194_304);
     for limit in [4_194_304, 16_777_216] {
         let mut config = test_config();
@@ -858,3 +953,5 @@ async fn decoding_override_receives_requests_over_four_mib() {
         task.await.unwrap().unwrap();
     }
 }
+
+mod fetch_ranges;
