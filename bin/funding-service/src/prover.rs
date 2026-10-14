@@ -8,7 +8,7 @@ use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Reques
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, warn};
+use miden_node_tracing::{ErrorReport, Span, miden_instrument, miden_span_record, warn};
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
 use miden_tx::LocalTransactionProver;
 use url::Url;
@@ -39,9 +39,22 @@ impl Prover {
     }
 
     /// Proves one executed transaction.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.prove",
+        fields(
+            transaction.id = executed_tx.id(),
+            prover.kind = if matches!(self, Self::Local(_)) { "local" } else { "remote" },
+            prover.fallback,
+        ),
+        err,
+    )]
     pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
         match self {
-            Self::Local(prover) => prover.prove(executed_tx).await,
+            Self::Local(prover) => {
+                miden_span_record!(prover.fallback = false #[nonstandard]);
+                prover.prove(executed_tx).await
+            },
             Self::Remote(prover) => prover.prove(executed_tx).await,
         }
     }
@@ -56,6 +69,14 @@ pub struct LocalProver;
 
 impl LocalProver {
     /// Proves one executed transaction in this process.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.prove.local",
+        fields(
+            transaction.id = executed_tx.id(),
+        ),
+        err,
+    )]
     pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
         // Proving is CPU bound and would block the runtime's worker thread.
         spawn_blocking_in_current_span(move || {
@@ -95,6 +116,14 @@ impl RemoteProver {
     }
 
     /// Proves one transaction on the remote prover.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.prove.remote",
+        fields(
+            transaction.id = executed_tx.id(),
+        ),
+        err,
+    )]
     async fn prove_remotely(&self, executed_tx: &ExecutedTransaction) -> Result<ProvenTransaction> {
         let request = tonic::Request::new(ProveRequest {
             request: Some(ProofRequestVariant::Transaction(executed_tx.tx_inputs().into())),
@@ -119,8 +148,12 @@ impl RemoteProver {
     /// Proves one executed transaction, falling back to local proving.
     pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
         match self.prove_remotely(&executed_tx).await {
-            Ok(proven_tx) => Ok(proven_tx),
+            Ok(proven_tx) => {
+                Span::current().record("prover.fallback", false);
+                Ok(proven_tx)
+            },
             Err(err) => {
+                Span::current().record("prover.fallback", true);
                 warn!(
                     &err,
                     target: COMPONENT,

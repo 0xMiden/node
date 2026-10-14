@@ -14,7 +14,7 @@ fn config(seed: u32) -> ProtocolConfig {
     .unwrap()
 }
 
-fn header_at(base: &BlockHeader, height: u32, config: &ProtocolConfig) -> BlockHeader {
+pub(super) fn header_at(base: &BlockHeader, height: u32, config: &ProtocolConfig) -> BlockHeader {
     BlockHeader::new(
         base.commitment(),
         height.into(),
@@ -47,8 +47,9 @@ async fn activations_include_reused_configs_and_survive_reopen() {
     let path = dir.path().join("validator.sqlite3");
     let first = test_protocol_config();
     let second = config(42);
-    let genesis = genesis_header(&first);
-    bootstrap(path.clone(), NonZeroUsize::new(2).unwrap(), genesis.clone(), first.clone())
+    let block = genesis_block(&first);
+    let genesis = block.header().clone();
+    bootstrap(path.clone(), NonZeroUsize::new(2).unwrap(), block, first.clone())
         .await
         .unwrap();
     let db = load(path.clone()).await.unwrap();

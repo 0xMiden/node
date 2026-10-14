@@ -16,7 +16,7 @@ use miden_node_proto::{
     Verify,
     VerifyWith,
 };
-use miden_node_store::{BlockStore, GenesisState};
+use miden_node_store::GenesisState;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_node_utils::testing::{
     deferred_transaction_fixture,
@@ -111,8 +111,7 @@ impl TestValidator {
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
-        let (temp_dir, db, block_store, genesis_header, protocol_config) =
-            setup_db_with_genesis(&key).await;
+        let (temp_dir, db, genesis_header, protocol_config) = setup_db_with_genesis(&key).await;
 
         Self {
             server: ValidatorService::new(
@@ -120,7 +119,6 @@ impl TestValidator {
                 db,
                 std::sync::Arc::new(test_decrypter()),
                 PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-                block_store,
                 InitialMetrics::default(),
             )
             .await
@@ -318,7 +316,7 @@ impl TestValidator {
 /// of `key`. Returns the database handle and the genesis block header.
 async fn setup_db_with_genesis(
     key: &SigningKey,
-) -> (tempfile::TempDir, ValidatorDbWriter, BlockStore, BlockHeader, ProtocolConfig) {
+) -> (tempfile::TempDir, ValidatorDbWriter, BlockHeader, ProtocolConfig) {
     let protocol_config = test_protocol_config();
     let genesis_state = GenesisState::new(
         vec![],
@@ -332,17 +330,11 @@ async fn setup_db_with_genesis(
 
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    let block_store =
-        BlockStore::bootstrap(dir.path().join("blocks").clone(), &genesis_block).unwrap();
+    db.insert_signed_block(genesis_block.inner().clone(), protocol_config.clone(), Vec::new())
+        .await
+        .unwrap();
 
-    db.upsert_block_header_with_protocol_config(
-        genesis_header.clone(),
-        Some(protocol_config.clone()),
-    )
-    .await
-    .unwrap();
-
-    (dir, db, block_store, genesis_header, protocol_config)
+    (dir, db, genesis_header, protocol_config)
 }
 
 /// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
@@ -505,7 +497,7 @@ fn open_transaction_effects(record: &StoredPrivateRecord) -> TransactionEffects 
 async fn signing_key_mismatch_rejected() {
     // Seed a database whose genesis designates `genesis_key` as the validator key.
     let genesis_key = random_secret_key();
-    let (_temp_dir, db, block_store, genesis_header, _) = setup_db_with_genesis(&genesis_key).await;
+    let (_temp_dir, db, genesis_header, _) = setup_db_with_genesis(&genesis_key).await;
 
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
@@ -519,7 +511,6 @@ async fn signing_key_mismatch_rejected() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        block_store,
         InitialMetrics::default(),
     )
     .await;
@@ -586,7 +577,7 @@ async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
     assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
     assert_eq!(tv.call_status().await.signed_blocks_count, 0);
     assert_eq!(
-        tv.server.block_store.load_block(1.into()).await.unwrap(),
+        tv.server.db.load_block(1.into()).await.unwrap(),
         None,
         "an unknown config must be rejected before backup"
     );
@@ -625,6 +616,8 @@ async fn chain_tip_plus_one_succeeds() {
 /// A replacement block at the same height as the current chain tip should be accepted.
 #[tokio::test]
 async fn chain_tip_replacement_succeeds() {
+    use tokio_stream::StreamExt;
+
     let mut tv = TestValidator::new().await;
 
     // The genesis block can never be replaced, so we advance the chain to block 1, which we can
@@ -659,6 +652,13 @@ async fn chain_tip_replacement_succeeds() {
     tv.call_sign_block_with_protocol_config(&replacement, None)
         .await
         .expect("repeated signing must retain the stored configuration");
+
+    let stored = tv.server.db.load_block(replacement_header.block_num()).await.unwrap().unwrap();
+    assert_eq!(stored.header(), &replacement_header);
+    let mut stream = tv.call_block_subscription(1).await;
+    let response = stream.next().await.unwrap().unwrap();
+    assert_eq!(response.block, Some(stored.into()));
+    drop(stream);
 
     // Verify that the chain tip in the database is now the replacement block, not the original.
     let new_chain_tip = tv.load_chain_tip().await;
@@ -1192,19 +1192,8 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
         BlockSignatures::new(vec![signature]).unwrap(),
     );
     tv.server
-        .block_store
-        .save_block(
-            transitioned_header.block_num(),
-            &miden_node_persistence::encode(&transitioned_block),
-        )
-        .await
-        .unwrap();
-    tv.server
         .db
-        .upsert_block_header_with_protocol_config(
-            transitioned_header.clone(),
-            Some(next_config.clone()),
-        )
+        .replace_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
         .await
         .unwrap();
     tv.chain_tip = transitioned_header;
@@ -1813,17 +1802,14 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     let parent = genesis.inner().header().clone();
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    db.upsert_block_header_with_protocol_config(parent.clone(), Some(config.clone()))
+    db.insert_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
         .await
         .unwrap();
-    let store_path = dir.path().join("blocks");
-    let store = BlockStore::bootstrap(store_path.clone(), &genesis).unwrap();
     let service = ValidatorService::new(
         ValidatorSigner::new_local(key.clone()),
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        store,
         InitialMetrics::default(),
     )
     .await
@@ -1851,9 +1837,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     .unwrap();
     drop(service);
     let db = crate::db::load(dir.path().join("validator.sqlite3")).await.unwrap();
-    let store = BlockStore::load(store_path).unwrap();
-    let bytes = store.load_block(1.into()).await.unwrap().unwrap();
-    let backed_up: SignedBlock = miden_node_persistence::decode(&bytes).unwrap();
+    let backed_up = db.load_block(1.into()).await.unwrap().unwrap();
     assert_eq!(backed_up.signatures().len(), 1);
     assert_eq!(backed_up.header().validator_config().keys().len(), 2);
     let service = ValidatorService::new(
@@ -1861,7 +1845,6 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        store,
         InitialMetrics {
             chain_tip: 1,
             ..InitialMetrics::default()

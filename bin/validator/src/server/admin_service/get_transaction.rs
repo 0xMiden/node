@@ -46,7 +46,7 @@ pub(super) async fn get_validated_private_transaction(
     Ok(Json(record.into()))
 }
 
-fn parse_transaction_id(value: &str) -> Result<TransactionId, ApiError> {
+pub(super) fn parse_transaction_id(value: &str) -> Result<TransactionId, ApiError> {
     let invalid = || ApiError::bad_request("transaction_id must be a canonical transaction id");
     // `read_from_bytes` does not reject bytes after the id, so the length is checked first.
     let bytes: [u8; 32] =
