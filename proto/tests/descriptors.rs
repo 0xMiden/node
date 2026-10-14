@@ -104,3 +104,22 @@ fn descriptors_embed_their_dependencies() {
         }
     }
 }
+
+#[test]
+fn note_transport_fetch_bounds_are_message_fields() {
+    let descriptor = miden_node_proto_build::note_transport_api_descriptor();
+    let file = descriptor
+        .file
+        .iter()
+        .find(|file| {
+            file.package() == "miden.note_transport.v1"
+                && file.message_type.iter().any(|message| message.name() == "FetchNotesRequest")
+        })
+        .unwrap();
+    for (name, number) in [("FetchNotesRequest", 3), ("FetchNotesResponse", 4)] {
+        let message = file.message_type.iter().find(|message| message.name() == name).unwrap();
+        let field = message.field.iter().find(|field| field.name() == "sync_to").unwrap();
+        assert_eq!(field.number(), number);
+        assert_eq!(field.type_name(), ".miden.note_transport.v1.FetchNotesCursor");
+    }
+}
