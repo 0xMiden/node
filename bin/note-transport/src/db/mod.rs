@@ -55,7 +55,9 @@ pub enum StorageError {
     InvalidCursor,
     #[error("invalid sync range")]
     InvalidSyncRange,
-    #[error("cursor belongs to another database generation; clear the cursor and retry")]
+    #[error(
+        "a fetch bound belongs to another database generation; clear both cursor and sync_to and retry"
+    )]
     StaleCursor,
     #[error("{0}")]
     InvalidData(String),

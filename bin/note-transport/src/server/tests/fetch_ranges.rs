@@ -97,6 +97,8 @@ async fn rejects_stale_upper_bound_without_a_lower_cursor() {
         for (lower, upper) in [(None, Some(old)), (Some(new), Some(old)), (Some(old), Some(new))] {
             let error = fetch(&second, tags.clone(), lower, upper).await.unwrap_err();
             assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+            assert!(error.message().contains("cursor"), "{error}");
+            assert!(error.message().contains("sync_to"), "{error}");
         }
     }
     let stale_future = FetchNotesCursor { sequence: 2, ..old };

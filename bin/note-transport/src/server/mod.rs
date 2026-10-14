@@ -226,9 +226,9 @@ fn decode_note(request: DecodedTransportNote) -> tonic::Result<(NoteHeader, Note
 fn storage_status(error: db::StorageError) -> tonic::Status {
     match error {
         db::StorageError::Capacity(message) => tonic::Status::resource_exhausted(message),
-        db::StorageError::StaleCursor => tonic::Status::failed_precondition(
-            "cursor belongs to another database generation; clear the cursor and retry",
-        ),
+        db::StorageError::StaleCursor => {
+            tonic::Status::failed_precondition(db::StorageError::StaleCursor.to_string())
+        },
         db::StorageError::InvalidCursor => tonic::Status::invalid_argument("invalid cursor"),
         db::StorageError::InvalidSyncRange => tonic::Status::invalid_argument("invalid sync range"),
         error => {
