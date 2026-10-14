@@ -3,6 +3,7 @@
 //! This module contains functionality for deploying Miden accounts to the network.
 
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -86,7 +87,8 @@ use url::Url;
 
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
-use crate::funding::{FeeFunder, FundingClient, counter_funding_amount, wallet_funding_amount};
+use crate::funding::{FeeFunder, FundingClient, counter_funding_amount};
+use crate::registration::{MonitorAccountPair, RegistrationPool};
 use crate::{COMPONENT, LOG_TARGET};
 
 pub mod counter;
@@ -369,17 +371,21 @@ pub async fn create_genesis_aware_rpc_client(
     .await
 }
 
-/// Create a fresh wallet + counter pair in memory and deploy the counter to the network.
+/// Prepare an in-memory wallet/counter pair and deploy the counter to the network.
 ///
 /// Used both at startup and by the increment task when accounts are fundamentally outdated
 /// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
-/// are never persisted to disk; the monitor re-creates them on every restart.
+/// are never persisted to disk; the monitor re-creates them on every restart. When a registration
+/// pool is provided, unresolved registrations reuse their existing accounts and codes. On a
+/// fee-charging chain the wallet receives `wallet_funding_amount` base units of the fee asset.
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
+    wallet_funding_amount: NonZeroU64,
+    registration: Option<&mut RegistrationPool>,
 ) -> Result<DeployedMonitorAccounts> {
-    info!(target: LOG_TARGET, "Creating fresh monitor accounts");
+    info!(target: LOG_TARGET, "Preparing monitor accounts");
 
     let mut rpc_client = submission_client.rpc_client();
 
@@ -390,9 +396,19 @@ pub async fn create_and_deploy_accounts(
     let verification_base_fee =
         funding_anchor.block_header.fee_parameters().verification_base_fee();
 
-    let (wallet_account, secret_key) = create_wallet_account()?;
-    let counter_account =
-        create_counter_account(wallet_account.id(), fee_faucet_id, verification_base_fee)?;
+    let create = || {
+        let (wallet, secret_key) = create_wallet_account()?;
+        let counter = create_counter_account(wallet.id(), fee_faucet_id, verification_base_fee)?;
+        Ok(MonitorAccountPair { wallet, secret_key, counter })
+    };
+    let MonitorAccountPair {
+        wallet: wallet_account,
+        secret_key,
+        counter: counter_account,
+    } = match registration {
+        Some(pool) => pool.register_accounts(&mut rpc_client, create).await?,
+        None => create()?,
+    };
 
     // Both vaults start empty, so each account's first transaction pays its fee from a faucet note
     // consumed in that same transaction.
@@ -403,7 +419,7 @@ pub async fn create_and_deploy_accounts(
                 .await
                 .context("failed to fund the counter account")?;
             let wallet_note = funder
-                .fund(wallet_account.id(), wallet_funding_amount(verification_base_fee))
+                .fund(wallet_account.id(), wallet_funding_amount.get())
                 .await
                 .context("failed to fund the wallet account")?;
             (Some(counter_note), Some(wallet_note))

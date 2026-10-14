@@ -26,6 +26,16 @@ probes use the same RPC configuration discovery.
 On a chain that charges fees, those checks also need the native asset, because the monitor's accounts pay their own
 transaction fees. Set `MIDEN_MONITOR_FUNDING_SERVICE_URL` to the [funding service](./funding-service.md), which is the
 only source the monitor pays fees from. `MIDEN_MONITOR_FAUCET_URL` configures the faucet checks and does not fund fees.
+The monitor's accounts live only in memory, so each restart abandons the wallet's remaining fee balance.
+`MIDEN_MONITOR_WALLET_FUNDING_AMOUNT` sets how much each funding request asks for, and so bounds that loss. See the
+[monitor operation guide](https://github.com/0xMiden/node/blob/next/bin/network-monitor/README.md#operation) for how to
+choose the amount.
+
+On networks with account allowlist enforcement enabled, set `MIDEN_MONITOR_REGISTRATION_CODES_FILE` to a JSON file of
+unused invitation codes. The monitor registers fresh accounts from this finite pool and keeps other checks running if
+registration cannot proceed. See the
+[monitor operation guide](https://github.com/0xMiden/node/blob/next/bin/network-monitor/README.md#operation) for the
+file format, code budget, restart behavior, and pool replenishment procedure.
 
 Each faucet check requests `MIDEN_MONITOR_FAUCET_MINT_AMOUNT` base units, which defaults to `1_000`. Keep this amount at
 or below the faucet's maximum claimable amount, otherwise the faucet rejects every request and the faucet card stays

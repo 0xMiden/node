@@ -97,7 +97,7 @@ services:
         ENDPOINTS=/data/validators/endpoints
         mkdir "$${ENDPOINTS}"
         for VALIDATOR in 1 2 3; do
-          ENDPOINT_OUTPUT="$$(miden-validator dkg generate-endpoint \
+          ENDPOINT_OUTPUT="$$(miden-validator privacy dkg generate-endpoint \
             --output-file "$${ENDPOINTS}/$${VALIDATOR}.secret")"
           ENDPOINT_ID="$$(printf '%s\n' "$${ENDPOINT_OUTPUT}" | sed -n 's/^Iroh endpoint ID: //p')"
           if [ -z "$${ENDPOINT_ID}" ]; then
@@ -153,7 +153,7 @@ services:
             STORAGE_KEY="/data/validators/$${VALIDATOR}/storage-key.bundle"
             cp "/fixtures/storage-key/validator-$${VALIDATOR}.bundle" "$${STORAGE_KEY}"
             chmod 600 "$${STORAGE_KEY}"
-            miden-validator dkg validate-fixture \
+            miden-validator privacy dkg validate-fixture \
               --bundle-file "$${STORAGE_KEY}" \
               --expected-participant "$${VALIDATOR}"
           done
@@ -189,7 +189,7 @@ services:
                 set -- "$$@" --peer "$${PUBLIC_KEY}" "$$(cat "$${ENDPOINTS}/$${PEER}.id")@127.0.0.1:900$${PEER}"
               fi
             done
-            miden-validator dkg participate \
+            miden-validator privacy dkg participate \
               --threshold 2 \
               --epoch "$${MIDEN_VALIDATOR_STORAGE_KEY_EPOCH}" \
               --signing-key.hex "$${SIGNING_KEY}" \

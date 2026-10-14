@@ -8,7 +8,7 @@ use super::{Migrator, SchemaHash};
 ///
 /// ```ignore
 /// use miden_node_db::migration::{Migrator, SchemaHash};
-/// use rusqlite::Transaction;
+/// use miden_node_db::Transaction;
 ///
 /// fn add_item_height(tx: &Transaction<'_>) -> anyhow::Result<()> {
 ///     tx.execute_batch("ALTER TABLE items ADD COLUMN height INTEGER;")?;
