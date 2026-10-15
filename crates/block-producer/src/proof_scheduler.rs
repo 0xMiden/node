@@ -162,6 +162,36 @@ pub(crate) async fn run(
     }
 }
 
+/// Proves the committed backlog in order, stopping at the tip captured when this call begins.
+///
+/// Completed proofs survive errors and cancellation. Proof commits are allowed to finish so the
+/// durable store and published proven tip remain consistent.
+pub async fn prove_pending_blocks(
+    state: &State,
+    writer: &mut ProofWriter,
+    prover_url: Option<url::Url>,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
+    let target = state.committed_tip();
+    if state.proven_tip() == target {
+        return Ok(());
+    }
+    let prover = match prover_url {
+        Some(url) => BlockProver::remote(url)?,
+        None => BlockProver::local(),
+    };
+    while state.proven_tip() < target {
+        let next = state.proven_tip().child();
+        let (height, proof) = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => anyhow::bail!("recovery proving cancelled"),
+            result = prove_block(state, &prover, next) => result?,
+        };
+        writer.apply_proof(height, proof).await?;
+    }
+    Ok(())
+}
+
 // PROVE BLOCK
 // ================================================================================================
 
@@ -362,3 +392,6 @@ mod persistence_tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;

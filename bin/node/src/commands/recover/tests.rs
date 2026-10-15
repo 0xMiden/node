@@ -676,3 +676,39 @@ async fn recovery_uses_active_configuration_after_legacy_activation() {
     assert_eq!(state.proven_tip(), BlockNumber::GENESIS);
     writer.stop(task).await;
 }
+
+#[test]
+fn recover_selects_optional_offline_prover() {
+    use clap::Parser;
+
+    // A prover URL configures proving but never enables it implicitly.
+    let base = [
+        "miden-node",
+        "recover",
+        "--data-directory",
+        "node-data",
+        "--validator.url",
+        "http://127.0.0.1:50101",
+    ];
+    for (extra, prove, expected_url) in [
+        (vec![], false, None),
+        (vec!["--prove"], true, None),
+        (
+            vec!["--prove", "--block-prover.url", "http://127.0.0.1:50051"],
+            true,
+            Some("http://127.0.0.1:50051/"),
+        ),
+        (
+            vec!["--block-prover.url", "http://127.0.0.1:50051"],
+            false,
+            Some("http://127.0.0.1:50051/"),
+        ),
+    ] {
+        let cli = crate::Cli::try_parse_from(base.into_iter().chain(extra)).unwrap();
+        let crate::commands::Command::Recover(command) = cli.command else {
+            panic!("expected recovery command")
+        };
+        assert_eq!(command.prove, prove);
+        assert_eq!(command.block_prover.url.as_ref().map(Url::as_str), expected_url);
+    }
+}

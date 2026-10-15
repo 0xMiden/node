@@ -10,7 +10,7 @@ use miden_node_proto::generated::miden::validator::v1::{
     BlockSubscriptionResponse,
 };
 use miden_node_proto::{BlockProofRequest, DecodeMessageExt};
-use miden_node_store::{BlockWriter, State, WriterTask};
+use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
@@ -91,28 +91,57 @@ pub struct RecoverCommand {
     )]
     validator_urls: Vec<Url>,
 
+    /// Prove all committed blocks after restoring their inputs, without starting block production.
+    #[arg(long)]
+    prove: bool,
+
+    #[command(flatten)]
+    block_prover: super::block_producer::BlockProverOptions,
+
     #[command(flatten)]
     store: StoreOptions,
 }
 
 impl RecoverCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        let (state, mut block_writer, writer_task) = self.load_state().await?;
+        let (state, mut block_writer, mut proof_writer, writer_task) = self.load_state().await?;
         let result = async {
             let validators = self
                 .validator_urls
                 .iter()
                 .map(|url| Ok((url.clone(), Self::validator_client(url)?)))
                 .collect::<anyhow::Result<Vec<_>>>()?;
-            recover_from_validators(&state, &mut block_writer, validators, shutdown).await
+            recover_from_validators(&state, &mut block_writer, validators, shutdown.clone())
+                .await?;
+            if self.prove {
+                miden_node_block_producer::prove_pending_blocks(
+                    &state,
+                    &mut proof_writer,
+                    self.block_prover.url,
+                    shutdown,
+                )
+                .await?;
+                info!(target: LOG_TARGET, "Recovery proving complete",
+                    block.number = state.proven_tip(), tip.proven = state.proven_tip(),
+                    tip.committed = state.committed_tip());
+            } else {
+                info!(target: LOG_TARGET, "Recovered inputs are ready for proving",
+                    block.number = state.committed_tip(), tip.proven = state.proven_tip(),
+                    tip.committed = state.committed_tip(),
+                    blocks.unproven = state.committed_tip().as_u32() - state.proven_tip().as_u32());
+            }
+            Ok(())
         }
         .await;
         // Drain accepted writes even when recovery fails or shutdown is requested.
+        drop(proof_writer);
         block_writer.stop(writer_task).await;
         result
     }
 
-    async fn load_state(&self) -> anyhow::Result<(Arc<State>, BlockWriter, WriterTask)> {
+    async fn load_state(
+        &self,
+    ) -> anyhow::Result<(Arc<State>, BlockWriter, ProofWriter, WriterTask)> {
         // The writer has an independent lifetime so cancellation cannot interrupt accepted writes.
         let loaded = State::load_with_database_options(
             &self.data_directory,
@@ -122,9 +151,9 @@ impl RecoverCommand {
         .await
         .context("failed to load state")?;
 
-        let (state, block_writer, _proof_writer, writer_task) =
+        let (state, block_writer, proof_writer, writer_task) =
             loaded.start(CancellationToken::new());
-        Ok((state, block_writer, writer_task))
+        Ok((state, block_writer, proof_writer, writer_task))
     }
 
     fn validator_client(url: &Url) -> anyhow::Result<ValidatorClient> {
