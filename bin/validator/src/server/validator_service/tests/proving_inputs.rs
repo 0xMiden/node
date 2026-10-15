@@ -16,7 +16,7 @@ async fn acknowledged_block_retains_inputs_after_restart() {
         ValidatorSigner::Local(key) => ValidatorSigner::new_local(key.clone()),
         ValidatorSigner::Kms(_) => unreachable!("fixture uses a local signer"),
     };
-    let TestValidator { server, _temp_dir: directory, .. } = tv;
+    let TestValidator { server, temp_dir: directory, .. } = tv;
     drop(server);
     let db = crate::db::load(directory.path().join("validator.sqlite3")).await.unwrap();
     let backup = db.load_block_backup(expected.block_num()).await.unwrap().unwrap();
@@ -90,7 +90,7 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
     inputs.validate_against(&backup.block).unwrap();
     assert!(inputs.validate_against(&original).is_err());
     let connection =
-        miden_node_db::Connection::open(tv._temp_dir.path().join("validator.sqlite3")).unwrap();
+        miden_node_db::Connection::open(tv.temp_dir.path().join("validator.sqlite3")).unwrap();
     connection
         .execute("UPDATE blocks SET proving_inputs = ?1 WHERE block_num = 1", [original_inputs])
         .unwrap();

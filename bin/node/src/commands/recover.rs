@@ -207,7 +207,7 @@ async fn recover_from_validators(
 
     let mut tasks = JoinSet::new();
     let result: anyhow::Result<()> = async {
-        run_recovery_pipeline(
+        Box::pin(run_recovery_pipeline(
             state,
             block_writer,
             validators,
@@ -215,7 +215,7 @@ async fn recover_from_validators(
             recovery_tip,
             &mut tasks,
             shutdown,
-        )
+        ))
         .await
     }
     .await;
@@ -340,7 +340,7 @@ async fn read_blocks(
                     })?;
                 let proving_inputs = event
                     .proving_inputs
-                    .map(|request| request.decode_and_build_unchecked())
+                    .map(miden_node_proto::DecodeMessageExt::decode_and_build_unchecked)
                     .transpose()
                     .with_context(|| {
                         format!(

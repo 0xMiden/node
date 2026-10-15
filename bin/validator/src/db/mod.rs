@@ -529,6 +529,17 @@ fn open_with_pool_size(
     })
 }
 
+/// Installs an input-write failure to exercise signing transaction rollback.
+#[cfg(test)]
+pub(crate) async fn reject_proving_input_writes_for_test(
+    db: &ValidatorDbWriter,
+) -> Result<(), DatabaseError> {
+    db.writer.write("reject proving inputs", |tx| {
+        tx.execute("CREATE TRIGGER reject_proving_inputs BEFORE INSERT ON blocks WHEN NEW.proving_inputs IS NOT NULL BEGIN SELECT RAISE(ABORT, 'proving inputs rejected'); END", &[])?;
+        Ok(())
+    }).await
+}
+
 #[cfg(test)]
 mod tests {
     mod block_data;
@@ -1227,15 +1238,4 @@ mod tests {
         assert!(schema.contains("idx_validated_transactions_setup_context_id"));
         assert!(schema.contains("PRIMARY KEY (block_num, block_tx_index)"));
     }
-}
-
-/// Installs an input-write failure to exercise signing transaction rollback.
-#[cfg(test)]
-pub(crate) async fn reject_proving_input_writes_for_test(
-    db: &ValidatorDbWriter,
-) -> Result<(), DatabaseError> {
-    db.writer.write("reject proving inputs", |tx| {
-        tx.execute("CREATE TRIGGER reject_proving_inputs BEFORE INSERT ON blocks WHEN NEW.proving_inputs IS NOT NULL BEGIN SELECT RAISE(ABORT, 'proving inputs rejected'); END", &[])?;
-        Ok(())
-    }).await
 }

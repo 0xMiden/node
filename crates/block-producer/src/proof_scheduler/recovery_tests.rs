@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::{GenesisState, State};
 use miden_node_utils::shutdown::CancellationToken;
@@ -22,9 +24,9 @@ fn next_block(
     let inputs = BlockInputs::new(
         parent.clone(),
         chain,
-        Default::default(),
-        Default::default(),
-        Default::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
     );
     let (header, body) =
         ProposedBlock::new_at(inputs.clone(), vec![], parent.block_num().child().as_u32())

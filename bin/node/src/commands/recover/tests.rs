@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -11,7 +13,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
-use miden_protocol::transaction::OrderedTransactionHeaders;
+use miden_protocol::transaction::{OrderedTransactionHeaders, PartialBlockchain};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -222,9 +224,9 @@ fn empty_recovery_fixture() -> (miden_node_store::GenesisState, BlockProofReques
     let block_inputs = miden_protocol::block::BlockInputs::new(
         parent,
         miden_protocol::transaction::PartialBlockchain::default(),
-        Default::default(),
-        Default::default(),
-        Default::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
     );
     let (header, body) =
         miden_protocol::block::ProposedBlock::new_at(block_inputs.clone(), vec![], 1)
@@ -300,7 +302,7 @@ async fn recovery_repairs_corrupt_local_inputs() {
     writer.apply_block(block.clone(), None).await.unwrap();
     writer.save_proving_inputs(1.into(), &request).await.unwrap();
     let path = directory.path().join("blocks/0000/inputs_00000001.dat");
-    std::fs::write(path, b"corrupt").unwrap();
+    fs_err::write(path, b"corrupt").unwrap();
     assert_eq!(inputs::recovery_start(&state, 1.into()).await.unwrap(), Some(1.into()));
     inputs::apply_recovered(
         &state,
@@ -465,10 +467,10 @@ async fn input_streams(
     for (index, signer) in signers.into_iter().enumerate() {
         let block_inputs = miden_protocol::block::BlockInputs::new(
             parent.clone(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
+            PartialBlockchain::default(),
+            BTreeMap::default(),
+            BTreeMap::default(),
+            BTreeMap::default(),
         );
         let (header, body) =
             miden_protocol::block::ProposedBlock::new_at(block_inputs.clone(), vec![], 1)
@@ -527,9 +529,9 @@ fn proposal_pair(
     let block_inputs = miden_protocol::block::BlockInputs::new(
         parent.clone(),
         chain,
-        Default::default(),
-        Default::default(),
-        Default::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
+        BTreeMap::default(),
     );
     let (header, body) = miden_protocol::block::ProposedBlock::new_at(
         block_inputs.clone(),
@@ -630,7 +632,7 @@ async fn recovery_uses_active_configuration_after_legacy_activation() {
     );
     let parent = genesis.clone().into_block().unwrap().inner().header().clone();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
-    let (base, _) = proposal_pair(&parent, Default::default(), None, &key);
+    let (base, _) = proposal_pair(&parent, PartialBlockchain::default(), None, &key);
     let (base, body, _) = base.into_parts();
     let header = BlockHeader::new(
         base.prev_block_commitment(),

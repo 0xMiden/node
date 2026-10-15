@@ -103,7 +103,7 @@ struct TestValidator {
     protocol_config: ProtocolConfig,
     // Keeps the database's temp directory alive for the validator's lifetime: the reader pool opens
     // connections lazily, so the file must still exist when the first read runs.
-    _temp_dir: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
 }
 
 impl TestValidator {
@@ -127,7 +127,7 @@ impl TestValidator {
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
             protocol_config,
-            _temp_dir: temp_dir,
+            temp_dir,
         }
     }
 
@@ -1934,8 +1934,7 @@ fn backup_response_budget_boundaries() {
         .push(0);
     assert_eq!(response.encoded_len(), LIMIT + 1);
     let error = <ValidatorService as BlockSubscription>::encode(response)
-        .err()
-        .expect("oversized backup must be rejected");
+        .expect_err("oversized backup must be rejected");
     assert_eq!(error.code(), tonic::Code::ResourceExhausted);
     assert!(error.message().contains("backup response"));
 }

@@ -1,15 +1,20 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, ensure};
+use clap::Parser;
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::{BlockProofRequest, DecodeMessage, DecodeMessageExt};
 use miden_node_store::{GenesisState, State};
+use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, SignedBlock};
+use miden_protocol::transaction::PartialBlockchain;
 use tokio::net::TcpListener;
+use tokio_stream::StreamExt;
 use url::Url;
 
 use super::super::{coalesce_signatures, inputs, recover_from_validators};
@@ -44,13 +49,17 @@ async fn validator_serves_bound_listener() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failover_recovers_inputs_and_proves_without_original_store() -> anyhow::Result<()> {
     for already_committed in [true, false] {
-        failover(already_committed)
+        Box::pin(failover(already_committed))
             .await
             .with_context(|| format!("failover with already_committed={already_committed}"))?;
     }
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the recovery scenario and resource cleanup together"
+)]
 async fn failover(already_committed: bool) -> anyhow::Result<()> {
     let keys = super::signers(2);
     let config = miden_node_utils::fee::test_protocol_config();
@@ -71,10 +80,10 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         let parent = genesis.inner().header().clone();
         let block_inputs = BlockInputs::new(
             parent.clone(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
-            Default::default(),
+            PartialBlockchain::default(),
+            BTreeMap::default(),
+            BTreeMap::default(),
+            BTreeMap::default(),
         );
         let (header, body) =
             ProposedBlock::new_at(block_inputs.clone(), vec![], 1)?.into_header_and_body()?;
@@ -185,7 +194,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
 
         // Reopening proves that the prover depends only on durable recovered material.
         let (state, writer, mut proof_writer, task) = load_store(standby.path()).await?;
-        let proved = miden_node_block_producer::prove_pending_blocks(
+        let proving_result = miden_node_block_producer::prove_pending_blocks(
             &state,
             &mut proof_writer,
             None,
@@ -197,7 +206,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         drop(proof_writer);
         writer.stop(task).await;
         drop(state);
-        proved?;
+        proving_result?;
         ensure!(proven == BlockNumber::from(1u32));
         let proof = proof?.context("missing generated proof")?;
         replicate(
@@ -221,6 +230,10 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
     result.and(cleanup)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the recovery scenario and resource cleanup together"
+)]
 async fn replicate(
     directory: &tempfile::TempDir,
     genesis: miden_node_store::genesis::GenesisBlock,
@@ -263,7 +276,7 @@ async fn replicate(
             state: Arc::clone(&upstream),
             mode: miden_node_rpc::RpcMode::full_node(source_rpc, 0, None, writer, proof_writer),
             ntx_builder: None,
-            grpc_options: Default::default(),
+            grpc_options: GrpcOptions::default(),
             network_tx_auth: None,
         };
         upstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
@@ -284,11 +297,10 @@ async fn replicate(
                 proof_writer,
             ),
             ntx_builder: None,
-            grpc_options: Default::default(),
+            grpc_options: GrpcOptions::default(),
             network_tx_auth: None,
         };
         downstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
-        use tokio_stream::StreamExt;
         let mut blocks = upstream_client
             .block_subscription(
                 miden_node_proto::generated::miden::node::v1::BlockSubscriptionRequest {
@@ -358,6 +370,10 @@ async fn replicate(
 
 /// Inject only transport failures; all signatures and input data come from real signing services.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Keep the recovery scenario and resource cleanup together"
+)]
 async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow::Result<()> {
     use tokio::sync::Notify;
     let key = super::SigningKey::new();
@@ -380,9 +396,9 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
             let inputs = BlockInputs::new(
                 parent.clone(),
                 chain.clone(),
-                Default::default(),
-                Default::default(),
-                Default::default(),
+                BTreeMap::default(),
+                BTreeMap::default(),
+                BTreeMap::default(),
             );
             let (header, body) =
                 ProposedBlock::new_at(inputs.clone(), vec![], parent.timestamp() + 1)?
@@ -578,7 +594,6 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
         // Restore-only handler execution must not contact an otherwise valid unreachable prover.
         let unreachable = TcpListener::bind("127.0.0.1:0").await?;
         let prover_url = format!("http://{}", unreachable.local_addr()?);
-        use clap::Parser;
         let cli = crate::Cli::try_parse_from([
             "miden-node",
             "recover",
@@ -608,10 +623,12 @@ async fn shared_validator_client_receives_large_backup() -> anyhow::Result<()> {
     use miden_node_proto::generated::block_proving;
     use miden_node_proto::generated::miden::validator::v1 as wire;
     use miden_node_proto::prost::Message;
-    let mut batch = miden_objects::proto::transaction::ProvenBatch::default();
-    batch.proof = Some(miden_objects::proto::primitives::ExecutionProof {
-        encoded: vec![7; 5 * 1024 * 1024],
-    });
+    let batch = miden_objects::proto::transaction::ProvenBatch {
+        proof: Some(miden_objects::proto::primitives::ExecutionProof {
+            encoded: vec![7; 5 * 1024 * 1024],
+        }),
+        ..Default::default()
+    };
     let response = wire::BlockSubscriptionResponse {
         proving_inputs: Some(block_proving::BlockProofRequest {
             batches: vec![batch],

@@ -254,7 +254,7 @@ fn recovered_proving_inputs_reject_changed_contents() {
             "protocol configuration" => wire.next_protocol_config = None,
             "validator configuration" => {
                 wire.next_validator_config =
-                    Some(original.block_inputs.prev_block_header().validator_config().into())
+                    Some(original.block_inputs.prev_block_header().validator_config().into());
             },
             "batch order" => wire.batches.reverse(),
             _ => unreachable!(),

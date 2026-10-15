@@ -7,7 +7,7 @@ use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::generated::miden::validator::v1 as wire;
 use miden_node_proto::server::miden_validator_v1_validator_service as api;
 use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
-use miden_node_utils::clap::StorageOptions;
+use miden_node_utils::clap::{GrpcOptions, StorageOptions};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::SignedBlock;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -79,7 +79,7 @@ pub async fn reopen_validator(
     let address = listener.local_addr()?;
     let server = miden_validator::ValidatorServer {
         address,
-        grpc_options: Default::default(),
+        grpc_options: GrpcOptions::default(),
         signer: miden_validator::ValidatorSigner::new_local(key),
         decrypter: Arc::new(miden_validator::LocalX25519TransactionInputDecrypter::new(
             key_exchange,
