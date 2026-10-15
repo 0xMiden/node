@@ -451,13 +451,18 @@ jobs:
           persist-credentials: false
 
       - name: Install actionlint
-        uses: taiki-e/install-action@v2.75.18
-        with:
-          tool: actionlint@1.7.12
+        run: |
+          mkdir -p "${RUNNER_TEMP}/actionlint"
+          cd "${RUNNER_TEMP}/actionlint"
+          release_url=https://github.com/rhysd/actionlint/releases/download/v1.7.12
+          curl --fail --location --retry 3 \
+            "${release_url}/actionlint_1.7.12_linux_amd64.tar.gz" --output actionlint.tar.gz
+          echo '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz' | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
 
       # Checks workflow syntax, expressions, and embedded shell scripts.
       - name: actionlint
-        run: actionlint -pyflakes=
+        run: '"${RUNNER_TEMP}/actionlint/actionlint" -pyflakes='
 
       # Limits workflow and local action YAML lines to 120 characters.
       - name: yamllint
