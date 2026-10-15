@@ -60,7 +60,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_internal("sign_block semaphore closed")?;
 
-        let (proposed_block, protocol_config, protocol_config_commitment) =
+        let (proposed_block, protocol_config, protocol_config_commitment, proving_inputs) =
             spawn_blocking_in_current_span(move || {
                 let request = request
                     // SAFETY: Construction checks local batch invariants and block witnesses.
@@ -72,6 +72,13 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
                     // blocks and expiration. Full validation needs more data or protocol support.
                     .decode_and_build_unchecked()
                     .map_err(miden_node_proto::errors::ConversionError::into_status)?;
+                let proving_inputs = miden_node_proto::BlockProofRequest {
+                    tx_batches: miden_protocol::batch::OrderedBatches::new(
+                        request.tx_batches.as_slice().to_vec(),
+                    ),
+                    block_header: request.block_header.clone(),
+                    block_inputs: request.block_inputs.clone(),
+                };
                 let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(
@@ -91,6 +98,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
                     proposed_block,
                     protocol_config,
                     protocol_config_commitment,
+                    proving_inputs,
                 ))
             })
             .await
@@ -126,19 +134,29 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = signed_block.header().commitment();
 
-        // Persist the signed header together with the block position of each of its transactions. A
-        // validated block at the tip's height replaces the current tip, which also deletes the
-        // replaced block — atomically with persisting its successor, so a crash cannot leave the
-        // replaced block's links behind.
+        // Persist the signed block, proving inputs, and transaction positions together. A validated
+        // block at the tip's height replaces the current tip, which also deletes the replaced block
+        // — atomically with persisting its successor, so a crash cannot leave the replaced block's
+        // links behind.
         let new_block_num = signed_block.header().block_num().as_u32();
         let is_replacement = signed_block.header().block_num() == chain_tip_num;
         if is_replacement {
             self.db
-                .replace_signed_block(signed_block, protocol_config, block_transactions)
+                .replace_signed_block(
+                    signed_block,
+                    protocol_config,
+                    block_transactions,
+                    proving_inputs,
+                )
                 .await
         } else {
             self.db
-                .insert_signed_block(signed_block, protocol_config, block_transactions)
+                .insert_signed_block(
+                    signed_block,
+                    protocol_config,
+                    block_transactions,
+                    proving_inputs,
+                )
                 .await
         }
         .or_internal("Failed to persist signed block")?;

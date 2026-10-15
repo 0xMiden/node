@@ -1,3 +1,4 @@
+mod proving_inputs;
 use std::collections::BTreeMap;
 
 use miden_node_proto::domain::encryption::{
@@ -330,9 +331,13 @@ async fn setup_db_with_genesis(
 
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    db.insert_signed_block(genesis_block.inner().clone(), protocol_config.clone(), Vec::new())
-        .await
-        .unwrap();
+    db.insert_legacy_signed_block(
+        genesis_block.inner().clone(),
+        protocol_config.clone(),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     (dir, db, genesis_header, protocol_config)
 }
@@ -1193,7 +1198,7 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
     );
     tv.server
         .db
-        .replace_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
+        .replace_legacy_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
         .await
         .unwrap();
     tv.chain_tip = transitioned_header;
@@ -1802,7 +1807,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     let parent = genesis.inner().header().clone();
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    db.insert_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
+    db.insert_legacy_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
         .await
         .unwrap();
     let service = ValidatorService::new(
@@ -1862,6 +1867,9 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     .unwrap();
     let item = stream.next().await.unwrap().unwrap();
     let streamed: SignedBlock = item.block.unwrap().decode_and_build_unchecked().unwrap();
+    let proving_inputs: miden_node_proto::BlockProofRequest =
+        item.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
+    proving_inputs.validate_against(&streamed).unwrap();
     assert_eq!(streamed, backed_up);
     assert_eq!(streamed.header(), &header);
     assert!(stream.next().await.is_none());

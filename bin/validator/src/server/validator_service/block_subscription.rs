@@ -84,9 +84,9 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
             async move {
                 let mut previous_config_commitment = None;
                 for block in from.as_u32()..=committed_tip.as_u32() {
-                    let response = match db.load_block(block.into()).await {
-                        Ok(Some(signed_block)) => {
-                            let commitment = signed_block.header().protocol_config_commitment();
+                    let response = match db.load_block_backup(block.into()).await {
+                        Ok(Some(backup)) => {
+                            let commitment = backup.block.header().protocol_config_commitment();
                             let protocol_config = if previous_config_commitment == Some(commitment)
                             {
                                 Ok(None)
@@ -105,10 +105,10 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                                 }
                             };
                             protocol_config.map(|protocol_config| BlockSubscriptionResponse {
-                                block: Some(signed_block.into()),
+                                block: Some(backup.block.into()),
                                 committed_chain_tip: committed_tip.as_u32(),
                                 protocol_config,
-                                proving_inputs: None,
+                                proving_inputs: backup.proving_inputs.as_ref().map(Into::into),
                             })
                         },
                         Ok(None) => {
