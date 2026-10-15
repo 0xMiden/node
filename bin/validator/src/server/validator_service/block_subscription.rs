@@ -4,6 +4,7 @@ use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
+use miden_node_proto::prost::Message;
 use miden_node_tracing::{ErrorReport, error, info, miden_instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
 use tokio::sync::OwnedRwLockWriteGuard;
@@ -43,6 +44,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
     }
 
     fn encode(item: Self::Item) -> tonic::Result<Self::Item> {
+        check_backup_response_budget(&item)?;
         Ok(item)
     }
 
@@ -104,11 +106,13 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                                     )),
                                 }
                             };
-                            protocol_config.map(|protocol_config| BlockSubscriptionResponse {
-                                block: Some(backup.block.into()),
-                                committed_chain_tip: committed_tip.as_u32(),
-                                protocol_config,
-                                proving_inputs: backup.proving_inputs.as_ref().map(Into::into),
+                            protocol_config.map(|protocol_config| {
+                                backup_response(
+                                    &backup.block,
+                                    backup.proving_inputs.as_ref(),
+                                    protocol_config,
+                                    committed_tip.as_u32(),
+                                )
                             })
                         },
                         Ok(None) => {
@@ -146,4 +150,33 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
             _guard: guard,
         }))
     }
+}
+
+/// Builds the backup envelope shared by signing admission and recovery streaming.
+pub(super) fn backup_response(
+    block: &miden_protocol::block::SignedBlock,
+    proving_inputs: Option<&miden_node_proto::BlockProofRequest>,
+    protocol_config: Option<miden_objects::proto::protocol_config::ProtocolConfig>,
+    committed_chain_tip: u32,
+) -> BlockSubscriptionResponse {
+    BlockSubscriptionResponse {
+        block: Some(block.clone().into()),
+        committed_chain_tip,
+        protocol_config,
+        proving_inputs: proving_inputs.map(Into::into),
+    }
+}
+
+/// Rejects backups the shared validator client cannot receive, including oversized legacy rows.
+pub(super) fn check_backup_response_budget(
+    response: &BlockSubscriptionResponse,
+) -> tonic::Result<()> {
+    let size = response.encoded_len();
+    let limit = miden_node_proto::clients::VALIDATOR_BACKUP_RESPONSE_LIMIT;
+    if size > limit {
+        return Err(Status::resource_exhausted(format!(
+            "validator backup response is {size} bytes, exceeding the {limit}-byte recovery limit"
+        )));
+    }
+    Ok(())
 }

@@ -353,9 +353,15 @@ impl GrpcClient for RemoteProverClient {
     }
 }
 
+/// Maximum encoded validator backup response, including the block, inputs, and configuration.
+pub const VALIDATOR_BACKUP_RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
+
 impl GrpcClient for ValidatorClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor)))
+        Self(
+            GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor))
+                .max_decoding_message_size(VALIDATOR_BACKUP_RESPONSE_LIMIT),
+        )
     }
 }
 

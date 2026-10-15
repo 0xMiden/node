@@ -130,6 +130,17 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_invalid_argument("Failed to validate block")?;
 
+        // Reserve the full configuration and largest tip encoding, so later subscriptions remain
+        // recoverable regardless of their starting height or the validator's future chain tip.
+        super::block_subscription::check_backup_response_budget(
+            &super::block_subscription::backup_response(
+                &signed_block,
+                Some(&proving_inputs),
+                Some((&protocol_config).into()),
+                u32::MAX,
+            ),
+        )?;
+
         // Capture the commitment that was signed before the block is moved into the persistence
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = signed_block.header().commitment();

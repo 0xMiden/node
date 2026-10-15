@@ -213,10 +213,12 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         anyhow::Ok(())
     }
     .await;
+    let mut cleanup = Ok(());
     for validator in validators {
-        validator.stop().await?;
+        let stopped = validator.stop().await.map(|_| ());
+        cleanup = cleanup.and(stopped);
     }
-    result
+    result.and(cleanup)
 }
 
 async fn replicate(
@@ -225,59 +227,67 @@ async fn replicate(
     block: &SignedBlock,
     proof: Vec<u8>,
 ) -> anyhow::Result<()> {
-    let (upstream, writer, proof_writer, writer_task) = load_store(directory.path()).await?;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let upstream_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
-    let client = |url: Url| {
-        Builder::new(url)
-            .without_tls()
-            .with_timeout(Duration::from_secs(5))
-            .without_metadata_version()
-            .without_metadata_genesis()
-            .without_otel_context_injection()
-            .connect_lazy::<RpcClient>()
-    };
-    // The recovered node has lost its source. A self-source would recursively forward Status,
-    // preventing an ordinary downstream node from completing its initial status query.
-    let offline_source = TcpListener::bind("127.0.0.1:0").await?;
-    let source_rpc = Builder::new(Url::parse(&format!("http://{}", offline_source.local_addr()?))?)
-        .without_tls()
-        .with_timeout(Duration::from_millis(100))
-        .without_metadata_version()
-        .without_metadata_genesis()
-        .without_otel_context_injection()
-        .connect_lazy::<RpcClient>();
     let shutdown = CancellationToken::new();
-    let rpc = miden_node_rpc::Rpc {
-        listener,
-        state: Arc::clone(&upstream),
-        mode: miden_node_rpc::RpcMode::full_node(source_rpc, 0, None, writer, proof_writer),
-        ntx_builder: None,
-        grpc_options: Default::default(),
-        network_tx_auth: None,
-    };
-    let upstream_task = tokio::spawn(rpc.serve(shutdown.clone()));
-    let mut upstream_client = client(upstream_url.clone());
-    let downstream_dir = tempfile::tempdir()?;
-    State::bootstrap(genesis, downstream_dir.path()).await?;
-    let (downstream, writer, proof_writer, downstream_writer) =
-        load_store(downstream_dir.path()).await?;
-    let rpc = miden_node_rpc::Rpc {
-        listener: TcpListener::bind("127.0.0.1:0").await?,
-        state: Arc::clone(&downstream),
-        mode: miden_node_rpc::RpcMode::full_node(
-            client(upstream_url),
-            0,
-            None,
-            writer,
-            proof_writer,
-        ),
-        ntx_builder: None,
-        grpc_options: Default::default(),
-        network_tx_auth: None,
-    };
-    let downstream_task = tokio::spawn(rpc.serve(shutdown.clone()));
+    let mut upstream_task = None;
+    let mut downstream_task = None;
+    let mut upstream_writer = None;
+    let mut downstream_writer = None;
+    let mut downstream_directory = None;
     let result = async {
+        let (upstream, writer, proof_writer, task) = load_store(directory.path()).await?;
+        upstream_writer = Some(task);
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let upstream_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
+        let client = |url: Url| {
+            Builder::new(url)
+                .without_tls()
+                .with_timeout(Duration::from_secs(5))
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .without_otel_context_injection()
+                .connect_lazy::<RpcClient>()
+        };
+        // The recovered node has lost its source. A self-source would recursively forward Status,
+        // preventing an ordinary downstream node from completing its initial status query.
+        let offline_source = TcpListener::bind("127.0.0.1:0").await?;
+        let source_rpc =
+            Builder::new(Url::parse(&format!("http://{}", offline_source.local_addr()?))?)
+                .without_tls()
+                .with_timeout(Duration::from_millis(100))
+                .without_metadata_version()
+                .without_metadata_genesis()
+                .without_otel_context_injection()
+                .connect_lazy::<RpcClient>();
+        let rpc = miden_node_rpc::Rpc {
+            listener,
+            state: Arc::clone(&upstream),
+            mode: miden_node_rpc::RpcMode::full_node(source_rpc, 0, None, writer, proof_writer),
+            ntx_builder: None,
+            grpc_options: Default::default(),
+            network_tx_auth: None,
+        };
+        upstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
+        let mut upstream_client = client(upstream_url.clone());
+        downstream_directory = Some(tempfile::tempdir()?);
+        let downstream_dir = downstream_directory.as_ref().unwrap();
+        State::bootstrap(genesis, downstream_dir.path()).await?;
+        let (downstream, writer, proof_writer, task) = load_store(downstream_dir.path()).await?;
+        downstream_writer = Some(task);
+        let rpc = miden_node_rpc::Rpc {
+            listener: TcpListener::bind("127.0.0.1:0").await?,
+            state: Arc::clone(&downstream),
+            mode: miden_node_rpc::RpcMode::full_node(
+                client(upstream_url),
+                0,
+                None,
+                writer,
+                proof_writer,
+            ),
+            ntx_builder: None,
+            grpc_options: Default::default(),
+            network_tx_auth: None,
+        };
+        downstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
         use tokio_stream::StreamExt;
         let mut blocks = upstream_client
             .block_subscription(
@@ -333,11 +343,17 @@ async fn replicate(
     }
     .await;
     shutdown.cancel();
-    tokio::time::timeout(Duration::from_secs(10), upstream_task).await???;
-    tokio::time::timeout(Duration::from_secs(10), downstream_task).await???;
-    tokio::time::timeout(Duration::from_secs(10), writer_task).await??;
-    tokio::time::timeout(Duration::from_secs(10), downstream_writer).await??;
-    result
+    let mut cleanup = Ok(());
+    for task in [upstream_task, downstream_task].into_iter().flatten() {
+        let joined = join_server(task).await.and_then(|result| result);
+        cleanup = cleanup.and(joined);
+    }
+    // Writers finish outstanding writes after their RPC owners release the senders.
+    for task in [upstream_writer, downstream_writer].into_iter().flatten() {
+        let joined = task.await.map_err(anyhow::Error::from);
+        cleanup = cleanup.and(joined);
+    }
+    result.and(cleanup)
 }
 
 /// Inject only transport failures; all signatures and input data come from real signing services.
@@ -488,9 +504,12 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
             let release = Arc::new(Notify::new());
             let proxy = start_proxy(validator.client(), Fault::Hold(release.clone())).await?;
             let refuse = Arc::new(Notify::new());
-            let refusing = start_proxy(validator.client(), Fault::Refuse(refuse.clone())).await?;
+            let mut refusing = None;
             let shutdown = CancellationToken::new();
             let tested = async {
+                refusing =
+                    Some(start_proxy(validator.client(), Fault::Refuse(refuse.clone())).await?);
+                let refusing = refusing.as_ref().unwrap();
                 let mut clients = vec![(proxy.url.clone(), proxy.client())];
                 if refuse_setup {
                     clients.push((refusing.url.clone(), refusing.client()));
@@ -520,18 +539,41 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 ensure!(result.is_err());
                 tokio::time::timeout(Duration::from_secs(10), proxy.dropped.notified()).await?;
                 release.notify_one();
-                // Service tests establish that the real backup lock follows stream lifetime.
-                validator.client().sign_block(last_request.clone().unwrap()).await?;
+                // The remote server observes stream cancellation asynchronously. A retained backup
+                // lock must still fail this bounded check; service tests check its local lifetime.
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    let mut retry = tokio::time::interval(Duration::from_millis(10));
+                    loop {
+                        retry.tick().await;
+                        match validator.client().sign_block(last_request.clone().unwrap()).await {
+                            Err(error) if error.code() == tonic::Code::ResourceExhausted => {},
+                            result => return result,
+                        }
+                    }
+                })
+                .await
+                .with_context(|| {
+                    format!(
+                        "backup lock remained held after stream drop (refuse_setup={refuse_setup})"
+                    )
+                })?
+                .with_context(|| {
+                    format!("signing after stream drop (refuse_setup={refuse_setup})")
+                })?;
                 anyhow::Ok(())
             }
             .await;
             shutdown.cancel();
             release.notify_one();
-            proxy.stop().await?;
-            refusing.stop().await?;
+            let stopped = proxy.stop().await;
+            let refused = if let Some(refusing) = refusing {
+                refusing.stop().await
+            } else {
+                Ok(())
+            };
             drop(proof_writer);
             writer.stop(task).await;
-            tested?;
+            tested.and(stopped).and(refused)?;
         }
         // Restore-only handler execution must not contact an otherwise valid unreachable prover.
         let unreachable = TcpListener::bind("127.0.0.1:0").await?;
@@ -557,4 +599,46 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
     .await;
     validator.stop().await?;
     result
+}
+
+/// The shared client must receive backups larger than tonic's default decode allowance. Synthetic
+/// proof bytes isolate transport capacity without claiming domain validity.
+#[tokio::test]
+async fn shared_validator_client_receives_large_backup() -> anyhow::Result<()> {
+    use miden_node_proto::generated::block_proving;
+    use miden_node_proto::generated::miden::validator::v1 as wire;
+    use miden_node_proto::prost::Message;
+    let mut batch = miden_objects::proto::transaction::ProvenBatch::default();
+    batch.proof = Some(miden_objects::proto::primitives::ExecutionProof {
+        encoded: vec![7; 5 * 1024 * 1024],
+    });
+    let response = wire::BlockSubscriptionResponse {
+        proving_inputs: Some(block_proving::BlockProofRequest {
+            batches: vec![batch],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    ensure!(response.encoded_len() > 4 * 1024 * 1024);
+    let upstream = Builder::new(Url::parse("http://127.0.0.1:1")?)
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy();
+    let proxy = start_proxy(upstream, Fault::Synthetic(Box::new(response.clone()))).await?;
+    let result = async {
+        let mut stream = proxy
+            .client()
+            .block_subscription(wire::BlockSubscriptionRequest { block_from: 0 })
+            .await?
+            .into_inner();
+        ensure!(stream.message().await? == Some(response));
+        anyhow::Ok(())
+    }
+    .await;
+    let stopped = proxy.stop().await;
+    result?;
+    stopped
 }

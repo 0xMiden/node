@@ -1897,3 +1897,45 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     assert_eq!(streamed.header(), &header);
     assert!(stream.next().await.is_none());
 }
+
+/// Backup encoding accepts the finite response boundary and explicitly rejects larger payloads.
+/// Synthetic proof bytes exercise the wire budget without representing a validated block.
+#[test]
+fn backup_response_budget_boundaries() {
+    use miden_validator_v1_validator_service::BlockSubscription;
+    const LIMIT: usize = 16 * 1024 * 1024;
+    let mut response = proto::miden::validator::v1::BlockSubscriptionResponse {
+        committed_chain_tip: u32::MAX,
+        proving_inputs: Some(proto::block_proving::BlockProofRequest {
+            batches: vec![miden_objects::proto::transaction::ProvenBatch {
+                proof: Some(miden_objects::proto::primitives::ExecutionProof {
+                    encoded: vec![0; LIMIT],
+                }),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let overhead = response.encoded_len() - LIMIT;
+    response.proving_inputs.as_mut().unwrap().batches[0]
+        .proof
+        .as_mut()
+        .unwrap()
+        .encoded
+        .truncate(LIMIT - overhead);
+    assert_eq!(response.encoded_len(), LIMIT);
+    assert!(<ValidatorService as BlockSubscription>::encode(response.clone()).is_ok());
+    response.proving_inputs.as_mut().unwrap().batches[0]
+        .proof
+        .as_mut()
+        .unwrap()
+        .encoded
+        .push(0);
+    assert_eq!(response.encoded_len(), LIMIT + 1);
+    let error = <ValidatorService as BlockSubscription>::encode(response)
+        .err()
+        .expect("oversized backup must be rejected");
+    assert_eq!(error.code(), tonic::Code::ResourceExhausted);
+    assert!(error.message().contains("backup response"));
+}
