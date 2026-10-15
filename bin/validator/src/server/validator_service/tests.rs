@@ -924,6 +924,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
     use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
     use rand_chacha_03::rand_core::SeedableRng;
+    use tokio_stream::StreamExt;
 
     use crate::db::ListTransactionsParams;
     use crate::private_record::test_private_record_sealer;
@@ -984,6 +985,28 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     );
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
     tv.call_sign_block(&proposed).await.expect("block should be signed");
+
+    // Backup streaming retains the ordered nonempty batches and the original state witnesses.
+    let mut backup = tv.call_block_subscription(1).await;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), backup.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let restored: miden_node_proto::BlockProofRequest =
+        event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
+    assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
+    let expected_inputs = BlockInputs::new(
+        proposed.prev_block_header().clone(),
+        proposed.partial_blockchain().clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    assert_eq!(restored.block_inputs.to_bytes(), expected_inputs.to_bytes());
+    let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
+    restored.validate_against(&signed).unwrap();
+    drop(backup);
 
     // The signed block links its transaction to block 1 at index 0.
     let listed = tv

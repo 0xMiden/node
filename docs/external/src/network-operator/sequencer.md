@@ -171,13 +171,10 @@ funding service directly to fund an account after a failed or interrupted reques
 Full nodes replicate the committed sequencer state from their upstream block source. Because of this, a full node can be
 promoted to sequencer if the active sequencer needs to be replaced.
 
-The promotion target must be in sync with the current sequencer state. A full node that is behind the sequencer is not a
-valid replacement until it has caught up to the committed chain tip.
-
-There is always some risk of data loss during failover because full nodes follow the sequencer asynchronously. Blocks
-committed by the sequencer but not yet replicated to the promoted full node may be missing from that node's local state.
-The validator also retains a copy of the blocks it validated and signed, and can be used to recover missing committed
-block data when this occurs. See [Recovery](/network-operator/recovery) for the procedure.
+The promotion target must have the committed chain and either proofs or recoverable proving inputs for every unproven
+block. Matching the committed tip alone is insufficient: full-node replication does not copy proving inputs. Follow
+[Recovery](/network-operator/recovery) to fence the old sequencer, restore missing blocks and inputs, and choose whether
+to prove the backlog before promotion.
 
 ### Fee Collector Account
 
@@ -185,8 +182,9 @@ Copy the existing `fee-collector.mac` file to the replacement node's data direct
 This file contains the collector's signing key and is not replicated with chain state. The account is already deployed
 and does not need to be deployed again.
 
-If the file is lost, complete chain recovery, then create and deploy a new collector with the same
-[Fee Collection](#fee-collection) procedure. Keep the replacement node stopped until deployment completes.
+If the file is lost, complete [recovery with `--prove`](/network-operator/recovery), then create and deploy a new
+collector with the same [Fee Collection](#fee-collection) procedure. Keep the replacement node stopped until deployment
+completes.
 
 ## Common Configuration
 

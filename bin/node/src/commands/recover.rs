@@ -122,13 +122,11 @@ impl RecoverCommand {
                 )
                 .await?;
                 info!(target: LOG_TARGET, "Recovery proving complete",
-                    block.number = state.proven_tip(), tip.proven = state.proven_tip(),
-                    tip.committed = state.committed_tip());
+                    block.number = state.proven_tip(), tip.number = state.committed_tip());
             } else {
                 info!(target: LOG_TARGET, "Recovered inputs are ready for proving",
-                    block.number = state.committed_tip(), tip.proven = state.proven_tip(),
-                    tip.committed = state.committed_tip(),
-                    blocks.unproven = state.committed_tip().as_u32() - state.proven_tip().as_u32());
+                    block.number = state.proven_tip(), tip.number = state.committed_tip(),
+                    sync.block_gap = state.committed_tip().as_u32() - state.proven_tip().as_u32());
             }
             Ok(())
         }

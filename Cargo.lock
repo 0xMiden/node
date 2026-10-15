@@ -4701,6 +4701,7 @@ dependencies = [
  "miden-objects",
  "miden-protocol",
  "miden-standards",
+ "miden-validator",
  "rand 0.10.3",
  "reqwest",
  "serde",

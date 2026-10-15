@@ -5,37 +5,27 @@ sidebar_position: 11
 
 # Recovery
 
-Recovery restores missing committed block data to a node from the validators' block backups. It is used when promoting a
-full node to sequencer after the active sequencer is lost, and the promotion target is missing committed blocks.
+Recovery restores committed blocks and the inputs needed to prove them from validator backups after sequencer loss. Use
+it before promoting a full node, even when that node has the latest committed block: ordinary replication does not copy
+proving inputs, and some committed blocks may not yet have proofs.
 
-This complements the [Sequencer Failover](/network-operator/sequencer) flow. Full nodes replicate the sequencer state
-asynchronously, so there is no guarantee that the node is fully up to date if the sequencer fails. These missing data
-can always be recovered from the validators because every validator has to sign every block before it can be committed.
+## Prerequisites
 
-## When to recover
+Upgrade and migrate validators before relying on input recovery. Only blocks signed after that upgrade have retained
+inputs. Rehearse recovery with newly signed blocks before declaring the deployment recoverable. Older missing inputs
+still require an original sequencer copy or a surviving source of the corresponding proofs.
 
-Recover when both of the following hold:
-
-- The active sequencer is lost or being replaced, and a full node is being promoted to take its place.
-- The promotion target is behind the committed chain tip and cannot catch up from another in-sync source.
-
-## What recovery does
-
-The `miden-node recover` command streams each validator's signed blocks into the node's local storage, starting from the
-node's current committed tip and stopping once it reaches the smallest of the validators' chain tips. It then exits.
-
-Each validator's block backup carries only that validator's own signature, so the command must be pointed at the full
-validator set: for every block it collects one signature per validator, orders them against the validator set committed
-to by the parent block's header, and verifies the reconstructed block before applying it.
-
-Recovered blocks are signed but **carry no proofs** — validators back up block data, not block proofs. These blocks must
-be imported or re-proven separately as part of recovery before the node resumes block production as a sequencer.
+The replacement must have an initialized data directory for the same network. Supply the full validator set, with each
+validator available and retaining its signing history. Recovery checks signatures and stops at the smallest validator
+tip; coordinate with validator operators if their tips differ. Recovery cannot reconcile divergent chains. Keep the old
+sequencer fenced throughout recovery and promotion so it cannot resume block production.
 
 ## Procedure
 
-1. Stop the sequencer, if it is not down already.
-2. Stop the full node being promoted.
-3. Run recovery against the full validator set, pointed at the promotion target's data directory:
+1. Stop and fence the old sequencer. Stop the promotion target before accessing its data directory.
+2. Choose one of the following completion modes and run recovery against every validator.
+
+   **Restore inputs only**, when the existing `fee-collector.mac` survives:
 
    ```bash
    miden-node recover \
@@ -45,9 +35,37 @@ be imported or re-proven separately as part of recovery before the node resumes 
      --validator.url http://validator-2:50101
    ```
 
-   The command applies blocks up to the validators' chain tip and exits. If the node is already at the validators' chain
-   tip, it reports that there is nothing to recover and exits successfully.
+   Successful completion reports that inputs are ready for proving. Every locally unproven block has usable inputs,
+   including blocks already present before recovery. This does not guarantee proof availability. Copy the existing
+   `fee-collector.mac` into the replacement data directory; the normal sequencer scheduler can then prove the backlog.
 
-4. Commission proofs for the recovered blocks.
-5. Restore or replace the [fee collector account](./sequencer.md#fee-collector-account).
-6. Restart the node as a sequencer. See [Sequencer](/network-operator/sequencer).
+   **Restore and prove**, when the collector file is lost or proofs are required before promotion:
+
+   ```bash
+   miden-node recover \
+     --data-directory node-data \
+     --validator.url http://validator-0:50101 \
+     --validator.url http://validator-1:50101 \
+     --validator.url http://validator-2:50101 \
+     --prove \
+     --block-prover.url http://block-prover:50051
+   ```
+
+   Omit `--block-prover.url` to prove locally. The URL alone does not enable proving; `--prove` is required. This mode
+   creates no blocks and needs no collector file. Successful completion reports that recovery proving is complete: the
+   recovered committed prefix has proofs, and the proven and committed tips match.
+
+3. If the collector file was lost, wait for `--prove` to complete, then create and deploy a replacement collector using
+   [Fee Collection](./sequencer.md#fee-collection). Keep the node stopped until deployment completes. If the existing
+   collector was restored, it does not need deployment again.
+4. Restart the replacement as a [sequencer](./sequencer.md), keeping the old sequencer fenced.
+
+## Failure and retry
+
+A failed or interrupted command preserves completed block, input, and proof writes. Resolve the reported error and rerun
+the same command against the same data directory. Recovery checks existing inputs and repairs missing or corrupt files
+without reapplying committed blocks. Proving resumes after the last persisted proof.
+
+If recovery reports a historical block without usable inputs, restore its original inputs or synchronize its proof from
+a surviving node before retrying. Migrating a validator does not reconstruct inputs for old blocks. Do not promote a
+node with an uncovered unproven gap or bypass the proof requirement for replacement collector deployment.

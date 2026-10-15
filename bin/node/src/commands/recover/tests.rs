@@ -712,3 +712,6 @@ fn recover_selects_optional_offline_prover() {
         assert_eq!(command.block_prover.url.as_ref().map(Url::as_str), expected_url);
     }
 }
+
+mod failover;
+mod support;

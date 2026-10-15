@@ -102,16 +102,24 @@ impl ValidatorServer {
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(self.address)
+            .await
+            .context("failed to bind to block producer address")?;
+        self.serve_on(listener, shutdown).await
+    }
+
+    /// Serves the validator RPC API on an already-bound listener.
+    pub async fn serve_on(
+        self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         // The database pool is opened once by the caller and shared with the admin server, so this
         // takes the handle rather than opening its own connection.
         let db = self.db;
 
         // Load initial metrics from the database for the in-memory counters.
         let metrics = db.load_initial_metrics().await.context("failed to load initial metrics")?;
-
-        let listener = TcpListener::bind(self.address)
-            .await
-            .context("failed to bind to block producer address")?;
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(validator_api_descriptor())
