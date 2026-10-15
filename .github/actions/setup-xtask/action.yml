@@ -17,7 +17,9 @@ runs:
         source /etc/os-release
         echo "id=${ID}-${VERSION_ID}" >> "${GITHUB_OUTPUT}"
 
+    # Forks build xtask locally without reading or writing the shared binary cache.
     - name: Restore xtask
+      if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
       id: cache
       uses: actions/cache/restore@v5.0.3
       with:
@@ -42,7 +44,10 @@ runs:
         install -D xtask/target/debug/xtask "${RUNNER_TEMP}/xtask-bin/xtask"
 
     - name: Save xtask
-      if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      if: >-
+        (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+        inputs.save-cache == 'true' &&
+        steps.cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5.0.3
       with:
         path: ${{ runner.temp }}/xtask-bin

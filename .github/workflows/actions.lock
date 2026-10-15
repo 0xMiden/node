@@ -26,7 +26,9 @@ workflows:
         - 'actions/checkout@v6.0.2'
         - 'actions/download-artifact@v8.0.1'
         - 'actions/upload-artifact@v7.0.1'
+        - 'docker/bake-action@v7.5.0'
         - 'docker/login-action@v4.2.0'
+        - 'docker/setup-buildx-action@v4.4.1'
         - 'warpbuilds/bake-action@v6.7.7'
     '.github/workflows/nightly.yml':
         - 'actions/checkout@v6.0.2'
@@ -94,11 +96,21 @@ dependencies:
         repo_id: 496012378
         uses:
             - 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f'
+    'docker/bake-action@v7.5.0':
+        ref: 'v7.5.0'
+        commit: 'sha1-59cb1203cd42bcefd40a1b6d73b589e48c86040e'
+        owner_id: 5429470
+        repo_id: 301684204
     'docker/login-action@v4.2.0':
         ref: 'v4.2.0'
         commit: 'sha1-650006c6eb7dba73a995cc03b0b2d7f5ca915bee'
         owner_id: 5429470
         repo_id: 287743349
+    'docker/setup-buildx-action@v4.4.1':
+        ref: 'v4.4.1'
+        commit: 'sha1-f87e5991a6d7451dcb8d9637bfbc97413f497069'
+        owner_id: 5429470
+        repo_id: 288485773
     'github/codeql-action@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2':
         ref: 'v4.38.2'
         commit: 'sha1-2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2'

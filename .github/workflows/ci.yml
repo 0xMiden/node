@@ -1,5 +1,6 @@
 # Continuous integration jobs.
-# These run on every pull request, with Warp caches updated on pushes to protected branches.
+# Fork pull requests use GitHub-hosted runners without shared caches. Internal
+# builds use WarpBuild, with Rust caches updated on pushes to protected branches.
 name: CI
 
 permissions:
@@ -19,11 +20,12 @@ on:
       - "**.txt"
 
 env:
+  USE_CACHE: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
   # Shared prefix key for the Rust caches.
   #
   # Cache is specific to the target development or release branch.
   CACHE_PREFIX: rust-cache-${{ github.base_ref || github.ref_name }}
-  # Push triggers are limited to protected branches; PRs restore from the target branch cache.
+  # Push triggers are limited to protected branches; internal PRs restore from that branch.
   SAVE_CACHE: ${{ github.event_name == 'push' }}
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -40,16 +42,19 @@ jobs:
 
   # Normal cargo build that verifies the workspace compiles.
   build:
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - uses: $/.github/actions/install-rocksdb
       - uses: $/.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -110,14 +115,17 @@ jobs:
 
   clippy:
     name: lint - clippy
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -127,12 +135,14 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
   tests:
-    runs-on: warp-ubuntu-latest-x64-8x
-    timeout-minutes: 30
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 30 || 90 }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - name: Verify protected branch ruleset target
         uses: $/.github/actions/verify-ruleset-target
         with:
@@ -145,6 +155,7 @@ jobs:
         with:
           tool: nextest@0.9.122
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -158,14 +169,17 @@ jobs:
         run: cargo test --doc --workspace --all-features
 
   doc:
-    runs-on: warp-ubuntu-latest-x64-8x
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -200,17 +214,20 @@ jobs:
   # Ensure the stress-test still functions by running some cheap benchmarks.
   stress-test:
     name: stress test
-    runs-on: warp-ubuntu-latest-x64-8x
-    timeout-minutes: 20
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 20 || 90 }}
     env:
       DATA_DIR: /tmp/store
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -248,15 +265,18 @@ jobs:
   # Smoke-tests `miden-benchmark` end-to-end against a locally bootstrapped node.
   benchmark:
     name: benchmark smoke
-    runs-on: warp-ubuntu-latest-x64-8x
-    timeout-minutes: 20
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 20 || 90 }}
     steps:
       - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
+      - uses: $/.github/actions/cleanup-runner
+        if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: WarpBuilds/rust-cache@v2.9.1
+        if: env.USE_CACHE == 'true'
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
