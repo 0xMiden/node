@@ -53,7 +53,11 @@ permissions:
   contents: read
 
 env:
-  USE_WARP: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+  USE_WARP: >-
+    ${{
+      github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+    }}
   # Skip the optional build-history export after Bake finishes.
   DOCKER_BUILD_SUMMARY: "false"
   REGISTRY: ghcr.io
@@ -201,11 +205,20 @@ jobs:
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'dry-run' }}
     # Forks use a fresh local builder on a native GitHub-hosted runner.
-    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && 'warp-ubuntu-latest-x64-8x' || matrix.runner }}
+    runs-on: >-
+      ${{
+        (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) &&
+        'warp-ubuntu-latest-x64-8x' || matrix.runner
+      }}
     timeout-minutes: 120
     concurrency:
       # Fork builds do not share the remote builder's concurrency queue.
-      group: docker-build-${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && vars.WARPBUILD_DOCKER_BUILDER_PROFILE || github.run_id }}-${{ matrix.architecture }}
+      group: >-
+        ${{ format('docker-build-{0}-{1}',
+          (github.event_name != 'pull_request' ||
+          github.event.pull_request.head.repo.full_name == github.repository) &&
+          vars.WARPBUILD_DOCKER_BUILDER_PROFILE || github.run_id, matrix.architecture) }}
       cancel-in-progress: false
       queue: max
     permissions:
@@ -293,6 +306,8 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    env:
+      IMAGE_TAG: ${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
@@ -329,15 +344,15 @@ jobs:
             *.args.CREATED=${{ needs.preflight.outputs.created }}
             *.args.VERSION=${{ needs.preflight.outputs.tag }}
             *.args.COMMIT=${{ needs.preflight.outputs.commit }}
-            node.tags=${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            validator.tags=${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            note-transport.tags=${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            ntx-builder.tags=${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            remote-prover.tags=${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
-            usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}-${{ matrix.architecture }}
+            node.tags=${{ env.REGISTRY_PREFIX }}/miden-node:${{ env.IMAGE_TAG }}
+            validator.tags=${{ env.REGISTRY_PREFIX }}/miden-validator:${{ env.IMAGE_TAG }}
+            note-transport.tags=${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ env.IMAGE_TAG }}
+            ntx-builder.tags=${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ env.IMAGE_TAG }}
+            remote-prover.tags=${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ env.IMAGE_TAG }}
+            network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ env.IMAGE_TAG }}
+            funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ env.IMAGE_TAG }}
+            node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ env.IMAGE_TAG }}
+            usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ env.IMAGE_TAG }}
 
   kache-summary:
     name: Summarize Kache cache
@@ -398,8 +413,10 @@ jobs:
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.tag }}
           MIDEN_NTX_BUILDER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.tag }}
           MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.tag }}
-          MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
-          MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
+          MIDEN_NETWORK_MONITOR_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
           MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
@@ -490,14 +507,20 @@ jobs:
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
         uses: 0xMiden/node/.github/actions/publish-compose@next
         env:
-          MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_NOTE_TRANSPORT_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_VALIDATOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-validator:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_NTX_BUILDER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_REMOTE_PROVER_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_NETWORK_MONITOR_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_FUNDING_SERVICE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_NTX_BUILDER_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-ntx-builder:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_REMOTE_PROVER_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-remote-prover:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_NETWORK_MONITOR_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_FUNDING_SERVICE_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_USDCX_GENESIS_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml
           mode: publish
