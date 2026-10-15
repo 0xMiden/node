@@ -20,6 +20,34 @@ pub struct BlockProofRequest {
     pub block_inputs: BlockInputs,
 }
 
+impl BlockProofRequest {
+    /// Checks that the proving request reconstructs the expected block header and body.
+    ///
+    /// The caller authenticates the expected block and parent separately. This check does not
+    /// replace signature verification or strengthen the protocol's batch-proof validation.
+    pub fn validate_against(
+        &self,
+        expected: &miden_protocol::block::SignedBlock,
+    ) -> Result<(), ConversionError> {
+        let (header, body) = ProposedBlock::new_at(
+            self.block_inputs.clone(),
+            self.tx_batches.as_slice().to_vec(),
+            self.block_header.timestamp(),
+        )
+        .map_err(ConversionError::new)?
+        .with_next_validator_config(self.block_header.validator_config().clone())
+        .with_next_protocol_config(self.block_header.next_protocol_config().cloned())
+        .into_header_and_body()
+        .map_err(ConversionError::new)?;
+        if header != self.block_header || &header != expected.header() || &body != expected.body() {
+            return Err(ConversionError::message(
+                "proving inputs do not reconstruct the expected block",
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl From<&BlockProofRequest> for proto::block_proving::BlockProofRequest {
     fn from(value: &BlockProofRequest) -> Self {
         Self {

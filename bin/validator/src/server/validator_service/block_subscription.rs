@@ -108,6 +108,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                                 block: Some(signed_block.into()),
                                 committed_chain_tip: committed_tip.as_u32(),
                                 protocol_config,
+                                proving_inputs: None,
                             })
                         },
                         Ok(None) => {

@@ -206,6 +206,113 @@ fn nonempty_block_request() -> BlockProofRequest {
     }
 }
 
+// Builds the expected block without authenticating signatures; binding is checked separately.
+fn block_from_request(request: &BlockProofRequest) -> miden_protocol::block::SignedBlock {
+    let (header, body) = ProposedBlock::new_at(
+        request.block_inputs.clone(),
+        request.tx_batches.as_slice().to_vec(),
+        request.block_header.timestamp(),
+    )
+    .unwrap()
+    .with_next_validator_config(request.block_header.validator_config().clone())
+    .with_next_protocol_config(request.block_header.next_protocol_config().cloned())
+    .into_header_and_body()
+    .unwrap();
+    miden_protocol::block::SignedBlock::new_unchecked(
+        header,
+        body,
+        miden_protocol::block::BlockSignatures::new(vec![]).unwrap(),
+    )
+}
+
+#[test]
+fn recovered_proving_inputs_match_the_signed_block() {
+    // Preserve nonempty batches, witnesses, and both configuration transitions.
+    let original = nonempty_block_request();
+    let expected = block_from_request(&original);
+    let recovered: BlockProofRequest =
+        miden_node_persistence::decode(&miden_node_persistence::encode(&original)).unwrap();
+    recovered.validate_against(&expected).unwrap();
+    assert_eq!(recovered.tx_batches, original.tx_batches);
+    assert_eq!(
+        generated::block_proving::BlockInputs::from(&recovered.block_inputs),
+        generated::block_proving::BlockInputs::from(&original.block_inputs),
+    );
+}
+
+#[test]
+fn recovered_proving_inputs_reject_changed_contents() {
+    // Each changed proposal must fail binding to the original signed block.
+    for mutation in
+        ["timestamp", "protocol configuration", "validator configuration", "batch order"]
+    {
+        let original = nonempty_block_request();
+        let expected = block_from_request(&original);
+        let mut wire = generated::block_proving::BlockProofRequest::from(&original);
+        match mutation {
+            "timestamp" => wire.timestamp += 1,
+            "protocol configuration" => wire.next_protocol_config = None,
+            "validator configuration" => {
+                wire.next_validator_config =
+                    Some(original.block_inputs.prev_block_header().validator_config().into())
+            },
+            "batch order" => wire.batches.reverse(),
+            _ => unreachable!(),
+        }
+        if let Ok(different) = wire.decode_and_build_unchecked() {
+            assert!(different.validate_against(&expected).is_err(), "mutation {mutation}");
+        }
+    }
+}
+
+#[test]
+fn recovered_proving_inputs_reject_a_different_body() {
+    // A matching header alone cannot authorize inputs for a different body.
+    let original = nonempty_block_request();
+    let expected = block_from_request(&original);
+    let (_, empty_body) = ProposedBlock::new_at(
+        original.block_inputs.clone(),
+        Vec::new(),
+        original.block_header.timestamp(),
+    )
+    .unwrap()
+    .into_header_and_body()
+    .unwrap();
+    let different = miden_protocol::block::SignedBlock::new_unchecked(
+        expected.header().clone(),
+        empty_body,
+        miden_protocol::block::BlockSignatures::new(vec![]).unwrap(),
+    );
+    assert!(original.validate_against(&different).is_err());
+}
+
+#[test]
+fn validator_backup_roundtrip_preserves_optional_proving_inputs() {
+    // Backup transport retains complete requests and distinguishes unavailable inputs.
+    let original = nonempty_block_request();
+    let expected = block_from_request(&original);
+    for proving_inputs in [Some((&original).into()), None] {
+        let response = generated::miden::validator::v1::BlockSubscriptionResponse {
+            block: Some((&expected).into()),
+            committed_chain_tip: expected.header().block_num().as_u32(),
+            protocol_config: None,
+            proving_inputs,
+        };
+        let decoded = generated::miden::validator::v1::BlockSubscriptionResponse::decode(
+            response.encode_to_vec().as_slice(),
+        )
+        .unwrap();
+        assert_eq!(decoded.proving_inputs.is_some(), response.proving_inputs.is_some());
+        if let Some(inputs) = decoded.proving_inputs {
+            inputs
+                .decode_and_build_unchecked()
+                .unwrap()
+                .validate_against(&expected)
+                .unwrap();
+        }
+    }
+}
+
 #[test]
 fn nonempty_block_proof_roundtrip_preserves_header_order_and_witnesses() {
     let request = nonempty_block_request();
