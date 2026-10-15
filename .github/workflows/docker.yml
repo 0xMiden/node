@@ -130,7 +130,7 @@ jobs:
 
       - name: Checkout repository
         id: checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -218,13 +218,13 @@ jobs:
             architecture: arm64
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
       - name: Validate Docker images
-        uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
+        uses: WarpBuilds/bake-action@v6.7.7
         with:
           source: .
           files: ./docker-bake.hcl
@@ -239,7 +239,7 @@ jobs:
             *.args.COMMIT=${{ needs.preflight.outputs.commit }}
 
       - name: Upload Kache cache report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: kache-report-${{ matrix.architecture }}
           path: kache-report/kache-report.md
@@ -270,20 +270,20 @@ jobs:
             architecture: arm64
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
       - name: Log in to the Container registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
       - name: Build and stage Docker images
-        uses: WarpBuilds/bake-action@cb88c8ea0c887c0d1a3dcb534e71bd68a015e2d6 # v6.7.7
+        uses: WarpBuilds/bake-action@v6.7.7
         with:
           source: .
           files: ./docker-bake.hcl
@@ -314,13 +314,13 @@ jobs:
       contents: read
     steps:
       - name: Download amd64 Kache cache report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: kache-report-amd64
           path: ${{ runner.temp }}/kache-reports/amd64
 
       - name: Download arm64 Kache cache report
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@v8.0.1
         with:
           name: kache-report-arm64
           path: ${{ runner.temp }}/kache-reports/arm64
@@ -350,14 +350,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
       - name: Dry-run Compose publishing
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
-        uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
+        uses: 0xMiden/node/.github/actions/publish-compose@next
         env:
           MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.tag }}
@@ -393,7 +393,7 @@ jobs:
       packages: write
     steps:
       - name: Log in to the Container registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -440,13 +440,13 @@ jobs:
       packages: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
 
       - name: Log in to the Container registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        uses: docker/login-action@v4.2.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -454,7 +454,7 @@ jobs:
 
       - name: Publish Compose application
         # Pin independently so the checked-out caller-provided ref cannot replace this action's code.
-        uses: 0xMiden/node/.github/actions/publish-compose@3df9adbec870c8039d38cc946b2dc79ec9cf7e59
+        uses: 0xMiden/node/.github/actions/publish-compose@next
         env:
           MIDEN_NOTE_TRANSPORT_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-note-transport:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_NODE_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-node:${{ needs.preflight.outputs.immutable_tag }}

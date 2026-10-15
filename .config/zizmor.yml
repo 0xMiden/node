@@ -1,4 +1,12 @@
 rules:
+  # We use GitHub's action lockfile to pin exact commits, so zizmor does not
+  # need to require commit SHAs in action references.
+  #
+  # We therefore allow any tag, branch, or commit reference to pass in zizmor.
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
   use-trusted-publishing:
     ignore:
       - publish-crates.yml
