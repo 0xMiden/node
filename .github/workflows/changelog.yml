@@ -43,12 +43,19 @@ jobs:
             | select(.head.repo.full_name == env.GITHUB_REPOSITORY and .head.sha == env.PR_HEAD_SHA)
             | ($pages[0] | add) as $files
             | (.body // "") as $original
-            | "\n\n<!-- dependabot-tooling-changelog -->\n## Changelog\n\n```toml\nchangelog = \"none\"\nreason    = \"CI and Markdown tooling dependency updates only.\"\n```\n<!-- /dependabot-tooling-changelog -->\n" as $section
+            | ("\n\n<!-- dependabot-tooling-changelog -->\n## Changelog\n\n```toml\n"
+                + "changelog = \"none\"\n"
+                + "reason    = \"CI and Markdown tooling dependency updates only.\"\n"
+                + "```\n<!-- /dependabot-tooling-changelog -->\n") as $section
             | ($original | split($section) | join("")) as $body
             | .changed_files as $count
             | ($files | length == $count and length > 0 and all(
                 .status == "modified" and (
-                  .filename | test("^(\\.github/workflows/([^/]+\\.ya?ml|actions\\.lock)|\\.github/actions/([^/]+/)+action\\.ya?ml|\\.config/markdown/package(-lock)?\\.json)$")
+                  .filename | test(
+                    "^(\\.github/workflows/([^/]+\\.ya?ml|actions\\.lock)"
+                    + "|\\.github/actions/([^/]+/)+action\\.ya?ml"
+                    + "|\\.config/markdown/package(-lock)?\\.json)$"
+                  )
                 )
               )) as $tooling_only
             | (if $tooling_only and ($body | test("(?im)^##[ \\t]+.*changelog|^.*changelog.*\\n-+[ \\t]*\\r?$") | not)

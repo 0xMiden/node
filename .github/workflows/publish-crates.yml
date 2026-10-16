@@ -11,7 +11,8 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag to publish (E.G. v0.10.0-rc.1, v0.10.0). Corresponding GitHub release must already exist."
+        description: >-
+          Release tag to publish (E.G. v0.10.0-rc.1, v0.10.0). Corresponding GitHub release must already exist.
         required: true
         type: string
 

@@ -64,7 +64,9 @@ jobs:
 
           version="${TAG#v}"
           metadata="$(cargo metadata --no-deps --format-version 1)"
-          mapfile -t versions < <(jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}")
+          mapfile -t versions < <(
+            jq -r '[.packages[] | select(.publish != []) | .version] | unique | .[]' <<< "${metadata}"
+          )
           publishable_crates="$(
             jq -c '
               [.packages[] | select(.publish != []) | { name }]

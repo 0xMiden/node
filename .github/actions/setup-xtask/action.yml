@@ -19,13 +19,21 @@ runs:
 
     # Forks build xtask locally without reading or writing the shared binary cache.
     - name: Restore xtask
-      if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+      if: >-
+        ${{
+          github.event_name != 'pull_request' ||
+            github.event.pull_request.head.repo.full_name == github.repository
+        }}
       id: cache
       uses: actions/cache/restore@v5.0.3
       with:
         path: ${{ runner.temp }}/xtask-bin
         # Accept only an exact match because the binary runs without a Cargo build check.
-        key: xtask-v3-${{ runner.os }}-${{ runner.arch }}-${{ steps.image.outputs.id }}-${{ hashFiles('xtask/**', '!xtask/target/**', 'rust-toolchain.toml', '.cargo/config.toml', '.config/clippy.toml', '.github/actions/setup-xtask/action.yml') }}
+        key: >-
+          ${{ format('xtask-v3-{0}-{1}-{2}-{3}',
+            runner.os, runner.arch, steps.image.outputs.id,
+            hashFiles('xtask/**', '!xtask/target/**', 'rust-toolchain.toml',
+              '.cargo/config.toml', '.config/clippy.toml', '.github/actions/setup-xtask/action.yml')) }}
 
     - name: Rustup
       if: steps.cache.outputs.cache-hit != 'true'
