@@ -77,7 +77,7 @@ async fn fixture() -> (
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_proving_drains_backlog_without_creating_blocks() {
-    // No collector account or block-production task is needed to drain committed work.
+    // Offline proving processes committed blocks without a fee collector or block production task.
     let (_directory, state, mut writer, mut proofs, task, _key, request, block) = fixture().await;
     writer
         .apply_block_with_proving_inputs(request.tx_batches, request.block_inputs, block)
@@ -101,7 +101,7 @@ async fn offline_proving_drains_backlog_without_creating_blocks() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_proving_missing_inputs_does_not_advance_tip() {
-    // A legacy block without inputs must fail without changing either tip.
+    // Missing proving inputs leave both the committed and proven tips unchanged.
     let (_directory, state, mut writer, mut proofs, task, _key, _request, block) = fixture().await;
     writer.apply_block(block, None).await.unwrap();
     let committed = state.committed_tip();
@@ -141,7 +141,8 @@ async fn offline_proving_cancelled_before_start_preserves_inputs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn offline_proving_preserves_completed_prefix_for_retry() {
-    // A later missing request leaves the proven prefix durable and retryable.
+    // Completed proofs remain stored when a later block has missing inputs, allowing proving to
+    // resume once those inputs are restored.
     let (_directory, state, mut writer, mut proofs, task, key, request, block) = fixture().await;
     let mut chain = PartialBlockchain::default();
     chain.add_block(request.block_inputs.prev_block_header(), false);

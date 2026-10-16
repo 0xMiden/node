@@ -23,8 +23,8 @@ pub struct BlockProofRequest {
 impl BlockProofRequest {
     /// Checks that the proving request reconstructs the expected block header and body.
     ///
-    /// The caller authenticates the expected block and parent separately. This check does not
-    /// replace signature verification or strengthen the protocol's batch-proof validation.
+    /// The caller must authenticate the expected block and its parent separately. Reconstruction
+    /// does not verify signatures and uses the protocol's existing batch-proof validation.
     pub fn validate_against(
         &self,
         expected: &miden_protocol::block::SignedBlock,

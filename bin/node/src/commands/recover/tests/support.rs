@@ -105,7 +105,9 @@ pub async fn load_store(
         .start(CancellationToken::new()))
 }
 
-/// A transport fault forwards genuine backup events while exposing stream lifetime to the test.
+/// A simulated transport failure or delay for testing recovery and backup stream cleanup.
+///
+/// The proxy preserves the validator's backup data and exposes stream lifetime through notifications.
 #[derive(Clone)]
 pub enum Fault {
     InterruptAfterFirst(Arc<Notify>),
@@ -308,7 +310,9 @@ pub async fn start_proxy(upstream: ValidatorClient, fault: Fault) -> anyhow::Res
     Ok(RunningProxy { url, opened, dropped, shutdown, task })
 }
 
-/// Retain ownership through timeout so stalled servers are aborted and drained.
+/// Waits for a server task to finish, aborting and joining it if the timeout expires.
+///
+/// Keeping ownership of the task prevents a stalled server from outliving the test.
 pub async fn join_server<T>(mut task: JoinHandle<T>) -> anyhow::Result<T> {
     match tokio::time::timeout(Duration::from_secs(10), &mut task).await {
         Ok(result) => Ok(result?),

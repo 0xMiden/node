@@ -1,4 +1,4 @@
-//! Reconciles proving requests with the locally committed unproven suffix.
+//! Restores proving inputs for committed, unproven blocks and blocks recovered from validators.
 
 use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
@@ -9,9 +9,10 @@ use miden_protocol::block::{BlockNumber, SignedBlock};
 use super::RecoveredBlock;
 use crate::LOG_TARGET;
 
-/// Loads a usable request, treating missing or corrupt files as recoverable gaps.
+/// Loads a local proving request and checks that it reconstructs the supplied block.
 ///
-/// Filesystem errors other than absence remain fatal so recovery cannot hide inaccessible storage.
+/// Missing, corrupt, or mismatched requests return `None` so recovery can replace them. Other
+/// filesystem errors propagate to avoid hiding inaccessible storage.
 pub(super) async fn load_valid_local_inputs(
     state: &State,
     block: &SignedBlock,
@@ -34,7 +35,10 @@ pub(super) async fn load_valid_local_inputs(
     }
 }
 
-/// Finds the earliest missing request or block and rejects gaps beyond validator coverage.
+/// Finds the first block that needs recovery of its proving inputs or the block itself.
+///
+/// Missing or invalid inputs above the validators' recovery target cause an error before recovery
+/// writes begin, since validator backups cannot repair them.
 pub(super) async fn recovery_start(
     state: &State,
     target: BlockNumber,
@@ -64,8 +68,8 @@ pub(super) async fn recovery_start(
 
 /// Repairs an existing block's inputs or saves inputs before committing a new block.
 ///
-/// Existing valid input files are preserved exactly; validator material cannot replace a divergent
-/// local block or overwrite a valid file before its binding has been checked.
+/// Recovery preserves valid local input files and rejects blocks that differ from the local chain.
+/// Supplied proving requests must reconstruct the recovered block even when local inputs are valid.
 pub(super) async fn apply_recovered(
     state: &State,
     writer: &mut BlockWriter,

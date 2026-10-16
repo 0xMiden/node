@@ -34,14 +34,16 @@ pub struct ValidatorDbReader {
     reader: DbReader,
 }
 
-/// A signed block and the proving material retained with it.
+/// A signed block and its proving request, if retained.
 pub struct BlockBackup {
     pub block: SignedBlock,
     pub proving_inputs: Option<BlockProofRequest>,
 }
 
 impl ValidatorDbReader {
-    /// Loads a block and its validated proving request from one database snapshot.
+    /// Loads a signed block and any retained proving request from one database snapshot.
+    ///
+    /// The request must reconstruct the stored block; corrupt or mismatched inputs cause an error.
     pub async fn load_block_backup(
         &self,
         block_num: BlockNumber,
@@ -323,7 +325,7 @@ impl ValidatorDbWriter {
             })
             .await
     }
-    /// Seeds a legacy backup without retained proving inputs.
+    /// Inserts a signed block without proving inputs to model a legacy backup.
     #[cfg(test)]
     pub(crate) async fn insert_legacy_signed_block(
         &self,
@@ -338,7 +340,7 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Replaces a legacy fixture without retained proving inputs.
+    /// Replaces a signed block without proving inputs to model a legacy backup.
     #[cfg(test)]
     pub(crate) async fn replace_legacy_signed_block(
         &self,
@@ -355,9 +357,8 @@ impl ValidatorDbWriter {
     }
 }
 
-/// Persists a signed block, its proving request, configuration activation, and transaction links
-/// within the caller's database transaction: the shared tail of
-/// [`ValidatorDbWriter::insert_signed_block`] and [`ValidatorDbWriter::replace_signed_block`].
+/// Persists a signed block, any proving request, configuration activation, and transaction links
+/// within the caller's database transaction.
 fn persist_signed_block(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     block: &SignedBlock,
@@ -529,7 +530,7 @@ fn open_with_pool_size(
     })
 }
 
-/// Installs an input-write failure to exercise signing transaction rollback.
+/// Rejects block inserts that contain proving inputs so tests can verify transaction rollback.
 #[cfg(test)]
 pub(crate) async fn reject_proving_input_writes_for_test(
     db: &ValidatorDbWriter,

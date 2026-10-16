@@ -23,11 +23,11 @@ service ValidatorService {
    // Validates and signs a proposed block.
    rpc SignBlock(SignBlockRequest) returns (SignBlockResponse) {}
 
-   // Streams signed blocks starting from the given block number (inclusive).
+   // Streams signed blocks from the given block number through the tip captured at backup start,
+   // inclusive, with any retained proving requests.
    //
-   // Captures a finite tip and excludes concurrent signing while streaming the backup. Unlike
-   // the RPC block subscription, these blocks carry no proofs; proofs must be commissioned
-   // separately as part of recovery.
+   // Signing is blocked while the backup is streamed. Blocks carry no proofs; recovery must
+   // obtain proofs separately using the proving requests.
    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
 
    // Returns the public key that clients use to encrypt the private inputs of the transactions
@@ -86,8 +86,8 @@ message BlockSubscriptionResponse {
     // Verify its commitment against the accompanying block header.
     optional protocol_config.ProtocolConfig protocol_config = 3;
 
-    // The complete request needed to re-prove this signed block.
-    // Absent for genesis and blocks whose inputs were not retained.
+    // The complete proving request for this signed block, absent for genesis and blocks whose
+    // inputs were not retained.
     optional block_proving.BlockProofRequest proving_inputs = 4;
 }
 

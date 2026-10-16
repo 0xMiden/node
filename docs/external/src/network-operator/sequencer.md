@@ -168,23 +168,16 @@ funding service directly to fund an account after a failed or interrupted reques
 
 ## Failover
 
-Full nodes replicate the committed sequencer state from their upstream block source. Because of this, a full node can be
-promoted to sequencer if the active sequencer needs to be replaced.
-
-The promotion target must have the committed chain and either proofs or recoverable proving inputs for every unproven
-block. Matching the committed tip alone is insufficient: full-node replication does not copy proving inputs. Follow
-[Recovery](/network-operator/recovery) to fence the old sequencer, restore missing blocks and inputs, and choose whether
-to prove the backlog before promotion.
+A full node can replace the active sequencer once it has recovered the committed chain and can prove any outstanding
+blocks. Follow [Recovery](/network-operator/recovery) to prepare the replacement, including when its latest committed
+block already matches the sequencer's. The procedure covers stopping the old sequencer, restoring blocks and proving
+inputs, and choosing when to generate missing proofs.
 
 ### Fee Collector Account
 
-Copy the existing `fee-collector.mac` file to the replacement node's data directory before starting it as a sequencer.
-This file contains the collector's signing key and is not replicated with chain state. The account is already deployed
-and does not need to be deployed again.
-
-If the file is lost, complete [recovery with `--prove`](/network-operator/recovery), then create and deploy a new
-collector with the same [Fee Collection](#fee-collection) procedure. Keep the replacement node stopped until deployment
-completes.
+The replacement needs the existing `fee-collector.mac` file or a newly deployed collector account. Have the file
+available when planning failover: losing it requires completing proofs before deploying a replacement collector. The
+[recovery procedure](/network-operator/recovery#procedure) covers both cases and when the node is ready to start.
 
 ## Common Configuration
 

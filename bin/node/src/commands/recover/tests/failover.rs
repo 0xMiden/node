@@ -45,7 +45,8 @@ async fn validator_serves_bound_listener() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Losing every original input file must leave validator backups sufficient to prove and replicate.
+/// Verifies that validator backups support proving and replication after all original inputs are
+/// lost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn failover_recovers_inputs_and_proves_without_original_store() -> anyhow::Result<()> {
     for already_committed in [true, false] {
@@ -192,7 +193,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         drop(state);
         recovered?;
 
-        // Reopening proves that the prover depends only on durable recovered material.
+        // Reopening the store verifies that proving uses only persisted recovery data.
         let (state, writer, mut proof_writer, task) = load_store(standby.path()).await?;
         let proving_result = miden_node_block_producer::prove_pending_blocks(
             &state,
@@ -260,8 +261,10 @@ async fn replicate(
                 .without_otel_context_injection()
                 .connect_lazy::<RpcClient>()
         };
-        // The recovered node has lost its source. A self-source would recursively forward Status,
-        // preventing an ordinary downstream node from completing its initial status query.
+        // An unresponsive upstream models the loss of the recovered node's source.
+        //
+        // Pointing the node at itself would forward Status requests recursively and prevent a
+        // downstream node from completing its initial status query.
         let offline_source = TcpListener::bind("127.0.0.1:0").await?;
         let source_rpc =
             Builder::new(Url::parse(&format!("http://{}", offline_source.local_addr()?))?)
@@ -368,7 +371,9 @@ async fn replicate(
     result.and(cleanup)
 }
 
-/// Inject only transport failures; all signatures and input data come from real signing services.
+/// Verifies that interrupted recovery preserves completed writes and releases backup streams.
+///
+/// Fault injection affects only transport; signing services supply the signatures and proving inputs.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
     clippy::too_many_lines,
@@ -486,7 +491,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
             inputs::load_valid_local_inputs(&state, &blocks[1])
                 .await?
                 .context("retry lost inputs")?;
-            // A completed rerun is a no-op and leaves proofs pending.
+            // Repeating successful recovery leaves the stored inputs unchanged and proofs pending.
             tokio::time::timeout(
                 Duration::from_secs(30),
                 recover_from_validators(
@@ -534,7 +539,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                     recover_from_validators(&state, &mut writer, clients, shutdown.clone());
                 let cancel = async {
                     tokio::time::timeout(Duration::from_secs(10), proxy.opened.notified()).await?;
-                    // A pending drop notification confirms the transport stream is still held.
+                    // The proxy still holds the stream when recovery is interrupted.
                     ensure!(
                         tokio::time::timeout(Duration::ZERO, proxy.dropped.notified())
                             .await
@@ -555,8 +560,10 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 ensure!(result.is_err());
                 tokio::time::timeout(Duration::from_secs(10), proxy.dropped.notified()).await?;
                 release.notify_one();
-                // The remote server observes stream cancellation asynchronously. A retained backup
-                // lock must still fail this bounded check; service tests check its local lifetime.
+                // Signing becomes available again after the backup stream is cancelled.
+                //
+                // The server observes cancellation asynchronously, so retries allow for propagation
+                // while the timeout detects a backup lock that remains held.
                 tokio::time::timeout(Duration::from_secs(10), async {
                     let mut retry = tokio::time::interval(Duration::from_millis(10));
                     loop {
@@ -591,7 +598,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
             writer.stop(task).await;
             tested.and(stopped).and(refused)?;
         }
-        // Restore-only handler execution must not contact an otherwise valid unreachable prover.
+        // Recovery without `--prove` succeeds even when the configured prover is unreachable.
         let unreachable = TcpListener::bind("127.0.0.1:0").await?;
         let prover_url = format!("http://{}", unreachable.local_addr()?);
         let cli = crate::Cli::try_parse_from([
