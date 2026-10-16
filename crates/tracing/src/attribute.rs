@@ -109,6 +109,7 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "transaction.expires_at",
     "transaction.reference_block.number",
     "transaction.submitted_at",
+    "validator.proving_input_retention_blocks",
     "worker.status.raw",
     "workers.active",
     "workers.capacity",

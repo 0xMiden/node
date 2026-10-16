@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -30,13 +30,15 @@ pub async fn start(
     keys: ValidatorKeys,
     data_directory: DataDirectory,
     sqlite_connection_pool_size: NonZeroUsize,
+    proving_input_retention_blocks: NonZeroU32,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     // The pool is opened once here and shared: the public API owns the sole writer, and both
     // servers read through cloned read handles.
-    let db = miden_validator::db::load_with_pool_size(
+    let db = miden_validator::db::load_with_retention(
         data_directory.database_path(),
         sqlite_connection_pool_size,
+        proving_input_retention_blocks,
     )
     .await
     .context("failed to initialize validator database")?;
