@@ -294,9 +294,11 @@ impl ValidatorCommand {
                     admin_listen,
                     grpc_options,
                     start::ValidatorKeys { signer, decrypter, operator_key },
-                    data_directory,
-                    sqlite_connection_pool_size,
-                    proving_input_retention_blocks,
+                    start::ValidatorDatabaseOptions {
+                        data_directory,
+                        connection_pool_size: sqlite_connection_pool_size,
+                        proving_input_retention_blocks,
+                    },
                     shutdown,
                 )
                 .await
