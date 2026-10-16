@@ -353,9 +353,20 @@ impl GrpcClient for RemoteProverClient {
     }
 }
 
+/// Maximum encoded validator response the client accepts, sized for backup stream items.
+///
+/// A backup item carries a block's full proving request alongside the signed block, whose body
+/// repeats much of the batch data, so it can be roughly twice the size of the `SignBlock` request
+/// the validator accepted. Under tonic's 4 MiB default, such a block would be signed but
+/// unrecoverable.
+const VALIDATOR_RESPONSE_LIMIT: usize = 16 * 1024 * 1024;
+
 impl GrpcClient for ValidatorClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor)))
+        Self(
+            GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor))
+                .max_decoding_message_size(VALIDATOR_RESPONSE_LIMIT),
+        )
     }
 }
 
