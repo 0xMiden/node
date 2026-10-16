@@ -269,6 +269,10 @@ impl ValidatorDbWriter {
     ///
     /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
     /// one.
+    ///
+    /// `proving_inputs` must be the request `block` was built from. It is stored without being
+    /// checked, because rebuilding the block to compare it would repeat the signing path's most
+    /// expensive step; [`ValidatorDbReader::load_block_backup`] checks it when it is read back.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -279,9 +283,6 @@ impl ValidatorDbWriter {
         transactions: Vec<TransactionId>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
-        proving_inputs
-            .validate_against(&block)
-            .map_err(|error| DatabaseError::deserialization("BlockProofRequest", error))?;
         self.writer
             .write("insert_signed_block", move |tx| {
                 persist_signed_block(
@@ -298,7 +299,8 @@ impl ValidatorDbWriter {
     /// Replaces the block signed at `block`'s height, in one database transaction: deletes the
     /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
     /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
-    /// then persists the new header and links exactly as [`Self::insert_signed_block`] does.
+    /// then persists the new header, links, and proving request exactly as
+    /// [`Self::insert_signed_block`] does.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -309,9 +311,6 @@ impl ValidatorDbWriter {
         transactions: Vec<TransactionId>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
-        proving_inputs
-            .validate_against(&block)
-            .map_err(|error| DatabaseError::deserialization("BlockProofRequest", error))?;
         self.writer
             .write("replace_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
