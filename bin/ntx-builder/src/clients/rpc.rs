@@ -33,6 +33,7 @@ use miden_node_utils::retry::{self, Retryable};
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_protocol::Word;
 use miden_protocol::account::{
+    AccountCode,
     AccountId,
     PartialAccount,
     PartialStorage,
@@ -528,19 +529,23 @@ impl RpcClient {
     ///
     /// These inputs reference a specific `block_num`, and include a minimal partial account,
     /// plus its witness.
+    ///
+    /// `known_code` is the caller's cached code for the account. Its commitment is sent with the
+    /// request, so the RPC service only returns the code when the account's code differs from it.
     pub async fn get_account_inputs(
         &self,
         account_id: AccountId,
         block_num: BlockNumber,
+        known_code: Option<&AccountCode>,
     ) -> Result<AccountInputs, RpcError> {
-        // Only request account code
+        // Request only the account code, and only if it differs from the known code.
+        let code_commitment = known_code.map_or_else(Word::default, AccountCode::commitment);
         let request = proto::miden::node::v1::GetAccountRequest {
             account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
-            // TODO: should these commitments be cached on the NTX builder?
             details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
-                code_commitment: Some(Word::default().into()),
-                asset_vault_commitment: None, //
+                code_commitment: Some(code_commitment.into()),
+                asset_vault_commitment: None,
                 storage_request: None,
             }),
         };
@@ -549,7 +554,7 @@ impl RpcClient {
         let details = response.details.as_ref().ok_or_else(|| {
             RpcError::InvalidResponse("response did not include account details".into())
         })?;
-        let partial_account = build_minimal_partial_account(details)?;
+        let partial_account = build_minimal_partial_account(details, known_code)?;
 
         Ok(AccountInputs::new(partial_account, response.witness))
     }
@@ -700,11 +705,17 @@ impl RpcClient {
 }
 
 /// Builds a minimal partial account from account details.
-fn build_minimal_partial_account(details: &AccountDetails) -> Result<PartialAccount, RpcError> {
-    let account_code = details
-        .account_code
-        .clone()
-        .ok_or_else(|| RpcError::InvalidResponse("response did not include account code".into()))?;
+///
+/// The RPC service omits the code when it matches the requester's known code, in which case
+/// `known_code` is used.
+fn build_minimal_partial_account(
+    details: &AccountDetails,
+    known_code: Option<&AccountCode>,
+) -> Result<PartialAccount, RpcError> {
+    let account_code =
+        details.account_code.clone().or_else(|| known_code.cloned()).ok_or_else(|| {
+            RpcError::InvalidResponse("response did not include account code".into())
+        })?;
 
     let partial_storage = PartialStorage::new(details.storage_details.header.clone(), [])
         .map_err(|err| RpcError::InvalidResponse(err.as_report()))?;
