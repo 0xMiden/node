@@ -73,6 +73,7 @@ impl Server {
         anyhow::ensure!(!config.grpc.request_timeout.is_zero(), "grpc.timeout must be positive");
         parse_rpc_url(config.rpc_url.as_str()).map_err(anyhow::Error::msg)?;
         let rpc = Builder::new(config.rpc_url.clone())
+            .max_decoding_message_size(config.grpc.message_size.max_decoding_message_size.get())
             .with_tls()?
             // The lookup timeout covers connection setup and the complete response.
             .without_timeout()
@@ -115,6 +116,8 @@ impl Server {
             service.name = COMPONENT,
             service.version = env!("CARGO_PKG_VERSION"),
             rpc.listen = listener.local_addr()?.to_string());
+        let max_decoding_message_size =
+            self.config.grpc.message_size.max_decoding_message_size.get();
         grpc::server_builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
@@ -140,9 +143,12 @@ impl Server {
             .layer(grpc::ResolveClientIpLayer)
             .layer(GlobalConcurrencyLimitLayer::new(self.config.max_connections.get()))
             .timeout(self.config.grpc.request_timeout)
-            .add_service(health_service)
-            .add_service(reflection)
-            .add_service(miden_note_transport_v1_note_transport_service::service(self))
+            .add_service(health_service.max_decoding_message_size(max_decoding_message_size))
+            .add_service(reflection.max_decoding_message_size(max_decoding_message_size))
+            .add_service(
+                miden_note_transport_v1_note_transport_service::service(self)
+                    .max_decoding_message_size(max_decoding_message_size),
+            )
             .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), async move {
                 shutdown.cancelled().await;
                 health

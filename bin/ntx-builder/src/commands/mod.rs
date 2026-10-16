@@ -46,6 +46,8 @@ const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
+        #[command(flatten)]
+        grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// Socket address at which to serve the ntx-builder's gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
@@ -252,6 +254,7 @@ impl NtxBuilderCommand {
 
     async fn start(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let Self::Start {
+            grpc_message_size,
             listen,
             grpc_timeout,
             rpc_url,
@@ -300,6 +303,7 @@ impl NtxBuilderCommand {
         let config =
             miden_ntx_builder::NtxBuilderConfig::new(rpc_url, tx_prover_url, database_filepath)
                 .with_grpc_timeout(grpc_timeout)
+                .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
                 .with_rpc_timeout(rpc_timeout)
                 .with_tx_prover_timeout(tx_prover_timeout)
                 .with_script_cache_size(script_cache_size)

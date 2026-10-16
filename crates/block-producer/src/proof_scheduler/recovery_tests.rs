@@ -84,16 +84,28 @@ async fn offline_proving_drains_backlog_without_creating_blocks() {
         .await
         .unwrap();
     let committed = state.committed_tip();
-    prove_pending_blocks(&state, &mut proofs, None, CancellationToken::new())
-        .await
-        .unwrap();
+    prove_pending_blocks(
+        &state,
+        &mut proofs,
+        None,
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(state.committed_tip(), committed);
     assert_eq!(state.proven_tip(), committed);
     assert!(state.load_proof(committed).await.unwrap().is_some());
     assert!(state.load_proving_inputs(committed).await.unwrap().is_none());
-    prove_pending_blocks(&state, &mut proofs, None, CancellationToken::new())
-        .await
-        .unwrap();
+    prove_pending_blocks(
+        &state,
+        &mut proofs,
+        None,
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(state.committed_tip(), committed);
     drop(proofs);
     writer.stop(task).await;
@@ -106,9 +118,15 @@ async fn offline_proving_missing_inputs_does_not_advance_tip() {
     writer.apply_block(block, None).await.unwrap();
     let committed = state.committed_tip();
     let proven = state.proven_tip();
-    let error = prove_pending_blocks(&state, &mut proofs, None, CancellationToken::new())
-        .await
-        .unwrap_err();
+    let error = prove_pending_blocks(
+        &state,
+        &mut proofs,
+        None,
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
     assert!(format!("{error:#}").contains("no proving inputs found for block 1"));
     assert_eq!(state.committed_tip(), committed);
     assert_eq!(state.proven_tip(), proven);
@@ -130,7 +148,17 @@ async fn offline_proving_cancelled_before_start_preserves_inputs() {
     let bytes = state.load_proving_inputs(committed).await.unwrap();
     let shutdown = CancellationToken::new();
     shutdown.cancel();
-    assert!(prove_pending_blocks(&state, &mut proofs, None, shutdown).await.is_err());
+    assert!(
+        prove_pending_blocks(
+            &state,
+            &mut proofs,
+            None,
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+            shutdown
+        )
+        .await
+        .is_err()
+    );
     assert_eq!(state.load_proving_inputs(committed).await.unwrap(), bytes);
     assert_eq!(state.committed_tip(), committed);
     assert_eq!(state.proven_tip(), proven);
@@ -154,16 +182,28 @@ async fn offline_proving_preserves_completed_prefix_for_retry() {
     writer.apply_block(second, None).await.unwrap();
     let target = state.committed_tip();
     assert!(
-        prove_pending_blocks(&state, &mut proofs, None, CancellationToken::new())
-            .await
-            .is_err()
+        prove_pending_blocks(
+            &state,
+            &mut proofs,
+            None,
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+            CancellationToken::new()
+        )
+        .await
+        .is_err()
     );
     assert_eq!(state.proven_tip().as_u32(), 1);
     let first_proof = state.load_proof(1.into()).await.unwrap().unwrap();
     writer.save_proving_inputs(target, &second_request).await.unwrap();
-    prove_pending_blocks(&state, &mut proofs, None, CancellationToken::new())
-        .await
-        .unwrap();
+    prove_pending_blocks(
+        &state,
+        &mut proofs,
+        None,
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
     assert_eq!(state.proven_tip(), target);
     assert_eq!(state.committed_tip(), target);
     assert_eq!(state.load_proof(1.into()).await.unwrap().unwrap(), first_proof);

@@ -58,6 +58,7 @@ impl Tasks {
             config.status_check_interval,
             config.request_timeout,
             config.stale_chain_tip_threshold,
+            config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
     }
@@ -84,6 +85,7 @@ impl Tasks {
             note_transport_url,
             config.status_check_interval,
             config.request_timeout,
+            config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
     }
@@ -105,6 +107,7 @@ impl Tasks {
                     url.clone(),
                     config.status_check_interval,
                     config.request_timeout,
+                    config.grpc.max_decoding_message_size.get(),
                 ))
             })
             .collect()
@@ -144,8 +147,11 @@ impl Tasks {
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
-            let test_client =
-                build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
+            let test_client = build_tls_client::<RemoteProverClient>(
+                prover_url.clone(),
+                config.request_timeout,
+                config.grpc.max_decoding_message_size.get(),
+            );
 
             let status_svc = ProverStatusService::new(
                 name,
@@ -156,6 +162,7 @@ impl Tasks {
                 config.request_timeout,
                 config.remote_prover_test_interval,
                 test_client,
+                config.grpc.max_decoding_message_size.get(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }
@@ -344,6 +351,7 @@ async fn bootstrap_ntx(
         &config.rpc_url,
         config.request_timeout,
         trusted_validator_signing_keys,
+        config.grpc.max_decoding_message_size.get(),
     )
     .await?;
     // The funding service pays fees; whether it is needed is decided during deployment.

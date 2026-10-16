@@ -72,6 +72,8 @@ impl ProtocolConfigStreamState {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct RecoverCommand {
+    #[command(flatten)]
+    grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// Directory containing the node's local data storage.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
@@ -109,7 +111,12 @@ impl RecoverCommand {
             let validators = self
                 .validator_urls
                 .iter()
-                .map(|url| Ok((url.clone(), Self::validator_client(url)?)))
+                .map(|url| {
+                    Ok((
+                        url.clone(),
+                        Self::validator_client(url, self.grpc.max_decoding_message_size.get())?,
+                    ))
+                })
                 .collect::<anyhow::Result<Vec<_>>>()?;
             recover_from_validators(&state, &mut block_writer, validators, shutdown.clone())
                 .await?;
@@ -118,6 +125,7 @@ impl RecoverCommand {
                     &state,
                     &mut proof_writer,
                     self.block_prover.url,
+                    self.grpc.max_decoding_message_size.get(),
                     shutdown,
                 )
                 .await?;
@@ -155,8 +163,12 @@ impl RecoverCommand {
         Ok((state, block_writer, proof_writer, writer_task))
     }
 
-    fn validator_client(url: &Url) -> anyhow::Result<ValidatorClient> {
+    fn validator_client(
+        url: &Url,
+        max_decoding_message_size: usize,
+    ) -> anyhow::Result<ValidatorClient> {
         Ok(Builder::new(url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .with_timeout(Duration::from_secs(5))
             .without_metadata_version()

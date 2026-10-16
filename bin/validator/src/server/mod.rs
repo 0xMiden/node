@@ -150,8 +150,14 @@ impl ValidatorServer {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(miden_validator_v1_validator_service::service(service))
-            .add_service(reflection_service)
+            .add_service(
+                miden_validator_v1_validator_service::service(service).max_decoding_message_size(
+                    self.grpc_options.message_size.max_decoding_message_size.get(),
+                ),
+            )
+            .add_service(reflection_service.max_decoding_message_size(
+                self.grpc_options.message_size.max_decoding_message_size.get(),
+            ))
             .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
             .context("failed to serve validator API")

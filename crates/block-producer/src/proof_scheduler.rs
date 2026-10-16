@@ -170,6 +170,7 @@ pub async fn prove_pending_blocks(
     state: &State,
     writer: &mut ProofWriter,
     prover_url: Option<url::Url>,
+    max_decoding_message_size: usize,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     let target = state.committed_tip();
@@ -177,7 +178,7 @@ pub async fn prove_pending_blocks(
         return Ok(());
     }
     let prover = match prover_url {
-        Some(url) => BlockProver::remote(url)?,
+        Some(url) => BlockProver::remote(url, max_decoding_message_size)?,
         None => BlockProver::local(),
     };
     while state.proven_tip() < target {

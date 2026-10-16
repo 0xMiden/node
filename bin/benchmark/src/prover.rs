@@ -72,10 +72,10 @@ impl BenchmarkProver {
         matches!(self, Self::Remote { .. })
     }
 
-    pub(crate) fn remote(endpoint: &str) -> Result<Self> {
+    pub(crate) fn remote(endpoint: &str, max_decoding_message_size: usize) -> Result<Self> {
         let url = Url::parse(endpoint)
             .with_context(|| format!("invalid remote prover url: {endpoint}"))?;
-        let prover = RemoteTransactionProver::new(url, PROVE_TIMEOUT)?;
+        let prover = RemoteTransactionProver::new(url, PROVE_TIMEOUT, max_decoding_message_size)?;
         Ok(Self::Remote {
             prover: Box::new(prover),
             limiter: Arc::new(RampingRateLimiter::new()),
@@ -183,8 +183,9 @@ pub(crate) struct RemoteTransactionProver {
 
 impl RemoteTransactionProver {
     /// Creates a new [`RemoteTransactionProver`] with a lazy connection to the given gRPC endpoint.
-    fn new(url: Url, timeout: Duration) -> Result<Self> {
+    fn new(url: Url, timeout: Duration, max_decoding_message_size: usize) -> Result<Self> {
         let client = Builder::new(url)
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .with_timeout(timeout)
             .without_metadata_version()
