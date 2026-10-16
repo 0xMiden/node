@@ -7,6 +7,7 @@ permissions:
 
 on:
   workflow_dispatch:
+  merge_group:
   push:
     branches:
       - next
@@ -41,14 +42,14 @@ jobs:
   build:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/install-rocksdb
-      - uses: ./.github/actions/install-protobuf-compiler
+      - uses: $/.github/actions/install-rocksdb
+      - uses: $/.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -102,7 +103,7 @@ jobs:
       contents: read
       id-token: write
       packages: write
-    uses: ./.github/workflows/docker.yml
+    uses: $/.github/workflows/docker.yml
     with:
       mode: dry-run
       ref: ${{ github.sha }}
@@ -111,12 +112,12 @@ jobs:
     name: lint - clippy
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -129,21 +130,21 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Verify protected branch ruleset target
-        uses: ./.github/actions/verify-ruleset-target
+        uses: $/.github/actions/verify-ruleset-target
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           ruleset-name: "Protected branches"
           expected-patterns: '["next", "release/v*"]'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+      - uses: taiki-e/install-action@v2.75.18
         with:
           tool: nextest@0.9.122
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -159,12 +160,12 @@ jobs:
   doc:
     runs-on: warp-ubuntu-latest-x64-8x
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -181,11 +182,11 @@ jobs:
       # directory. Disable that notifier in CI so docs output is limited to build/link failures.
       NO_UPDATE_NOTIFIER: "1"
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        uses: actions/setup-node@v6.0.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
@@ -204,18 +205,18 @@ jobs:
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
           cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
-      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+      - uses: taiki-e/install-action@v2.75.18
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -250,12 +251,12 @@ jobs:
     runs-on: warp-ubuntu-latest-x64-8x
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@9d0cc3090d9c87de74ea67617b246e978735b1a1 # v2.9.1
+      - uses: WarpBuilds/rust-cache@v2.9.1
         with:
           shared-key: ${{ github.job }}
           prefix-key: ${{ env.CACHE_PREFIX }}
@@ -299,25 +300,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/check-rust-versions
+      - uses: $/.github/actions/check-rust-versions
 
   audit:
     name: lint - dependency audit
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        uses: taiki-e/install-action@v2.75.18
         with:
-          tool: cargo-binstall
+          tool: cargo-binstall@1.25.3
       - name: Install cargo-audit
-        run: cargo binstall --no-confirm cargo-audit@0.22.2
+        run: cargo binstall --locked --no-confirm cargo-audit@0.22.2
       - name: Check xtask dependencies
         run: cargo audit --file xtask/Cargo.lock --deny yanked --deny unsound
       - name: Check dependencies
@@ -369,24 +370,55 @@ jobs:
 
           exit "${audit_status}"
 
+  actions-security:
+    name: lint - gh actions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6.0.2
+        with:
+          persist-credentials: false
+
+      # Requires complete lockfile coverage and validates pinned commits and
+      # repository identities against GitHub.
+      - name: Verify action dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh extension install github/gh-actions-lock --pin v0.2.0
+          gh actions-lock --verify
+
+      # Checks workflows and local actions for unsafe permissions, script
+      # injection, credential exposure, and unpinned container images.
+      - name: zizmor
+        uses: zizmorcore/zizmor-action@v0.7.0
+        with:
+          advanced-security: false
+          config: .config/zizmor.yml
+          version: 1.31.0
+
   typos:
     name: lint - spelling
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@2028fbc5c25fe9cf00d9f06a71cc4710d4507903 # v6.0.0
+        uses: actions/setup-node@v6.0.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
-      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+      - uses: taiki-e/install-action@v2.75.18
         with:
           tool: typos@1.42.0
-      - name: Install CSpell
-        run: npm install --global cspell@10.0.1
+      - name: Install Markdown tools
+        run: make install-markdown-tools
       - run: make typos-check
       - run: make markdown-spellcheck
 
@@ -394,16 +426,21 @@ jobs:
     name: lint - formatting
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-xtask
+      - uses: $/.github/actions/setup-xtask
         with:
           save-cache: ${{ env.SAVE_CACHE }}
       - name: Rustup +nightly
         run: rustup toolchain install --no-self-update nightly --component rustfmt
+      - name: Setup Node.js
+        uses: actions/setup-node@v6.0.0
+        with:
+          node-version: "22.18.0"
+          package-manager-cache: false
       - name: Install Markdown tools
-        run: npm install --global prettier@3.8.3 markdownlint-cli2@0.22.1
+        run: make install-markdown-tools
       - name: Fmt
         run: make format-check XTASK=xtask
       - name: Markdown lint
@@ -414,10 +451,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+      - uses: taiki-e/install-action@v2.75.18
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -427,10 +464,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+      - uses: taiki-e/install-action@v2.75.18
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
@@ -440,15 +477,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        uses: taiki-e/install-action@v2.75.18
         with:
-          tool: cargo-binstall
+          tool: cargo-binstall@1.25.3
       - name: Install workspace inheritance checker
-        run: cargo binstall --no-confirm cargo-workspace-inheritance-check@1.3.0
+        run: cargo binstall --locked --no-confirm cargo-workspace-inheritance-check@1.3.0
       - name: Check workspace inheritance
         run: cargo workspace-inheritance-check --promotion-threshold 2 --promotion-failure
 
@@ -456,13 +493,13 @@ jobs:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        uses: taiki-e/install-action@v2.75.18
         with:
-          tool: cargo-binstall
+          tool: cargo-binstall@1.25.3
       - name: Install cargo-shear
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -19,7 +19,7 @@ runs:
 
     - name: Restore xtask
       id: cache
-      uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      uses: actions/cache/restore@v5.0.3
       with:
         path: ${{ runner.temp }}/xtask-bin
         # Accept only an exact match because the binary runs without a Cargo build check.
@@ -43,7 +43,7 @@ runs:
 
     - name: Save xtask
       if: inputs.save-cache == 'true' && steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
+      uses: actions/cache/save@v5.0.3
       with:
         path: ${{ runner.temp }}/xtask-bin
         key: ${{ steps.cache.outputs.cache-primary-key }}

@@ -36,15 +36,15 @@ jobs:
       pages: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
 
       # Installation from source takes a fair while, so we install the binaries directly instead.
       - name: Install mdbook and plugins
-        uses: taiki-e/install-action@055f5df8c3f65ea01cd41e9dc855becd88953486 # v2.75.18
+        uses: taiki-e/install-action@v2.75.18
         with:
-          tool: mdbook@0.4, mdbook-linkcheck@0.7, mdbook-alerts@0.8, mdbook-katex@0.9
+          tool: mdbook@0.4.52, mdbook-linkcheck@0.7.7, mdbook-alerts@0.8.0, mdbook-katex@0.9.4
 
       - name: Build book
         run: mdbook build docs/internal/
@@ -53,11 +53,11 @@ jobs:
       - name: Setup Pages
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' }}
         id: pages
-        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+        uses: actions/configure-pages@v6.0.0
 
       - name: Upload book artifact
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/next' }}
-        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        uses: actions/upload-pages-artifact@v5.0.0
         with:
           # We specify multiple [output] sections in our book.toml which causes mdbook to create separate folders for each. This moves the generated `html` into its own `html` subdirectory.
           path: ./docs/internal/book/html
@@ -79,4 +79,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0
+        uses: actions/deploy-pages@v5.0.0
