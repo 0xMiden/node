@@ -82,15 +82,21 @@ impl SequencerCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
+        let max_decoding_message_size =
+            runtime.grpc_options.message_size.max_decoding_message_size.get();
         self.block_producer.validate()?;
         let fee_collector_account = self.fee_collector.read(&runtime.data_directory)?;
         let network_tx_auth = self.runtime.rpc.network_tx_auth()?;
-        let (validator_clients, validator_monitors) =
-            self.external_services.validator_clients_and_monitors()?;
-        let (ntx_builder_client, ntx_builder_monitor) =
-            self.external_services.ntx_builder_client_and_monitor()?;
-        let block_prover_monitor =
-            remote_prover_monitor(self.block_producer.block_prover.url.as_ref())?;
+        let (validator_clients, validator_monitors) = self
+            .external_services
+            .validator_clients_and_monitors(max_decoding_message_size)?;
+        let (ntx_builder_client, ntx_builder_monitor) = self
+            .external_services
+            .ntx_builder_client_and_monitor(max_decoding_message_size)?;
+        let block_prover_monitor = remote_prover_monitor(
+            self.block_producer.block_prover.url.as_ref(),
+            max_decoding_message_size,
+        )?;
         let allowlist = Arc::new(self.load_allowlist()?);
         let funding = self.external_services.funding_client()?;
         let account_admission = self.account_admission(Arc::clone(&allowlist), funding.clone());
@@ -104,6 +110,7 @@ impl SequencerCommand {
             proof_writer,
             validator_urls: self.external_services.validator_urls.clone(),
             validator_timeout: self.external_services.validator_timeout,
+            max_decoding_message_size,
             block_prover_url: self.block_producer.block_prover.url,
             batch_interval: self.block_producer.batch.interval,
             block_interval: self.block_producer.block.interval,
@@ -292,12 +299,14 @@ impl SequencerExternalServiceOptions {
 
     fn validator_clients_and_monitors(
         &self,
+        max_decoding_message_size: usize,
     ) -> anyhow::Result<(ValidatorClients, Vec<Builder<WantsConnection>>)> {
         let builders = self
             .validator_urls
             .iter()
             .map(|url| {
                 Ok(Builder::new(url.clone())
+                    .max_decoding_message_size(max_decoding_message_size)
                     .with_tls()?
                     .with_timeout(self.validator_timeout)
                     .without_metadata_version()
@@ -313,8 +322,10 @@ impl SequencerExternalServiceOptions {
 
     fn ntx_builder_client_and_monitor(
         &self,
+        max_decoding_message_size: usize,
     ) -> anyhow::Result<(NtxBuilderClient, Builder<WantsConnection>)> {
         let builder = Builder::new(self.ntx_builder_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .without_timeout()
             .without_metadata_version()
@@ -370,7 +381,9 @@ impl FullNodeCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
-        let source_rpc = self.sync.source_rpc_client()?;
+        let source_rpc = self
+            .sync
+            .source_rpc_client(runtime.grpc_options.message_size.max_decoding_message_size.get())?;
         let PreAuthComponents {
             submission: pre_auth,
             validator_monitors,
@@ -415,6 +428,8 @@ impl FullNodeCommand {
     }
 
     fn pre_auth_components(&self) -> anyhow::Result<PreAuthComponents> {
+        let max_decoding_message_size =
+            self.runtime.rpc.grpc.message_size.max_decoding_message_size.get();
         // Clap enforces that the sequencer URL and at least one validator URL come together.
         let Some(sequencer_url) = self.sequencer_url.as_ref() else {
             return Ok(PreAuthComponents {
@@ -424,6 +439,7 @@ impl FullNodeCommand {
             });
         };
         let sequencer_builder = Builder::new(sequencer_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .expect("TLS is enabled")
             .with_timeout(Duration::from_secs(5))
@@ -436,6 +452,7 @@ impl FullNodeCommand {
             .iter()
             .map(|url| {
                 Builder::new(url.clone())
+                    .max_decoding_message_size(max_decoding_message_size)
                     .with_tls()
                     .expect("TLS is enabled")
                     .with_timeout(Duration::from_secs(5))
@@ -483,8 +500,9 @@ impl FullNodeCommand {
 }
 
 impl SyncOptions {
-    fn source_rpc_client(&self) -> anyhow::Result<RpcClient> {
+    fn source_rpc_client(&self, max_decoding_message_size: usize) -> anyhow::Result<RpcClient> {
         Ok(Builder::new(self.block_source_url())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .without_timeout()
             .without_metadata_version()
@@ -526,10 +544,12 @@ async fn bind_rpc(listen: SocketAddr) -> anyhow::Result<TcpListener> {
 
 fn remote_prover_monitor(
     endpoint: Option<&Url>,
+    max_decoding_message_size: usize,
 ) -> anyhow::Result<Option<Builder<WantsConnection>>> {
     endpoint
         .map(|endpoint| {
             Ok(Builder::new(endpoint.clone())
+                .max_decoding_message_size(max_decoding_message_size)
                 .with_tls()?
                 .without_timeout()
                 .without_metadata_version()

@@ -414,25 +414,14 @@ impl Service {
         ret
     }
 
-    /// Constructs the underlying tonic server for this service behind an opaque tower service type.
+    /// Constructs the underlying tonic server so callers can configure its transport limits.
     fn service_constructor(&self) -> Function {
         let mut ret = Function::new("service");
         ret.vis("pub")
             .attr("allow(deprecated)")
             .generic("T")
             .arg("service", "T")
-            .ret(
-                "impl tower::Service<
-    http::Request<tonic::body::Body>,
-    Response = http::Response<tonic::body::Body>,
-    Error = std::convert::Infallible,
-    Future: Send + 'static,
-> + tonic::server::NamedService
-  + Clone
-  + Send
-  + Sync
-  + 'static",
-            )
+            .ret(format!("{}<T>", self.tonic_server_path()))
             .bound("T", self.service_trait().ty())
             .bound("T", "Send")
             .bound("T", "Sync")

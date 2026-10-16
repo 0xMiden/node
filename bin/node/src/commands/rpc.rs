@@ -32,7 +32,10 @@ pub struct RpcOptions {
 
 impl RpcOptions {
     pub(super) fn grpc_options(&self) -> miden_node_utils::clap::GrpcOptions {
-        miden_node_utils::clap::GrpcOptions { request_timeout: self.grpc.timeout }
+        miden_node_utils::clap::GrpcOptions {
+            request_timeout: self.grpc.timeout,
+            message_size: self.grpc.message_size,
+        }
     }
 
     pub(super) fn network_tx_auth(&self) -> anyhow::Result<Option<AsciiMetadataValue>> {
@@ -49,6 +52,8 @@ impl RpcOptions {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct GrpcOptions {
+    #[command(flatten)]
+    pub message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// Maximum duration a gRPC request is allocated before being dropped by the server.
     #[arg(
         long = "rpc.grpc.timeout",

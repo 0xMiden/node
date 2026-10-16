@@ -170,10 +170,19 @@ impl ProofCollector {
     reason = "single linear orchestration of genesis fetch + mint phase + consume phase; \
               splitting would just shuffle locals (faucet, data_store, authenticator) around"
 )]
-pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: Option<String>) {
-    let mut rpc_client = create_genesis_aware_rpc_client(&rpc_url, Duration::from_secs(10))
-        .await
-        .unwrap();
+pub(crate) async fn run(
+    rpc_url: Url,
+    num_transactions: u64,
+    remote_prover_url: Option<String>,
+    max_decoding_message_size: usize,
+) {
+    let mut rpc_client = create_genesis_aware_rpc_client(
+        &rpc_url,
+        Duration::from_secs(10),
+        max_decoding_message_size,
+    )
+    .await
+    .unwrap();
 
     println!("Fetching genesis block header from {rpc_url}...");
     let genesis_header_proto = rpc_client
@@ -221,7 +230,8 @@ pub(crate) async fn run(rpc_url: Url, num_transactions: u64, remote_prover_url: 
     let prover = Arc::new(match remote_prover_url {
         Some(url) => {
             println!("Using remote prover at {url} (rate-limited ramp from 1 to 10 req/s).");
-            BenchmarkProver::remote(&url).expect("remote prover client should be constructed")
+            BenchmarkProver::remote(&url, max_decoding_message_size)
+                .expect("remote prover client should be constructed")
         },
         None => BenchmarkProver::local(),
     });

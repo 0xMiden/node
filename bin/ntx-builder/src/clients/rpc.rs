@@ -151,6 +151,7 @@ impl RpcClient {
         request_timeout: Duration,
         backoff_initial: Duration,
         backoff_max: Duration,
+        max_decoding_message_size: usize,
     ) -> anyhow::Result<Self> {
         Self::new_with_auth(
             rpc_url,
@@ -158,8 +159,8 @@ impl RpcClient {
             genesis_commitment,
             trusted_validator_signing_keys,
             request_timeout,
-            backoff_initial,
-            backoff_max,
+            (backoff_initial, backoff_max),
+            max_decoding_message_size,
         )
     }
 
@@ -173,8 +174,8 @@ impl RpcClient {
         genesis_commitment: Word,
         trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
         request_timeout: Duration,
-        backoff_initial: Duration,
-        backoff_max: Duration,
+        backoff: (Duration, Duration),
+        max_decoding_message_size: usize,
     ) -> anyhow::Result<Self> {
         info!(
             target: COMPONENT,
@@ -184,6 +185,7 @@ impl RpcClient {
         );
 
         let builder = Builder::new(rpc_url)
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .with_timeout(request_timeout)
             .without_metadata_version()
@@ -194,7 +196,7 @@ impl RpcClient {
         };
         let rpc = builder.with_otel_context_injection().connect_lazy::<InnerRpcClient>();
 
-        let backoff = retry::exponential(backoff_initial, backoff_max);
+        let backoff = retry::exponential(backoff.0, backoff.1);
 
         Ok(Self {
             inner: rpc,
