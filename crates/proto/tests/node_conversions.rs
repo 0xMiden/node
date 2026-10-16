@@ -206,7 +206,7 @@ fn nonempty_block_request() -> BlockProofRequest {
     }
 }
 
-// Builds the expected block without authenticating signatures; binding is checked separately.
+/// Builds an unsigned block from a proving request for reconstruction checks.
 fn block_from_request(request: &BlockProofRequest) -> miden_protocol::block::SignedBlock {
     let (header, body) = ProposedBlock::new_at(
         request.block_inputs.clone(),
@@ -227,7 +227,7 @@ fn block_from_request(request: &BlockProofRequest) -> miden_protocol::block::Sig
 
 #[test]
 fn recovered_proving_inputs_match_the_signed_block() {
-    // Preserve nonempty batches, witnesses, and both configuration transitions.
+    // Persistence preserves nonempty batches, state witnesses, and both configuration transitions.
     let original = nonempty_block_request();
     let expected = block_from_request(&original);
     let recovered: BlockProofRequest =
@@ -242,7 +242,7 @@ fn recovered_proving_inputs_match_the_signed_block() {
 
 #[test]
 fn recovered_proving_inputs_reject_changed_contents() {
-    // Each changed proposal must fail binding to the original signed block.
+    // Changes to proposal contents prevent reconstruction of the expected block.
     for mutation in
         ["timestamp", "protocol configuration", "validator configuration", "batch order"]
     {
@@ -267,7 +267,7 @@ fn recovered_proving_inputs_reject_changed_contents() {
 
 #[test]
 fn recovered_proving_inputs_reject_a_different_body() {
-    // A matching header alone cannot authorize inputs for a different body.
+    // Reconstruction checks the block body even when the header matches.
     let original = nonempty_block_request();
     let expected = block_from_request(&original);
     let (_, empty_body) = ProposedBlock::new_at(
@@ -288,7 +288,7 @@ fn recovered_proving_inputs_reject_a_different_body() {
 
 #[test]
 fn validator_backup_roundtrip_preserves_optional_proving_inputs() {
-    // Backup transport retains complete requests and distinguishes unavailable inputs.
+    // Backup encoding preserves complete proving requests and the absence of unretained inputs.
     let original = nonempty_block_request();
     let expected = block_from_request(&original);
     for proving_inputs in [Some((&original).into()), None] {

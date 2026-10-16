@@ -51,7 +51,7 @@ fn signatures_are_ordered_against_the_validator_set() {
     let signers = signers(3);
     let keys = validator_config(&signers);
 
-    // Collect the signatures in reverse order to prove they get reordered.
+    // Reversed validator order exercises signature ordering in the recovered block.
     let shuffled = signers.iter().rev().map(|signer| signer.sign(commitment)).collect();
 
     let coalesced = coalesce_signatures(shuffled, commitment, &keys).unwrap();
@@ -296,7 +296,7 @@ async fn store_for(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_repairs_corrupt_local_inputs() {
-    // A corrupt file must be found by the scan and replaced with authenticated backup inputs.
+    // Recovery detects corrupt local inputs and replaces them with inputs from a validated backup.
     let (genesis, request, block) = empty_recovery_fixture();
     let (directory, state, mut writer, task) = store_for(genesis).await;
     writer.apply_block(block.clone(), None).await.unwrap();
@@ -322,7 +322,8 @@ async fn recovery_repairs_corrupt_local_inputs() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_preserves_valid_local_inputs() {
-    // Legacy backups can fill signatures while a valid local request remains byte-for-byte intact.
+    // A backup without proving inputs can supply signatures while preserving the local request byte
+    // for byte.
     let (genesis, request, block) = empty_recovery_fixture();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
     writer.apply_block(block.clone(), None).await.unwrap();
@@ -359,7 +360,7 @@ fn wrong_timestamp(request: BlockProofRequest) -> BlockProofRequest {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_rejects_wrong_inputs_before_writing() {
-    // Even when local inputs are usable, a supplied mismatched request must fail without mutation.
+    // Recovery rejects mismatched backup inputs without modifying valid local inputs.
     let (genesis, request, block) = empty_recovery_fixture();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
     writer.apply_block(block.clone(), None).await.unwrap();
@@ -386,7 +387,8 @@ async fn recovery_rejects_wrong_inputs_before_writing() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_rejects_local_chain_divergence() {
-    // A valid block on a different chain cannot replace committed local material.
+    // Recovery preserves the local block and inputs when a valid backup belongs to a different
+    // chain.
     let (genesis, request, block) = empty_recovery_fixture();
     let (_, other_request, other_block) = empty_recovery_fixture();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
@@ -415,7 +417,7 @@ async fn recovery_rejects_local_chain_divergence() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_requires_inputs_before_applying_new_block() {
-    // An old backup without a surviving request must fail before committing a new block.
+    // Recovery rejects a new block when its proving inputs are unavailable.
     let (genesis, _, block) = empty_recovery_fixture();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
     let error = inputs::apply_recovered(
@@ -438,7 +440,7 @@ async fn recovery_requires_inputs_before_applying_new_block() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_refuses_gap_above_validator_tip() {
-    // An uncovered gap is detected before any recovery writes can occur.
+    // Recovery rejects missing inputs above the validators' tip before writing to the local store.
     let (genesis, _, block) = empty_recovery_fixture();
     let (_directory, state, mut writer, task) = store_for(genesis).await;
     writer.apply_block(block, None).await.unwrap();
@@ -513,7 +515,7 @@ async fn recovery_uses_one_validator_input_copy() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_rejects_a_bad_supplied_copy() {
-    // A good first copy cannot hide another validator's mismatched payload.
+    // Recovery checks every supplied proving request, even after finding a valid one.
     let (parent, mut streams) = input_streams(true, true).await;
     let error = next_coalesced_block(&mut streams, &parent).await.unwrap_err();
     assert!(error.to_string().contains("validator-1.test"), "{error}");
@@ -553,7 +555,7 @@ fn proposal_pair(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_preserves_scheduled_protocol_transition() {
-    // Scheduled upgrade metadata survives recovery in both the blocks and genuine proving requests.
+    // Recovery preserves scheduled protocol upgrades in both blocks and proving requests.
     let key = SigningKey::new();
     let first = miden_node_utils::fee::test_protocol_config();
     let (_, second) = protocol_configs();
@@ -618,8 +620,10 @@ async fn recovery_preserves_scheduled_protocol_transition() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recovery_uses_active_configuration_after_legacy_activation() {
-    // A legacy activation header establishes the active config; genuine child inputs must retain
-    // it. The pinned proposal builder cannot generate an activation header itself.
+    // Proving inputs for the child block retain the configuration established by its parent.
+    //
+    // The proposal builder cannot generate an activation header, so a legacy header models the
+    // parent's configuration activation.
     let key = SigningKey::new();
     let first = miden_node_utils::fee::test_protocol_config();
     let (_, second) = protocol_configs();

@@ -134,10 +134,10 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         // closure, so it can be returned to the block producer for cross-checking.
         let block_commitment = signed_block.header().commitment();
 
-        // Persist the signed block, proving inputs, and transaction positions together. A validated
-        // block at the tip's height replaces the current tip, which also deletes the replaced block
-        // — atomically with persisting its successor, so a crash cannot leave the replaced block's
-        // links behind.
+        // The signed block, proving inputs, and transaction positions are persisted atomically.
+        //
+        // A block at the current tip's height replaces that tip in the same transaction, so a crash
+        // cannot leave transaction links from the replaced block behind.
         let new_block_num = signed_block.header().block_num().as_u32();
         let is_replacement = signed_block.header().block_num() == chain_tip_num;
         if is_replacement {

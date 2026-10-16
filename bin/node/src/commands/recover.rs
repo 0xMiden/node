@@ -41,7 +41,7 @@ use crate::LOG_TARGET;
 /// blocks buffered in memory while keeping every stage busy.
 const BLOCK_CHANNEL_CAPACITY: usize = 16;
 
-/// A recovered block with its supplied protocol configuration and optional proving request.
+/// A recovered block with any protocol configuration and proving request supplied by validators.
 #[derive(Debug)]
 struct RecoveredBlock {
     block: SignedBlock,
@@ -131,7 +131,7 @@ impl RecoverCommand {
             Ok(())
         }
         .await;
-        // Drain accepted writes even when recovery fails or shutdown is requested.
+        // Accepted writes finish before recovery returns, including on failure or shutdown.
         drop(proof_writer);
         block_writer.stop(writer_task).await;
         result
@@ -140,7 +140,6 @@ impl RecoverCommand {
     async fn load_state(
         &self,
     ) -> anyhow::Result<(Arc<State>, BlockWriter, ProofWriter, WriterTask)> {
-        // The writer has an independent lifetime so cancellation cannot interrupt accepted writes.
         let loaded = State::load_with_database_options(
             &self.data_directory,
             self.store.storage.clone().into(),
@@ -149,6 +148,8 @@ impl RecoverCommand {
         .await
         .context("failed to load state")?;
 
+        // The writer uses a separate cancellation token so recovery cancellation cannot interrupt
+        // accepted writes.
         let (state, block_writer, proof_writer, writer_task) =
             loaded.start(CancellationToken::new());
         Ok((state, block_writer, proof_writer, writer_task))
@@ -176,9 +177,10 @@ async fn recover_from_validators(
     mut validators: Vec<(Url, ValidatorClient)>,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    // Capture the smallest of the validators' chain tips as the recovery target: it is the highest
-    // block for which every validator can supply its signature. Each backup stream captures a
-    // finite tip, and the sequencer must remain stopped so the target stays fixed.
+    // The recovery target is the highest block for which every validator can supply a signature.
+    //
+    // Each backup stream captures a finite tip. The sequencer must remain stopped so the target
+    // stays fixed while validator statuses are queried and backup streams are opened.
     let mut recovery_tip: Option<BlockNumber> = None;
     for (url, validator) in &mut validators {
         let response = tokio::select! {
@@ -224,7 +226,10 @@ async fn recover_from_validators(
     result
 }
 
-/// Runs the bounded recovery pipeline, checking every producer before reporting completion.
+/// Restores blocks and proving inputs through the target height with bounded buffering.
+///
+/// Recovery succeeds only after all producer tasks finish successfully and the target block has
+/// been applied, so a closed channel cannot hide a producer failure.
 async fn run_recovery_pipeline(
     state: &State,
     writer: &mut BlockWriter,

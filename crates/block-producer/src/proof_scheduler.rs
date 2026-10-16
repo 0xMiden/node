@@ -162,10 +162,10 @@ pub(crate) async fn run(
     }
 }
 
-/// Proves the committed backlog in order, stopping at the tip captured when this call begins.
+/// Proves committed, unproven blocks in order up to the tip captured when this call begins.
 ///
-/// Completed proofs survive errors and cancellation. Proof commits are allowed to finish so the
-/// durable store and published proven tip remain consistent.
+/// Completed proofs survive errors and cancellation. Each proof commit finishes before cancellation
+/// is checked again, keeping the stored proofs and published proven tip consistent.
 pub async fn prove_pending_blocks(
     state: &State,
     writer: &mut ProofWriter,

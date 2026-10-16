@@ -31,7 +31,8 @@ fn empty_pair(
 
 #[tokio::test]
 async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history() {
-    // Input persistence shares the block transaction, including replacement deletion and metadata.
+    // A failed proving input write rolls back the block, transaction links, and configuration
+    // history, including deletion of a replaced block.
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("validator.sqlite3");
     let db = setup(path.clone()).await.unwrap();

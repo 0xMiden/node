@@ -1,4 +1,4 @@
-//! Reads signed blocks together with their retained proving material.
+//! Reads signed blocks and checks that any retained proving requests reconstruct them.
 use miden_node_db::sqlite::ReadTx;
 use miden_node_db::{DatabaseError, SqlTypeConvert};
 use miden_node_proto::BlockProofRequest;

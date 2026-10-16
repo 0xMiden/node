@@ -52,7 +52,7 @@ async fn acknowledged_block_retains_inputs_after_restart() {
 
 #[tokio::test]
 async fn failed_input_commit_does_not_acknowledge_or_publish_tip() {
-    // Persistence failure must leave both durable and advertised progress unchanged.
+    // A failed proving input write leaves both the stored and advertised chain tips unchanged.
     let tv = TestValidator::new().await;
     let before = tv.call_status().await;
     let tip = *tv.server.committed_tip.borrow();
@@ -66,7 +66,8 @@ async fn failed_input_commit_does_not_acknowledge_or_publish_tip() {
 
 #[tokio::test]
 async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup() {
-    // Replacement changes the proposal identity, and corrupt inputs must never be served as usable.
+    // A replacement block retains its own proving inputs, and corrupt inputs cause backup reads to
+    // fail.
     let tv = TestValidator::new().await;
     let proposal = tv.propose_empty_block();
     tv.call_sign_block(&proposal).await.unwrap();
@@ -104,8 +105,10 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
 
 #[tokio::test]
 async fn backup_retains_requests_across_two_configuration_activations() {
-    // Legacy transition rows model activations until the protocol applies scheduled upgrades. The
-    // following signed rows retain real requests under each newly active configuration.
+    // Signed blocks retain proving requests under each newly active configuration.
+    //
+    // Legacy rows model configuration activations because the protocol does not apply scheduled
+    // upgrades during block construction.
     use tokio_stream::StreamExt;
     let mut tv = TestValidator::new().await;
     let initial = tv.protocol_config.clone();
