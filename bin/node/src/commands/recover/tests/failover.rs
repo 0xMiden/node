@@ -622,3 +622,47 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
     validator.stop().await?;
     result
 }
+
+/// The shared client must receive backups larger than tonic's default decode allowance. Synthetic
+/// proof bytes isolate transport capacity without claiming domain validity.
+#[tokio::test]
+async fn shared_validator_client_receives_large_backup() -> anyhow::Result<()> {
+    use miden_node_proto::generated::block_proving;
+    use miden_node_proto::generated::miden::validator::v1 as wire;
+    use miden_node_proto::prost::Message;
+    let batch = miden_objects::proto::transaction::ProvenBatch {
+        proof: Some(miden_objects::proto::primitives::ExecutionProof {
+            encoded: vec![7; 5 * 1024 * 1024],
+        }),
+        ..Default::default()
+    };
+    let response = wire::BlockSubscriptionResponse {
+        proving_inputs: Some(block_proving::BlockProofRequest {
+            batches: vec![batch],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    ensure!(response.encoded_len() > 4 * 1024 * 1024);
+    let upstream = Builder::new(Url::parse("http://127.0.0.1:1")?)
+        .without_tls()
+        .without_timeout()
+        .without_metadata_version()
+        .without_metadata_genesis()
+        .without_otel_context_injection()
+        .connect_lazy();
+    let proxy = start_proxy(upstream, Fault::Synthetic(Box::new(response.clone()))).await?;
+    let result = async {
+        let mut stream = proxy
+            .client()
+            .block_subscription(wire::BlockSubscriptionRequest { block_from: 0 })
+            .await?
+            .into_inner();
+        ensure!(stream.message().await? == Some(response));
+        anyhow::Ok(())
+    }
+    .await;
+    let stopped = proxy.stop().await;
+    result?;
+    stopped
+}

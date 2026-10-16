@@ -113,6 +113,7 @@ pub enum Fault {
     InterruptAfterFirst(Arc<Notify>),
     Hold(Arc<Notify>),
     Refuse(Arc<Notify>),
+    Synthetic(Box<wire::BlockSubscriptionResponse>),
 }
 
 #[derive(Clone)]
@@ -205,6 +206,12 @@ impl api::BlockSubscription for BackupProxy {
         _: &tonic::metadata::MetadataMap,
         _: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
+        if let Fault::Synthetic(response) = &self.fault {
+            return Ok(ObservedStream {
+                inner: Box::pin(tokio_stream::iter([Ok(response.as_ref().clone())])),
+                dropped: self.dropped.clone(),
+            });
+        }
         if let Fault::Refuse(release) = &self.fault {
             release.notified().await;
             return Err(tonic::Status::unavailable("injected setup refusal"));
@@ -214,7 +221,7 @@ impl api::BlockSubscription for BackupProxy {
         let (release, interrupt) = match &self.fault {
             Fault::Hold(release) => (release.clone(), false),
             Fault::InterruptAfterFirst(release) => (release.clone(), true),
-            Fault::Refuse(_) => unreachable!(),
+            Fault::Refuse(_) | Fault::Synthetic(_) => unreachable!(),
         };
         let inner = Box::pin(GatedStream {
             upstream,
