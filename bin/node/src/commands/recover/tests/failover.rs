@@ -199,6 +199,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
             &state,
             &mut proof_writer,
             None,
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
             CancellationToken::new(),
         )
         .await;
@@ -626,7 +627,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
 /// The shared client must receive backups larger than tonic's default decode allowance. Synthetic
 /// proof bytes isolate transport capacity without claiming domain validity.
 #[tokio::test]
-async fn shared_validator_client_receives_large_backup() -> anyhow::Result<()> {
+async fn validator_backup_decoding_limit_is_configurable() -> anyhow::Result<()> {
     use miden_node_proto::generated::block_proving;
     use miden_node_proto::generated::miden::validator::v1 as wire;
     use miden_node_proto::prost::Message;
@@ -653,8 +654,18 @@ async fn shared_validator_client_receives_large_backup() -> anyhow::Result<()> {
         .connect_lazy();
     let proxy = start_proxy(upstream, Fault::Synthetic(Box::new(response.clone()))).await?;
     let result = async {
-        let mut stream = proxy
+        let mut default_stream = proxy
             .client()
+            .block_subscription(wire::BlockSubscriptionRequest { block_from: 0 })
+            .await?
+            .into_inner();
+        ensure!(default_stream.message().await.unwrap_err().code() == tonic::Code::OutOfRange);
+        drop(default_stream);
+        let mut configured = miden_node_proto::clients::GrpcClient::max_decoding_message_size(
+            proxy.client(),
+            16 * 1024 * 1024,
+        );
+        let mut stream = configured
             .block_subscription(wire::BlockSubscriptionRequest { block_from: 0 })
             .await?
             .into_inner();

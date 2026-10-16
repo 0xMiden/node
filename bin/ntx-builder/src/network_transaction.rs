@@ -93,10 +93,15 @@ impl NetworkTransactionContext {
                     Duration::from_secs(10),
                     Duration::from_millis(1),
                     Duration::from_millis(10),
+                    miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
                 )
                 .expect("rpc client should be constructed"),
-                prover: RemoteTransactionProver::new(url, Duration::from_secs(10))
-                    .expect("prover client should be constructed"),
+                prover: RemoteTransactionProver::new(
+                    url,
+                    Duration::from_secs(10),
+                    miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+                )
+                .expect("prover client should be constructed"),
             },
             db: db.clone(),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),

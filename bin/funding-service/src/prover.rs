@@ -34,8 +34,12 @@ impl Prover {
     }
 
     /// Builds a prover which uses the remote prover at `url`, with local proving as a fallback.
-    pub fn remote(url: Url, timeout: Duration) -> Result<Self> {
-        Ok(Self::Remote(Box::new(RemoteProver::new(url, timeout)?)))
+    pub fn remote(url: Url, timeout: Duration, max_decoding_message_size: usize) -> Result<Self> {
+        Ok(Self::Remote(Box::new(RemoteProver::new(
+            url,
+            timeout,
+            max_decoding_message_size,
+        )?)))
     }
 
     /// Proves one executed transaction.
@@ -101,8 +105,9 @@ pub struct RemoteProver {
 
 impl RemoteProver {
     /// Creates a prover with a lazy connection to the given gRPC endpoint.
-    pub fn new(url: Url, timeout: Duration) -> Result<Self> {
+    pub fn new(url: Url, timeout: Duration, max_decoding_message_size: usize) -> Result<Self> {
         let client = Builder::new(url)
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("failed to configure TLS for the remote prover client")?
             .with_timeout(timeout)

@@ -21,9 +21,15 @@ pub struct NoteTransportService {
 }
 
 impl NoteTransportService {
-    pub fn new(url: Url, interval: Duration, timeout: Duration) -> Self {
+    pub fn new(
+        url: Url,
+        interval: Duration,
+        timeout: Duration,
+        max_decoding_message_size: usize,
+    ) -> Self {
         let channel = create_channel(&url, timeout).expect("failed to create channel");
-        let client = HealthClient::new(channel);
+        let client =
+            HealthClient::new(channel).max_decoding_message_size(max_decoding_message_size);
         Self { url, client, interval }
     }
 }
@@ -120,8 +126,12 @@ mod tests {
                 .unwrap();
         });
         let url = Url::parse(&format!("http://{address}")).unwrap();
-        let mut monitor =
-            NoteTransportService::new(url.clone(), Duration::from_secs(1), Duration::from_secs(5));
+        let mut monitor = NoteTransportService::new(
+            url.clone(),
+            Duration::from_secs(1),
+            Duration::from_secs(5),
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        );
         assert_eq!(monitor.check().await.status, Status::Healthy);
         reporter
             .set_service_status(

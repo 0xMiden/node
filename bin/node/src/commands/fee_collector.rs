@@ -120,6 +120,8 @@ impl FeeCollectorAccountOptions {
 
 #[derive(clap::Args, Debug)]
 pub struct DeployCommand {
+    #[command(flatten)]
+    grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// Directory containing the node's local data storage.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
@@ -177,6 +179,7 @@ impl DeployCommand {
                     account,
                     self.validator_urls,
                     self.validator_timeout,
+                    self.grpc.max_decoding_message_size.get(),
                 )) => result,
             }
         }

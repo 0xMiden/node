@@ -490,6 +490,22 @@ mod tests {
         )
     }
 
+    #[test]
+    fn cli_decoding_limit_defaults_and_overrides() {
+        for (extra, expected) in [
+            (vec![], 4_194_304),
+            (vec!["--grpc.max-decoding-message-size", "16777216"], 16_777_216),
+        ] {
+            let command =
+                parse_start(&ENCRYPTION_KEY_ARGS.into_iter().chain(extra).collect::<Vec<_>>())
+                    .unwrap();
+            let ValidatorCommand::Start { grpc_options, .. } = command else {
+                panic!("expected start")
+            };
+            assert_eq!(grpc_options.message_size.max_decoding_message_size.get(), expected);
+        }
+    }
+
     fn test_operator_keys(epoch: u8, setup_marker: u8) -> Vec<GoldenOperatorKey> {
         let participants = [1, 2, 3].map(|value| ParticipantIndex::new(value).unwrap());
         let decryption_secret = Secp256k1Scalar::from_u64(11).unwrap();

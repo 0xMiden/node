@@ -180,6 +180,8 @@ const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 = NonZeroU16::new(30).unwrap();
 /// This struct contains all the settings needed to create and run a `NetworkTransactionBuilder`.
 #[derive(Debug, Clone)]
 pub struct NtxBuilderConfig {
+    /// Maximum encoded size accepted by each gRPC client and server.
+    pub max_decoding_message_size: usize,
     /// Address of the node RPC gRPC server.
     pub rpc_url: Url,
 
@@ -252,6 +254,13 @@ pub struct NtxBuilderConfig {
 }
 
 impl NtxBuilderConfig {
+    /// Sets the maximum encoded size accepted by each gRPC client and server.
+    #[must_use]
+    pub fn with_max_decoding_message_size(mut self, limit: usize) -> Self {
+        self.max_decoding_message_size = limit;
+        self
+    }
+
     pub fn new(rpc_url: Url, tx_prover_url: Url, database_filepath: PathBuf) -> Self {
         Self {
             rpc_url,
@@ -260,6 +269,7 @@ impl NtxBuilderConfig {
             tx_prover_url,
             tx_prover_timeout: DEFAULT_TX_PROVER_TIMEOUT,
             grpc_timeout: DEFAULT_GRPC_TIMEOUT,
+            max_decoding_message_size: miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
             script_cache_size: DEFAULT_SCRIPT_CACHE_SIZE,
             max_concurrent_txs: DEFAULT_MAX_CONCURRENT_TXS,
             priority_accounts: Vec::new(),
@@ -436,8 +446,8 @@ impl NtxBuilderConfig {
                 genesis_commitment,
                 trusted_validator_signing_keys,
                 self.rpc_timeout,
-                self.request_backoff_initial,
-                self.request_backoff_max,
+                (self.request_backoff_initial, self.request_backoff_max),
+                self.max_decoding_message_size,
             ),
             None => RpcClient::new(
                 self.rpc_url.clone(),
@@ -446,6 +456,7 @@ impl NtxBuilderConfig {
                 self.rpc_timeout,
                 self.request_backoff_initial,
                 self.request_backoff_max,
+                self.max_decoding_message_size,
             ),
         }?;
         rpc.sealer()
@@ -455,6 +466,7 @@ impl NtxBuilderConfig {
         // The transaction prover is otherwise contacted only once an account has work, so monitor
         // its lazy endpoint from startup to make a bad configuration visible immediately.
         let tx_prover_monitor = miden_node_proto::clients::Builder::new(self.tx_prover_url.clone())
+            .max_decoding_message_size(self.max_decoding_message_size)
             .with_tls()?
             .with_timeout(self.tx_prover_timeout)
             .without_metadata_version()
@@ -521,6 +533,7 @@ impl NtxBuilderConfig {
                 prover: RemoteTransactionProver::new(
                     self.tx_prover_url.clone(),
                     self.tx_prover_timeout,
+                    self.max_decoding_message_size,
                 )?,
             },
             db,
