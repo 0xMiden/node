@@ -272,7 +272,13 @@ impl Scheduler {
         block_num: BlockNumber,
         notes: NoteUpdates,
     ) -> anyhow::Result<()> {
-        let NoteUpdates { failed, discarded, scripts, eligibility } = notes;
+        let NoteUpdates {
+            failed,
+            failed_sponsorships,
+            discarded,
+            scripts,
+            eligibility,
+        } = notes;
 
         // A correction moves a note whose stored eligibility block is earlier than the exact rule
         // allows. The account is selected on every block until the correction is written. See
@@ -286,6 +292,11 @@ impl Scheduler {
             db.notes_failed(failed, block_num)
                 .await
                 .context("failed to persist note failures")?;
+        }
+        if !failed_sponsorships.is_empty() {
+            db.sponsorships_failed(failed_sponsorships, block_num)
+                .await
+                .context("failed to persist sponsorship failures")?;
         }
         if !discarded.is_empty() {
             db.discard_notes(discarded, block_num, self.ctx.config.max_note_attempts)
@@ -514,6 +525,7 @@ mod tests {
             block_num: 7_u32.into(),
             notes: NoteUpdates {
                 failed: vec![(failed_note.as_note().nullifier(), error)],
+                failed_sponsorships: vec![],
                 discarded: vec![discarded_note.as_note().nullifier()],
                 eligibility: vec![],
                 scripts: vec![],
