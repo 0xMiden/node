@@ -2,3 +2,14 @@ self-hosted-runner:
   labels:
     - Linux-ARM64-Runner
     - warp-ubuntu-latest-x64-8x
+# actionlint 1.7.12 predates self-repository references. Zizmor parses these
+# references, and gh actions-lock verifies their dependency coverage.
+paths:
+  .github/workflows/*.{yml,yaml}:
+    ignore:
+      - '^specifying action "\$/\.github/actions/[a-z0-9-]+" in invalid format because ref is missing\.'
+      - '^reusable workflow call "\$/\.github/workflows/docker\.yml" at "uses" is not following the format '
+  .github/workflows/docker.yml:
+    ignore:
+      # GitHub supports queue: max, but actionlint 1.7.12 does not parse it yet.
+      - '^unexpected key "queue" for "concurrency" section\.'

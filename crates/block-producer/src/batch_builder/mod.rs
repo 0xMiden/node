@@ -230,6 +230,21 @@ impl BatchBuilder {
         self.active_jobs.len() < self.num_workers.get()
     }
 
+    /// Aborts all in-flight batch jobs.
+    ///
+    /// # Invariant: abort strands the job's transactions
+    ///
+    /// Batch selection (`Self::select_full_batch` / `Self::select_any_batch`) synchronously moves
+    /// transactions into `selected` state in the mempool DAG. A job's error path re-queues them
+    /// via `BatchJob::rollback_batch`, but an **aborted** job never reaches that path: its
+    /// selected transactions remain unavailable until they are rolled back or expire. Their DAG
+    /// descendants may still be selected, since selecting a parent makes its children candidates.
+    ///
+    /// This is only safe because every current caller aborts during shutdown, when the in-memory
+    /// mempool is about to be discarded. Any future caller that aborts jobs on a live mempool
+    /// (e.g. job timeouts, worker recycling) must abort the jobs and await their termination
+    /// before rolling back the selections of jobs that did not commit: rolling back while a job
+    /// is still running would race its commit path.
     fn abort_active_jobs(active_jobs: &mut JoinSet<Result<(), BuildBatchError>>) {
         active_jobs.abort_all();
     }
