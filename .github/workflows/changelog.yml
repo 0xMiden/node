@@ -14,21 +14,87 @@ env:
   SAVE_CACHE: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
 jobs:
-  changelog:
+  # Adds release-note metadata only to Dependabot PRs confined to CI and Markdown
+  # tooling. This job edits PR metadata without checking out or running PR code.
+  dependabot-metadata:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
     steps:
-      - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: ./.github/actions/setup-xtask
-        with:
-          save-cache: ${{ env.SAVE_CACHE }}
-      - name: Verify changelog metadata
+      - name: Update tooling changelog metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          jq -r '.pull_request.body // ""' "${GITHUB_EVENT_PATH}" > "${RUNNER_TEMP}/pr-body.md"
+          pr_endpoint="repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"
+          gh api --paginate --slurp "${pr_endpoint}/files?per_page=100" > "${RUNNER_TEMP}/pr-files.json"
+          gh api "${pr_endpoint}" > "${RUNNER_TEMP}/pr.json"
+
+          jq --slurpfile pages "${RUNNER_TEMP}/pr-files.json" '
+            select(.user.login == "dependabot[bot]" and .user.type == "Bot")
+            | select(.head.repo.full_name == env.GITHUB_REPOSITORY and .head.sha == env.PR_HEAD_SHA)
+            | ($pages[0] | add) as $files
+            | (.body // "") as $original
+            | ("\n\n<!-- dependabot-tooling-changelog -->\n## Changelog\n\n```toml\n"
+                + "changelog = \"none\"\n"
+                + "reason    = \"CI and Markdown tooling dependency updates only.\"\n"
+                + "```\n<!-- /dependabot-tooling-changelog -->\n") as $section
+            | ($original | split($section) | join("")) as $body
+            | .changed_files as $count
+            | ($files | length == $count and length > 0 and all(
+                .status == "modified" and (
+                  .filename | test(
+                    "^(\\.github/workflows/([^/]+\\.ya?ml|actions\\.lock)"
+                    + "|\\.github/actions/([^/]+/)+action\\.ya?ml"
+                    + "|\\.config/markdown/package(-lock)?\\.json)$"
+                  )
+                )
+              )) as $tooling_only
+            | (if $tooling_only and ($body | test("(?im)^##[ \\t]+.*changelog|^.*changelog.*\\n-+[ \\t]*\\r?$") | not)
+                then $body + $section
+                else $body
+              end) as $updated
+            | select($updated != $original)
+            | {body: $updated}
+          ' "${RUNNER_TEMP}/pr.json" > "${RUNNER_TEMP}/pr-update.json"
+
+          if [[ -s "${RUNNER_TEMP}/pr-update.json" ]]; then
+            gh api --method PATCH "${pr_endpoint}" --input "${RUNNER_TEMP}/pr-update.json" > /dev/null
+          fi
+
+  changelog:
+    needs: dependabot-metadata
+    if: ${{ !cancelled() }}
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: $/.github/actions/setup-xtask
+        with:
+          save-cache: ${{ env.SAVE_CACHE }}
+      # Read the current description after the metadata job, since edits made
+      # with GITHUB_TOKEN do not trigger another pull_request workflow run.
+      - name: Verify changelog metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.body // ""' > "${RUNNER_TEMP}/pr-body.md"
           xtask changelog verify --pr-body-file "${RUNNER_TEMP}/pr-body.md"
         shell: bash
