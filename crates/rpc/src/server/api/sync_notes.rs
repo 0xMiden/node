@@ -9,17 +9,17 @@ use super::{RpcService, check, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncNotes for RpcService {
-    type Input = proto::rpc::DecodedSyncNotesRequest;
-    type Output = proto::rpc::SyncNotesResponse;
+impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncNotesRequest;
+    type Output = proto::miden::node::v1::SyncNotesResponse;
 
-    fn decode(request: proto::rpc::SyncNotesRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::miden::node::v1::SyncNotesRequest) -> tonic::Result<Self::Input> {
         request
             .decode_fields()
             .map_err(|err| SyncNotesErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNotesResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::node::v1::SyncNotesResponse> {
         Ok(output)
     }
 
@@ -67,15 +67,17 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
             .await?;
         let blocks = results
             .into_iter()
-            .map(|(state, mmr_proof)| proto::rpc::sync_notes_response::NoteSyncBlock {
-                block_header: Some(state.block_header.into()),
-                mmr_path: Some(mmr_proof.merkle_path().clone().into()),
-                notes: state.notes.into_iter().map(note_sync_record_to_proto).collect(),
-            })
+            .map(
+                |(state, mmr_proof)| proto::miden::node::v1::sync_notes_response::NoteSyncBlock {
+                    block_header: Some(state.block_header.into()),
+                    mmr_path: Some(mmr_proof.merkle_path().clone().into()),
+                    notes: state.notes.into_iter().map(note_sync_record_to_proto).collect(),
+                },
+            )
             .collect();
 
-        Ok(proto::rpc::SyncNotesResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncNotesResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: last_block_checked.as_u32(),
             }),
@@ -87,28 +89,28 @@ impl proto::server::rpc_api::SyncNotes for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::rpc::NoteSyncRecord {
+fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::miden::node::v1::NoteSyncRecord {
     let attachments = note
         .attachments
         .iter()
         .map(|attachment| {
             let payload = if attachment.num_words() == 1 {
-                proto::rpc::note_sync_attachment::Payload::Value(
+                proto::miden::node::v1::note_sync_attachment::Payload::Value(
                     attachment.content().as_words()[0].into(),
                 )
             } else {
-                proto::rpc::note_sync_attachment::Payload::Commitment(
+                proto::miden::node::v1::note_sync_attachment::Payload::Commitment(
                     attachment.to_commitment().into(),
                 )
             };
 
-            proto::rpc::NoteSyncAttachment {
+            proto::miden::node::v1::NoteSyncAttachment {
                 scheme: attachment.attachment_scheme().as_u16().into(),
                 payload: Some(payload),
             }
         })
         .collect();
-    let metadata = Some(proto::rpc::NoteSyncMetadata {
+    let metadata = Some(proto::miden::node::v1::NoteSyncMetadata {
         sender: Some(note.metadata.sender().into()),
         version: proto::note::NoteVersion::V1 as i32,
         note_type: proto::note::NoteType::from(note.metadata.note_type()) as i32,
@@ -121,7 +123,7 @@ fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::rpc::NoteSyncRecord
         note_index_in_block: note.note_index.leaf_index_value().into(),
         inclusion_path: Some(note.inclusion_path.into()),
     });
-    proto::rpc::NoteSyncRecord { metadata, inclusion_proof }
+    proto::miden::node::v1::NoteSyncRecord { metadata, inclusion_proof }
 }
 
 fn note_sync_error_to_status(err: NoteSyncError) -> Status {
@@ -218,14 +220,14 @@ mod tests {
         assert_eq!(first.scheme, u32::from(single_word_scheme.as_u16()));
         assert_eq!(
             first.payload,
-            Some(proto::rpc::note_sync_attachment::Payload::Value(single_word.into()))
+            Some(proto::miden::node::v1::note_sync_attachment::Payload::Value(single_word.into()))
         );
 
         let second = &proto_metadata.attachments[1];
         assert_eq!(second.scheme, u32::from(multi_word_scheme.as_u16()));
         assert_eq!(
             second.payload,
-            Some(proto::rpc::note_sync_attachment::Payload::Commitment(
+            Some(proto::miden::node::v1::note_sync_attachment::Payload::Commitment(
                 multi_word_commitment.into()
             ))
         );
@@ -234,11 +236,11 @@ mod tests {
             .attachments
             .iter()
             .map(|attachment| match attachment.payload.as_ref().unwrap() {
-                proto::rpc::note_sync_attachment::Payload::Value(value) => {
+                proto::miden::node::v1::note_sync_attachment::Payload::Value(value) => {
                     let value = Word::try_from(value).unwrap();
                     Hasher::hash_elements(value.as_elements())
                 },
-                proto::rpc::note_sync_attachment::Payload::Commitment(commitment) => {
+                proto::miden::node::v1::note_sync_attachment::Payload::Commitment(commitment) => {
                     Word::try_from(commitment).unwrap()
                 },
             })
@@ -386,15 +388,15 @@ mod tests {
                 protocol_config: Some(word.into()),
             }),
         };
-        let block = proto::rpc::sync_notes_response::NoteSyncBlock {
+        let block = proto::miden::node::v1::sync_notes_response::NoteSyncBlock {
             block_header: Some(header),
             mmr_path: Some(proto::primitives::MerklePath {
                 siblings: vec![word.into(); u32::BITS as usize],
             }),
             notes: Vec::new(),
         };
-        let mut response = proto::rpc::SyncNotesResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        let mut response = proto::miden::node::v1::SyncNotesResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: u32::MAX,
                 block_num: u32::MAX,
             }),

@@ -124,9 +124,7 @@ prover, runs `create-proofs` then `run-benchmark`, and tears everything down on 
 `$PATH`:
 
 ```sh
-make install-node install-validator install-ntx-builder install-remote-prover install-benchmark
-git submodule update --init --recursive
-cargo install --locked --path vendor/miden-usdcx/crates/xusdc-genesis
+make install-node install-validator install-ntx-builder install-remote-prover install-benchmark install-usdcx-genesis
 
 scripts/bench-local.sh                       # 5 tx pairs, local prover
 N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
@@ -197,18 +195,16 @@ miden-ntx-builder bootstrap \
 Start each component. The example runs them in the background and captures logs under `./logs/`. For an interactive run,
 drop the trailing `&` and put each command in its own terminal.
 
+Pass the validator's completed bundle with `--storage-key.file`; it need not be inside the data directory.
+
 ```sh
 mkdir -p logs
 DATA=./node-data
 
-export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH="<32-byte-hex-epoch>"
-export MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT="<setup-context-file>"
-export MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET="<public-key-set-file>"
-export MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE="<secret-share-file>"
-
 nohup miden-validator start \
   --listen             127.0.0.1:50101 \
   --data-directory     "$DATA/validator" \
+  --storage-key.file    "<storage-key-bundle-file>" \
   --signing-key.hex    "<signing-key-hex>" \
   --encryption-key.hex "<encryption-key-hex>" \
   > logs/validator.log 2>&1 &

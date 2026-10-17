@@ -31,4 +31,9 @@ Keep service-specific wrappers with their service. For example, `rpc.proto` owns
 messages. `internal/validator.proto` owns the signing request and signature response. Submission envelopes belong in
 `types/submission.proto`. Block proving requests belong in `types/block_proving.proto`.
 
+Each method has a dedicated request message and a dedicated response message. Name these messages after the method, with
+`Request` and `Response` suffixes. Add a service prefix when method names repeat within one package. Use dedicated empty
+messages for methods that have no request fields or response fields. Do not share endpoint messages between methods or
+services. Endpoint messages can contain shared payload types.
+
 See the [migration guidance](../README.md#canonical-protobuf-migration) before updating an existing client.

@@ -1,16 +1,12 @@
-## Summary
-
 <!--
-Explain the change for reviewers.
+Briefly describe what this PR changes, then explain why the change is needed.
+Help reviewers understand the intent rather than walking through the diff.
 
-Why:
-- What problem does this solve?
-- What user/operator/developer behavior changes?
-- Which issues does this close? Use "Closes #123" where applicable.
+Call out anything that needs extra attention, such as a design tradeoff,
+compatibility concern, or important constraint. Link related issues and use
+"Closes #123" when this PR resolves one.
 
-How:
-- What is the main implementation approach?
-- Mention important tradeoffs, migrations, compatibility notes, or follow-up work.
+You do not need a separate validation or verification section.
 -->
 
 ## Changelog

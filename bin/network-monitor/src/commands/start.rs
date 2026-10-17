@@ -38,6 +38,11 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
 
     let faucet_rx = config.faucet_url.is_some().then(|| tasks.spawn_faucet(&config));
 
+    let funding_rx = config
+        .funding_service_url
+        .is_some()
+        .then(|| tasks.spawn_funding_checker(&config));
+
     let explorer_rx = config.explorer_url.is_some().then(|| tasks.spawn_explorer_checker(&config));
 
     let (ntx_increment_rx, ntx_tracking_rx) = if config.disable_ntx_service {
@@ -52,8 +57,7 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
         .is_some()
         .then(|| tasks.spawn_note_transport_checker(&config));
 
-    let validator_rx =
-        config.validator_url.is_some().then(|| tasks.spawn_validator_checker(&config));
+    let validator_rxs = tasks.spawn_validator_checkers(&config);
 
     let agglayer_rx = config
         .agglayer_monitor_url
@@ -64,11 +68,12 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     let services = std::iter::once(rpc_rx)
         .chain(prover_rxs)
         .chain(faucet_rx)
+        .chain(funding_rx)
         .chain(explorer_rx)
         .chain(ntx_increment_rx)
         .chain(ntx_tracking_rx)
         .chain(note_transport_rx)
-        .chain(validator_rx)
+        .chain(validator_rxs)
         .chain(agglayer_rx)
         .collect();
 

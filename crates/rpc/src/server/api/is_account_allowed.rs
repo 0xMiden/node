@@ -8,16 +8,20 @@ use super::{RpcBackend, RpcService};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::IsAccountAllowed for RpcService {
+impl proto::server::miden_node_v1_node_service::IsAccountAllowed for RpcService {
     type Input = AccountId;
     type Output = bool;
 
-    fn decode(request: proto::rpc::IsAccountAllowedRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::IsAccountAllowedRequest,
+    ) -> tonic::Result<Self::Input> {
         request.decode_and_verify().map_err(ConversionError::into_status)
     }
 
-    fn encode(allowed: Self::Output) -> tonic::Result<proto::rpc::IsAccountAllowedResponse> {
-        Ok(proto::rpc::IsAccountAllowedResponse { allowed })
+    fn encode(
+        allowed: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::IsAccountAllowedResponse> {
+        Ok(proto::miden::node::v1::IsAccountAllowedResponse { allowed })
     }
 
     #[miden_instrument(target = COMPONENT, name = "is_account_allowed", err)]
@@ -35,7 +39,7 @@ impl proto::server::rpc_api::IsAccountAllowed for RpcService {
                 .await
                 .map_err(|error| Status::internal(error.as_report())),
             RpcBackend::FullNode { source_rpc, .. } => {
-                let mut request = Request::new(proto::rpc::IsAccountAllowedRequest {
+                let mut request = Request::new(proto::miden::node::v1::IsAccountAllowedRequest {
                     account_id: Some(account_id.into()),
                 });
                 if let Some(accept) = metadata.get(http::header::ACCEPT.as_str()) {

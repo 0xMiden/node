@@ -16,7 +16,7 @@ use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, 
 use thiserror::Error;
 
 use crate::errors::{ConversionError, ConversionResultExt};
-use crate::generated::sequencer;
+use crate::generated::miden::sequencer::v1 as sequencer;
 
 impl VerifyWith<u32> for sequencer::DecodedAuthenticatedTransactionBatch {
     type Verified = (ProvenBatch, ProposedBatch, Vec<TransactionInputs>);

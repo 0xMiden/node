@@ -1,14 +1,14 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_proto::server::ntx_builder_api;
+use miden_node_proto::server::miden_ntx_builder_v1_network_transaction_builder_service;
 use miden_node_proto_build::ntx_builder_api_descriptor;
 use miden_node_tracing::grpc::grpc_trace_fn;
 use miden_node_tracing::info;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
+use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic_reflection::server;
 use tower_http::trace::TraceLayer;
 
@@ -46,7 +46,7 @@ impl NtxBuilderRpcServer {
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
         let request_timeout = self.request_timeout;
-        let api_service = ntx_builder_api::service(self);
+        let api_service = miden_ntx_builder_v1_network_transaction_builder_service::service(self);
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(ntx_builder_api_descriptor())
             .build_v1()
@@ -62,16 +62,13 @@ impl NtxBuilderRpcServer {
             ntx_builder.listen = endpoint.to_string()
         );
 
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(request_timeout)
             .add_service(api_service)
             .add_service(reflection_service)
-            .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
-                shutdown.cancelled_owned(),
-            )
+            .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
             .context("failed to serve NTX builder gRPC API")
     }

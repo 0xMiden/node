@@ -1,0 +1,33 @@
+[package]
+authors.workspace      = true
+description            = "Protobuf persistence codecs for Miden node"
+edition.workspace      = true
+homepage.workspace     = true
+license.workspace      = true
+name                   = "miden-node-persistence"
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[dependencies]
+miden-objects  = { workspace = true }
+miden-protobuf = { workspace = true }
+miden-protocol = { workspace = true }
+prost          = { workspace = true }
+thiserror      = { workspace = true }
+
+[build-dependencies]
+miden-objects  = { workspace = true }
+miden-protobuf = { features = ["build"], workspace = true }
+prost-build    = { workspace = true }
+protox         = { workspace = true }
+
+[dev-dependencies]
+miden-protocol = { features = ["testing"], workspace = true }
+
+[lib]
+doctest = false

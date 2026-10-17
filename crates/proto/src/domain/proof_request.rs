@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use miden_protobuf::{BuildUnchecked, ConversionResultExt, Verify};
+use miden_protobuf::{BuildUnchecked, ConversionResultExt, DecodeMessageExt, Verify};
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
@@ -8,13 +8,6 @@ use miden_protocol::block::nullifier_tree::NullifierWitness;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::note::{NoteId, NoteInclusionProof, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
-use miden_protocol::utils::serde::{
-    ByteReader,
-    ByteWriter,
-    Deserializable,
-    DeserializationError,
-    Serializable,
-};
 
 use crate::errors::ConversionError;
 use crate::generated as proto;
@@ -178,21 +171,16 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockInputs {
     }
 }
 
-impl Serializable for BlockProofRequest {
-    fn write_into<W: ByteWriter>(&self, target: &mut W) {
-        let Self { tx_batches, block_header, block_inputs } = self;
-        tx_batches.write_into(target);
-        block_header.write_into(target);
-        block_inputs.write_into(target);
-    }
-}
+impl miden_node_persistence::ProtobufValue for BlockProofRequest {
+    type Message = proto::block_proving::BlockProofRequest;
 
-impl Deserializable for BlockProofRequest {
-    fn read_from<R: ByteReader>(source: &mut R) -> Result<Self, DeserializationError> {
-        Ok(Self {
-            tx_batches: OrderedBatches::read_from(source)?,
-            block_header: BlockHeader::read_from(source)?,
-            block_inputs: BlockInputs::read_from(source)?,
-        })
+    fn to_proto(&self) -> Self::Message {
+        self.into()
+    }
+
+    fn from_proto(
+        message: Self::Message,
+    ) -> Result<Self, miden_node_persistence::PersistenceError> {
+        Ok(message.decode_and_build_unchecked()?)
     }
 }

@@ -5,12 +5,12 @@ sidebar_position: 1
 
 # Public RPC
 
-This page summarizes the public gRPC `rpc.Api` service.
+This page summarizes the public gRPC `miden.node.v1.NodeService` service.
 
 As a reminder, you can inspect the exact schema on any deployed network using gRPC reflection:
 
 ```bash
-grpcurl rpc.testnet.miden.io:443 describe rpc.Api
+grpcurl rpc.testnet.miden.io:443 describe miden.node.v1.NodeService
 ```
 
 ## Status and Limits
@@ -55,6 +55,13 @@ invitation codes over a network. Do not log invitation codes. Full nodes forward
 
 `IsAccountAllowed` takes an account ID in `account_id` and returns `true` if allowlist enforcement is disabled or the
 account is allowlisted. Full nodes forward this query to the sequencer.
+
+`IsInvitationCodeValid` returns `true` if the invitation code can be used to register an account. The code must be
+registered in the invitation registry and unused. Send the code in `invitation_code`. This check does not consume the
+code.
+
+When account allowlist enforcement is disabled, this method always returns `true`. With enforcement enabled, an empty
+code is rejected with `INVALID_ARGUMENT`. Full nodes forward this query to the sequencer.
 
 ## Transaction Submission
 

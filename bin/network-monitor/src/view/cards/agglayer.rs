@@ -4,7 +4,7 @@
 use maud::{Markup, html};
 
 use super::super::helpers::{
-    copy_button,
+    copyable_value,
     format_success_rate,
     format_timestamp,
     metric_row,
@@ -17,8 +17,7 @@ pub(in crate::view) fn render_agglayer(details: &AgglayerStatusDetails) -> Marku
         div class="service-details" {
             div class="detail-item" {
                 strong { "URL: " }
-                (details.url)
-                (copy_button(&details.url, "URL"))
+                (copyable_value(&details.url, "URL"))
             }
             div class="detail-item" {
                 strong { "Runner: " }

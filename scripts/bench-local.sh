@@ -13,17 +13,17 @@
 #
 # Assumes these binaries are on $PATH (install with `make install-node`,
 # `make install-validator`, `make install-ntx-builder`,
-# `make install-remote-prover`, `make install-benchmark`):
+# `make install-remote-prover`, `make install-benchmark`, `make install-usdcx-genesis`):
 #   - miden-node
 #   - miden-validator
 #   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
-#   - xusdc-genesis (install from vendor/miden-usdcx/crates/xusdc-genesis)
+#   - miden-usdcx-genesis
 #
 # Usage:
-#   Export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH, MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT,
-#   MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET, and MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE first.
+#   Export MIDEN_VALIDATOR_STORAGE_KEY_FILE with the path to a completed bundle first.
+#   The runner passes this path directly to the validator.
 #   scripts/bench-local.sh                       # 5 tx pairs, local prover
 #   N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
 #   USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload create-proofs to the remote-prover
@@ -104,20 +104,12 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark xusdc-genesis)
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark miden-usdcx-genesis)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
-required_storage_key_vars=(
-    MIDEN_VALIDATOR_STORAGE_KEY_EPOCH
-    MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT
-    MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET
-    MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE
-)
-for var in "${required_storage_key_vars[@]}"; do
-    [ -n "${!var:-}" ] || die "$var is required"
-done
+[ -n "${MIDEN_VALIDATOR_STORAGE_KEY_FILE:-}" ] || die "MIDEN_VALIDATOR_STORAGE_KEY_FILE is required"
 
 if [ -e "$DATA/node" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ] \
     || [ -e "$DATA/ntx-builder" ] || [ -e "$DATA/usdcx" ]; then
@@ -134,7 +126,7 @@ say "creating the native USDCx faucet and funding account"
 mkdir "$DATA/usdcx"
 (
     cd "$DATA/usdcx"
-    DISTRIBUTOR_OUTPUT="$(xusdc-genesis new-distributor)"
+    DISTRIBUTOR_OUTPUT="$(miden-usdcx-genesis new-distributor)"
     printf '%s\n' "$DISTRIBUTOR_OUTPUT"
     DISTRIBUTOR_ID="$(printf '%s\n' "$DISTRIBUTOR_OUTPUT" | sed -n 's/^  hex: *//p')"
     [ -n "$DISTRIBUTOR_ID" ] || die "USDCx genesis did not report the distributor account ID"
@@ -153,8 +145,8 @@ mkdir "$DATA/usdcx"
   }
 }
 EOF
-    xusdc-genesis faucet
-    xusdc-genesis prefund
+    miden-usdcx-genesis faucet
+    miden-usdcx-genesis prefund
 ) > "$LOGS/bootstrap-usdcx.log" 2>&1
 
 say "building genesis block"
@@ -193,6 +185,7 @@ miden-ntx-builder bootstrap \
 start_bg validator miden-validator start \
     --listen             "127.0.0.1:$VALIDATOR_PORT" \
     --data-directory     "$DATA/validator" \
+    --storage-key.file    "$MIDEN_VALIDATOR_STORAGE_KEY_FILE" \
     --signing-key.hex    "$VALIDATOR_SIGNING_KEY_HEX" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX"
 wait_for_port "$VALIDATOR_PORT" validator

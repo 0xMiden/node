@@ -1,7 +1,6 @@
 use std::path::Path;
 
 use anyhow::Context;
-use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{GoldenOperatorKey, PrivateRecordShareRequest, StoredPrivateRecord};
 use rand_core_06::OsRng;
 
@@ -23,7 +22,7 @@ pub(super) fn issue(
     let record_bytes = fs_err::read(record_path).with_context(|| {
         format!("failed to read private record bundle from {}", record_path.display())
     })?;
-    let record = StoredPrivateRecord::read_from_bytes(&record_bytes)
+    let record = miden_node_persistence::decode::<StoredPrivateRecord>(&record_bytes)
         .context("private record bundle is invalid")?;
 
     let request = PrivateRecordShareRequest::for_record(&record);

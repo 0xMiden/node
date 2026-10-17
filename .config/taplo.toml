@@ -1,4 +1,3 @@
-exclude = ["vendor/**"]
 
 [formatting]
 align_entries         = true
