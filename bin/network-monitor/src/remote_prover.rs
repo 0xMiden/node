@@ -48,12 +48,12 @@ pub enum ProofType {
     Unknown,
 }
 
-impl From<proto::remote_prover::ProofType> for ProofType {
-    fn from(value: proto::remote_prover::ProofType) -> Self {
+impl From<proto::miden::remote_prover::v1::ProofType> for ProofType {
+    fn from(value: proto::miden::remote_prover::v1::ProofType) -> Self {
         match value {
-            proto::remote_prover::ProofType::Transaction => ProofType::Transaction,
-            proto::remote_prover::ProofType::Batch => ProofType::Batch,
-            proto::remote_prover::ProofType::Block => ProofType::Block,
+            proto::miden::remote_prover::v1::ProofType::Transaction => ProofType::Transaction,
+            proto::miden::remote_prover::v1::ProofType::Batch => ProofType::Batch,
+            proto::miden::remote_prover::v1::ProofType::Block => ProofType::Block,
         }
     }
 }
@@ -299,7 +299,11 @@ impl Service for ProverStatusService {
         ),
     )]
     async fn check(&mut self) -> ServiceStatus {
-        match self.client.status(()).await {
+        match self
+            .client
+            .status(miden_node_proto::generated::miden::remote_prover::v1::ProxyStatusRequest {})
+            .await
+        {
             Ok(response) => {
                 self.last_status = Some(RemoteProverStatusDetails::from_proxy_status(
                     response.into_inner(),
@@ -539,15 +543,19 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 async fn generate_prover_test_payload(
     rpc_url: &Url,
     funding: Option<&FundingClient>,
-) -> anyhow::Result<proto::remote_prover::ProofRequest> {
+) -> anyhow::Result<proto::miden::remote_prover::v1::ProveRequest> {
     let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, funding).await?;
-    Ok(proto::remote_prover::ProofRequest {
-        request: Some(proto::remote_prover::proof_request::Request::Transaction(tx_inputs.into())),
+    Ok(proto::miden::remote_prover::v1::ProveRequest {
+        request: Some(proto::miden::remote_prover::v1::prove_request::Request::Transaction(
+            tx_inputs.into(),
+        )),
     })
 }
 
-fn transaction_proof_size(response: proto::remote_prover::Proof) -> Result<usize, tonic::Status> {
-    use proto::remote_prover::proof::Proof;
+fn transaction_proof_size(
+    response: proto::miden::remote_prover::v1::ProveResponse,
+) -> Result<usize, tonic::Status> {
+    use proto::miden::remote_prover::v1::prove_response::Proof;
 
     match response.proof {
         Some(Proof::Transaction(proof)) => Ok(proof.encoded_len()),
@@ -568,15 +576,16 @@ mod tests {
     #[test]
     fn missing_probe_response_variant_is_a_protocol_error() {
         let error =
-            transaction_proof_size(proto::remote_prover::Proof { proof: None }).unwrap_err();
+            transaction_proof_size(proto::miden::remote_prover::v1::ProveResponse { proof: None })
+                .unwrap_err();
 
         assert_eq!(error.code(), tonic::Code::Internal);
     }
 
     #[test]
     fn mismatched_probe_response_variant_is_a_protocol_error() {
-        let response = proto::remote_prover::Proof {
-            proof: Some(proto::remote_prover::proof::Proof::Block(
+        let response = proto::miden::remote_prover::v1::ProveResponse {
+            proof: Some(proto::miden::remote_prover::v1::prove_response::Proof::Block(
                 proto::primitives::ExecutionProof::default(),
             )),
         };

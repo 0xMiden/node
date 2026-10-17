@@ -36,8 +36,7 @@ fn note_with_advice(seed: u32, tag: u32, elements: usize) -> NewNote {
     NewNote {
         header: *note.header(),
         details: miden_protocol::note::NoteDetails::from(note),
-        after_block_num: Some(BlockNumber::from(10)),
-        committed_in_block: None,
+        committed_in_block: BlockNumber::from(10),
     }
 }
 
@@ -80,7 +79,7 @@ async fn retained_note_roundtrips_after_reopening() {
     let (dir, writer, reader) = database();
     let mut original = note(7, u32::MAX);
     let before = now_micros();
-    original.after_block_num = Some(BlockNumber::from(u32::MAX));
+    original.committed_in_block = BlockNumber::from(u32::MAX);
     store_note(&writer, original.clone(), u64::MAX).await.unwrap();
     drop((writer, reader));
 
@@ -90,24 +89,46 @@ async fn retained_note_roundtrips_after_reopening() {
     let retained = &page.notes[0];
     assert_eq!(retained.header, original.header);
     assert_eq!(retained.details, original.details);
-    assert_eq!(retained.after_block_num, original.after_block_num);
+    assert_eq!(retained.committed_in_block, original.committed_in_block);
     assert!((before..=now_micros()).contains(&retained.created_at));
     assert_eq!(retained.seq, 1);
     assert!(!page.has_more);
 }
 
 #[tokio::test]
+async fn inclusion_block_is_required_and_bounded() {
+    let (_dir, writer, reader) = database();
+    let original = note(1, 42);
+    store_note(&writer, original.clone(), u64::MAX).await.unwrap();
+    for block_num in [None, Some(-1_i64), Some(i64::from(u32::MAX) + 1)] {
+        let error = writer
+            .write("set invalid inclusion block", move |tx| {
+                tx.execute("UPDATE notes SET committed_in_block = ?1", &[&block_num])?;
+                Ok::<_, miden_node_db::DatabaseError>(())
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error,
+            miden_node_db::DatabaseError::Rusqlite(rusqlite::Error::SqliteFailure(code, _))
+                if code.code == rusqlite::ErrorCode::ConstraintViolation
+        ));
+        let page = fetch_notes(&reader, vec![42], None).await.unwrap();
+        assert_eq!(page.notes[0].committed_in_block, original.committed_in_block);
+    }
+}
+
+#[tokio::test]
 async fn retry_at_capacity_preserves_first_write() {
     let (_dir, writer, reader) = database();
     let original = note(1, 42);
-    let limit = (original.header.to_bytes().len() + original.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&original.header, &original.details).unwrap() as u64;
     assert_eq!(
         store_note(&writer, original.clone(), limit).await.unwrap(),
         StoreResult::Inserted
     );
     let mut retry = original.clone();
     let created_at = fetch_notes(&reader, vec![42], None).await.unwrap().notes[0].created_at;
-    retry.after_block_num = Some(BlockNumber::from(99));
+    retry.committed_in_block = BlockNumber::from(99);
     assert_eq!(store_note(&writer, retry, limit).await.unwrap(), StoreResult::AlreadyPresent);
     assert!(matches!(
         store_note(&writer, note(2, 42), limit).await,
@@ -115,8 +136,7 @@ async fn retry_at_capacity_preserves_first_write() {
     ));
     let page = fetch_notes(&reader, vec![42], None).await.unwrap();
     assert_eq!(page.notes.len(), 1);
-    assert_eq!(page.notes[0].after_block_num, original.after_block_num);
-    assert_eq!(page.notes[0].committed_in_block, None);
+    assert_eq!(page.notes[0].committed_in_block, original.committed_in_block);
     assert_eq!(page.notes[0].created_at, created_at);
     assert_eq!(page.notes[0].seq, 1);
     assert!(!page.has_more);
@@ -195,7 +215,7 @@ async fn failed_insert_rolls_back_capacity_and_cursor() {
         Ok::<_, miden_node_db::DatabaseError>(())
     }).await.unwrap();
     let item = note(1, 42);
-    let limit = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     assert!(store_note(&writer, item.clone(), limit).await.is_err());
     writer
         .write("allow insertion", |tx| {
@@ -212,7 +232,7 @@ async fn failed_insert_rolls_back_capacity_and_cursor() {
 async fn concurrent_writes_share_capacity() {
     let (_dir, writer, reader) = database();
     let item = note(1, 42);
-    let limit = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let limit = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     let (first, second) =
         tokio::join!(store_note(&writer, item, limit), store_note(&writer, note(2, 42), limit),);
     assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
@@ -276,7 +296,7 @@ async fn insertion_deletes_at_most_ten_oldest_notes_with_cursor_ties() {
 async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
     let (dir, writer, reader) = database();
     let item = note(1, 42);
-    let size = (item.header.to_bytes().len() + item.details.to_bytes().len()) as u64;
+    let size = encoded_note_payload_len(&item.header, &item.details).unwrap() as u64;
     for seed in 1..=2 {
         seed_expired(&writer, seed, 0, size * 2).await;
     }
@@ -296,7 +316,7 @@ async fn insertion_uses_cleanup_capacity_and_preserves_cursor_after_reopen() {
 async fn insufficient_reclaimed_capacity_rolls_back_deletions_and_cursor() {
     let (_dir, writer, reader) = database();
     let item = note(1, 42);
-    let size = item.header.to_bytes().len() + item.details.to_bytes().len();
+    let size = encoded_note_payload_len(&item.header, &item.details).unwrap();
     let limit = (size * 12) as u64;
     for seed in 1..=12 {
         seed_expired(&writer, seed, 0, limit).await;
@@ -406,4 +426,43 @@ async fn cursor_survives_cleanup_of_all_notes() {
     assert_eq!(next.notes.len(), 1);
     assert_eq!(next.cursor.sequence, 2);
     assert_eq!(next.cursor.nonce, first.cursor.nonce);
+}
+
+#[tokio::test]
+async fn protobuf_size_matches_retained_bytes_and_sql_blobs() {
+    let (_dir, writer, reader) = database();
+    let original = note(71, 42);
+    let size = miden_node_persistence::encode(&original.header).len()
+        + miden_node_persistence::encode(&original.details).len();
+    store_note(&writer, original.clone(), size as u64).await.unwrap();
+    assert_eq!(
+        store_note(&writer, original, size as u64).await.unwrap(),
+        StoreResult::AlreadyPresent
+    );
+    let (retained, stored) = reader
+        .read("sizes", |tx| {
+            let retained = queries::select_retained_bytes(tx)?;
+            let stored =
+                tx.query("SELECT LENGTH(header) + LENGTH(details) FROM notes", &[], |row| {
+                    row.get::<i64>(0)
+                })?;
+            Ok::<_, StorageError>((retained, stored[0]))
+        })
+        .await
+        .unwrap();
+    assert_eq!(retained, i64::try_from(size).unwrap());
+    assert_eq!(stored, retained);
+}
+
+#[tokio::test]
+async fn protobuf_quota_rejects_one_byte_below_payload() {
+    let (_dir, writer, reader) = database();
+    let original = note(72, 42);
+    let size = encoded_note_payload_len(&original.header, &original.details).unwrap() as u64;
+    assert!(matches!(
+        store_note(&writer, original.clone(), size - 1).await,
+        Err(StorageError::Capacity(_))
+    ));
+    assert!(fetch_notes(&reader, vec![42], None).await.unwrap().notes.is_empty());
+    assert_eq!(store_note(&writer, original, size).await.unwrap(), StoreResult::Inserted);
 }

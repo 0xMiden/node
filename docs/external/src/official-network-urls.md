@@ -29,7 +29,7 @@ https://<service>.<network>.miden.io
 The public RPC endpoints use TLS. Tools such as `grpcurl` use the host name and port `443`:
 
 ```bash
-grpcurl rpc.testnet.miden.io:443 rpc.Api/Status
+grpcurl rpc.testnet.miden.io:443 miden.node.v1.NodeService/Status
 ```
 
 See [gRPC API](/rpc) for schema discovery, endpoint groups, subscriptions, limits, and method-specific errors.
@@ -44,4 +44,8 @@ miden-node bootstrap \
   --network testnet
 ```
 
-Use `--network devnet` for devnet.
+Use `--network mainnet` for mainnet or `--network devnet` for devnet. Genesis downloads use
+`https://genesis.<network>.miden.io`.
+
+Full nodes also accept `--network mainnet`, `--network testnet`, or `--network devnet` to sync from
+`https://rpc.<network>.miden.io`. See [Full Node Operation](/full-node/operation) for startup options.

@@ -23,7 +23,6 @@ use miden_node_tracing::{Instrument, debug, info, miden_instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::utils::serde::Deserializable;
 use miden_protocol::vm::ExecutionProof;
 use thiserror::Error;
 use tokio::sync::watch;
@@ -260,7 +259,7 @@ async fn generate_block_proof(
             ProveBlockError::Fatal(ProofSchedulerError::MissingProvingInputs(block_num))
         })?;
 
-    let request = BlockProofRequest::read_from_bytes(&bytes)
+    let request = miden_node_persistence::decode::<BlockProofRequest>(&bytes)
         .map_err(|e| ProveBlockError::Fatal(ProofSchedulerError::DeserializationFailed(e)))?;
 
     let proof = block_prover
@@ -313,5 +312,53 @@ mod tests {
             .expect("join set should contain the aborted proof task");
 
         assert!(result.is_err_and(|err| err.is_cancelled()));
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use std::collections::BTreeMap;
+
+    use miden_protocol::batch::OrderedBatches;
+    use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
+    use miden_protocol::transaction::PartialBlockchain;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn persisted_request_runs_through_local_prover() {
+        let key = miden_protocol::testing::random_secret_key::random_secret_key();
+        let genesis = miden_node_store::GenesisState::new(
+            vec![],
+            miden_node_utils::fee::test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+            miden_node_utils::fee::test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let inputs = BlockInputs::new(
+            genesis.inner().header().clone(),
+            PartialBlockchain::default(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (header, _) = ProposedBlock::new_at(inputs.clone(), vec![], 1)
+            .unwrap()
+            .into_header_and_body()
+            .unwrap();
+        let request = BlockProofRequest {
+            tx_batches: OrderedBatches::new(vec![]),
+            block_header: header.clone(),
+            block_inputs: inputs,
+        };
+        let decoded: BlockProofRequest =
+            miden_node_persistence::decode(&miden_node_persistence::encode(&request)).unwrap();
+        assert_eq!(decoded.block_header, header);
+        BlockProver::local()
+            .prove(decoded.tx_batches, decoded.block_inputs, &decoded.block_header)
+            .await
+            .unwrap();
     }
 }

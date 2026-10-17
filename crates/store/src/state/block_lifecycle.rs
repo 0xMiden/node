@@ -321,6 +321,7 @@ mod tests {
 
     use miden_protocol::Felt;
     use miden_protocol::account::{
+        AccountCodePatch,
         AccountPatch,
         AccountStoragePatch,
         AccountVaultPatch,
@@ -420,7 +421,7 @@ mod tests {
             account_id,
             storage,
             AccountVaultPatch::default(),
-            None,
+            AccountCodePatch::default(),
             Some(Felt::new_unchecked(2)),
         )
         .unwrap();

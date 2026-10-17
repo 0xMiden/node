@@ -11,7 +11,11 @@ use anyhow::{Context, Result};
 use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::rpc::{FinalityLevel, SyncChainMmrRequest, SyncChainMmrResponse};
+use miden_node_proto::generated::miden::node::v1::{
+    FinalityLevel,
+    SyncChainMmrRequest,
+    SyncChainMmrResponse,
+};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::merkle::mmr::{MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -75,7 +79,7 @@ fn decode_chain_tip_state(
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::generated::rpc::SyncChainMmrResponse;
+    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
     use miden_protocol::Word;
     use miden_protocol::account::AccountId;
     use miden_protocol::asset::AssetId;

@@ -57,7 +57,7 @@ impl BootstrapCommand {
         let genesis_block =
             read_bootstrap_genesis_block(self.genesis_block_file.as_deref(), self.network).await?;
         let genesis_commitment = genesis_block.inner().header().commitment();
-        State::bootstrap(genesis_block, &self.data_directory)?;
+        State::bootstrap(genesis_block, &self.data_directory).await?;
         info!(
             target: crate::LOG_TARGET,
             "Node bootstrap complete",

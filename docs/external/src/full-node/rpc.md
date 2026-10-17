@@ -5,9 +5,9 @@ sidebar_position: 6
 
 # RPC
 
-A full node serves the public `rpc.Api` service from its local replicated state. Use it as a private or dedicated RPC
-endpoint for applications, indexers, explorers, and other infrastructure that should not depend directly on official
-public RPC capacity.
+A full node serves the public `miden.node.v1.NodeService` service from its local replicated state. Use it as a private
+or dedicated RPC endpoint for applications, indexers, explorers, and other infrastructure that should not depend
+directly on official public RPC capacity.
 
 ## Local Queries
 
@@ -24,9 +24,9 @@ cannot reach a validator or its upstream source can no longer serve submitting c
 
 ## Account Registration
 
-Full nodes forward `RegisterAccount` requests to their configured upstream RPC source. The sequencer stores the
-registration. Full nodes do not maintain a local allowlist. This also applies when pre-authenticated transaction
-submission is configured.
+Full nodes forward `RegisterAccount`, `IsAccountAllowed`, and `IsInvitationCodeValid` requests to their configured
+upstream RPC source. The sequencer stores the registration. Full nodes do not maintain a local allowlist. This also
+applies when pre-authenticated transaction submission is configured.
 
 ## Transaction Submission
 

@@ -3,10 +3,11 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_persistence::ProtobufValue;
+use miden_node_persistence::prost::Message;
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteDetails, NoteHeader, NoteTag};
-use miden_protocol::utils::serde::Serializable;
 
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -24,8 +25,7 @@ mod queries;
 pub struct NewNote {
     pub header: NoteHeader,
     pub details: NoteDetails,
-    pub after_block_num: Option<BlockNumber>,
-    pub committed_in_block: Option<BlockNumber>,
+    pub committed_in_block: BlockNumber,
 }
 
 /// A persisted note with its storage timestamp and cursor.
@@ -36,8 +36,7 @@ pub struct StoredNote {
     /// Microseconds since the Unix epoch, assigned when storage accepts the note.
     pub created_at: i64,
     pub seq: i64,
-    pub after_block_num: Option<BlockNumber>,
-    pub committed_in_block: Option<BlockNumber>,
+    pub committed_in_block: BlockNumber,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,13 +76,15 @@ pub struct FetchPage {
 /// Creates a database with the current schema. The path must not exist.
 #[miden_instrument(target = COMPONENT, err)]
 pub fn bootstrap(path: &Path) -> anyhow::Result<()> {
-    migrator()?.bootstrap(path)
+    let migrator = migrator()?;
+    migrator.create_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Applies pending migrations to an existing database.
 #[miden_instrument(target = COMPONENT, err)]
 pub fn migrate(path: &Path) -> anyhow::Result<()> {
-    migrator()?.migrate(path)
+    let migrator = migrator()?;
+    migrator.open_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Verifies the schema and opens the database handles.
@@ -91,6 +92,11 @@ pub fn migrate(path: &Path) -> anyhow::Result<()> {
 pub fn load(path: &Path) -> anyhow::Result<(DbWriter, DbReader)> {
     migrator()?.verify_latest_schema(path)?;
     Ok(miden_node_db::sqlite::open(path)?)
+}
+
+/// Returns the size of the stored protobuf payloads.
+pub fn encoded_note_payload_len(header: &NoteHeader, details: &NoteDetails) -> Option<usize> {
+    header.to_proto().encoded_len().checked_add(details.to_proto().encoded_len())
 }
 
 /// Stores a validated note and removes up to ten expired notes in the same transaction. A retry
@@ -109,10 +115,7 @@ pub async fn store_note(
             }
             let retained = queries::select_retained_bytes(tx)?;
 
-            let header = note.header.to_bytes();
-            let note_bytes = header
-                .len()
-                .checked_add(note.details.to_bytes().len())
+            let note_bytes = encoded_note_payload_len(&note.header, &note.details)
                 .filter(|size| *size <= FETCH_NOTES_MAX_BYTES)
                 .ok_or_else(|| {
                     StorageError::Capacity(format!(

@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
-use miden_node_tracing::warn;
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -13,7 +13,7 @@ use miden_protocol::block::BlockNumber;
 use miden_standards::account::faucets::FungibleFaucet;
 use serde::{Deserialize, Serialize};
 
-use crate::LOG_TARGET;
+use crate::COMPONENT;
 use crate::node::RpcNodeClient;
 
 // NATIVE ASSET
@@ -144,13 +144,7 @@ impl StatusRefresher {
     /// stays at the value of the last successful read.
     pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
         loop {
-            if let Err(err) = self.refresh().await {
-                warn!(
-                    &err,
-                    target: LOG_TARGET,
-                    "Failed to read the funding account"
-                );
-            }
+            let _ = self.refresh().await;
 
             tokio::select! {
                 () = tokio::time::sleep(self.interval) => {},
@@ -160,6 +154,15 @@ impl StatusRefresher {
     }
 
     /// Reads the funding account at the chain tip and publishes its balance.
+    #[miden_instrument(
+        parent = None,
+        target = COMPONENT,
+        name = "funding.refresh_status",
+        fields(
+            account.id = self.account_id,
+        ),
+        err,
+    )]
     async fn refresh(&self) -> Result<()> {
         let (vault, block_num) = self.node.public_account_vault(self.account_id).await?;
         // The fee parameters are read at the block the vault came from, so the reported base fee
@@ -168,6 +171,11 @@ impl StatusRefresher {
 
         let balance = vault.get_balance(self.fee_asset_id).map_or(0, |amount| amount.as_u64());
         self.status.update(balance, block_num, fee_parameters.verification_base_fee());
+        miden_span_record!(
+            asset.balance = balance,
+            block.number = block_num,
+            fee.verification_base_fee = fee_parameters.verification_base_fee()
+        );
 
         Ok(())
     }

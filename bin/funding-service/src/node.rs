@@ -14,13 +14,13 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-use miden_node_proto::generated::rpc::{
-    AccountRequest as ProtoAccountRequest,
-    BlockHeaderByNumberRequest,
+use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+use miden_node_proto::generated::miden::node::v1::{
     BlockRange,
     FinalityLevel,
-    NotesByIdRequest,
+    GetAccountRequest as ProtoAccountRequest,
+    GetBlockHeaderByNumberRequest,
+    GetNotesByIdRequest,
     SyncChainMmrRequest,
     SyncNotesRequest,
     SyncNullifiersRequest,
@@ -28,7 +28,15 @@ use miden_node_proto::generated::rpc::{
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
-use miden_node_tracing::warn;
+use miden_node_tracing::{
+    ErrorSpanExt,
+    Level,
+    Span,
+    enabled,
+    miden_instrument,
+    miden_span_record,
+    warn,
+};
 use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
@@ -76,6 +84,11 @@ pub struct RpcNodeClient {
 
 impl RpcNodeClient {
     /// Connects to the node's RPC API and verifies the attested transaction encryption key.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.connect",
+        err,
+    )]
     pub async fn connect(
         rpc_url: &Url,
         timeout: Duration,
@@ -114,6 +127,14 @@ impl RpcNodeClient {
     }
 
     /// The fee parameters of `block_num`, or at the chain tip when it is `None`.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.fee_parameters",
+        fields(
+            block.number = block_num,
+        ),
+        err,
+    )]
     pub async fn fee_parameters(&self, block_num: Option<BlockNumber>) -> Result<FeeParameters> {
         let header = fetch_block_header(&mut self.rpc_client.clone(), block_num).await?;
 
@@ -121,6 +142,14 @@ impl RpcNodeClient {
     }
 
     /// The asset vault of a public account, with the block number the node observed it at.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.public_account_vault",
+        fields(
+            account.id = account_id,
+        ),
+        err,
+    )]
     pub async fn public_account_vault(
         &self,
         account_id: AccountId,
@@ -166,11 +195,25 @@ impl RpcNodeClient {
     }
 
     /// The committed chain tip header with a partial blockchain which proves it.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.tip_chain_state",
+        err,
+    )]
     pub async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)> {
         fetch_tip_chain_state(&mut self.rpc_client.clone(), self.genesis_commitment).await
     }
 
     /// A public account in full with its account-tree witness at `block_num`.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.public_account",
+        fields(
+            account.id = account_id,
+            block.number = block_num,
+        ),
+        err,
+    )]
     pub async fn public_account(
         &self,
         account_id: AccountId,
@@ -180,6 +223,17 @@ impl RpcNodeClient {
     }
 
     /// Returns one page of deposits and the last block checked in the given range.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.sync_deposits",
+        level = "debug",
+        fields(
+            account.id = funder,
+            block_range.from = from_block,
+            block_range.to = to_block,
+        ),
+        err(level = "debug"),
+    )]
     pub async fn sync_deposits(
         &self,
         funder: AccountId,
@@ -226,17 +280,32 @@ impl RpcNodeClient {
             }
         }
 
-        let deposits = self
+        if enabled!(target: COMPONENT, Level::DEBUG) {
+            miden_span_record!(note.count = note_ids.len(), block.number = last_checked_block);
+        }
+        let deposits: Vec<_> = self
             .get_public_notes_by_id(&note_ids)
             .await?
             .into_iter()
             .filter(|note| is_deposit(note, funder, fee_asset_id))
             .collect();
 
+        if enabled!(target: COMPONENT, Level::DEBUG) {
+            miden_span_record!(deposit.count = deposits.len());
+        }
         Ok(SyncedDeposits { deposits, last_checked_block })
     }
 
     /// The notes among `note_ids` whose details the node stores.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.get_notes",
+        level = "debug",
+        fields(
+            note.count = note_ids.len(),
+        ),
+        err(level = "debug"),
+    )]
     async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
         let mut notes = Vec::new();
 
@@ -248,7 +317,7 @@ impl RpcNodeClient {
             let response = self
                 .rpc_client
                 .clone()
-                .get_notes_by_id(NotesByIdRequest { note_ids })
+                .get_notes_by_id(GetNotesByIdRequest { note_ids })
                 .await
                 .context("failed to fetch notes from RPC")?
                 .into_inner();
@@ -270,6 +339,15 @@ impl RpcNodeClient {
     }
 
     /// Returns the requested nullifiers spent from genesis through `tip`.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.spent_nullifiers",
+        fields(
+            nullifier.count = nullifiers.len(),
+            block_range.to = tip,
+        ),
+        err,
+    )]
     pub async fn spent_nullifiers(
         &self,
         nullifiers: &[Nullifier],
@@ -280,6 +358,7 @@ impl RpcNodeClient {
         prefixes.sort_unstable();
         prefixes.dedup();
         let mut spent = HashSet::new();
+        let mut pages = 0_usize;
 
         for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
             let mut start = BlockNumber::GENESIS;
@@ -301,6 +380,7 @@ impl RpcNodeClient {
                     .decode_and_verify()
                     .context("failed to convert the nullifier sync response")?;
 
+                pages += 1;
                 let last_checked = response.pagination_info.block_num;
                 anyhow::ensure!(
                     (start..=tip).contains(&last_checked),
@@ -319,10 +399,23 @@ impl RpcNodeClient {
             }
         }
 
+        miden_span_record!(page.count = pages, nullifier.spent.count = spent.len());
         Ok(spent)
     }
 
     /// Checks for commitment before reporting expiration. Reads every page in the block range.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.transaction_status",
+        level = "debug",
+        fields(
+            account.id = account_id,
+            transaction.id = transaction_id,
+            block_range.from = reference_block,
+            block_range.to = expiration_block,
+        ),
+        err(level = "debug"),
+    )]
     pub async fn transaction_status(
         &self,
         account_id: AccountId,
@@ -333,6 +426,10 @@ impl RpcNodeClient {
         let tip = self.committed_tip().await?;
         let end = tip.min(expiration_block);
         let mut start = reference_block + 1;
+        let mut pages = 0_usize;
+        if enabled!(target: COMPONENT, Level::DEBUG) {
+            miden_span_record!(tip.number = tip);
+        }
 
         while start <= end {
             let response = self
@@ -349,6 +446,7 @@ impl RpcNodeClient {
                 .context("failed to synchronize transactions")?
                 .into_inner();
 
+            pages += 1;
             for record in response.transactions {
                 let id = record
                     .header
@@ -358,6 +456,9 @@ impl RpcNodeClient {
                     .decode_and_verify()
                     .context("failed to convert a transaction ID")?;
                 if id == transaction_id {
+                    if enabled!(target: COMPONENT, Level::DEBUG) {
+                        miden_span_record!(page.count = pages);
+                    }
                     return Ok(TransactionStatus::Committed);
                 }
             }
@@ -377,6 +478,9 @@ impl RpcNodeClient {
             start = last_checked + 1;
         }
 
+        if enabled!(target: COMPONENT, Level::DEBUG) {
+            miden_span_record!(page.count = pages);
+        }
         Ok(if tip >= expiration_block {
             TransactionStatus::Expired
         } else {
@@ -385,11 +489,17 @@ impl RpcNodeClient {
     }
 
     /// The chain tip of the node's local store.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.committed_tip",
+        level = "debug",
+        err(level = "debug"),
+    )]
     pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
             .rpc_client
             .clone()
-            .status(())
+            .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
             .await
             .context("failed to fetch the node status")?
             .into_inner();
@@ -398,6 +508,14 @@ impl RpcNodeClient {
     }
 
     /// Seals and submits one proven transaction. Errors occur before submission starts.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.submit",
+        fields(
+            transaction.id = proven_tx.id(),
+        ),
+        err,
+    )]
     pub async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
@@ -412,17 +530,30 @@ impl RpcNodeClient {
             transaction: Some(proven_tx.into()),
             sealed_transaction_inputs: Some(sealed),
         };
-        let result = self.rpc_client.clone().submit_proven_tx(request).await;
+        let result = self
+            .rpc_client
+            .clone()
+            .submit_proven_tx(miden_node_proto::generated::miden::node::v1::SubmitProvenTxRequest {
+                submission: Some(request),
+            })
+            .await;
 
         if result.is_err() {
             // The encryption key can be stale. Fetch it again for the next submission.
             *self.sealer.lock().await = None;
         }
 
-        Ok(match result {
+        let outcome = match result {
             Ok(_) => SubmissionOutcome::Accepted,
-            Err(status) => SubmissionOutcome::from_status(status),
-        })
+            Err(status) => {
+                Span::current().set_error(&status);
+                warn!(&status, target: COMPONENT, "Funding transaction submission failed");
+                miden_span_record!(rpc.status = status.code().to_string() #[nonstandard]);
+                SubmissionOutcome::from_status(status)
+            },
+        };
+        miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
+        Ok(outcome)
     }
 
     /// The cached verified sealer. The attested key is fetched and checked on first use.
@@ -431,13 +562,27 @@ impl RpcNodeClient {
             return Ok(sealer);
         }
 
+        self.refresh_sealer().await
+    }
+
+    /// Fetches and verifies the node's transaction encryption key on a cache miss.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "funding.node.refresh_sealer",
+        err,
+    )]
+    async fn refresh_sealer(&self) -> Result<TransactionInputsSealer> {
         let key = self
             .rpc_client
             .clone()
-            .get_transaction_encryption_key(())
+            .get_transaction_encryption_key(
+                miden_node_proto::generated::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+            )
             .await
             .context("failed to fetch the transaction encryption key")?
-            .into_inner();
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
@@ -464,6 +609,14 @@ pub enum SubmissionOutcome {
 }
 
 impl SubmissionOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Accepted => "accepted",
+            Self::Rejected(_) => "rejected",
+            Self::Unknown(_) => "unknown",
+        }
+    }
+
     fn from_status(status: tonic::Status) -> Self {
         // The error byte identifies a node rejection. Without it, these codes can also report
         // transport or response-decoding failures after the node accepted the transaction.
@@ -577,7 +730,7 @@ async fn fetch_block_header(
     rpc_client: &mut RpcClient,
     block_num: Option<BlockNumber>,
 ) -> Result<BlockHeader> {
-    let request = BlockHeaderByNumberRequest {
+    let request = GetBlockHeaderByNumberRequest {
         block_num: block_num.map(|block_num| block_num.as_u32()),
         include_mmr_proof: None,
         include_protocol_config: None,
@@ -606,7 +759,7 @@ async fn fetch_genesis_header_and_config(
     rpc_client: &mut RpcClient,
 ) -> Result<(BlockHeader, ProtocolConfig)> {
     let response = rpc_client
-        .get_block_header_by_number(BlockHeaderByNumberRequest {
+        .get_block_header_by_number(GetBlockHeaderByNumberRequest {
             block_num: Some(BlockNumber::GENESIS.as_u32()),
             include_mmr_proof: None,
             include_protocol_config: Some(true),
@@ -688,8 +841,8 @@ async fn fetch_public_account(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
 
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();

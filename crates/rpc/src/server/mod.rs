@@ -11,7 +11,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_proto::server::{rpc_api, sequencer_api};
+use miden_node_proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::grpc::grpc_trace_fn;
@@ -25,7 +25,6 @@ use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::BlockNumber;
 use rand::RngExt;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
@@ -290,7 +289,7 @@ impl Rpc {
 
         api.set_genesis_commitment(genesis.commitment())?;
 
-        let api_service = rpc_api::service(api);
+        let api_service = miden_node_v1_node_service::service(api);
 
         let mut tasks = Tasks::new();
 
@@ -300,7 +299,7 @@ impl Rpc {
             RpcMode::Sequencer { .. } => {
                 health_reporter
                     .set_service_status(
-                        rpc_api::service_name(),
+                        miden_node_v1_node_service::service_name(),
                         tonic_health::ServingStatus::Serving,
                     )
                     .await;
@@ -340,7 +339,7 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        let rpc = tonic::transport::Server::builder()
+        let rpc = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
@@ -377,7 +376,7 @@ impl Rpc {
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(self.listener),
+                grpc::tcp_incoming(self.listener),
                 shutdown.clone().cancelled_owned(),
             );
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
@@ -403,7 +402,10 @@ impl Rpc {
         proof_writer: ProofWriter,
     ) {
         health_reporter
-            .set_service_status(rpc_api::service_name(), tonic_health::ServingStatus::NotServing)
+            .set_service_status(
+                miden_node_v1_node_service::service_name(),
+                tonic_health::ServingStatus::NotServing,
+            )
             .await;
         let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
         tasks.spawn(
@@ -450,7 +452,7 @@ fn log_node_synchronizing(mode: &str, endpoint: impl Display, readiness_threshol
 
 /// The internal Sequencer server.
 ///
-/// Serves the private `sequencer.Api` gRPC service, which accepts already-authenticated
+/// Serves the private `miden.sequencer.v1.SequencerService` gRPC service, which accepts already-authenticated
 /// transactions from full nodes and submits them directly to the mempool *without*
 /// re-verification.
 ///
@@ -493,13 +495,13 @@ impl SequencerInternal {
 
         // Note: deliberately no accept-header / auth layers; this is a private, trusted interface
         // and is expected to be network-isolated.
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(sequencer_api::service(service))
+            .add_service(miden_sequencer_v1_sequencer_service::service(service))
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(self.listener),
+                grpc::tcp_incoming(self.listener),
                 shutdown.cancelled_owned(),
             )
             .await

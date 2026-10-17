@@ -1,5 +1,6 @@
 use core::error::Error as CoreError;
 
+use miden_node_persistence::PersistenceError;
 use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
 use miden_node_store::{
@@ -14,7 +15,6 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::crypto::utils::DeserializationError;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -31,7 +31,7 @@ pub enum ProofSchedulerError {
     #[error("no proving inputs found for block {0}")]
     MissingProvingInputs(BlockNumber),
     #[error("failed to deserialize proving inputs for block")]
-    DeserializationFailed(#[source] DeserializationError),
+    DeserializationFailed(#[source] PersistenceError),
 }
 
 // Add transaction and add user batch errors
