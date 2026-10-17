@@ -1,4 +1,5 @@
-use miden_node_proto::generated::{self as grpc, rpc};
+use miden_node_proto::generated::miden::node::v1 as rpc;
+use miden_node_proto::generated::{self as grpc};
 use miden_node_tracing::error;
 use miden_protocol::Word;
 
@@ -6,12 +7,19 @@ use super::NtxBuilderRpcServer;
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer {
+impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteStatus
+    for NtxBuilderRpcServer
+{
     type Input = miden_protocol::note::NoteId;
-    type Output = grpc::rpc::GetNetworkNoteStatusResponse;
+    type Output = grpc::miden::ntx_builder::v1::GetNetworkNoteStatusResponse;
 
-    fn decode(request: grpc::note::NoteId) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: grpc::miden::ntx_builder::v1::GetNetworkNoteStatusRequest,
+    ) -> tonic::Result<Self::Input> {
         let note_id_digest: Word = request
+            .note_id
+            .as_ref()
+            .ok_or_else(|| tonic::Status::invalid_argument("missing note ID"))?
             .id
             .as_ref()
             .ok_or_else(|| tonic::Status::invalid_argument("missing note ID digest"))?
@@ -60,7 +68,7 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         let status =
             derive_status(row.committed_at.is_some(), attempt_count, self.max_note_attempts);
 
-        Ok(grpc::rpc::GetNetworkNoteStatusResponse {
+        Ok(grpc::miden::ntx_builder::v1::GetNetworkNoteStatusResponse {
             status: status.into(),
             last_error: row.last_error,
             attempt_count: response_attempt_count,
@@ -68,7 +76,9 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<grpc::rpc::GetNetworkNoteStatusResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<grpc::miden::ntx_builder::v1::GetNetworkNoteStatusResponse> {
         Ok(output)
     }
 }
@@ -94,14 +104,40 @@ fn derive_status(
 #[cfg(test)]
 mod tests {
     use miden_node_proto::generated::note::NoteId;
-    use miden_node_proto::generated::rpc::NetworkNoteStatus;
-    use miden_node_proto::generated::server::ntx_builder_api::GetNetworkNoteStatus;
+    use miden_node_proto::generated::miden::node::v1::NetworkNoteStatus;
+    use miden_node_proto::generated::server::miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteStatus;
 
     use super::*;
 
     #[test]
+    fn decode_rejects_missing_note_id() {
+        let error = NtxBuilderRpcServer::decode(
+            grpc::miden::ntx_builder::v1::GetNetworkNoteStatusRequest { note_id: None },
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[test]
+    fn decode_preserves_note_id() {
+        let note_id = miden_protocol::note::NoteId::from_raw(Word::from([1u32, 2, 3, 4]));
+        let decoded = NtxBuilderRpcServer::decode(
+            grpc::miden::ntx_builder::v1::GetNetworkNoteStatusRequest {
+                note_id: Some(note_id.as_word().into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(decoded, note_id);
+    }
+
+    #[test]
     fn decode_note_id_rejects_missing_digest() {
-        let err = NtxBuilderRpcServer::decode(NoteId { id: None }).unwrap_err();
+        let err = NtxBuilderRpcServer::decode(
+            grpc::miden::ntx_builder::v1::GetNetworkNoteStatusRequest {
+                note_id: Some(NoteId { id: None }),
+            },
+        )
+        .unwrap_err();
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert_eq!(err.message(), "missing note ID digest");
     }

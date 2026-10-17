@@ -1,3 +1,5 @@
+use miden_node_persistence::encode;
+use miden_node_persistence::prost::Message;
 use miden_protocol::Word;
 use miden_protocol::block::{
     BlockBody,
@@ -8,8 +10,25 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::transaction::OrderedTransactionHeaders;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::*;
+
+#[test]
+fn official_network_endpoints() {
+    use clap::ValueEnum;
+
+    for (name, genesis_url, rpc_url) in [
+        ("mainnet", "https://genesis.mainnet.miden.io", "https://rpc.mainnet.miden.io/"),
+        ("testnet", "https://genesis.testnet.miden.io", "https://rpc.testnet.miden.io/"),
+        ("devnet", "https://genesis.devnet.miden.io", "https://rpc.devnet.miden.io/"),
+    ] {
+        let network = OfficialNetwork::from_str(name, false).unwrap();
+        assert_eq!(network.to_string(), name);
+        assert_eq!(network.genesis_block_url(), genesis_url);
+        assert_eq!(network.rpc_url().as_str(), rpc_url);
+    }
+}
 
 fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
     let body = BlockBody::new_unchecked(
@@ -42,8 +61,7 @@ fn genesis_round_trip_preserves_block_and_config() {
     let block = genesis(BlockNumber::GENESIS, &config);
     let block_bytes = block.to_bytes();
     let genesis = GenesisBlock::new(block, config.clone()).unwrap();
-    let bytes = genesis.to_bytes();
-    assert_eq!(bytes, [block_bytes.clone(), config.to_bytes()].concat());
+    let bytes = encode(&genesis);
 
     // File downloads use the same decoder as local files.
     let decoded = deserialize_genesis_block(&bytes).unwrap();
@@ -69,7 +87,12 @@ fn genesis_rejects_mismatched_config() {
             .unwrap(),
     ))
     .unwrap();
-    let bytes = [block.to_bytes(), other_config.to_bytes()].concat();
+    let bytes = miden_node_persistence::generated::GenesisFile {
+        version: 1,
+        block: Some(block.to_proto()),
+        protocol_config: Some(other_config.to_proto()),
+    }
+    .encode_to_vec();
     let error = GenesisBlock::new(block, other_config).unwrap_err();
     assert!(error.to_string().contains("commitment mismatch"));
     assert!(deserialize_genesis_block(&bytes).is_err());
@@ -79,6 +102,12 @@ fn genesis_rejects_mismatched_config() {
 fn genesis_rejects_non_genesis_and_signed_blocks() {
     let config = ProtocolConfig::mock();
     let block = genesis(BlockNumber::from(1), &config);
+    let message = miden_node_persistence::generated::GenesisFile {
+        version: 1,
+        block: Some(block.to_proto()),
+        protocol_config: Some(config.to_proto()),
+    };
+    assert!(deserialize_genesis_block(&message.encode_to_vec()).is_err());
     assert!(
         GenesisBlock::new(block, config.clone())
             .unwrap_err()
@@ -119,8 +148,46 @@ fn genesis_rejects_incomplete_malformed_and_trailing_data() {
     assert!(deserialize_genesis_block(&block.to_bytes()).is_err());
     assert!(deserialize_genesis_block(&[]).is_err());
     assert!(deserialize_genesis_block(&[0xff; 32]).is_err());
-    let mut bytes = GenesisBlock::new(block, config).unwrap().to_bytes();
+    let mut bytes = encode(&GenesisBlock::new(block, config).unwrap());
     assert!(deserialize_genesis_block(&bytes[..bytes.len() - 1]).is_err());
     bytes.push(0);
-    assert!(deserialize_genesis_block(&bytes).unwrap_err().to_string().contains("trailing"));
+    assert!(deserialize_genesis_block(&bytes).is_err());
+}
+
+#[test]
+fn genesis_file_is_versioned_protobuf() {
+    use miden_node_persistence::generated::GenesisFile;
+    use miden_node_persistence::prost::Message;
+    let config = ProtocolConfig::mock();
+    let value = GenesisBlock::new(genesis(BlockNumber::GENESIS, &config), config).unwrap();
+    let message = GenesisFile::decode(encode(&value).as_slice()).unwrap();
+    assert_eq!(message.version, 1);
+    assert!(message.block.is_some());
+    assert!(message.protocol_config.is_some());
+}
+
+#[test]
+fn genesis_accepts_unknown_fields_and_rejects_versions() {
+    let config = ProtocolConfig::mock();
+    let value = GenesisBlock::new(genesis(BlockNumber::GENESIS, &config), config).unwrap();
+    let mut bytes = encode(&value);
+    bytes.extend_from_slice(&[0xa0, 0x06, 0x01]);
+    assert_eq!(deserialize_genesis_block(&bytes).unwrap().inner(), value.inner());
+    for version in [0, 2] {
+        let mut message = value.to_proto();
+        message.version = version;
+        assert!(deserialize_genesis_block(&message.encode_to_vec()).is_err());
+    }
+}
+
+#[test]
+fn genesis_rejects_missing_payload_fields() {
+    let config = ProtocolConfig::mock();
+    let value = GenesisBlock::new(genesis(BlockNumber::GENESIS, &config), config).unwrap();
+    let mut message = value.to_proto();
+    message.block = None;
+    assert!(deserialize_genesis_block(&message.encode_to_vec()).is_err());
+    let mut message = value.to_proto();
+    message.protocol_config = None;
+    assert!(deserialize_genesis_block(&message.encode_to_vec()).is_err());
 }

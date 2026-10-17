@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use miden_node_store::DatabaseError;
-use miden_node_store::allowlist::AccountAllowlist;
+use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationStatus};
 use miden_node_tracing::{error, miden_instrument};
-use miden_protocol::account::{Account, AccountId, AccountUpdateDetails};
+use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
@@ -52,6 +52,21 @@ impl AccountAdmission {
         self.allowlist.contains_account(account_id).await
     }
 
+    /// Returns true if the invitation code can be used to register an account. The code must be
+    /// registered in the invitation registry and unused.
+    ///
+    /// Always returns true when account allowlist enforcement is disabled.
+    pub(crate) async fn is_invitation_code_valid(
+        &self,
+        invitation_code: InvitationCode,
+    ) -> Result<bool, DatabaseError> {
+        if self.disabled {
+            return Ok(true);
+        }
+        let status = self.allowlist.invitation_status(invitation_code).await?;
+        Ok(status == InvitationStatus::Unused)
+    }
+
     /// Rejects the submission if it creates an unregistered, non-network account.
     #[miden_instrument(
         target = COMPONENT,
@@ -67,7 +82,8 @@ impl AccountAdmission {
         // New public accounts include their full state. Use the store's network-account
         // classification rule before the account exists on chain.
         if let AccountUpdateDetails::Public(patch) = update.details() {
-            let account = Account::try_from(patch)
+            let account = patch
+                .try_to_new_account()
                 .map_err(|error| Status::invalid_argument(error.to_string()))?;
             if NetworkAccount::new(account).is_ok() {
                 return Ok(());

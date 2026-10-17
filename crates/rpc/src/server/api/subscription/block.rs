@@ -3,26 +3,29 @@ use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, error, miden_instrument};
 use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::{BlockNumber, SignedBlock};
-use miden_protocol::utils::serde::Deserializable;
 
 use super::super::{COMPONENT, RpcService};
 use super::stream::SubscriptionStream;
 use crate::LOG_TARGET;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::BlockSubscription for RpcService {
+impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService {
     type Input = BlockNumber;
-    type Item = proto::rpc::BlockSubscriptionResponse;
+    type Item = proto::miden::node::v1::BlockSubscriptionResponse;
     type ItemStream = Pin<Box<dyn Stream<Item = tonic::Result<Self::Item>> + Send>>;
 
-    fn decode(request: proto::rpc::BlockSubscriptionRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::BlockSubscriptionRequest,
+    ) -> tonic::Result<Self::Input> {
         Ok(BlockNumber::from(request.block_from))
     }
 
-    fn encode(event: Self::Item) -> tonic::Result<proto::rpc::BlockSubscriptionResponse> {
+    fn encode(
+        event: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v1::BlockSubscriptionResponse> {
         Ok(event)
     }
 
@@ -52,9 +55,19 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
                 let Some(event) = stream.try_next().await? else {
                     return Ok(None);
                 };
-                let block = SignedBlock::read_from_bytes(&event.data).map_err(|err| {
-                    tonic::Status::internal(format!("invalid stored block: {err}"))
-                })?;
+                let block =
+                    miden_node_persistence::decode::<SignedBlock>(&event.data).map_err(|err| {
+                        error!(
+                            err,
+                            target: LOG_TARGET,
+                            "Failed to decode stored block",
+                            block.number = event.block
+                        );
+                        tonic::Status::internal(format!(
+                            "Failed to decode stored block {}.",
+                            event.block
+                        ))
+                    })?;
                 let commitment = block.header().protocol_config_commitment();
                 let protocol_config = if previous == Some(commitment) {
                     None
@@ -65,7 +78,7 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
                             .into(),
                     )
                 };
-                let response = proto::rpc::BlockSubscriptionResponse {
+                let response = proto::miden::node::v1::BlockSubscriptionResponse {
                     block: Some(block.into()),
                     committed_chain_tip: event.tip.as_u32(),
                     protocol_config,

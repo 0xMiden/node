@@ -52,7 +52,7 @@ pub struct AcceptHeaderLayer {
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
     /// These should be gRPC method names (e.g. `SubmitProvenTx`),
-    /// matched against the end of the request path like "/rpc.Api/<method>".
+    /// matched against the end of the request path like "/miden.node.v1.NodeService/<method>".
     require_genesis_methods: Vec<&'static str>,
 }
 

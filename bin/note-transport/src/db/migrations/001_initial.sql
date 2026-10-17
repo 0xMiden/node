@@ -6,9 +6,7 @@ CREATE TABLE notes (
     details BLOB NOT NULL,
     -- created_at stores microseconds since the Unix epoch, assigned by the service at insertion.
     created_at INTEGER NOT NULL,
-    -- after_block_num is the sender's unverified lower bound for the inclusion block.
-    -- A NULL block hint differs from block zero.
-    after_block_num INTEGER CHECK (after_block_num BETWEEN 0 AND 4294967295)
+    committed_in_block INTEGER NOT NULL CHECK (committed_in_block BETWEEN 0 AND 4294967295)
 ) STRICT;
 
 CREATE INDEX idx_notes_tag_seq ON notes(tag, seq);

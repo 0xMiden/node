@@ -15,7 +15,7 @@ pub struct PaginationInfo {
     pub block_num: BlockNumber,
 }
 
-impl Verify for proto::rpc::DecodedPaginationInfo {
+impl Verify for proto::miden::node::v1::DecodedPaginationInfo {
     type Verified = PaginationInfo;
     type Error = ConversionError;
 
@@ -39,7 +39,7 @@ pub struct SyncNullifiersResponse {
     pub nullifiers: HashMap<Nullifier, BlockNumber>,
 }
 
-impl Verify for proto::rpc::DecodedSyncNullifiersResponse {
+impl Verify for proto::miden::node::v1::DecodedSyncNullifiersResponse {
     type Verified = SyncNullifiersResponse;
     type Error = ConversionError;
 

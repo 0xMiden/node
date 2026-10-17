@@ -31,7 +31,6 @@ SELECT
     notes.header,
     notes.details,
     notes.created_at,
-    notes.after_block_num,
     notes.committed_in_block,
     bounded.candidate_count
 FROM bounded

@@ -55,7 +55,7 @@ impl Service for NoteTransportService {
         let health = self
             .client
             .check(HealthCheckRequest {
-                service: miden_node_proto::server::note_transport_api::service_name().to_string(),
+                service: miden_node_proto::server::miden_note_transport_v1_note_transport_service::service_name().to_string(),
             })
             .await
             .map(tonic::Response::into_inner);
@@ -104,7 +104,10 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let (reporter, service) = tonic_health::server::health_reporter();
         reporter
-            .set_service_status("note_transport.Api", tonic_health::ServingStatus::Serving)
+            .set_service_status(
+                "miden.note_transport.v1.NoteTransportService",
+                tonic_health::ServingStatus::Serving,
+            )
             .await;
         let incoming = futures::stream::unfold(listener, |listener| async {
             Some((listener.accept().await.map(|(stream, _)| stream), listener))
@@ -121,7 +124,10 @@ mod tests {
             NoteTransportService::new(url.clone(), Duration::from_secs(1), Duration::from_secs(5));
         assert_eq!(monitor.check().await.status, Status::Healthy);
         reporter
-            .set_service_status("note_transport.Api", tonic_health::ServingStatus::NotServing)
+            .set_service_status(
+                "miden.note_transport.v1.NoteTransportService",
+                tonic_health::ServingStatus::NotServing,
+            )
             .await;
         let status = monitor.check().await;
         assert_eq!(status.status, Status::Unhealthy);

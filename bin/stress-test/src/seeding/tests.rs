@@ -1,4 +1,6 @@
 use miden_protocol::account::StorageSlotContent;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 use super::*;
 
@@ -50,9 +52,7 @@ fn oversized_account_updates_are_seeded_at_genesis() {
 
 #[test]
 fn public_account_can_be_created_with_large_storage_map() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let mut rng = RandomCoin::new(coin_seed.into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let account = create_account(key_pair.public_key(), 42, AccountType::Public, 128);
 
@@ -72,9 +72,7 @@ fn public_account_can_be_created_with_large_storage_map() {
 
 #[test]
 fn private_account_ignores_large_storage_map_entries() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let mut rng = RandomCoin::new(coin_seed.into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let account = create_account(key_pair.public_key(), 42, AccountType::Private, 128);
 
@@ -91,9 +89,7 @@ fn private_account_ignores_large_storage_map_entries() {
 fn public_account_note_contains_requested_distinct_vault_assets() {
     let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
-    let mut key_rng = rng.lock().unwrap();
-    let key_pair = SecretKey::with_rng(&mut *key_rng);
-    drop(key_rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);
     let (_, notes) =
@@ -111,9 +107,7 @@ fn public_account_note_contains_requested_distinct_vault_assets() {
 fn private_account_note_keeps_single_vault_asset() {
     let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
     let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
-    let mut key_rng = rng.lock().unwrap();
-    let key_pair = SecretKey::with_rng(&mut *key_rng);
-    drop(key_rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);
     let (_, notes) =
@@ -124,9 +118,7 @@ fn private_account_note_keeps_single_vault_asset() {
 
 #[test]
 fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let mut rng = RandomCoin::new(coin_seed.into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
     let mut account = create_account(key_pair.public_key(), 42, AccountType::Public, 4);
 
     let key = StorageMapKey::from_index(2);
@@ -142,9 +134,7 @@ fn public_account_storage_map_entry_can_be_updated_for_benchmark_blocks() {
 
 #[test]
 fn private_account_storage_map_update_is_skipped() {
-    let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let mut rng = RandomCoin::new(coin_seed.into());
-    let key_pair = SecretKey::with_rng(&mut rng);
+    let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
     let mut account = create_account(key_pair.public_key(), 42, AccountType::Private, 4);
 
     let updated = update_benchmark_storage_map_entry(&mut account, 3, 9, 4);
@@ -156,8 +146,8 @@ fn private_account_storage_map_update_is_skipped() {
 async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
     use miden_node_proto::domain::account::{
         AccountDetailRequest,
-        AccountRequest,
         AccountStorageRequest,
+        GetAccountRequest,
         StorageMapEntries,
     };
 
@@ -173,7 +163,7 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
     let (state, block_writer, writer_task) = load_state(data_directory).await;
     let response = state
         .view()
-        .get_account(AccountRequest {
+        .get_account(GetAccountRequest {
             account_id,
             block_num: None,
             details: Some(AccountDetailRequest {
@@ -207,7 +197,7 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seed_store_handles_map_larger_than_transaction_account_update_limit() {
-    use miden_node_proto::domain::account::AccountRequest;
+    use miden_node_proto::domain::account::GetAccountRequest;
 
     let temp_dir = tempfile::tempdir().unwrap();
     let data_directory = temp_dir.path().join("store");
@@ -221,7 +211,7 @@ async fn seed_store_handles_map_larger_than_transaction_account_update_limit() {
     let (state, block_writer, writer_task) = load_state(data_directory).await;
     let response = state
         .view()
-        .get_account(AccountRequest {
+        .get_account(GetAccountRequest {
             account_id,
             block_num: None,
             details: None,

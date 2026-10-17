@@ -59,7 +59,8 @@ use crate::deploy::{
     fetch_account_at_tip,
     refresh_counter_anchor,
 };
-use crate::funding::{FeeFunder, FundingClient, wallet_funding_amount, wallet_topup_threshold};
+use crate::funding::{FeeFunder, FundingClient, wallet_topup_threshold};
+use crate::registration::RegistrationPool;
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -190,6 +191,8 @@ impl FailureTracker {
 /// Periodically submits a network note that increments the counter account.
 pub struct IncrementService {
     config: MonitorConfig,
+    /// Registration budget transferred from bootstrap to account regeneration.
+    pub(crate) registration: Option<RegistrationPool>,
     rpc_client: RpcClient,
     tx: TxBuilder,
     prover: LocalTransactionProver,
@@ -232,6 +235,7 @@ impl IncrementService {
         )?;
         Ok(Self {
             config,
+            registration: None,
             rpc_client,
             tx,
             prover,
@@ -253,19 +257,12 @@ impl IncrementService {
     /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
     /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
     fn handle_increment_success(&mut self, account_patch: &AccountPatch, tx_id: String) -> u64 {
-        if account_patch.is_full_state() {
-            // The wallet is created in-memory and never separately deployed, so its first increment
-            // doubles as the account-creation transaction. That transaction's patch carries the
-            // account code and fully describes the account, so it must be converted into the
-            // account rather than applied as a delta (`apply_patch` rejects full-state patches).
-            self.tx.wallet_account = Account::try_from(account_patch)
-                .expect("full-state patch should convert to a valid account");
-        } else {
-            self.tx
-                .wallet_account
-                .apply_patch(account_patch)
-                .expect("successful tx should apply patch correctly");
-        }
+        // The wallet is created in-memory and never separately deployed, so its first increment
+        // doubles as the account-creation transaction. `apply_patch` handles that patch as well.
+        self.tx
+            .wallet_account
+            .apply_patch(account_patch)
+            .expect("successful tx should apply patch correctly");
         // The transaction consumed the pending funding note; do not offer it again.
         self.pending_funding_note = None;
         self.details.success_count += 1;
@@ -331,6 +328,8 @@ impl IncrementService {
             &self.submission_client,
             &self.prover,
             self.funding.as_ref(),
+            self.config.wallet_funding_amount,
+            self.registration.as_mut(),
         ))
         .await
         .context("failed to regenerate accounts")?;
@@ -483,7 +482,8 @@ impl IncrementService {
             .map_or(0, |amount| amount.as_u64());
         self.details.fee_balance = Some(balance);
 
-        if balance >= wallet_topup_threshold(verification_base_fee) {
+        let funding_amount = self.config.wallet_funding_amount;
+        if balance >= wallet_topup_threshold(funding_amount) {
             self.details.fee_topup_error = None;
             return;
         }
@@ -499,10 +499,7 @@ impl IncrementService {
             asset.balance = balance
         );
         let mut funder = FeeFunder::new(funding, fee_faucet_id);
-        match funder
-            .fund(self.tx.wallet_account.id(), wallet_funding_amount(verification_base_fee))
-            .await
-        {
+        match funder.fund(self.tx.wallet_account.id(), funding_amount.get()).await {
             Ok(note) => {
                 self.pending_funding_note = Some(note);
                 self.details.fee_topup_error = None;
@@ -570,6 +567,8 @@ impl Service for IncrementService {
                         Ok(()) => self.failures.reset(),
                         Err(regen_err) => {
                             self.failures.mark_regeneration_failed();
+                            last_error =
+                                Some(format!("account regeneration failed: {regen_err:#}"));
                             error!(&regen_err, target: LOG_TARGET, "Account regeneration failed");
                         },
                     }
@@ -1041,7 +1040,7 @@ async fn fetch_slot_value(
 fn build_account_request(
     account_id: AccountId,
     include_code_and_vault: bool,
-) -> miden_node_proto::generated::rpc::AccountRequest {
+) -> miden_node_proto::generated::miden::node::v1::GetAccountRequest {
     let account_id_proto: miden_node_proto::generated::account::AccountId = account_id.into();
 
     let (code_commitment, asset_vault_commitment) = if include_code_and_vault {
@@ -1051,14 +1050,16 @@ fn build_account_request(
         (None, None)
     };
 
-    miden_node_proto::generated::rpc::AccountRequest {
+    miden_node_proto::generated::miden::node::v1::GetAccountRequest {
         account_id: Some(account_id_proto),
         block_num: None,
-        details: Some(miden_node_proto::generated::rpc::account_request::AccountDetailRequest {
-            code_commitment,
-            asset_vault_commitment,
-            storage_request: None,
-        }),
+        details: Some(
+            miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest {
+                code_commitment,
+                asset_vault_commitment,
+                storage_request: None,
+            },
+        ),
     }
 }
 
@@ -1206,7 +1207,10 @@ fn create_network_note(
 
 /// Fetch the current chain tip height from RPC status.
 async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
-    let status = rpc_client.status(()).await?.into_inner();
+    let status = rpc_client
+        .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
+        .await?
+        .into_inner();
 
     if let Some(block_producer_status) = status.block_producer {
         Ok(block_producer_status.chain_tip)
@@ -1220,6 +1224,7 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use miden_protocol::Word;
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::account::{Account, AccountId};
@@ -1245,6 +1250,7 @@ mod tests {
     use miden_tx::TransactionExecutor;
     use miden_tx::auth::BasicAuthenticator;
 
+    use crate::config::MonitorConfig;
     use crate::counter::{
         FailureTracker,
         PENDING_UNHEALTHY_CONFIRMATION_POLLS,
@@ -1259,7 +1265,7 @@ mod tests {
     use crate::deploy::counter::create_counter_account;
     use crate::deploy::wallet::{WALLET_COUNTER_SLOT_NAME, create_wallet_account};
     use crate::deploy::{MonitorDataStore, execute_counter_genesis_tx};
-    use crate::funding::{counter_funding_amount, max_fee_per_transaction, wallet_funding_amount};
+    use crate::funding::{counter_funding_amount, max_fee_per_transaction};
     use crate::status::{CounterTrackingDetails, Status};
 
     const THRESHOLD: u64 = 5;
@@ -1298,7 +1304,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
 
         let mut builder = MockChain::builder().fee_faucet_id(fee_faucet_id);
         builder.add_account(committed_counter.clone())?;
@@ -1356,7 +1363,8 @@ mod tests {
             1,
             "the increment transaction must emit exactly the network note"
         );
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let counter_slot = updated_wallet.storage().get_item(&WALLET_COUNTER_SLOT_NAME)?;
         assert_eq!(
             counter_slot.as_elements()[0].as_canonical_u64(),
@@ -1457,7 +1465,8 @@ mod tests {
             Some((committed_faucet, witness)),
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let balance = committed_counter
             .vault()
             .get_balance(AssetId::new_fungible(fee_faucet_id))?
@@ -1496,7 +1505,8 @@ mod tests {
             None,
         )
         .await?;
-        let committed_counter = Account::try_from(creation_tx.account_patch())?;
+        let mut committed_counter = counter.clone();
+        committed_counter.apply_patch(creation_tx.account_patch())?;
         let counter_balance = committed_counter.vault().get_balance(fee_asset)?.as_u64();
         assert!(
             counter_balance > 0 && counter_balance < counter_funding_amount(BASE_FEE),
@@ -1540,7 +1550,7 @@ mod tests {
             BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
-        let funded = wallet_funding_amount(BASE_FEE);
+        let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount.get();
         let wallet_funding = funding_note(fee_faucet_id, wallet.id(), funded);
         let input_notes = InputNotes::new(vec![InputNote::unauthenticated(wallet_funding)])?;
 
@@ -1555,7 +1565,8 @@ mod tests {
             "expected the increment, fee-sponsorship, and tx-fee notes"
         );
 
-        let updated_wallet = Account::try_from(executed_tx.account_patch())?;
+        let mut updated_wallet = wallet.clone();
+        updated_wallet.apply_patch(executed_tx.account_patch())?;
         let balance = updated_wallet.vault().get_balance(fee_asset)?.as_u64();
         let sponsorship = max_fee_per_transaction(BASE_FEE);
         assert!(

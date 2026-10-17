@@ -80,7 +80,8 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
                 &mast_store,
                 scripts,
                 indices,
-            );
+            )
+            .unwrap();
             // Keep the precompile witness in the proof for the batch prover.
             let witness = FastProcessor::new_with_options(
                 stack_inputs,

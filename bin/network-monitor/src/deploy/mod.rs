@@ -3,6 +3,7 @@
 //! This module contains functionality for deploying Miden accounts to the network.
 
 use std::collections::{BTreeSet, HashMap};
+use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -16,10 +17,10 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::rpc::{
-    AccountRequest as ProtoAccountRequest,
-    BlockHeaderByNumberRequest,
+use miden_node_proto::generated::miden::node::v1::{
     FinalityLevel,
+    GetAccountRequest as ProtoAccountRequest,
+    GetBlockHeaderByNumberRequest,
     SyncChainMmrRequest,
     SyncChainMmrResponse,
 };
@@ -86,7 +87,8 @@ use url::Url;
 
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
-use crate::funding::{FeeFunder, FundingClient, counter_funding_amount, wallet_funding_amount};
+use crate::funding::{FeeFunder, FundingClient, counter_funding_amount};
+use crate::registration::{MonitorAccountPair, RegistrationPool};
 use crate::{COMPONENT, LOG_TARGET};
 
 pub mod counter;
@@ -155,10 +157,14 @@ impl TransactionSubmissionClient {
         let key = self
             .rpc_client
             .clone()
-            .get_transaction_encryption_key(())
+            .get_transaction_encryption_key(
+                miden_node_proto::generated::miden::node::v1::GetTransactionEncryptionKeyRequest {},
+            )
             .await
             .context("Failed to fetch the transaction encryption key")?
-            .into_inner();
+            .into_inner()
+            .key
+            .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?;
         let verified = key
             .verify_with(TrustedTransactionEncryptionState::new(
                 self.genesis_commitment,
@@ -232,10 +238,14 @@ impl TransactionSubmissionClient {
                     .context("Failed to seal the transaction inputs")?;
                 self.rpc_client
                     .clone()
-                    .submit_proven_tx(ProtoProvenTransaction {
-                        transaction: Some(transaction),
-                        sealed_transaction_inputs: Some(sealed),
-                    })
+                    .submit_proven_tx(
+                        miden_node_proto::generated::miden::node::v1::SubmitProvenTxRequest {
+                            submission: Some(ProtoProvenTransaction {
+                                transaction: Some(transaction),
+                                sealed_transaction_inputs: Some(sealed),
+                            }),
+                        },
+                    )
                     .await
                     .context("Failed to submit proven transaction to RPC")
             }
@@ -313,7 +323,7 @@ pub async fn create_genesis_aware_rpc_client(
             .await
             .context("Failed to create RPC client for genesis discovery")?;
 
-        let block_header_request = BlockHeaderByNumberRequest {
+        let block_header_request = GetBlockHeaderByNumberRequest {
             block_num: Some(BlockNumber::GENESIS.as_u32()),
             include_mmr_proof: None,
             include_protocol_config: None,
@@ -361,17 +371,21 @@ pub async fn create_genesis_aware_rpc_client(
     .await
 }
 
-/// Create a fresh wallet + counter pair in memory and deploy the counter to the network.
+/// Prepare an in-memory wallet/counter pair and deploy the counter to the network.
 ///
 /// Used both at startup and by the increment task when accounts are fundamentally outdated
 /// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
-/// are never persisted to disk; the monitor re-creates them on every restart.
+/// are never persisted to disk; the monitor re-creates them on every restart. When a registration
+/// pool is provided, unresolved registrations reuse their existing accounts and codes. On a
+/// fee-charging chain the wallet receives `wallet_funding_amount` base units of the fee asset.
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
+    wallet_funding_amount: NonZeroU64,
+    registration: Option<&mut RegistrationPool>,
 ) -> Result<DeployedMonitorAccounts> {
-    info!(target: LOG_TARGET, "Creating fresh monitor accounts");
+    info!(target: LOG_TARGET, "Preparing monitor accounts");
 
     let mut rpc_client = submission_client.rpc_client();
 
@@ -382,9 +396,19 @@ pub async fn create_and_deploy_accounts(
     let verification_base_fee =
         funding_anchor.block_header.fee_parameters().verification_base_fee();
 
-    let (wallet_account, secret_key) = create_wallet_account()?;
-    let counter_account =
-        create_counter_account(wallet_account.id(), fee_faucet_id, verification_base_fee)?;
+    let create = || {
+        let (wallet, secret_key) = create_wallet_account()?;
+        let counter = create_counter_account(wallet.id(), fee_faucet_id, verification_base_fee)?;
+        Ok(MonitorAccountPair { wallet, secret_key, counter })
+    };
+    let MonitorAccountPair {
+        wallet: wallet_account,
+        secret_key,
+        counter: counter_account,
+    } = match registration {
+        Some(pool) => pool.register_accounts(&mut rpc_client, create).await?,
+        None => create()?,
+    };
 
     // Both vaults start empty, so each account's first transaction pays its fee from a faucet note
     // consumed in that same transaction.
@@ -395,7 +419,7 @@ pub async fn create_and_deploy_accounts(
                 .await
                 .context("failed to fund the counter account")?;
             let wallet_note = funder
-                .fund(wallet_account.id(), wallet_funding_amount(verification_base_fee))
+                .fund(wallet_account.id(), wallet_funding_amount.get())
                 .await
                 .context("failed to fund the wallet account")?;
             (Some(counter_note), Some(wallet_note))
@@ -502,8 +526,8 @@ pub(crate) async fn fetch_foreign_account_inputs(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::rpc::account_request::AccountDetailRequest;
-    use miden_node_proto::generated::rpc::account_request::account_detail_request::StorageRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
 
     // Dummy commitments force the server to include code and vault data in the response.
     let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
@@ -1065,8 +1089,10 @@ pub async fn deploy_counter_account(
 
     let transaction_inputs = executed_tx.tx_inputs().to_bytes();
 
-    let committed_counter = Account::try_from(executed_tx.account_patch())
-        .context("counter creation patch should convert to an account")?;
+    let mut committed_counter = counter_account.clone();
+    committed_counter
+        .apply_patch(executed_tx.account_patch())
+        .context("counter creation patch should apply to the counter account")?;
 
     let prover = prover.clone();
     let proven_tx = spawn_blocking_in_current_span(move || prover.prove(executed_tx))
@@ -1259,7 +1285,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
-    use miden_node_proto::generated::rpc::SyncChainMmrResponse;
+    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
     use miden_protocol::Word;
     use miden_protocol::asset::{AssetId, FungibleAsset};
     use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};

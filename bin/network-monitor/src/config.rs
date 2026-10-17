@@ -3,6 +3,9 @@
 //! This module contains the configuration structures and constants for the network monitor.
 //! Configuration for the monitor.
 
+use std::num::NonZeroU64;
+use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -16,6 +19,10 @@ use url::Url;
 
 const DEFAULT_RPC_URL: &str = "http://0.0.0.0:57291";
 const DEFAULT_PORT: u16 = 3000;
+/// Amount of tokens, in base units, requested by each faucet check by default.
+const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
+/// Amount of the fee asset, in base units, requested by each wallet funding request by default.
+const DEFAULT_WALLET_FUNDING_AMOUNT: NonZeroU64 = NonZeroU64::new(1_000_000).unwrap();
 
 /// Configuration for the monitor.
 ///
@@ -30,6 +37,10 @@ pub struct MonitorConfig {
         help = "The URL of the RPC service"
     )]
     pub rpc_url: Url,
+
+    /// JSON file containing a finite pool of invitation codes for monitor accounts.
+    #[arg(long = "registration-codes-file", env = "MIDEN_MONITOR_REGISTRATION_CODES_FILE")]
+    pub registration_codes_file: Option<PathBuf>,
 
     /// The display name of the network (e.g., "Testnet", "Devnet").
     #[arg(
@@ -75,6 +86,16 @@ pub struct MonitorConfig {
     )]
     pub funding_request_timeout: Duration,
 
+    /// Amount of the fee asset, in base units, that each wallet funding request asks for.
+    #[arg(
+        long = "wallet-funding-amount",
+        env = "MIDEN_MONITOR_WALLET_FUNDING_AMOUNT",
+        default_value_t = DEFAULT_WALLET_FUNDING_AMOUNT,
+        help = "Amount of the fee asset, in base units, that each wallet funding request asks for. \
+                It must not exceed the funding service's maximum request amount"
+    )]
+    pub wallet_funding_amount: NonZeroU64,
+
     /// The interval at which to test the remote provers services.
     #[arg(
         long = "remote-prover-test-interval",
@@ -94,6 +115,17 @@ pub struct MonitorConfig {
         help = "The interval at which to test the faucet services"
     )]
     pub faucet_test_interval: Duration,
+
+    /// Amount of tokens, in base units, that each faucet check requests.
+    #[arg(
+        long = "faucet-mint-amount",
+        env = "MIDEN_MONITOR_FAUCET_MINT_AMOUNT",
+        default_value_t = DEFAULT_FAUCET_MINT_AMOUNT,
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Amount of tokens, in base units, that each faucet check requests. It must not \
+                exceed the faucet's maximum claimable amount"
+    )]
+    pub faucet_mint_amount: u64,
 
     /// The interval at which to check the status of the services.
     #[arg(
@@ -199,7 +231,17 @@ pub struct MonitorConfig {
     )]
     pub note_transport_url: Option<Url>,
 
-    /// The URL of the validator service.
+    /// Named validators, as repeated arguments or a comma-separated list of NAME=URL pairs.
+    #[arg(
+        long = "validators",
+        env = "MIDEN_MONITOR_VALIDATORS",
+        value_delimiter = ',',
+        value_name = "NAME=URL",
+        conflicts_with = "validator_url"
+    )]
+    pub validators: Vec<ValidatorConfig>,
+
+    /// The URL of a single validator service. Use `--validators` to provide display names.
     #[arg(
         long = "validator-url",
         env = "MIDEN_MONITOR_VALIDATOR_URL",
@@ -231,6 +273,29 @@ pub struct MonitorConfig {
     pub stale_chain_tip_threshold: Duration,
 }
 
+/// A validator endpoint identified by an operator-provided display name.
+#[derive(Debug, Clone)]
+pub struct ValidatorConfig {
+    pub name: String,
+    pub url: Url,
+}
+
+impl FromStr for ValidatorConfig {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        let (name, url) = value.split_once('=').context("expected a NAME=URL pair")?;
+        let name = name.trim();
+        anyhow::ensure!(!name.is_empty(), "validator name must not be empty");
+        let url = Url::parse(url).context("invalid validator URL")?;
+        anyhow::ensure!(
+            matches!(url.scheme(), "http" | "https") && url.host_str().is_some(),
+            "validator URL must use http or https and include a host"
+        );
+        Ok(Self { name: name.to_string(), url })
+    }
+}
+
 impl MonitorConfig {
     /// Decodes the validator signing keys required by transaction submission checks.
     pub fn trusted_validator_signing_keys(&self) -> Result<Vec<ValidatorPublicKey>> {
@@ -256,6 +321,90 @@ mod tests {
     use miden_protocol::utils::serde::Serializable;
 
     use super::*;
+
+    /// Operators can supply the registration pool through a file without exposing its codes in
+    /// command-line arguments.
+    #[test]
+    fn accepts_registration_codes_file() {
+        assert!(
+            MonitorConfig::try_parse_from([
+                "monitor",
+                "--registration-codes-file",
+                "/tmp/codes.json",
+            ])
+            .is_ok()
+        );
+    }
+
+    /// Operators can choose how much of the fee asset the wallet requests, but not a zero amount,
+    /// which would leave the wallet unable to pay fees.
+    #[test]
+    fn accepts_a_positive_wallet_funding_amount() {
+        let config =
+            MonitorConfig::try_parse_from(["monitor", "--wallet-funding-amount", "5000"]).unwrap();
+        assert_eq!(config.wallet_funding_amount.get(), 5000);
+        assert!(
+            MonitorConfig::try_parse_from(["monitor", "--wallet-funding-amount", "0"]).is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_named_validators_as_a_list_or_repeated_arguments() {
+        for args in [
+            vec!["--validators", "Miden=https://miden.example,Gateway=https://gateway.example"],
+            vec![
+                "--validators",
+                "Miden=https://miden.example",
+                "--validators",
+                "Gateway=https://gateway.example",
+            ],
+        ] {
+            let config =
+                MonitorConfig::try_parse_from(["miden-network-monitor"].into_iter().chain(args))
+                    .unwrap();
+            assert_eq!(config.validators.len(), 2);
+            assert_eq!(config.validators[0].name, "Miden");
+            assert_eq!(config.validators[0].url.as_str(), "https://miden.example/");
+            assert_eq!(config.validators[1].name, "Gateway");
+            assert_eq!(config.validators[1].url.as_str(), "https://gateway.example/");
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_named_validators() {
+        for value in [
+            "https://validator.example",
+            "=https://validator.example",
+            "  =https://validator.example",
+            "Miden=",
+            "Miden=invalid",
+            "Miden=file:///tmp/validator",
+        ] {
+            assert!(MonitorConfig::try_parse_from(["monitor", "--validators", value]).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_validator_configuration_remains_supported() {
+        let config = MonitorConfig::try_parse_from([
+            "monitor",
+            "--validator-url",
+            "https://validator.example",
+        ])
+        .unwrap();
+        assert_eq!(config.validator_url.unwrap().as_str(), "https://validator.example/");
+        assert!(config.validators.is_empty());
+        assert!(
+            MonitorConfig::try_parse_from([
+                "monitor",
+                "--validator-url",
+                "https://validator.example",
+                "--validators",
+                "Miden=https://miden.example",
+            ])
+            .is_err()
+        );
+    }
 
     #[test]
     fn accepts_all_configured_validator_keys() {

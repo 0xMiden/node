@@ -4,7 +4,7 @@ use miden_protocol::Word;
 use miden_protocol::note::Nullifier;
 
 use crate::DecodeMessageExt;
-use crate::generated::rpc::{self, SyncNullifiersResponse};
+use crate::generated::miden::node::v1::{self as rpc, SyncNullifiersResponse};
 
 impl SyncNullifiersResponse {
     fn fixture(chain_tip: u32, checked: u32, spent: &[(u32, u32)]) -> Self {

@@ -37,9 +37,8 @@ async function probeGrpcWeb(baseUrl, grpcPath) {
         "Content-Type": "application/grpc-web+proto",
         "X-Grpc-Web": "1",
     };
-    // The Miden RPC service requires its custom Accept header; the remote prover is fine with
-    // the standard gRPC-Web content type.
-    headers["Accept"] = grpcPath.startsWith("/rpc.")
+    // Use the Miden media type for node RPC requests.
+    headers["Accept"] = grpcPath.startsWith("/miden.node.")
         ? "application/vnd.miden"
         : "application/grpc-web+proto";
 
@@ -196,8 +195,21 @@ document.addEventListener("DOMContentLoaded", () => {
     periodicProbeTimer = setInterval(runProbes, PROBE_INTERVAL_MS);
 });
 
+// Keep expanded validator errors open across status refreshes while replacing their contents.
+let expandedValidatorErrors = new Set();
+document.body.addEventListener("htmx:beforeSwap", (e) => {
+    if (e.detail?.target?.id === "status-container") {
+        expandedValidatorErrors = new Set(
+            [...e.detail.target.querySelectorAll(".validator-error[open]")].map((el) => el.id),
+        );
+    }
+});
+
 document.body.addEventListener("htmx:afterSwap", (e) => {
     if (e.detail && e.detail.target && e.detail.target.id === "status-container") {
+        for (const el of e.detail.target.querySelectorAll(".validator-error")) {
+            el.open = expandedValidatorErrors.has(el.id);
+        }
         repaintAllFromCache();
         // Re-run a probe for any newly added target that we haven't seen before.
         const known = new Set(probeResults.keys());
