@@ -3,6 +3,8 @@ use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_f
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_store::State;
+use miden_protocol::block::BlockNumber;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -31,11 +33,9 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
             .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))?;
         request
             // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
-            // does not authenticate the transaction against current chain state.
-            //
-            // FIXME: Check committed nullifiers and expiration against one local state snapshot
-            // on every submission path. Forwarding skips the local nullifier check, and
-            // expiration is checked later by the sequencer mempool.
+            // does not authenticate the transaction against current chain state. The forwarding
+            // path performs a nullifier and expiration check via `check_nullifiers_and_expiration`
+            // before the transaction reaches the upstream sequencer.
             .decode_and_build_unchecked()
             .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
@@ -165,8 +165,11 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // FIXME: Preserve and forward the original request. This request contains the
-                // transaction rebuilt above with output-note decorators removed.
+                // Check nullifiers and expiration against the local store before forwarding so
+                // that provably-invalid transactions are rejected at the edge rather than
+                // consuming sequencer resources.
+                check_nullifiers_and_expiration(&self.state, &rebuilt_tx).await?;
+
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
                     forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
@@ -227,6 +230,59 @@ impl RpcService {
 
 // HELPERS
 // ================================================================================================
+
+/// Checks that none of the transaction's input nullifiers are already spent and that the
+/// transaction has not yet expired, using a single consistent snapshot of the local store.
+///
+/// This is called on the `FullNode { pre_auth: None }` forwarding path before the transaction
+/// is sent upstream, so that provably-invalid transactions are rejected at the edge rather than
+/// consuming sequencer resources.
+async fn check_nullifiers_and_expiration(
+    state: &State,
+    tx: &ProvenTransaction,
+) -> tonic::Result<()> {
+    let view = state.view();
+
+    // Expiration check: reject if the transaction has already expired at the local chain tip.
+    let chain_tip = *view.tip();
+    if tx.expiration_block_num() <= chain_tip {
+        return Err(Status::invalid_argument(format!(
+            "transaction {} has expired: expiration block {} <= chain tip {}",
+            tx.id(),
+            tx.expiration_block_num(),
+            chain_tip,
+        )));
+    }
+
+    // Nullifier check: collect the nullifiers of all input notes and verify none are already
+    // committed in the local store.
+    let nullifiers: Vec<_> = tx.input_notes().iter().map(|note| note.nullifier()).collect();
+
+    if nullifiers.is_empty() {
+        return Ok(());
+    }
+
+    let inputs = view
+        .get_transaction_inputs(tx.account_id(), &nullifiers, Vec::new())
+        .await
+        .map_err(|err| Status::internal(format!("nullifier check failed: {err}")))?;
+
+    let spent: Vec<_> = inputs
+        .nullifiers
+        .iter()
+        .filter(|info| info.block_num != BlockNumber::GENESIS)
+        .collect();
+
+    if !spent.is_empty() {
+        return Err(Status::invalid_argument(format!(
+            "transaction {} consumes already-spent nullifiers: {:?}",
+            tx.id(),
+            spent.iter().map(|info| info.nullifier).collect::<Vec<_>>(),
+        )));
+    }
+
+    Ok(())
+}
 
 /// Strips decorators from public output notes' scripts.
 ///
