@@ -155,7 +155,7 @@ fn note_authentication_preserves_ids_across_serialization() {
     inputs.nullifiers = tx.nullifiers().map(|nullifier| (nullifier, None)).collect();
     inputs.found_unauthenticated_notes.insert(input_note_ids[0]);
 
-    let message = generated::sequencer::AuthInputs::from(inputs);
+    let message = generated::miden::sequencer::v1::AuthInputs::from(inputs);
     assert_eq!(message.found_unauthenticated_notes, vec![input_note_ids[0].as_word().into()]);
     let inputs = message.decode_fields().and_then(Verify::verify).unwrap();
     assert_eq!(inputs.found_unauthenticated_notes, HashSet::from([input_note_ids[0]]));
@@ -167,14 +167,16 @@ fn note_authentication_preserves_ids_across_serialization() {
         vec![input_note_ids[1]]
     );
 
-    let message = generated::sequencer::AuthenticatedTransaction::from(authenticated.clone());
+    let message =
+        generated::miden::sequencer::v1::AuthenticatedTransaction::from(authenticated.clone());
     assert_eq!(message.notes_authenticated_by_store, vec![input_note_ids[0].as_word().into()]);
     let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
     assert_eq!(decoded, authenticated);
 
     authenticated.mark_notes_authenticated([input_note_ids[1]]);
     assert_eq!(authenticated.unauthenticated_note_ids().count(), 0);
-    let message = generated::sequencer::AuthenticatedTransaction::from(authenticated.clone());
+    let message =
+        generated::miden::sequencer::v1::AuthenticatedTransaction::from(authenticated.clone());
     let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
     assert_eq!(decoded, authenticated);
 }

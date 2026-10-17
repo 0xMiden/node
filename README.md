@@ -80,6 +80,8 @@ The [developer documentation][developer-docs] provides the architectural design 
 For testing and other workflows, please see the `Makefile`. The more frequently used commands are:
 
 ```sh
+# Install the repository's locked Markdown tools (requires Node.js 22.18 or newer).
+make install-markdown-tools
 # Note: we use +nightly for formatting, so using general `cargo fmt` will conflict.
 make format
 make lint

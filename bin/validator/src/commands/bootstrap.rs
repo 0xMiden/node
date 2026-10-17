@@ -2,7 +2,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use anyhow::Context;
-use miden_node_store::BlockStore;
 use miden_node_tracing::info;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::read_genesis_block;
@@ -36,14 +35,11 @@ pub async fn bootstrap(
         read_genesis_block(genesis_block_file).context("failed to read genesis block file")?;
     let genesis_commitment = genesis_block.inner().header().commitment();
 
-    let _ = BlockStore::bootstrap(dirs.block_store_dir(), &genesis_block)?;
-
     let (genesis_block, protocol_config) = genesis_block.into_parts();
-    let (genesis_header, ..) = genesis_block.into_parts();
     miden_validator::db::bootstrap(
         dirs.database_path(),
         sqlite_connection_pool_size,
-        genesis_header,
+        genesis_block,
         protocol_config,
     )
     .await
@@ -103,13 +99,19 @@ mod tests {
             validator_db.load_protocol_config(commitment).await.unwrap(),
             Some(config.clone())
         );
-        let block_bytes = genesis.inner().to_bytes();
+        let block_bytes = miden_node_persistence::encode(genesis.inner());
+        assert_eq!(
+            validator_db.load_block(BlockNumber::GENESIS).await.unwrap(),
+            Some(genesis.inner().clone())
+        );
+        assert!(!data_directory.join("blocks").exists());
         assert_eq!(config.to_commitment(), commitment);
         let node_directory = root.path().join("node");
         fs_err::create_dir(&node_directory).unwrap();
-        miden_node_store::State::bootstrap(genesis, &node_directory).unwrap();
+        miden_node_store::State::bootstrap(genesis, &node_directory).await.unwrap();
         let directories = miden_node_store::DataDirectory::load(node_directory).unwrap();
-        let block_store = BlockStore::load(directories.block_store_dir()).unwrap();
+        let block_store =
+            miden_node_store::BlockStore::load(directories.block_store_dir()).unwrap();
         assert_eq!(block_store.load_block(BlockNumber::GENESIS).await.unwrap(), Some(block_bytes));
         let db = miden_node_store::Db::load(directories.database_path()).await.unwrap();
         assert_eq!(

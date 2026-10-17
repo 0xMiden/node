@@ -1,6 +1,6 @@
 use anyhow::Context;
 use miden_protocol::transaction::TransactionId;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{DataDirectory, PrivateRecordId};
 
 use super::PrivateRecordExportOptions;
@@ -29,7 +29,7 @@ pub(super) async fn export(options: PrivateRecordExportOptions) -> anyhow::Resul
             format!("private record ({transaction_id}, {validator_id}) was not found")
         })?;
 
-    fs_err::write(&output, record.to_bytes())
+    fs_err::write(&output, miden_node_persistence::encode(&record))
         .with_context(|| format!("failed to write private record bundle to {}", output.display()))
 }
 

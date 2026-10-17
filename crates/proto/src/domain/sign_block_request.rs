@@ -17,7 +17,7 @@ pub struct SignBlockRequest {
     pub protocol_config: Option<ProtocolConfig>,
 }
 
-impl BuildUnchecked for proto::validator::DecodedSignBlockRequest {
+impl BuildUnchecked for proto::miden::validator::v1::DecodedSignBlockRequest {
     type Output = SignBlockRequest;
     type Error = ConversionError;
 
@@ -49,7 +49,7 @@ impl BuildUnchecked for proto::validator::DecodedSignBlockRequest {
     }
 }
 
-impl From<&SignBlockRequest> for proto::validator::SignBlockRequest {
+impl From<&SignBlockRequest> for proto::miden::validator::v1::SignBlockRequest {
     fn from(value: &SignBlockRequest) -> Self {
         Self {
             batches: value.tx_batches.as_slice().iter().map(Into::into).collect(),
@@ -62,7 +62,7 @@ impl From<&SignBlockRequest> for proto::validator::SignBlockRequest {
     }
 }
 
-impl From<SignBlockRequest> for proto::validator::SignBlockRequest {
+impl From<SignBlockRequest> for proto::miden::validator::v1::SignBlockRequest {
     fn from(value: SignBlockRequest) -> Self {
         Self::from(&value)
     }

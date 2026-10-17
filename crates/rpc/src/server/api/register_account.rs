@@ -9,16 +9,18 @@ use super::{RpcBackend, RpcService};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::RegisterAccount for RpcService {
+impl proto::server::miden_node_v1_node_service::RegisterAccount for RpcService {
     type Input = RegisterAccountRequest;
     type Output = ();
 
-    fn decode(request: proto::rpc::RegisterAccountRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::RegisterAccountRequest,
+    ) -> tonic::Result<Self::Input> {
         request.decode_and_verify().map_err(ConversionError::into_status)
     }
 
-    fn encode((): Self::Output) -> tonic::Result<()> {
-        Ok(())
+    fn encode((): Self::Output) -> tonic::Result<proto::miden::node::v1::RegisterAccountResponse> {
+        Ok(proto::miden::node::v1::RegisterAccountResponse {})
     }
 
     #[miden_instrument(target = COMPONENT, name = "register_account", err)]
@@ -66,7 +68,7 @@ impl proto::server::rpc_api::RegisterAccount for RpcService {
                 Ok(())
             },
             RpcBackend::FullNode { source_rpc, .. } => {
-                let mut request = Request::new(proto::rpc::RegisterAccountRequest {
+                let mut request = Request::new(proto::miden::node::v1::RegisterAccountRequest {
                     account_id: Some(account_id.into()),
                     invitation_code: request.invitation_code,
                 });

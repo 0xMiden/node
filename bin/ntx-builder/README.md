@@ -6,9 +6,10 @@ layout.
 
 ## Role
 
-The network transaction builder syncs blocks from an upstream node, tracking network notes and accounts. It starts
-per-account workers for network accounts with pending work. Each worker selects viable notes, constructs a transaction,
-proves it, and submits the proven transaction back through the upstream node's RPC API.
+The network transaction builder syncs blocks from an upstream node, tracking network notes and accounts. On every
+committed block it picks the network accounts that have pending notes and spawns one short-lived transaction attempt per
+account, up to a configured concurrency limit. Each attempt selects viable notes, constructs a transaction, proves it,
+and submits the proven transaction back through the upstream node's RPC API.
 
 The builder can use a remote transaction prover through `miden-remote-prover`, or fall back to in-process proving where
 appropriate for local development. It also exposes an internal gRPC API that the node RPC component can use for
@@ -22,11 +23,10 @@ be exposed through the public RPC API.
 
 ## Benchmarks
 
-`benches/large_account.rs` measures the cost of a large network account, which each actor keeps fully resident for its
-lifetime and reloads from the database on start and after every expired submission. It synthesizes a network account
-with a populated storage map and reports resident/peak heap, serialized size, and per-operation timings. Per-candidate
-cost is not a factor: the account is shared via `Arc` and advanced with `Arc::make_mut`, and `PartialAccount::from` is
-constant-time in the map size for existing accounts.
+`benches/large_account.rs` measures the cost of a large network account, which every transaction attempt loads from the
+database. It synthesizes a network account with a populated storage map and reports resident/peak heap, serialized size,
+and per-operation timings. Per-candidate cost is not a factor: the account is shared via `Arc`, and
+`PartialAccount::from` is constant-time in the map size for existing accounts.
 
 ```bash
 # Default sizes (1k, 10k, 100k entries).

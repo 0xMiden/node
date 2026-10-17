@@ -17,7 +17,17 @@ words:
   - ciphertext
   - Devnet
   - grpcurl
+  - Iroh
   - Merkle
   - Miden
   - Midenscan
   - RocksDB
+  - USDCx
+  - Keccak
+  - bech32
+  - prefund
+  - prefunding
+  - prefunded
+  - unpauser
+  - blocklist
+  - undeployed

@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
 use miden_node_proto::domain::account::{
-    AccountRequest,
-    AccountResponse,
     AccountStorageRequest,
+    GetAccountRequest,
+    GetAccountResponse,
     SlotData,
 };
 use miden_node_proto::{DecodeMessageExt, generated as proto};
@@ -17,17 +17,17 @@ use super::{RpcService, check};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetAccount for RpcService {
-    type Input = AccountRequest;
-    type Output = AccountResponse;
+impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
+    type Input = GetAccountRequest;
+    type Output = GetAccountResponse;
 
-    fn decode(request: proto::rpc::AccountRequest) -> tonic::Result<Self::Input> {
+    fn decode(request: proto::miden::node::v1::GetAccountRequest) -> tonic::Result<Self::Input> {
         request
             .decode_and_verify()
             .map_err(|err| GetAccountErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::AccountResponse> {
+    fn encode(output: Self::Output) -> tonic::Result<proto::miden::node::v1::GetAccountResponse> {
         Ok(output.into())
     }
 

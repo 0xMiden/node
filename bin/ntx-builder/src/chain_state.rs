@@ -1,6 +1,6 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
+use miden_protocol::block::{BlockHeader, SignedBlock};
 use miden_protocol::crypto::merkle::mmr::PartialMmr;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::PartialBlockchain;
@@ -8,8 +8,9 @@ use miden_protocol::transaction::PartialBlockchain;
 // CHAIN STATE
 // ================================================================================================
 
-/// Contains information about the chain that is relevant to the [`NetworkTransactionBuilder`] and
-/// all account actors managed by the [`Coordinator`].
+/// Contains information about the chain that is relevant to the
+/// [`NetworkTransactionBuilder`](crate::NetworkTransactionBuilder).
+///
 ///
 /// The chain MMR stored here contains:
 /// - The MMR peaks.
@@ -63,8 +64,26 @@ impl ChainState {
         self.chain_mmr.mmr().clone()
     }
 
-    /// Builds the next chain snapshot and prunes old blocks from its MMR.
+    /// Verifies the block against the current tip, then builds the next snapshot.
+    ///
+    /// The subscription starts after the persisted tip and resumes after its last received block.
+    /// Each block must be the direct child of the current tip. Repeated or older blocks are
+    /// rejected so the caller cannot apply their effects again.
     pub(crate) fn next_chain_tip(
+        &self,
+        block: &SignedBlock,
+        protocol_config: Option<ProtocolConfig>,
+        max_block_count: usize,
+    ) -> anyhow::Result<Self> {
+        block.validate(Some(&self.chain_tip_header))?;
+        self.next_tip_from_header(block.header().clone(), protocol_config, max_block_count)
+    }
+
+    /// Builds the next chain snapshot and prunes old blocks from its MMR.
+    ///
+    /// This skips the block validation of [`ChainState::next_chain_tip`], so a caller that holds a
+    /// [`SignedBlock`] must use that method instead.
+    pub(crate) fn next_tip_from_header(
         &self,
         tip: BlockHeader,
         protocol_config: Option<ProtocolConfig>,
@@ -100,50 +119,6 @@ impl ChainState {
         Arc::make_mut(&mut next.chain_mmr).prune_to(..pruned_block_height.into());
 
         Ok(next)
-    }
-}
-
-/// A thread-safe wrapper around [`ChainState`] that can be shared across multiple actors.
-///
-/// The API guarantees that the lock cannot be held across await points.
-pub struct SharedChainState(RwLock<ChainState>);
-
-impl SharedChainState {
-    pub fn new(
-        chain_tip_header: BlockHeader,
-        chain_mmr: PartialMmr,
-        protocol_config: ProtocolConfig,
-    ) -> Self {
-        Self(RwLock::new(ChainState::new(chain_tip_header, chain_mmr, protocol_config)))
-    }
-
-    pub(crate) fn chain_tip_block_number(&self) -> BlockNumber {
-        self.0.read().expect("chain state lock poisoned").chain_tip_header.block_num()
-    }
-
-    /// Verify the block against the current tip before building the next snapshot.
-    ///
-    /// The subscription starts after the persisted tip and resumes after its last received block.
-    /// Each block must be the direct child of the current tip. Reject repeated or older blocks so
-    /// the caller cannot apply their effects again.
-    pub(crate) fn next_chain_tip(
-        &self,
-        block: &SignedBlock,
-        protocol_config: Option<ProtocolConfig>,
-        max_block_count: usize,
-    ) -> anyhow::Result<ChainState> {
-        let current = self.0.read().expect("chain state lock poisoned");
-        block.validate(Some(&current.chain_tip_header))?;
-        current.next_chain_tip(block.header().clone(), protocol_config, max_block_count)
-    }
-
-    /// Publishes a snapshot after its database state is durable.
-    pub(crate) fn publish(&self, next: ChainState) {
-        *self.0.write().expect("chain state lock poisoned") = next;
-    }
-
-    pub(crate) fn get_cloned(&self) -> ChainState {
-        self.0.read().expect("chain state lock poisoned").clone()
     }
 }
 
@@ -194,7 +169,7 @@ mod protocol_config_tests {
             ChainState::new(mock_block_header(0_u32.into()), PartialMmr::default(), config.clone());
 
         let next = old
-            .next_chain_tip(
+            .next_tip_from_header(
                 header_for_config(1_u32.into(), &next_config),
                 Some(next_config.clone()),
                 4,
@@ -215,7 +190,7 @@ mod protocol_config_tests {
         let old = ChainState::new(mock_block_header(0_u32.into()), PartialMmr::default(), config);
         let changed = header_for_config(1_u32.into(), &next_config);
 
-        assert!(old.next_chain_tip(changed, None, 4).is_err());
+        assert!(old.next_tip_from_header(changed, None, 4).is_err());
         assert_eq!(old.chain_tip_header.block_num(), 0_u32.into());
     }
 }
@@ -245,9 +220,9 @@ mod tests {
         .into_block()
         .unwrap();
         let parent = genesis.inner().header();
-        let chain =
-            SharedChainState::new(parent.clone(), PartialMmr::default(), test_protocol_config());
-        let initial_mmr = chain.get_cloned().current_mmr();
+        let mut chain =
+            ChainState::new(parent.clone(), PartialMmr::default(), test_protocol_config());
+        let initial_mmr = chain.current_mmr();
         let inputs = BlockInputs::new(
             parent.clone(),
             PartialBlockchain::default(),
@@ -274,21 +249,22 @@ mod tests {
                 BlockSignatures::new(signatures).unwrap(),
             );
             assert!(chain.next_chain_tip(&invalid, None, 4).is_err());
-            assert_eq!(&chain.get_cloned().chain_tip_header, parent);
-            assert_eq!(chain.get_cloned().current_mmr(), initial_mmr);
+            assert_eq!(&chain.chain_tip_header, parent);
+            assert_eq!(chain.current_mmr(), initial_mmr);
         }
 
         let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
         let valid = SignedBlock::new_unchecked(header, body, signatures);
         let next = chain.next_chain_tip(&valid, None, 4).unwrap();
-        assert_eq!(&chain.get_cloned().chain_tip_header, parent);
-        chain.publish(next);
-        assert_eq!(&chain.get_cloned().chain_tip_header, valid.header());
-        let advanced_mmr = chain.get_cloned().current_mmr();
+        assert_eq!(&chain.chain_tip_header, parent, "building a snapshot does not advance the tip");
+
+        chain = next;
+        assert_eq!(&chain.chain_tip_header, valid.header());
+        let advanced_mmr = chain.current_mmr();
         assert_ne!(advanced_mmr, initial_mmr);
 
-        assert!(chain.next_chain_tip(&valid, None, 4).is_err());
-        assert_eq!(&chain.get_cloned().chain_tip_header, valid.header());
-        assert_eq!(chain.get_cloned().current_mmr(), advanced_mmr);
+        assert!(chain.next_chain_tip(&valid, None, 4).is_err(), "a replayed block is rejected");
+        assert_eq!(&chain.chain_tip_header, valid.header());
+        assert_eq!(chain.current_mmr(), advanced_mmr);
     }
 }

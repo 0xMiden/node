@@ -7,7 +7,7 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::prost::Message;
-use miden_node_proto::server::validator_api;
+use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto::{
     BuildUnchecked,
     DecodeMessage,
@@ -16,7 +16,7 @@ use miden_node_proto::{
     Verify,
     VerifyWith,
 };
-use miden_node_store::{BlockStore, GenesisState};
+use miden_node_store::GenesisState;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_node_utils::testing::{
     deferred_transaction_fixture,
@@ -111,8 +111,7 @@ impl TestValidator {
     async fn new() -> Self {
         let key = random_secret_key();
         let signer = ValidatorSigner::new_local(key.clone());
-        let (temp_dir, db, block_store, genesis_header, protocol_config) =
-            setup_db_with_genesis(&key).await;
+        let (temp_dir, db, genesis_header, protocol_config) = setup_db_with_genesis(&key).await;
 
         Self {
             server: ValidatorService::new(
@@ -120,7 +119,6 @@ impl TestValidator {
                 db,
                 std::sync::Arc::new(test_decrypter()),
                 PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-                block_store,
                 InitialMetrics::default(),
             )
             .await
@@ -147,7 +145,14 @@ impl TestValidator {
             transaction: Some(tx.into()),
             sealed_transaction_inputs: Some(sealed),
         });
-        validator_api::SubmitProvenTransaction::full(&self.server, request).await
+        miden_validator_v1_validator_service::SubmitProvenTransaction::full(
+            &self.server,
+            request.map(|submission| proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                submission: Some(submission),
+            }),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Seals `plaintext` exactly as a well-behaved client would: against the key this validator
@@ -179,7 +184,7 @@ impl TestValidator {
     async fn call_sign_block(
         &self,
         proposed_block: &ProposedBlock,
-    ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
+    ) -> Result<proto::miden::validator::v1::SignBlockResponse, tonic::Status> {
         self.call_sign_block_with_protocol_config(proposed_block, Some(&self.protocol_config))
             .await
     }
@@ -189,7 +194,7 @@ impl TestValidator {
         &self,
         proposed_block: &ProposedBlock,
         protocol_config: Option<&ProtocolConfig>,
-    ) -> Result<proto::validator::SignBlockResponse, tonic::Status> {
+    ) -> Result<proto::miden::validator::v1::SignBlockResponse, tonic::Status> {
         let block_inputs = BlockInputs::new(
             proposed_block.prev_block_header().clone(),
             proposed_block.partial_blockchain().clone(),
@@ -198,7 +203,7 @@ impl TestValidator {
             BTreeMap::new(),
         );
         let (block_header, _) = proposed_block.clone().into_header_and_body().unwrap();
-        let request: proto::validator::SignBlockRequest = SignBlockRequest {
+        let request: proto::miden::validator::v1::SignBlockRequest = SignBlockRequest {
             tx_batches: OrderedBatches::new(proposed_block.batches().as_slice().to_vec()),
             block_header,
             block_inputs,
@@ -206,14 +211,14 @@ impl TestValidator {
         }
         .into();
         let request = tonic::Request::new(request);
-        validator_api::SignBlock::full(&self.server, request).await
+        miden_validator_v1_validator_service::SignBlock::full(&self.server, request).await
     }
 
     /// Opens a block subscription starting from `block_from`.
     async fn call_block_subscription(
         &self,
         block_from: u32,
-    ) -> <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream {
+    ) -> <ValidatorService as proto::server::miden_validator_v1_validator_service::BlockSubscription>::ItemStream{
         self.try_call_block_subscription(block_from)
             .await
             .expect("subscription should open")
@@ -225,19 +230,23 @@ impl TestValidator {
         &self,
         block_from: u32,
     ) -> Result<
-        <ValidatorService as proto::server::validator_api::BlockSubscription>::ItemStream,
+        <ValidatorService as proto::server::miden_validator_v1_validator_service::BlockSubscription>::ItemStream,
         tonic::Status,
-    > {
-        let request =
-            tonic::Request::new(proto::validator::BlockSubscriptionRequest { block_from });
-        validator_api::BlockSubscription::full(&self.server, request).await
+    >{
+        let request = tonic::Request::new(proto::miden::validator::v1::BlockSubscriptionRequest {
+            block_from,
+        });
+        miden_validator_v1_validator_service::BlockSubscription::full(&self.server, request).await
     }
 
     /// Calls the `status` endpoint on the validator server.
-    async fn call_status(&self) -> proto::validator::ValidatorStatus {
-        validator_api::Status::full(&self.server, tonic::Request::new(()))
-            .await
-            .expect("status should always be available")
+    async fn call_status(&self) -> proto::miden::validator::v1::StatusResponse {
+        miden_validator_v1_validator_service::Status::full(
+            &self.server,
+            tonic::Request::new(proto::miden::validator::v1::StatusRequest {}),
+        )
+        .await
+        .expect("status should always be available")
     }
 
     /// Returns whether `tx_id` has a validated transaction marker.
@@ -264,9 +273,14 @@ impl TestValidator {
     async fn call_get_transaction_encryption_key(
         &self,
     ) -> proto::submission::TransactionEncryptionKey {
-        validator_api::GetTransactionEncryptionKey::full(&self.server, tonic::Request::new(()))
-            .await
-            .expect("encryption key should always be available")
+        miden_validator_v1_validator_service::GetTransactionEncryptionKey::full(
+            &self.server,
+            tonic::Request::new(proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {}),
+        )
+        .await
+        .expect("encryption key should always be available")
+        .key
+        .expect("transaction encryption key")
     }
 
     /// Asserts that opening a backup subscription is rejected with `resource_exhausted`. The
@@ -302,7 +316,7 @@ impl TestValidator {
 /// of `key`. Returns the database handle and the genesis block header.
 async fn setup_db_with_genesis(
     key: &SigningKey,
-) -> (tempfile::TempDir, ValidatorDbWriter, BlockStore, BlockHeader, ProtocolConfig) {
+) -> (tempfile::TempDir, ValidatorDbWriter, BlockHeader, ProtocolConfig) {
     let protocol_config = test_protocol_config();
     let genesis_state = GenesisState::new(
         vec![],
@@ -316,17 +330,11 @@ async fn setup_db_with_genesis(
 
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    let block_store =
-        BlockStore::bootstrap(dir.path().join("blocks").clone(), &genesis_block).unwrap();
+    db.insert_signed_block(genesis_block.inner().clone(), protocol_config.clone(), Vec::new())
+        .await
+        .unwrap();
 
-    db.upsert_block_header_with_protocol_config(
-        genesis_header.clone(),
-        Some(protocol_config.clone()),
-    )
-    .await
-    .unwrap();
-
-    (dir, db, block_store, genesis_header, protocol_config)
+    (dir, db, genesis_header, protocol_config)
 }
 
 /// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
@@ -489,7 +497,7 @@ fn open_transaction_effects(record: &StoredPrivateRecord) -> TransactionEffects 
 async fn signing_key_mismatch_rejected() {
     // Seed a database whose genesis designates `genesis_key` as the validator key.
     let genesis_key = random_secret_key();
-    let (_temp_dir, db, block_store, genesis_header, _) = setup_db_with_genesis(&genesis_key).await;
+    let (_temp_dir, db, genesis_header, _) = setup_db_with_genesis(&genesis_key).await;
 
     // Start a validator with a different key, modelling a validator configured with the wrong key.
     let rogue_signer = ValidatorSigner::new_local(random_secret_key());
@@ -503,7 +511,6 @@ async fn signing_key_mismatch_rejected() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        block_store,
         InitialMetrics::default(),
     )
     .await;
@@ -570,7 +577,7 @@ async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
     assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
     assert_eq!(tv.call_status().await.signed_blocks_count, 0);
     assert_eq!(
-        tv.server.block_store.load_block(1.into()).await.unwrap(),
+        tv.server.db.load_block(1.into()).await.unwrap(),
         None,
         "an unknown config must be rejected before backup"
     );
@@ -609,6 +616,8 @@ async fn chain_tip_plus_one_succeeds() {
 /// A replacement block at the same height as the current chain tip should be accepted.
 #[tokio::test]
 async fn chain_tip_replacement_succeeds() {
+    use tokio_stream::StreamExt;
+
     let mut tv = TestValidator::new().await;
 
     // The genesis block can never be replaced, so we advance the chain to block 1, which we can
@@ -644,6 +653,13 @@ async fn chain_tip_replacement_succeeds() {
         .await
         .expect("repeated signing must retain the stored configuration");
 
+    let stored = tv.server.db.load_block(replacement_header.block_num()).await.unwrap().unwrap();
+    assert_eq!(stored.header(), &replacement_header);
+    let mut stream = tv.call_block_subscription(1).await;
+    let response = stream.next().await.unwrap().unwrap();
+    assert_eq!(response.block, Some(stored.into()));
+    drop(stream);
+
     // Verify that the chain tip in the database is now the replacement block, not the original.
     let new_chain_tip = tv.load_chain_tip().await;
     assert_eq!(
@@ -665,6 +681,37 @@ async fn chain_tip_replacement_succeeds() {
         Some(tv.protocol_config.clone()),
         "replacement persistence must retain the active protocol config"
     );
+}
+
+/// A replacement of the tip block stores no additional block, so it does not change the signed
+/// block count. The count in memory then stays equal to the growth of the count that a restart
+/// reads from the database.
+#[tokio::test]
+async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
+    let mut tv = TestValidator::new().await;
+    let genesis_header = tv.chain_tip.clone();
+    let chain_at_genesis = tv.chain.clone();
+    let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    tv.apply_empty_block().await;
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        chain_at_genesis,
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let replacement =
+        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
+            .unwrap();
+    tv.call_sign_block(&replacement)
+        .await
+        .expect("chain tip replacement should succeed");
+
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+    let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    assert_eq!(stored - stored_at_genesis, 1);
 }
 
 /// A block at chain tip + 2 (skipping a block number) should be rejected.
@@ -865,6 +912,97 @@ async fn unknown_transactions_rejected() {
     }
 }
 
+/// Signing a block records which block includes each of its transactions, so the administration API
+/// can filter validated transactions by block range.
+#[tokio::test]
+async fn sign_block_links_transactions_to_the_signed_block() {
+    use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
+    use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
+    use rand_chacha_03::rand_core::SeedableRng;
+
+    use crate::db::ListTransactionsParams;
+    use crate::private_record::test_private_record_sealer;
+    use crate::{PrivateRecordChainId, PrivateRecordContext, PrivateRecordId, StorageKeyEpoch};
+
+    let tv = TestValidator::new().await;
+    let genesis_header = tv.chain_tip.clone();
+
+    // Build a dummy transaction and record it as validated, as `submit_proven_transaction` would.
+    let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
+    let tx_header = TransactionHeader::new(
+        account_id,
+        Word::default(),
+        Word::default(),
+        InputNotes::<InputNoteCommitment>::default(),
+        vec![],
+    )
+    .unwrap();
+    let tx_id = tx_header.id();
+    let key_epoch = StorageKeyEpoch::new([2; 32]);
+    let record = test_private_record_sealer(key_epoch, [4; 32])
+        .seal(
+            &mut rand_chacha_03::ChaCha20Rng::from_seed([1; 32]),
+            PrivateRecordId::new(tx_id, &random_secret_key().public_key()),
+            PrivateRecordContext::new(PrivateRecordChainId::new([1; 32]), key_epoch, tx_id),
+            b"private transaction inputs",
+        )
+        .unwrap();
+    tv.server.db.insert_validated_private_transaction(record).await.unwrap();
+
+    // Build a block containing the transaction and have the validator sign it.
+    let batch = ProvenBatch::new_unchecked(
+        BatchId::from_ids(std::iter::once((tx_id, account_id))),
+        genesis_header.commitment(),
+        BlockNumber::GENESIS,
+        BTreeMap::from([(
+            account_id,
+            BatchAccountUpdate::new_unchecked(
+                account_id,
+                Word::default(),
+                Word::default(),
+                AccountUpdateDetails::Private,
+            ),
+        )]),
+        InputNotes::default(),
+        vec![],
+        BlockNumber::MAX,
+        OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        miden_protocol::testing::dummy_execution_proof(),
+    )
+    .unwrap();
+    let block_inputs = BlockInputs::new(
+        genesis_header.clone(),
+        PartialBlockchain::default(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
+    tv.call_sign_block(&proposed).await.expect("block should be signed");
+
+    // The signed block links its transaction to block 1 at index 0.
+    let listed = tv
+        .server
+        .db
+        .list_validated_transactions(ListTransactionsParams {
+            start: Some((BlockNumber::from(1u32), 0)),
+            block_to: Some(BlockNumber::from(1u32)),
+            limit: 10,
+            include_records: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .transactions
+            .iter()
+            .map(|item| (item.transaction_id, item.block_num, item.block_tx_index))
+            .collect::<Vec<_>>(),
+        vec![(tx_id, BlockNumber::from(1u32), 0)],
+        "the signed block's transaction should be linked to block 1 at index 0"
+    );
+}
+
 /// After replacing the chain tip, a new block built against the pre-replacement tip should be
 /// rejected because its previous block commitment no longer matches.
 #[tokio::test]
@@ -1054,16 +1192,8 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
         BlockSignatures::new(vec![signature]).unwrap(),
     );
     tv.server
-        .block_store
-        .save_block(transitioned_header.block_num(), &transitioned_block.to_bytes())
-        .await
-        .unwrap();
-    tv.server
         .db
-        .upsert_block_header_with_protocol_config(
-            transitioned_header.clone(),
-            Some(next_config.clone()),
-        )
+        .replace_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
         .await
         .unwrap();
     tv.chain_tip = transitioned_header;
@@ -1355,6 +1485,21 @@ async fn encryption_key_available_during_backup() {
 // SUBMIT PATH: TRANSACTION INPUT SEALING
 // ================================================================================================
 
+#[tokio::test]
+async fn submit_rejects_missing_submission() {
+    let tv = TestValidator::new().await;
+    let request =
+        tonic::Request::new(proto::miden::validator::v1::SubmitProvenTransactionRequest {
+            submission: None,
+        });
+    let status =
+        miden_validator_v1_validator_service::SubmitProvenTransaction::full(&tv.server, request)
+            .await
+            .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.validated_transaction_count().await, 0);
+}
+
 /// A submission with no encrypted inputs is rejected before validation.
 #[tokio::test]
 async fn submit_rejects_missing_encrypted_inputs() {
@@ -1365,9 +1510,14 @@ async fn submit_rejects_missing_encrypted_inputs() {
         sealed_transaction_inputs: None,
     });
 
-    let status = validator_api::SubmitProvenTransaction::full(&tv.server, request)
-        .await
-        .unwrap_err();
+    let status = miden_validator_v1_validator_service::SubmitProvenTransaction::full(
+        &tv.server,
+        request.map(|submission| proto::miden::validator::v1::SubmitProvenTransactionRequest {
+            submission: Some(submission),
+        }),
+    )
+    .await
+    .unwrap_err();
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert!(status.message().contains("sealed_transaction_inputs:"), "{}", status.message());
@@ -1523,6 +1673,8 @@ async fn stored_record_holds_the_transaction_effects() {
     let record = tv.server.db.load_private_record(tx.id()).await.unwrap().unwrap();
     assert_eq!(record.context().format_version(), PrivateRecordFormatVersion::V1);
 
+    let record: StoredPrivateRecord =
+        miden_node_persistence::decode(&miden_node_persistence::encode(&record)).unwrap();
     let effects = open_transaction_effects(&record);
 
     assert_eq!(effects.transaction_id(), tx.id());
@@ -1629,4 +1781,88 @@ async fn failed_batch_item_does_not_store_inputs() {
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     tv.assert_transaction_absent(rejected_tx.id(), 1).await;
     assert!(tv.transaction_exists(valid_tx.id()).await);
+}
+
+#[tokio::test]
+async fn single_signature_backup_reopens_and_streams_with_multiple_validators() {
+    use tokio_stream::StreamExt;
+
+    let key = random_secret_key();
+    let other_key = random_secret_key();
+    let config = test_protocol_config();
+    let genesis = GenesisState::new(
+        vec![],
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![key.public_key(), other_key.public_key()], 2).unwrap(),
+        config.clone(),
+    )
+    .into_block()
+    .unwrap();
+    let parent = genesis.inner().header().clone();
+    let dir = tempfile::tempdir().unwrap();
+    let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
+    db.insert_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
+        .await
+        .unwrap();
+    let service = ValidatorService::new(
+        ValidatorSigner::new_local(key.clone()),
+        db,
+        std::sync::Arc::new(test_decrypter()),
+        PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        InitialMetrics::default(),
+    )
+    .await
+    .unwrap();
+    let chain = PartialBlockchain::default();
+    let proposed = empty_block(&parent, &chain);
+    let (header, _) = proposed.into_header_and_body().unwrap();
+    let request = SignBlockRequest {
+        tx_batches: OrderedBatches::new(vec![]),
+        block_header: header.clone(),
+        block_inputs: BlockInputs::new(
+            parent,
+            chain,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ),
+        protocol_config: Some(config),
+    };
+    miden_validator_v1_validator_service::SignBlock::full(
+        &service,
+        tonic::Request::new(request.into()),
+    )
+    .await
+    .unwrap();
+    drop(service);
+    let db = crate::db::load(dir.path().join("validator.sqlite3")).await.unwrap();
+    let backed_up = db.load_block(1.into()).await.unwrap().unwrap();
+    assert_eq!(backed_up.signatures().len(), 1);
+    assert_eq!(backed_up.header().validator_config().keys().len(), 2);
+    let service = ValidatorService::new(
+        ValidatorSigner::new_local(key),
+        db,
+        std::sync::Arc::new(test_decrypter()),
+        PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        InitialMetrics {
+            chain_tip: 1,
+            ..InitialMetrics::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut stream = miden_validator_v1_validator_service::BlockSubscription::full(
+        &service,
+        tonic::Request::new(proto::miden::validator::v1::BlockSubscriptionRequest {
+            block_from: 1,
+        }),
+    )
+    .await
+    .unwrap();
+    let item = stream.next().await.unwrap().unwrap();
+    let streamed: SignedBlock = item.block.unwrap().decode_and_build_unchecked().unwrap();
+    assert_eq!(streamed, backed_up);
+    assert_eq!(streamed.header(), &header);
+    assert!(stream.next().await.is_none());
 }

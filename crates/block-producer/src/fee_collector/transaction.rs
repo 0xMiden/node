@@ -321,7 +321,7 @@ mod tests {
         chain.add_account(faucet.clone())?;
         let mut chain = chain.build()?;
         let directory = tempfile::tempdir()?;
-        bootstrap(&chain, directory.path())?;
+        bootstrap(&chain, directory.path()).await?;
         let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         let mut builder =
@@ -446,7 +446,7 @@ mod tests {
             chain.add_account(collector.account().clone())?;
             let mut chain = chain.fee_faucet_id(faucet.id()).build()?;
             let directory = tempfile::tempdir()?;
-            bootstrap(&chain, directory.path())?;
+            bootstrap(&chain, directory.path()).await?;
             let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
             let asset = FungibleAsset::new(faucet.id(), 20)?;
             let note = TxFeeNote::builder()
@@ -515,7 +515,7 @@ mod tests {
         Ok(())
     }
 
-    fn bootstrap(chain: &MockChain, path: &Path) -> anyhow::Result<()> {
+    async fn bootstrap(chain: &MockChain, path: &Path) -> anyhow::Result<()> {
         let genesis = chain.latest_block();
         State::bootstrap(
             GenesisBlock::new(
@@ -528,12 +528,13 @@ mod tests {
             )?,
             path,
         )
+        .await
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn rejects_missing_or_mismatched_signing_keys() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
-        bootstrap(&MockChain::builder().build()?, directory.path())?;
+        bootstrap(&MockChain::builder().build()?, directory.path()).await?;
         let (state, ..) = State::for_tests(directory.path()).await;
         let (account, _) = mock_collection_account().into_parts();
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
@@ -554,7 +555,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn rejects_an_ordinary_wallet_as_the_collector() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
-        bootstrap(&MockChain::builder().build()?, directory.path())?;
+        bootstrap(&MockChain::builder().build()?, directory.path()).await?;
         let (state, ..) = State::for_tests(directory.path()).await;
         let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;

@@ -8,17 +8,21 @@ use super::{RpcService, check, database_error_to_status, invalid_block_range_to_
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::SyncNullifiers for RpcService {
-    type Input = proto::rpc::DecodedSyncNullifiersRequest;
-    type Output = proto::rpc::SyncNullifiersResponse;
+impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
+    type Input = proto::miden::node::v1::DecodedSyncNullifiersRequest;
+    type Output = proto::miden::node::v1::SyncNullifiersResponse;
 
-    fn decode(request: proto::rpc::SyncNullifiersRequest) -> tonic::Result<Self::Input> {
+    fn decode(
+        request: proto::miden::node::v1::SyncNullifiersRequest,
+    ) -> tonic::Result<Self::Input> {
         request
             .decode_fields()
             .map_err(|err| SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(err))
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::rpc::SyncNullifiersResponse> {
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::SyncNullifiersResponse> {
         Ok(output)
     }
 
@@ -87,14 +91,16 @@ impl proto::server::rpc_api::SyncNullifiers for RpcService {
             .await?;
         let nullifiers = nullifiers
             .into_iter()
-            .map(|nullifier_info| proto::rpc::sync_nullifiers_response::NullifierUpdate {
-                nullifier: Some(nullifier_info.nullifier.as_word().into()),
-                block_num: nullifier_info.block_num.as_u32(),
+            .map(|nullifier_info| {
+                proto::miden::node::v1::sync_nullifiers_response::NullifierUpdate {
+                    nullifier: Some(nullifier_info.nullifier.as_word().into()),
+                    block_num: nullifier_info.block_num.as_u32(),
+                }
             })
             .collect();
 
-        Ok(proto::rpc::SyncNullifiersResponse {
-            pagination_info: Some(proto::rpc::PaginationInfo {
+        Ok(proto::miden::node::v1::SyncNullifiersResponse {
+            pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
                 block_num: block_num.as_u32(),
             }),
