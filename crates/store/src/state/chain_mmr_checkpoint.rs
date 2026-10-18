@@ -175,10 +175,11 @@ impl ChainMmrCheckpoint {
     }
 }
 
-/// Number of nodes in the MMR of a chain with `num_blocks` blocks: each block adds its own leaf
-/// node plus one parent node per binary-tree merge, totalling `2 * blocks - popcount(blocks)`.
+/// Number of nodes in the MMR of a chain with `num_blocks` blocks.
 fn num_nodes_in_chain(num_blocks: u32) -> usize {
-    2 * num_blocks as usize - num_blocks.count_ones() as usize
+    Forest::new(num_blocks as usize)
+        .expect("a u32 block count is within the MMR's maximum forest size")
+        .num_nodes()
 }
 
 /// Returns the largest block count whose MMR node array fits within `num_nodes` complete nodes,
@@ -186,28 +187,25 @@ fn num_nodes_in_chain(num_blocks: u32) -> usize {
 ///
 /// Node counts don't map 1:1 to block counts (see [`num_nodes_in_chain`]): a file cut short by a
 /// torn append usually ends between block boundaries, and only the nodes up to the last whole
-/// block are usable. This binary-searches for the largest block count whose complete node array
-/// is present, capped at the database's `chain_length` for the case where the checkpoint is
-/// ahead of the database (e.g. the database was restored from an older backup).
+/// block are usable. The cap at the database's `chain_length` covers a checkpoint that is ahead of
+/// the database (e.g. the database was restored from an older backup).
 /// [`ChainMmrCheckpoint::read`] then decodes just that prefix of the file and ignores the rest.
+///
+/// The node array is a sequence of perfect trees, largest first, one per set bit of the block
+/// count, so the block count is read off greedily: each tree that still fits sets its bit. Taking
+/// a fitting tree always yields more blocks than skipping it, since a tree of height `h` has
+/// `2^(h+1) - 1` nodes while all smaller trees together have fewer.
 fn largest_chain_prefix(num_nodes: usize, chain_length: u32) -> u32 {
-    // `num_nodes_in_chain` is strictly increasing, so "fits in the file" is a monotone predicate
-    // and the largest block count satisfying it is found by binary search. `lo` always satisfies
-    // the predicate; `hi` starts at the answer's cheap upper bounds (`chain_length`, and
-    // `num_nodes` since every block contributes at least one node).
-    let mut lo = 0u64;
-    let mut hi = u64::from(chain_length).min(num_nodes as u64);
-    while lo < hi {
-        // Round the probe up: with rounding down, `hi == lo + 1` would probe `lo` and loop forever.
-        // The u64 arithmetic avoids overflow near `u32::MAX`.
-        let mid = lo + (hi - lo).div_ceil(2);
-        if num_nodes_in_chain(mid as u32) <= num_nodes {
-            lo = mid;
-        } else {
-            hi = mid - 1;
+    let mut remaining = num_nodes;
+    let mut num_blocks = 0u32;
+    for height in (0..u32::BITS).rev() {
+        let tree_nodes = (1usize << (height + 1)) - 1;
+        if tree_nodes <= remaining {
+            remaining -= tree_nodes;
+            num_blocks |= 1 << height;
         }
     }
-    lo as u32
+    num_blocks.min(chain_length)
 }
 
 /// Decodes a complete MMR node array of a chain with `num_blocks` blocks, taking the nodes verbatim
