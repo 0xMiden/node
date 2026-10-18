@@ -503,7 +503,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// The checkpoint is a cache of the derived MMR structure; the MMR is append-only, so a stale
 /// checkpoint is a valid prefix and is topped up with the block commitments it is missing. A
 /// missing, corrupt, or divergent checkpoint falls back to a full rebuild. Either path is verified
-/// against the latest header's chain commitment, and the topped-up blocks are appended to the
+/// against the latest block header, and the topped-up blocks are appended to the
 /// checkpoint whenever it was behind the database.
 #[miden_instrument(
     target = COMPONENT,
@@ -532,8 +532,8 @@ pub async fn load_mmr(
 /// - there is no genesis block yet (nothing to restore against);
 /// - the checkpoint file is missing, unreadable, or holds no usable prefix (see
 ///   [`ChainMmrCheckpoint::read`]);
-/// - the checkpoint, topped up with the blocks committed since it was taken, does not reproduce
-///   the latest header's chain commitment (e.g. the file diverged from the database).
+/// - the checkpoint, topped up with the blocks committed since it was taken, does not match the
+///   latest block header (e.g. the file diverged from the database).
 async fn try_restore_mmr_from_checkpoint(
     db: &Db,
     checkpoint: &ChainMmrCheckpoint,
@@ -605,6 +605,12 @@ async fn rebuild_mmr_from_database(
     Ok(chain_mmr)
 }
 
+/// Verifies that the chain MMR matches the latest block header: its peaks before the latest block
+/// must hash to the header's chain commitment, and its latest leaf must be the header's commitment.
+///
+/// The header's chain commitment covers every block except the latest one, so the leaf check is
+/// what pins down the latest block. Without it, a restored checkpoint could carry a divergent
+/// latest block undetected, which would make every subsequent block fail its chain commitment check.
 fn verify_chain_mmr_consistency(
     chain_mmr: &Blockchain,
     latest_header: Option<&BlockHeader>,
@@ -614,6 +620,18 @@ fn verify_chain_mmr_consistency(
     };
 
     let block_num = latest_header.block_num();
+    let chain_mmr_leaf = chain_mmr
+        .as_mmr()
+        .get(block_num.as_usize())
+        .map_err(|source| StateInitializationError::ChainMmrLoadError { block_num, source })?;
+    if chain_mmr_leaf != latest_header.commitment() {
+        return Err(StateInitializationError::ChainMmrTipDiverged {
+            block_num,
+            chain_mmr_leaf,
+            block_header_commitment: latest_header.commitment(),
+        });
+    }
+
     let expected_chain_commitment = latest_header.chain_commitment();
     let actual_chain_commitment = chain_mmr
         .peaks_at(block_num)
@@ -1009,6 +1027,32 @@ mod tests {
             .await
             .expect("corrupt checkpoint should fall back to a database rebuild");
         assert_eq!(chain.num_blocks(), 5);
+    }
+
+    #[tokio::test]
+    #[miden_node_test_macro::enable_logging]
+    async fn load_mmr_rejects_checkpoint_with_divergent_tip() {
+        // A checkpoint whose latest block differs from the database, e.g. one left behind by a
+        // previous network after re-bootstrapping the data directory. A genesis-only chain is the
+        // extreme case, where the checkpoint holds nothing but the divergent block.
+        for count in [1, 5] {
+            let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+            let (headers, db) = seed_headers(&temp_dir.path().join("store.sqlite"), count).await;
+            let checkpoint = ChainMmrCheckpoint::new(temp_dir.path());
+
+            let mut commitments = headers.iter().map(BlockHeader::commitment).collect::<Vec<_>>();
+            *commitments.last_mut().unwrap() = Word::from([42, 0, 0, 0u32]);
+            let divergent_mmr = Mmr::try_from_iter(commitments).expect("test MMR should build");
+            checkpoint.write(&Blockchain::from_mmr_unchecked(divergent_mmr));
+
+            let chain = load_mmr(&db, &checkpoint)
+                .await
+                .expect("divergent checkpoint should fall back to a database rebuild");
+
+            let expected = Mmr::try_from_iter(headers.iter().map(BlockHeader::commitment))
+                .expect("test MMR should build");
+            assert_eq!(chain.commitment(), expected.peaks().hash_peaks());
+        }
     }
 
     #[test]

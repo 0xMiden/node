@@ -12,9 +12,9 @@
 //! synced: a crash may tear or lose the tail, which the read path drops before restoring the
 //! remaining prefix.
 //!
-//! Restoring takes the nodes verbatim, without re-hashing them. The loader's chain-commitment check
-//! validates the restored peaks, but not the inner nodes beneath them, so the file is trusted as
-//! the store's own previously validated state.
+//! Restoring takes the nodes verbatim, without re-hashing them. The loader's consistency check
+//! validates the restored peaks and the latest leaf against the latest block header, but not the
+//! inner nodes beneath them, so the file is trusted as the store's own previously validated state.
 //!
 //! The checkpoint is a pure cache. A stale checkpoint is simply topped up by the loader; a corrupt
 //! or divergent checkpoint is discarded in favour of a full rebuild, guarded by the
