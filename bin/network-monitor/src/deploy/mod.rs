@@ -205,7 +205,7 @@ impl TransactionSubmissionClient {
                     target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
-                    retry.delay_ms = delay.as_millis() as u64
+                    retry.delay_ms = delay
                 );
             })
             .await?;
