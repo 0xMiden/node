@@ -198,9 +198,13 @@ fn num_nodes_in_chain(num_blocks: u32) -> usize {
 fn largest_chain_prefix(num_nodes: usize, chain_length: u32) -> u32 {
     let mut remaining = num_nodes;
     let mut num_blocks = 0u32;
+    // Visit the possible trees from the largest down, matching their order in the node array.
     for height in (0..u32::BITS).rev() {
+        // A perfect tree of this height has `2^height` leaves and `2^(height + 1) - 1` nodes.
         let tree_nodes = (1usize << (height + 1)) - 1;
         if tree_nodes <= remaining {
+            // The tree is wholly present: consume its nodes and count its `2^height` blocks, which
+            // is the block count's bit at `height`.
             remaining -= tree_nodes;
             num_blocks |= 1 << height;
         }
