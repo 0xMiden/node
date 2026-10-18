@@ -27,7 +27,7 @@ use miden_crypto::merkle::mmr::{Forest, Mmr};
 use miden_node_tracing::warn;
 use miden_protocol::Word;
 use miden_protocol::block::Blockchain;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::{ByteWriter, Deserializable};
 
 use crate::LOG_TARGET;
 
@@ -74,11 +74,9 @@ impl ChainMmrCheckpoint {
         if num_blocks == 0 {
             return None;
         }
-        let num_nodes = num_nodes_in_chain(num_blocks);
-        // Restoring the valid prefix needs no dedicated logic: the decode below always takes
-        // exactly `num_nodes` nodes, which in the healthy case is the whole file. This branch only
-        // reports when tail bytes are actually being dropped.
-        if num_nodes * NODE_SIZE != bytes.len() {
+        // Only this prefix is decoded below; in the healthy case it is the whole file.
+        let prefix_len = num_nodes_in_chain(num_blocks) * NODE_SIZE;
+        if prefix_len != bytes.len() {
             warn!(
                 target: LOG_TARGET,
                 "Chain MMR checkpoint tail is unusable (torn append or ahead of the database); restoring the valid prefix",
@@ -88,7 +86,7 @@ impl ChainMmrCheckpoint {
             );
         }
 
-        match decode_mmr(&bytes[..num_nodes * NODE_SIZE], num_blocks) {
+        match decode_mmr(&bytes[..prefix_len], num_blocks) {
             Ok(mmr) => Some(Blockchain::from_mmr_unchecked(mmr)),
             Err(err) => {
                 warn!(
@@ -154,9 +152,6 @@ impl ChainMmrCheckpoint {
                 chain_mmr.checkpoint.expected_bytes = expected_len
             );
             return false;
-        }
-        if from_blocks == blockchain.num_blocks() {
-            return true;
         }
 
         let bytes = node_bytes_from(blockchain, from_blocks);
@@ -232,17 +227,12 @@ fn decode_mmr(
 fn node_bytes_from(blockchain: &Blockchain, from_blocks: u32) -> Vec<u8> {
     let nodes = blockchain.as_mmr().nodes_from(num_nodes_in_chain(from_blocks));
     let mut bytes = Vec::with_capacity(nodes.len() * NODE_SIZE);
-    for node in nodes {
-        node.write_into(&mut bytes);
-    }
+    bytes.write_many(nodes);
     bytes
 }
 
 #[cfg(test)]
 mod tests {
-    use miden_crypto::merkle::mmr::Mmr;
-    use miden_protocol::Word;
-
     use super::*;
 
     fn chain(blocks: u32) -> Blockchain {
