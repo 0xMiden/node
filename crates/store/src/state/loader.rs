@@ -560,8 +560,8 @@ async fn try_restore_mmr_from_checkpoint(
 
     if let Err(err) = verify_chain_mmr_consistency(&chain_mmr, Some(header)) {
         warn!(
+            &err,
             target: LOG_TARGET,
-            err = %miden_node_utils::ErrorReport::as_report(&err),
             "Chain MMR checkpoint diverged from the database; rebuilding"
         );
         return Ok(None);
@@ -569,9 +569,9 @@ async fn try_restore_mmr_from_checkpoint(
 
     info!(
         target: LOG_TARGET,
-        checkpoint_blocks,
-        appended_blocks = chain_length - checkpoint_blocks,
-        "Loaded chain MMR from checkpoint"
+        "Loaded chain MMR from checkpoint",
+        chain_mmr.blocks.checkpointed = checkpoint_blocks,
+        chain_mmr.blocks.appended = chain_length - checkpoint_blocks
     );
 
     // Keep the on-disk checkpoint caught up so the next startup has fewer blocks to append. Startup
@@ -936,18 +936,19 @@ mod tests {
 
         let headers_to_insert = headers.clone();
         let signing_key = SigningKey::new();
-        db.query("insert block headers", move |conn| {
-            for header in &headers_to_insert {
-                let signatures = miden_protocol::block::BlockSignatures::new(vec![
-                    signing_key.sign(header.commitment()),
-                ])
-                .expect("one signature is within bounds");
-                crate::db::models::queries::insert_block_header(conn, header, &signatures)?;
-            }
-            Ok::<_, DatabaseError>(())
-        })
-        .await
-        .expect("test block headers should be inserted");
+        db.writer()
+            .write::<_, DatabaseError, _>("insert block headers", move |tx| {
+                for header in &headers_to_insert {
+                    let signatures = miden_protocol::block::BlockSignatures::new(vec![
+                        signing_key.sign(header.commitment()),
+                    ])
+                    .expect("one signature is within bounds");
+                    crate::db::queries::insert_block_header(tx, header, &signatures)?;
+                }
+                Ok(())
+            })
+            .await
+            .expect("test block headers should be inserted");
 
         (headers, db)
     }

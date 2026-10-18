@@ -12,6 +12,10 @@
 //! synced: a crash may tear or lose the tail, which the read path drops before restoring the
 //! remaining prefix.
 //!
+//! Restoring takes the nodes verbatim, without re-hashing them. The loader's chain-commitment check
+//! validates the restored peaks, but not the inner nodes beneath them, so the file is trusted as
+//! the store's own previously validated state.
+//!
 //! The checkpoint is a pure cache. A stale checkpoint is simply topped up by the loader; a corrupt
 //! or divergent checkpoint is discarded in favour of a full rebuild, guarded by the
 //! chain-commitment consistency check in the loader. Deleting the file is always safe.
@@ -19,12 +23,11 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use miden_crypto::merkle::mmr::Mmr;
-use miden_node_utils::ErrorReport;
+use miden_crypto::merkle::mmr::{Forest, Mmr};
+use miden_node_tracing::warn;
 use miden_protocol::Word;
 use miden_protocol::block::Blockchain;
-use miden_protocol::utils::serde::{ByteWriter, Deserializable, Serializable};
-use tracing::warn;
+use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::LOG_TARGET;
 
@@ -56,11 +59,15 @@ impl ChainMmrCheckpoint {
     /// Returns `None` if the file is missing, unreadable, undecodable, or holds no complete block.
     pub fn read(&self, chain_length: u32) -> Option<Blockchain> {
         let bytes = fs_err::read(&self.path)
-            .inspect_err(|err|
+            .inspect_err(|err| {
                 if err.kind() != std::io::ErrorKind::NotFound {
-                    warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to read the chain MMR checkpoint; rebuilding from the database");
+                    warn!(
+                        err,
+                        target: LOG_TARGET,
+                        "Failed to read the chain MMR checkpoint; rebuilding from the database"
+                    );
                 }
-            )
+            })
             .ok()?;
 
         let num_blocks = largest_chain_prefix(bytes.len() / NODE_SIZE, chain_length);
@@ -74,32 +81,21 @@ impl ChainMmrCheckpoint {
         if num_nodes * NODE_SIZE != bytes.len() {
             warn!(
                 target: LOG_TARGET,
-                file_bytes = bytes.len(),
-                restored_blocks = num_blocks,
-                chain_length,
-                "Chain MMR checkpoint tail is unusable (torn append or ahead of the database); restoring the valid prefix"
+                "Chain MMR checkpoint tail is unusable (torn append or ahead of the database); restoring the valid prefix",
+                chain_mmr.checkpoint.bytes = bytes.len(),
+                chain_mmr.blocks.restored = num_blocks,
+                chain.length = chain_length
             );
         }
 
-        // The node array is an in-memory struct at this point; what is missing is a constructor
-        // that turns raw nodes into an `Mmr` without re-hashing them (`nodes` is private, and
-        // `Mmr::try_from_iter` re-hashes every merge). The only non-hashing path in is the
-        // `Deserializable` impl, so the node bytes are prefixed with the two integers its layout
-        // expects — the forest's leaf count and the node-array length — and decoded.
-        //
-        // TODO: Replace with `Mmr::from_nodes_unchecked` (decode the node bytes into `Word`s and
-        // construct directly) once the node is on a miden-vm release containing
-        // 0xMiden/miden-vm#3585, removing the extra copy. The layout coupling is safe meanwhile:
-        // upstream documents the flat `forest || nodes` encoding as the stable wire format.
-        let mut serialized = Vec::with_capacity(2 * size_of::<u64>() + num_nodes * NODE_SIZE);
-        serialized.write_usize(num_blocks as usize);
-        serialized.write_usize(num_nodes);
-        serialized.extend_from_slice(&bytes[..num_nodes * NODE_SIZE]);
-
-        match Mmr::read_from_bytes(&serialized) {
+        match decode_mmr(&bytes[..num_nodes * NODE_SIZE], num_blocks) {
             Ok(mmr) => Some(Blockchain::from_mmr_unchecked(mmr)),
             Err(err) => {
-                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to decode the chain MMR checkpoint; rebuilding from the database");
+                warn!(
+                    &*err,
+                    target: LOG_TARGET,
+                    "Failed to decode the chain MMR checkpoint; rebuilding from the database"
+                );
                 None
             },
         }
@@ -117,7 +113,7 @@ impl ChainMmrCheckpoint {
         let result =
             fs_err::write(&tmp_path, &bytes).and_then(|()| fs_err::rename(&tmp_path, &self.path));
         if let Err(err) = result {
-            warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to write the chain MMR checkpoint");
+            warn!(&err, target: LOG_TARGET, "Failed to write the chain MMR checkpoint");
         }
     }
 
@@ -142,16 +138,20 @@ impl ChainMmrCheckpoint {
             Ok(metadata) => metadata.len(),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => 0,
             Err(err) => {
-                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to stat the chain MMR checkpoint; skipping the append");
+                warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to stat the chain MMR checkpoint; skipping the append"
+                );
                 return false;
             },
         };
         if file_len != expected_len {
             warn!(
                 target: LOG_TARGET,
-                file_len,
-                expected_len,
-                "Chain MMR checkpoint does not end at the expected node; skipping the append"
+                "Chain MMR checkpoint does not end at the expected node; skipping the append",
+                chain_mmr.checkpoint.bytes = file_len,
+                chain_mmr.checkpoint.expected_bytes = expected_len
             );
             return false;
         }
@@ -168,7 +168,7 @@ impl ChainMmrCheckpoint {
         match result {
             Ok(()) => true,
             Err(err) => {
-                warn!(target: LOG_TARGET, err = %err.as_report(), "Failed to append to the chain MMR checkpoint");
+                warn!(&err, target: LOG_TARGET, "Failed to append to the chain MMR checkpoint");
                 false
             },
         }
@@ -210,16 +210,30 @@ fn largest_chain_prefix(num_nodes: usize, chain_length: u32) -> u32 {
     lo as u32
 }
 
+/// Decodes a complete MMR node array of a chain with `num_blocks` blocks, taking the nodes verbatim
+/// rather than re-hashing them.
+fn decode_mmr(
+    bytes: &[u8],
+    num_blocks: u32,
+) -> Result<Mmr, Box<dyn std::error::Error + Send + Sync>> {
+    let nodes = bytes
+        .as_chunks::<NODE_SIZE>()
+        .0
+        .iter()
+        .map(|node| Word::read_from_bytes(node))
+        .collect::<Result<Vec<_>, _>>()?;
+    let forest = Forest::new(num_blocks as usize)?;
+    Ok(Mmr::from_nodes_unchecked(forest, nodes)?)
+}
+
 /// Serializes the MMR nodes appended after the first `from_blocks` blocks.
-///
-/// TODO: Serialize just the new nodes via `Mmr::nodes_from(start)` once the node is on a
-/// miden-vm release containing 0xMiden/miden-vm#3585. Until then the whole MMR is serialized —
-/// its layout ends with the node array — and the new nodes' bytes are taken from the tail.
 fn node_bytes_from(blockchain: &Blockchain, from_blocks: u32) -> Vec<u8> {
-    let mmr = blockchain.as_mmr();
-    let serialized = mmr.to_bytes();
-    let new_bytes = (mmr.forest().num_nodes() - num_nodes_in_chain(from_blocks)) * NODE_SIZE;
-    serialized[serialized.len() - new_bytes..].to_vec()
+    let nodes = blockchain.as_mmr().nodes_from(num_nodes_in_chain(from_blocks));
+    let mut bytes = Vec::with_capacity(nodes.len() * NODE_SIZE);
+    for node in nodes {
+        node.write_into(&mut bytes);
+    }
+    bytes
 }
 
 #[cfg(test)]
