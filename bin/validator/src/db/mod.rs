@@ -1,5 +1,5 @@
 use std::io;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use miden_node_db::DatabaseError;
@@ -20,6 +20,9 @@ mod queries;
 pub(crate) use queries::{ListTransactionsParams, ListedTransaction};
 #[cfg(test)]
 pub(crate) use tests::block_with_header;
+
+/// Number of recent signed blocks whose proving inputs are retained by default.
+pub const DEFAULT_PROVING_INPUT_RETENTION_BLOCKS: NonZeroU32 = NonZeroU32::new(10_000).unwrap();
 
 // VALIDATOR DATABASE
 // ================================================================================================
@@ -203,6 +206,7 @@ impl ValidatorDbReader {
 /// single owner, matching SQLite's single-writer model.
 pub struct ValidatorDbWriter {
     writer: DbWriter,
+    proving_input_retention_blocks: NonZeroU32,
     reader: ValidatorDbReader,
 }
 
@@ -219,6 +223,16 @@ impl ValidatorDbWriter {
     /// must not be able to write.
     pub fn reader(&self) -> ValidatorDbReader {
         self.reader.clone()
+    }
+
+    /// Removes expired inputs using the persisted chain tip in one write transaction.
+    async fn prune_expired_proving_inputs(&self) -> Result<(), DatabaseError> {
+        let retention = self.proving_input_retention_blocks;
+        self.writer
+            .write("prune_expired_proving_inputs", move |tx| {
+                prune_expired_proving_inputs(tx, retention)
+            })
+            .await
     }
 
     /// Inserts a validated transaction and its encrypted private record, returning the number of
@@ -283,6 +297,7 @@ impl ValidatorDbWriter {
         transactions: Vec<TransactionId>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
+        let retention = self.proving_input_retention_blocks;
         self.writer
             .write("insert_signed_block", move |tx| {
                 persist_signed_block(
@@ -291,7 +306,8 @@ impl ValidatorDbWriter {
                     protocol_config,
                     &transactions,
                     Some(&proving_inputs),
-                )
+                )?;
+                prune_expired_proving_inputs(tx, retention)
             })
             .await
     }
@@ -311,6 +327,7 @@ impl ValidatorDbWriter {
         transactions: Vec<TransactionId>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
+        let retention = self.proving_input_retention_blocks;
         self.writer
             .write("replace_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
@@ -320,7 +337,8 @@ impl ValidatorDbWriter {
                     protocol_config,
                     &transactions,
                     Some(&proving_inputs),
-                )
+                )?;
+                prune_expired_proving_inputs(tx, retention)
             })
             .await
     }
@@ -369,6 +387,19 @@ fn persist_signed_block(
     record_protocol_config_activation(tx, header, Some(protocol_config))?;
     queries::insert_block(tx, block, proving_inputs)?;
     queries::link_block_transactions(tx, header.block_num(), transactions)
+}
+
+/// Clears inputs that have reached the retention age relative to the stored signed tip.
+fn prune_expired_proving_inputs(
+    tx: &miden_node_db::sqlite::WriteTx<'_>,
+    retention: NonZeroU32,
+) -> Result<(), DatabaseError> {
+    if let Some(tip) = queries::load_chain_tip(tx)?
+        && let Some(cutoff) = tip.block_num().as_u32().checked_sub(retention.get())
+    {
+        queries::prune_proving_inputs(tx, cutoff.into())?;
+    }
+    Ok(())
 }
 
 /// Records the configuration activation for a block, within the caller's database transaction.
@@ -449,8 +480,22 @@ pub async fn load_with_pool_size(
     connection_pool_size: NonZeroUsize,
 ) -> Result<ValidatorDbWriter, DatabaseError> {
     verify_latest_schema(&database_filepath)?;
-
     open_with_pool_size(&database_filepath, connection_pool_size)
+}
+
+/// Opens the database with a block-age retention window and clears already expired proving inputs.
+///
+/// The database must already use the latest schema. Cleanup completes before the writer is returned,
+/// so reducing the window takes effect even when no new blocks are signed.
+pub async fn load_with_retention(
+    database_filepath: PathBuf,
+    connection_pool_size: NonZeroUsize,
+    proving_input_retention_blocks: NonZeroU32,
+) -> Result<ValidatorDbWriter, DatabaseError> {
+    let mut db = load_with_pool_size(database_filepath, connection_pool_size).await?;
+    db.proving_input_retention_blocks = proving_input_retention_blocks;
+    db.prune_expired_proving_inputs().await?;
+    Ok(db)
 }
 
 /// Creates a new database, applies all migrations, and opens a connection pool.
@@ -525,6 +570,7 @@ fn open_with_pool_size(
     );
     Ok(ValidatorDbWriter {
         writer,
+        proving_input_retention_blocks: DEFAULT_PROVING_INPUT_RETENTION_BLOCKS,
         reader: ValidatorDbReader { reader },
     })
 }

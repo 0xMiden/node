@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -22,21 +22,28 @@ pub(crate) struct ValidatorKeys {
     pub(crate) operator_key: GoldenOperatorKey,
 }
 
+/// Database location, connection pool size, and proving input retention for startup.
+pub(crate) struct ValidatorDatabaseOptions {
+    pub(crate) data_directory: DataDirectory,
+    pub(crate) connection_pool_size: NonZeroUsize,
+    pub(crate) proving_input_retention_blocks: NonZeroU32,
+}
+
 // Starts the validator component.
 pub async fn start(
     address: SocketAddr,
     admin_address: Option<SocketAddr>,
     grpc_options: GrpcOptions,
     keys: ValidatorKeys,
-    data_directory: DataDirectory,
-    sqlite_connection_pool_size: NonZeroUsize,
+    database_options: ValidatorDatabaseOptions,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
     // The pool is opened once here and shared: the public API owns the sole writer, and both
     // servers read through cloned read handles.
-    let db = miden_validator::db::load_with_pool_size(
-        data_directory.database_path(),
-        sqlite_connection_pool_size,
+    let db = miden_validator::db::load_with_retention(
+        database_options.data_directory.database_path(),
+        database_options.connection_pool_size,
+        database_options.proving_input_retention_blocks,
     )
     .await
     .context("failed to initialize validator database")?;
