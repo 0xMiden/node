@@ -43,6 +43,12 @@ use url::Url;
 
 use crate::generated;
 
+mod foreign_account;
+mod usdcx_faucet;
+
+pub use foreign_account::ForeignAccount;
+pub use usdcx_faucet::UsdcxFaucet;
+
 #[derive(Clone)]
 pub struct Interceptor {
     otel: Option<OtelInterceptor>,

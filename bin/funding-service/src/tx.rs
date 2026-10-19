@@ -1,15 +1,17 @@
 //! Building and execution of the funding transaction.
 
 use std::num::NonZeroU16;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use miden_node_proto::clients::{RpcClient, UsdcxFaucet};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::block::BlockHeader;
-use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
 use miden_protocol::note::{Note, NoteType, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -40,7 +42,7 @@ pub fn build_funding_note(
     target: AccountId,
     amount: u64,
     rng: &mut RandomCoin,
-) -> Result<Note> {
+) -> Result<UsdcxP2Id> {
     let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
         .context("failed to build the funding asset")?;
     let note: Note = P2idNote::builder()
@@ -53,7 +55,7 @@ pub fn build_funding_note(
         .context("failed to build the funding note")?
         .into();
 
-    Ok(note)
+    UsdcxP2Id::from_note(note, fee_asset_id).context("the funding note must be a USDCx P2ID note")
 }
 
 // TRANSACTION EXECUTION
@@ -61,12 +63,14 @@ pub fn build_funding_note(
 
 /// Everything one funding transaction needs besides the notes it creates.
 pub struct ExecutionInputs {
+    /// The RPC connection used to load missing foreign storage proofs.
+    pub rpc_client: RpcClient,
     /// The funding account, in the state committed in `reference_header`.
-    pub funder: Account,
+    pub funder: Arc<Account>,
     /// The signing key of the funding account.
     pub secret_key: AuthSecretKey,
     /// The faucet which issues the fee asset, together with its account-tree witness.
-    pub fee_faucet: (Account, AccountWitness),
+    pub fee_faucet: UsdcxFaucet,
     /// The protocol configuration of the chain, which names the fee asset.
     pub protocol_config: ProtocolConfig,
     /// The reference block of the transaction.
@@ -96,6 +100,7 @@ pub async fn execute(
     rng: &mut RandomCoin,
 ) -> Result<ExecutedTransaction> {
     let ExecutionInputs {
+        rpc_client,
         funder,
         secret_key,
         fee_faucet,
@@ -117,10 +122,14 @@ pub async fn execute(
             .context("failed to build the deposit input notes")?;
 
     let executed_tx = spawn_blocking_in_current_span(move || {
-        let mut data_store = InMemoryDataStore::new(reference_header, blockchain, protocol_config);
-        data_store.add_account(funder);
-        let (faucet_account, faucet_witness) = fee_faucet;
-        data_store.add_foreign_account(faucet_account, faucet_witness);
+        let data_store = InMemoryDataStore::new(
+            reference_header,
+            blockchain,
+            protocol_config,
+            rpc_client,
+            funder,
+            fee_faucet.into_foreign_account(),
+        );
 
         let authenticator = BasicAuthenticator::new(&[secret_key]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
@@ -207,10 +216,12 @@ fn build_tx_args(
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::clients::ForeignAccount;
     use miden_protocol::Word;
     use miden_standards::note::TxFeeNote;
 
     use super::*;
+    use crate::node::tests::{TestChain, TestServer};
     use crate::test_utils::{
         Fixture,
         TEST_BASE_FEE,
@@ -225,7 +236,7 @@ mod tests {
     async fn execution_inputs(
         fixture: &Fixture,
         expiration_delta: NonZeroU16,
-    ) -> Result<ExecutionInputs> {
+    ) -> Result<(ExecutionInputs, TestServer)> {
         let chain = fixture.chain.lock().await;
         let reference_header = chain.latest_block_header();
         let blockchain = chain.latest_partial_blockchain();
@@ -236,15 +247,28 @@ mod tests {
             .remove(&fixture.fee_faucet_id)
             .context("a witness was requested for the faucet")?;
 
-        Ok(ExecutionInputs {
-            funder,
-            secret_key: fixture.funder_key.secret_key().clone(),
-            fee_faucet: (faucet, witness),
-            protocol_config: chain.protocol_config().clone(),
-            reference_header,
-            blockchain,
-            expiration_delta,
-        })
+        let protocol_config = chain.protocol_config().clone();
+        let funder_witness = chain.account_witnesses([funder.id()]).remove(&funder.id()).unwrap();
+        drop(chain);
+        let block = reference_header.block_num();
+        let mut state = TestChain::new(block.as_u32());
+        state.account = Some((funder.clone(), funder_witness));
+        let server = TestServer::start(state).await;
+        let rpc_client = server.node.rpc_client();
+
+        Ok((
+            ExecutionInputs {
+                rpc_client,
+                funder: Arc::new(funder),
+                secret_key: fixture.wallet.secret_key().clone(),
+                fee_faucet: UsdcxFaucet::new(ForeignAccount::from_account(faucet, witness)),
+                protocol_config,
+                reference_header,
+                blockchain,
+                expiration_delta,
+            },
+            server,
+        ))
     }
 
     /// Builds one funding note per `(target, amount)` pair.
@@ -263,6 +287,7 @@ mod tests {
                     amount,
                     rng,
                 )
+                .map(UsdcxP2Id::into_note)
             })
             .collect()
     }
@@ -302,6 +327,43 @@ mod tests {
             .as_u64())
     }
 
+    #[tokio::test]
+    async fn funding_executes_with_a_partial_faucet_and_large_storage_maps() -> Result<()> {
+        let fixture = Fixture::with_transfer_policy(
+            BALANCE,
+            TEST_BASE_FEE,
+            miden_standards::account::policies::TransferPolicy::empty_basic_blocklist(),
+        )?;
+        let server = crate::node::tests::large_faucet_server(&fixture).await;
+        let (mut inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
+        inputs.rpc_client = server.node.rpc_client();
+        inputs.fee_faucet = UsdcxFaucet::load_at(
+            &mut server.node.rpc_client(),
+            fixture.fee_faucet_id,
+            inputs.reference_header.block_num(),
+        )
+        .await?;
+        let metadata = inputs.fee_faucet.metadata()?;
+        let metadata = serde_json::to_value(crate::status::NativeAsset::new(
+            AssetId::new_fungible(fixture.fee_faucet_id),
+            &metadata,
+        ))?;
+        assert_eq!(metadata["name"], "MIDEN");
+        assert_eq!(metadata["symbol"], "MIDEN");
+        assert_eq!(metadata["decimals"], 6);
+        assert_eq!(metadata["asset_id"], AssetId::new_fungible(fixture.fee_faucet_id).to_string());
+        let mut rng = RandomCoin::new(Word::from([91u32; 4]));
+        let targets = targets(&fixture)?;
+        let notes = funding_notes(&fixture, &targets, &mut rng)?;
+        let executed = execute(inputs, vec![], notes, &mut rng).await?;
+        assert_eq!(executed.output_notes().num_notes(), targets.len() + 1);
+        assert!(
+            balance_after(&fixture, &executed)?
+                < BALANCE - targets.iter().map(|(_, amount)| amount).sum::<u64>()
+        );
+        Ok(())
+    }
+
     /// One transaction must create every requested note, pay its own fee, and expire at the
     /// configured delta.
     #[tokio::test]
@@ -317,7 +379,7 @@ mod tests {
             chain.latest_block_header().block_num()
         };
 
-        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         let executed_tx = execute(inputs, Vec::new(), notes.clone(), &mut rng).await?;
 
         // Three funding notes plus the fee note the kernel emits.
@@ -366,7 +428,7 @@ mod tests {
         let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
         let mut rng = RandomCoin::new(Word::from([19_u32; 4]));
         let notes = funding_notes(&fixture, &targets(&fixture)?[..1], &mut rng)?;
-        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         let server = TestServer::start(TestChain::new(0)).await;
         let prover = Prover::remote(server.url.clone(), std::time::Duration::from_secs(5))?;
         let (telemetry, _guard) = Telemetry::capture();
@@ -413,7 +475,7 @@ mod tests {
         let deposits = vec![deposit_note(&fixture, 1_000_000, 31)];
         let collected: u64 = 1_000_000;
 
-        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         let executed_tx = execute(inputs, deposits.clone(), notes.clone(), &mut rng).await?;
 
         let consumed: Vec<_> = executed_tx.input_notes().iter().map(InputNote::id).collect();
@@ -457,7 +519,7 @@ mod tests {
         let mut rng = RandomCoin::new(Word::from([29u32; 4]));
         let deposit = deposit_note(&fixture, 5_000_000, 7);
 
-        let inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         let executed_tx = execute(inputs, vec![deposit], Vec::new(), &mut rng).await?;
 
         let balance = balance_after(&fixture, &executed_tx)?;
@@ -485,7 +547,7 @@ mod tests {
 
         // Substitute an unrelated account for the faucet, which leaves the real faucet absent from
         // the data store.
-        let mut inputs = execution_inputs(&fixture, EXPIRATION).await?;
+        let (mut inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         let (unrelated, _) = genesis_style_wallet(fixture.fee_faucet_id, 0, [51; 32])?;
         let unrelated_witness = {
             let chain = fixture.chain.lock().await;
@@ -494,9 +556,10 @@ mod tests {
                 .remove(&fixture.funder.id())
                 .context("a witness was requested")?
         };
-        inputs.fee_faucet = (unrelated, unrelated_witness);
+        inputs.fee_faucet =
+            UsdcxFaucet::new(ForeignAccount::from_account(unrelated, unrelated_witness));
 
-        let err = execute(inputs, Vec::new(), vec![note], &mut rng)
+        let err = execute(inputs, Vec::new(), vec![note.into_note()], &mut rng)
             .await
             .expect_err("moving a callback-enabled asset requires the issuing faucet");
         assert!(

@@ -24,6 +24,7 @@ miden-node-utils            = { workspace = true }
 miden-objects               = { workspace = true }
 miden-protobuf              = { features = ["tonic"], workspace = true }
 miden-protocol              = { workspace = true }
+miden-standards             = { workspace = true }
 prost                       = { workspace = true }
 rand                        = { workspace = true }
 thiserror                   = { workspace = true }
@@ -35,7 +36,9 @@ url                         = { workspace = true }
 
 [dev-dependencies]
 assert_matches = { workspace = true }
+futures        = { workspace = true }
 miden-protocol = { features = ["testing"], workspace = true }
+tokio          = { features = ["net"], workspace = true }
 
 [build-dependencies]
 build-rs               = { workspace = true }
