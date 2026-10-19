@@ -6,9 +6,9 @@ The operator documentation covers the configuration and the API. This page cover
 
 The service owns one wallet account. The account is created at genesis from a named `[[wallet]]` entry, which prefunds it and writes its account file to a fixed path.
 
-The account is public, and the service stores no account state of its own. It reads the account from the node before every transaction and holds only the account ID, the signing key, and the code commitment from the account file. The node stores the full state of a public account, which makes that read possible.
+The account is public, so the node serves its full state. A long-lived funding wallet holds the account state, signing key, unspent deposits, and synchronization progress in memory. The worker synchronizes it to the transaction's reference block before preparing a transaction.
 
-This removes a class of failure which a service holding its own copy of the account would have. If a service crashes between submitting a transaction and seeing it commit, its copy of the account is behind the chain, and every later transaction it builds is rejected for a stale nonce until it re-synchronizes. Reading the account each time means there is no local copy to fall behind.
+The account file supplies the initial state and signing key; synchronization progress is not persisted. After a restart, the worker reloads the account from the node and rediscovers unspent deposits before preparing a transaction. This recovers the committed account state even if the previous process stopped before observing a transaction's commitment.
 
 ## The request handler builds the note
 
