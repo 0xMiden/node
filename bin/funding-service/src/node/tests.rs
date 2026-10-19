@@ -25,6 +25,8 @@ use crate::deposit::DepositScanner;
 // ================================================================================================
 
 pub(crate) struct TestChain {
+    genesis_response: Option<rpc::GetBlockHeaderByNumberResponse>,
+    status_version_bytes: usize,
     pub tip: u32,
     pub notes: Vec<(u32, Note)>,
     pub transactions: Vec<(u32, AccountId, TransactionId)>,
@@ -38,6 +40,8 @@ pub(crate) struct TestChain {
 impl TestChain {
     pub(crate) fn new(tip: u32) -> Self {
         Self {
+            genesis_response: None,
+            status_version_bytes: 0,
             tip,
             notes: vec![],
             transactions: vec![],
@@ -243,9 +247,15 @@ impl Service<http::Request<Body>> for RpcFixture {
             return Box::pin(async { Ok(tonic::Status::unavailable("retry").into_http()) });
         }
         match method {
+            "GetBlockHeaderByNumber" => {
+                self.respond(request, |chain, _: &rpc::GetBlockHeaderByNumberRequest| {
+                    chain.genesis_response.clone().unwrap_or_default()
+                })
+            },
             "Status" => {
                 self.respond(request, |chain, _: &rpc::StatusRequest| rpc::StatusResponse {
                     chain_tip: chain.tip,
+                    version: "x".repeat(chain.status_version_bytes),
                     ..Default::default()
                 })
             },
@@ -506,4 +516,44 @@ async fn nullifier_checks_find_spent_notes_in_a_large_set() {
         server.node.spent_nullifiers(&requested, 20.into()).await.unwrap(),
         HashSet::from([first, last])
     );
+}
+
+#[tokio::test]
+async fn decoding_limit_survives_genesis_discovery_and_client_reconstruction() {
+    let chain = miden_testing::MockChain::builder().build().unwrap();
+    for limit in [4_194_304, 16_777_216] {
+        let mut fixture = TestChain::new(0);
+        fixture.status_version_bytes = 4_194_305;
+        let mut genesis = rpc::GetBlockHeaderByNumberResponse {
+            block_header: Some(chain.genesis_block_header().into()),
+            protocol_config: Some(chain.protocol_config().into()),
+            ..Default::default()
+        };
+        if limit == 16_777_216 {
+            // An unused optional proof makes discovery itself exercise the larger wire ceiling.
+            genesis.mmr_path = Some(miden_node_proto::generated::primitives::MerklePath {
+                siblings: vec![miden_node_proto::generated::primitives::Word {
+                    encoded: vec![0; 4_194_305],
+                }],
+            });
+            assert!(genesis.encoded_len() > 4_194_304);
+        }
+        fixture.genesis_response = Some(genesis);
+        let server = TestServer::start(fixture).await;
+        let (mut client, commitment, protocol_config) = tokio::time::timeout(
+            Duration::from_secs(5),
+            create_genesis_aware_rpc_client(&server.url, Duration::from_secs(2), limit),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(commitment, chain.genesis_block_header().commitment());
+        assert_eq!(protocol_config, *chain.protocol_config());
+        let status = client.status(rpc::StatusRequest {}).await;
+        if limit == 4_194_304 {
+            assert_eq!(status.unwrap_err().code(), tonic::Code::OutOfRange);
+        } else {
+            assert_eq!(status.unwrap().into_inner().version.len(), 4_194_305);
+        }
+    }
 }

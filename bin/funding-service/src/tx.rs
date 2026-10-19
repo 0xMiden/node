@@ -368,7 +368,11 @@ mod tests {
         let notes = funding_notes(&fixture, &targets(&fixture)?[..1], &mut rng)?;
         let inputs = execution_inputs(&fixture, EXPIRATION).await?;
         let server = TestServer::start(TestChain::new(0)).await;
-        let prover = Prover::remote(server.url.clone(), std::time::Duration::from_secs(5))?;
+        let prover = Prover::remote(
+            server.url.clone(),
+            std::time::Duration::from_secs(5),
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        )?;
         let (telemetry, _guard) = Telemetry::capture();
         let transaction = Box::pin(
             async {

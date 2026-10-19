@@ -616,8 +616,12 @@ impl CounterTrackingService {
         accounts_receiver: watch::Receiver<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
-        let (mut rpc_client, _) =
-            create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
+        let (mut rpc_client, _) = create_genesis_aware_rpc_client(
+            &config.rpc_url,
+            config.request_timeout,
+            config.grpc.max_decoding_message_size.get(),
+        )
+        .await?;
         let TrackedAccounts {
             wallet: wallet_account,
             counter: counter_account,

@@ -20,8 +20,13 @@ pub struct RemoteTransactionProver {
 
 impl RemoteTransactionProver {
     /// Creates a new [`RemoteTransactionProver`] with a lazy connection to the given gRPC endpoint.
-    pub fn new(url: Url, timeout: Duration) -> anyhow::Result<Self> {
+    pub fn new(
+        url: Url,
+        timeout: Duration,
+        max_decoding_message_size: usize,
+    ) -> anyhow::Result<Self> {
         let client = Builder::new(url)
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .with_timeout(timeout)
             .without_metadata_version()
