@@ -10,28 +10,27 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
+use miden_node_proto::clients::UsdcxFaucet;
 use miden_node_tracing::{info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::note::Note;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_standards::account::faucets::FungibleFaucet;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use url::Url;
 
-use crate::account::FunderKey;
+use crate::account::FundingWallet;
 use crate::node::RpcNodeClient;
 use crate::prover::Prover;
 use crate::server::FundingServer;
-use crate::status::{NativeAsset, StatusRefresher, StatusSnapshot};
+use crate::status::{NativeAsset, StatusSnapshot};
 use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
 mod data_store;
-mod deposit;
 mod error;
 mod node;
 mod prover;
@@ -66,23 +65,17 @@ pub const MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(100).expect("litera
 pub const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 =
     NonZeroU16::new(50).expect("literal is non-zero");
 
-/// Default interval for processing pending notes and checking submitted transactions.
+/// Default interval for syncing the wallet and checking submitted transactions.
 pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Default timeout of a request to the node's RPC API.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Default interval between two scans for the deposits sent to the funding account.
-pub const DEFAULT_DEPOSIT_SCAN_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Default timeout of a request to the remote prover.
 pub const DEFAULT_TX_PROVER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Default timeout of an HTTP request served by this service.
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How often the service reads the funding account while no request arrives.
-const STATUS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 /// How many notes may wait in the queue, per note of one transaction.
 const QUEUE_CAPACITY_PER_TX: usize = 4;
@@ -97,7 +90,6 @@ pub struct FundingServiceConfig {
     account_file: PathBuf,
     validator_signing_public_keys: Vec<ValidatorPublicKey>,
     tx_prover_url: Option<Url>,
-    deposit_scan_interval: Duration,
     http_timeout: Duration,
     rpc_timeout: Duration,
     tx_prover_timeout: Duration,
@@ -127,7 +119,6 @@ impl FundingServiceConfig {
             account_file,
             validator_signing_public_keys,
             tx_prover_url: None,
-            deposit_scan_interval: DEFAULT_DEPOSIT_SCAN_INTERVAL,
             http_timeout: DEFAULT_HTTP_TIMEOUT,
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             tx_prover_timeout: DEFAULT_TX_PROVER_TIMEOUT,
@@ -142,12 +133,6 @@ impl FundingServiceConfig {
     #[must_use]
     pub fn with_tx_prover_url(mut self, url: Option<Url>) -> Self {
         self.tx_prover_url = url;
-        self
-    }
-
-    #[must_use]
-    pub fn with_deposit_scan_interval(mut self, interval: Duration) -> Self {
-        self.deposit_scan_interval = interval;
         self
     }
 
@@ -210,15 +195,7 @@ impl FundingServiceConfig {
         );
 
         anyhow::ensure!(!self.poll_interval.is_zero(), "--poll-interval must be greater than zero");
-        anyhow::ensure!(
-            !self.deposit_scan_interval.is_zero(),
-            "--deposit-scan-interval must be greater than zero",
-        );
 
-        let funder_key = FunderKey::load(&self.account_file)
-            .context("failed to load the funding account file")?;
-
-        miden_span_record!(account.id = funder_key.account_id());
         let node = RpcNodeClient::connect(
             &self.rpc_url,
             self.rpc_timeout,
@@ -230,28 +207,26 @@ impl FundingServiceConfig {
 
         // The fee asset is constant for the chain and is only named by the protocol configuration,
         // which the node serves with the genesis block header. The remaining fee parameters are in
-        // every block header, and the status refresher reads them at the block it reports.
+        // every block header, and the worker publishes them with its synchronized balance.
         let protocol_config = node.protocol_config().clone();
         let fee_asset_id = protocol_config.fee_asset_id();
-        let fee_parameters = node
-            .fee_parameters(None)
-            .await
-            .context("failed to read the fee parameters from the node")?;
-        let verification_base_fee = fee_parameters.verification_base_fee();
-
+        let wallet = FundingWallet::load(&self.account_file, fee_asset_id)
+            .context("failed to load the funding account file")?;
+        miden_span_record!(account.id = wallet.account_id());
         // The native faucet cannot change the symbol, the decimals or the name of its asset, so the
         // service reads them once.
         let chain_tip = node
             .committed_tip()
             .await
             .context("failed to read the chain tip from the node")?;
-        let (native_faucet, _) = node
-            .public_account(fee_asset_id.faucet_id(), chain_tip)
-            .await
-            .context("failed to read the native faucet account")?;
-        let native_asset = FungibleFaucet::try_from(&native_faucet)
-            .map(|faucet| NativeAsset::new(fee_asset_id, &faucet))
+        let native_faucet =
+            UsdcxFaucet::load_at(&mut node.rpc_client(), fee_asset_id.faucet_id(), chain_tip)
+                .await
+                .context("failed to read the native faucet account")?;
+        let metadata = native_faucet
+            .metadata()
             .context("the native faucet account is not a fungible faucet")?;
+        let native_asset = NativeAsset::new(fee_asset_id, &metadata);
 
         // A note holds the amount as a fungible asset, so an amount the asset type cannot express
         // must fail at startup instead of on every request.
@@ -269,10 +244,9 @@ impl FundingServiceConfig {
         info!(
             target: LOG_TARGET,
             "Funding service initialized",
-            account.id = funder_key.account_id(),
+            account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),
             genesis.commitment = node.genesis_commitment(),
-            fee.verification_base_fee = verification_base_fee,
             funding_service.max_amount = self.max_amount,
             funding_service.max_notes_per_tx = self.max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = self.tx_expiration_delta.get(),
@@ -282,16 +256,15 @@ impl FundingServiceConfig {
         Ok(FundingService {
             node,
             prover,
-            funder_key,
+            wallet,
             fee_asset_id,
             native_asset,
-            verification_base_fee,
+            fee_faucet: native_faucet,
             protocol_config,
             worker_config: WorkerConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
                 expiration_delta: self.tx_expiration_delta,
-                tick_interval: self.poll_interval,
-                deposit_scan_interval: self.deposit_scan_interval,
+                poll_interval: self.poll_interval,
             },
             max_amount: self.max_amount,
             http_timeout: self.http_timeout,
@@ -306,10 +279,10 @@ impl FundingServiceConfig {
 pub struct FundingService {
     node: RpcNodeClient,
     prover: Prover,
-    funder_key: FunderKey,
+    wallet: FundingWallet,
     fee_asset_id: AssetId,
     native_asset: NativeAsset,
-    verification_base_fee: u32,
+    fee_faucet: UsdcxFaucet,
     protocol_config: ProtocolConfig,
     worker_config: WorkerConfig,
     max_amount: u64,
@@ -317,15 +290,15 @@ pub struct FundingService {
 }
 
 impl FundingService {
-    /// Runs the HTTP server, the status refresher and the funding worker until one of them stops.
+    /// Runs the HTTP server and funding worker until one of them stops.
     pub async fn run(
         self,
         listener: TcpListener,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
         let status =
-            StatusSnapshot::new(self.funder_key.account_id(), self.native_asset, self.max_amount);
-        let (requests, request_receiver) = mpsc::channel::<Note>(
+            StatusSnapshot::new(self.wallet.account_id(), self.native_asset, self.max_amount);
+        let (requests, request_receiver) = mpsc::channel::<UsdcxP2Id>(
             QUEUE_CAPACITY_PER_TX * self.worker_config.max_notes_per_tx.get(),
         );
 
@@ -341,28 +314,13 @@ impl FundingService {
                 .context("the funding service HTTP server failed")
         });
 
-        let refresher = StatusRefresher::new(
-            self.node.clone(),
-            self.funder_key.account_id(),
-            self.fee_asset_id,
-            status.clone(),
-            STATUS_REFRESH_INTERVAL,
-        );
-        let refresher_shutdown = shutdown.clone();
-        tasks.spawn("status-refresher", async move {
-            refresher
-                .run(refresher_shutdown)
-                .await
-                .context("the funding service status refresher failed")
-        });
-
         let funder = Funder::new(
             self.node,
             self.prover,
             FunderSetup {
-                key: self.funder_key,
+                wallet: self.wallet,
                 fee_asset_id: self.fee_asset_id,
-                verification_base_fee: self.verification_base_fee,
+                fee_faucet: self.fee_faucet,
                 protocol_config: self.protocol_config,
                 config: self.worker_config,
                 status,

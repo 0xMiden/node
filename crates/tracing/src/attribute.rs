@@ -126,7 +126,6 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "block.interval",
     "dependency.endpoint",
     "dependency.name",
-    "funding_service.deposit_scan_interval",
     "funding_service.listen",
     "funding_service.poll_interval",
     "genesis.source",
