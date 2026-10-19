@@ -256,7 +256,7 @@ async fn check_nullifiers_and_expiration(
 
     // Nullifier check: collect the nullifiers of all input notes and verify none are already
     // committed in the local store.
-    let nullifiers: Vec<_> = tx.input_notes().iter().map(|note| note.nullifier()).collect();
+    let nullifiers: Vec<_> = tx.nullifiers().collect();
 
     if nullifiers.is_empty() {
         return Ok(());
