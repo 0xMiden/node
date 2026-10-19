@@ -19,6 +19,7 @@ use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::errors::StateInitializationError;
 use crate::proven_tip::ProvenTipWriter;
+use crate::state::chain_mmr_checkpoint::ChainMmrCheckpoint;
 use crate::state::loader::{
     ACCOUNT_STATE_FOREST_STORAGE_DIR,
     ACCOUNT_TREE_STORAGE_DIR,
@@ -192,10 +193,12 @@ impl State {
         // because loading has long synchronous sections (RocksDB opens, MMR hashing, SMT top
         // reconstruction) that would serialize if polled from a single task. Spawning is eager, so
         // all four run from this point; the join below only collects their results.
+        let chain_mmr_checkpoint = ChainMmrCheckpoint::new(data_path);
+
         let mmr_task = tokio::spawn(
             {
-                let db = Arc::clone(&db);
-                async move { load_mmr(&db).await }
+                let (db, checkpoint) = (Arc::clone(&db), chain_mmr_checkpoint.clone());
+                async move { load_mmr(&db, &checkpoint).await }
             }
             .in_current_span(),
         );
@@ -310,6 +313,7 @@ impl State {
             nullifier_tree,
             account_tree,
             blockchain,
+            chain_mmr_checkpoint,
             forest,
             apply_block_thread_priority,
         );

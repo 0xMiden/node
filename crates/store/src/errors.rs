@@ -155,11 +155,20 @@ pub enum StateInitializationError {
         tree_root: Word,
         block_root: Word,
     },
-    #[error("loaded chain MMR cannot produce peaks for block {block_num}")]
+    #[error("loaded chain MMR does not cover block {block_num}")]
     ChainMmrLoadError {
         block_num: BlockNumber,
         #[source]
         source: MmrError,
+    },
+    #[error(
+        "chain MMR leaf for block {block_num} ({chain_mmr_leaf:?}) does not match the block \
+         header commitment ({block_header_commitment:?})"
+    )]
+    ChainMmrTipDiverged {
+        block_num: BlockNumber,
+        chain_mmr_leaf: Word,
+        block_header_commitment: Word,
     },
     #[error(
         "chain MMR commitment ({chain_mmr_commitment:?}) does not match expected chain commitment \

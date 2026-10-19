@@ -37,6 +37,7 @@ use crate::blocks::BlockStore;
 use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
+use crate::state::chain_mmr_checkpoint::ChainMmrCheckpoint;
 use crate::state::loader::TreeStorage;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification};
@@ -44,6 +45,14 @@ use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 // WRITE WORKER
 // ================================================================================================
+
+/// Number of new blocks after which the chain MMR checkpoint is refreshed.
+///
+/// A refresh appends only the nodes added since the previous one (at most two per block) as a
+/// buffered, unsynced write, so it is cheap enough to run inline on the write path. The interval
+/// bounds how far the checkpoint can lag after a crash, which startup then tops up from the
+/// database.
+const CHECKPOINT_INTERVAL_BLOCKS: u32 = 500;
 
 /// Single-task owner of the mutable trees. Processes [`WriteRequest`]s serially.
 ///
@@ -64,6 +73,11 @@ pub(in crate::state) struct WriteWorker {
     account_tree: AccountTreeWithHistory<TreeStorage>,
     /// The blockchain MMR owned by this writer.
     blockchain: Blockchain,
+    /// On-disk checkpoint of the chain MMR, appended to every [`CHECKPOINT_INTERVAL_BLOCKS`] blocks
+    /// and on shutdown so the next startup only tops up the blocks committed after that.
+    chain_mmr_checkpoint: ChainMmrCheckpoint,
+    /// Number of blocks already persisted in the chain MMR checkpoint file.
+    checkpointed_blocks: u32,
     /// The mutable account state forest owned by this writer.
     forest: AccountStateForest<AccountStateForestBackend>,
     /// Writer-local log of published generations; its oldest still-pinned height feeds the
@@ -105,6 +119,7 @@ impl WriteWorker {
         nullifier_tree: NullifierTree<LargeSmt<TreeStorage>>,
         account_tree: AccountTreeWithHistory<TreeStorage>,
         blockchain: Blockchain,
+        chain_mmr_checkpoint: ChainMmrCheckpoint,
         forest: AccountStateForest<AccountStateForestBackend>,
         apply_block_thread_priority: bool,
     ) -> Self {
@@ -122,6 +137,10 @@ impl WriteWorker {
         let apply_pool =
             Arc::new(pool_builder.build().expect("apply_block thread pool should build"));
 
+        // The loader refreshed the checkpoint up to the loaded chain tip (best-effort; a failed
+        // refresh is healed by the length check on the next append).
+        let checkpointed_blocks = blockchain.num_blocks();
+
         Self {
             db,
             block_store,
@@ -132,6 +151,8 @@ impl WriteWorker {
             nullifier_tree,
             account_tree,
             blockchain,
+            chain_mmr_checkpoint,
+            checkpointed_blocks,
             forest,
             published_generations,
             apply_pool,
@@ -159,7 +180,35 @@ impl WriteWorker {
                 .instrument(req.span)
                 .await;
             let _ = req.result_tx.send(result);
+
+            if self.blockchain.num_blocks() - self.checkpointed_blocks >= CHECKPOINT_INTERVAL_BLOCKS
+            {
+                self.refresh_checkpoint();
+            }
         }
+
+        // Refresh the on-disk chain MMR checkpoint so the next startup only tops up the blocks
+        // committed after this point. Shutdown is off the block-apply path, so here — unlike in the
+        // periodic refresh — a checkpoint the appends could not extend is healed by rewriting it in
+        // full (via write).
+        if !self.chain_mmr_checkpoint.append(&self.blockchain, self.checkpointed_blocks) {
+            self.chain_mmr_checkpoint.write(&self.blockchain);
+        }
+    }
+
+    /// Appends the blocks committed since the last refresh to the on-disk chain MMR checkpoint.
+    ///
+    /// A checkpoint that cannot be extended is left as is: healing it means rewriting the file in
+    /// full, whose I/O grows with chain height, so it is deferred to the shutdown refresh (or the
+    /// next startup). The tracked block count advances regardless, keeping later refreshes on the
+    /// cheap length-check-and-skip path rather than retrying ever larger appends.
+    fn refresh_checkpoint(&mut self) {
+        let num_blocks = self.blockchain.num_blocks();
+        if num_blocks == self.checkpointed_blocks {
+            return;
+        }
+        self.chain_mmr_checkpoint.append(&self.blockchain, self.checkpointed_blocks);
+        self.checkpointed_blocks = num_blocks;
     }
 
     /// Validates and commits a signed block to all persistent and in-memory stores.
