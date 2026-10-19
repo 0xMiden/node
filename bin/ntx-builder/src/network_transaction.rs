@@ -8,7 +8,7 @@ use anyhow::Context;
 use miden_node_tracing::{error, info, miden_instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteScript, Nullifier};
 use miden_protocol::transaction::{TransactionArgs, TransactionId};
@@ -65,6 +65,8 @@ pub struct NetworkTransactionContext {
     pub db: NtxDbReader,
     /// Shared LRU cache for note scripts retrieved over RPC.
     pub script_cache: LruCache<Word, NoteScript>,
+    /// Shared LRU cache of account code retrieved over RPC, keyed by account ID.
+    pub code_cache: LruCache<AccountId, AccountCode>,
     /// [`TransactionArgs`] used by every network transaction. These are constant and are therefore
     /// prebuilt once and cloned per transaction.
     pub tx_args: TransactionArgs,
@@ -98,6 +100,7 @@ impl NetworkTransactionContext {
             },
             db: db.clone(),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
+            code_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
             tx_args: crate::selection::build_tx_args(
                 std::num::NonZeroU16::new(30).expect("literal is non-zero"),
             ),
@@ -210,8 +213,6 @@ impl NetworkTransactionContext {
                 result: NetworkTransactionResult::NoWork,
             });
         };
-        let account = Arc::new(account);
-
         let Selection { candidate, rejected, stale_eligibility } = select_candidate(
             &self.db,
             &account,
@@ -236,18 +237,54 @@ impl NetworkTransactionContext {
             });
         };
 
-        let result = self.execute_candidate(account_id, candidate, &mut notes).await;
+        // A failed load is an infrastructure failure, so it aborts the attempt instead of being
+        // charged to the selected notes. The selection bookkeeping is still persisted.
+        let context = self.ntx_context();
+        let account =
+            match context.load_account(account_id, &candidate.chain_state.chain_tip_header).await {
+                Ok(account) => account,
+                Err(err) => {
+                    let err = anyhow::Error::new(err)
+                        .context("failed to load the network account from the RPC service");
+                    return Ok(NetworkTransactionOutcome {
+                        account_id,
+                        block_num,
+                        notes,
+                        result: NetworkTransactionResult::Aborted(err),
+                    });
+                },
+            };
+
+        let result = self.execute_candidate(context, account, candidate, &mut notes).await;
 
         Ok(NetworkTransactionOutcome { account_id, block_num, notes, result })
     }
 
-    /// Executes, proves and submits `candidate`, recording the note bookkeeping into `notes`.
+    /// Creates the execution context shared by the account load and the execution of one attempt.
+    fn ntx_context(&self) -> execute::NtxContext {
+        execute::NtxContext::new(
+            self.clients.prover.clone(),
+            self.clients.rpc.clone(),
+            self.script_cache.clone(),
+            self.code_cache.clone(),
+            self.db.clone(),
+            self.config.max_cycles,
+            self.tx_args.clone(),
+            self.config.request_backoff_initial,
+            self.config.request_backoff_max,
+        )
+    }
+
+    /// Executes, proves and submits `candidate` against `account`, recording the note bookkeeping
+    /// into `notes`.
     async fn execute_candidate(
         &self,
-        account_id: AccountId,
+        context: execute::NtxContext,
+        account: PartialAccount,
         candidate: TransactionCandidate,
         notes: &mut NoteUpdates,
     ) -> NetworkTransactionResult {
+        let account_id = account.id();
         let sponsor_to_feature = candidate.sponsor_to_feature_nullifier();
         let note_ids: Vec<_> = candidate
             .notes
@@ -271,18 +308,7 @@ impl NetworkTransactionContext {
             note.count = note_ids.len()
         );
 
-        let context = execute::NtxContext::new(
-            self.clients.prover.clone(),
-            self.clients.rpc.clone(),
-            self.script_cache.clone(),
-            self.db.clone(),
-            self.config.max_cycles,
-            self.tx_args.clone(),
-            self.config.request_backoff_initial,
-            self.config.request_backoff_max,
-        );
-
-        match context.execute_transaction(candidate).await {
+        match context.execute_transaction(account, candidate).await {
             Ok(NtxExecutionResult {
                 tx_id,
                 failed_notes,
