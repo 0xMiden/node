@@ -33,6 +33,8 @@ mod tests;
 /// A gRPC server providing a proving service for the Miden blockchain.
 #[derive(clap::Parser)]
 pub struct Server {
+    #[command(flatten)]
+    grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// The port the gRPC server will be hosted on.
     #[arg(long, default_value = "50051", env = "MIDEN_PROVER_PORT")]
     port: u16,
@@ -107,6 +109,7 @@ impl Server {
             )
             .await;
 
+        let max_decoding_message_size = self.grpc.max_decoding_message_size.get();
         let server = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.timeout)
@@ -114,10 +117,10 @@ impl Server {
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .layer(cors_for_grpc_web_layer())
             .layer(GrpcWebLayer::new())
-            .add_service(prover_service)
-            .add_service(status_service)
-            .add_service(health_service)
-            .add_service(reflection_service)
+            .add_service(prover_service.max_decoding_message_size(max_decoding_message_size))
+            .add_service(status_service.max_decoding_message_size(max_decoding_message_size))
+            .add_service(health_service.max_decoding_message_size(max_decoding_message_size))
+            .add_service(reflection_service.max_decoding_message_size(max_decoding_message_size))
             .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned());
 
         let server =

@@ -40,6 +40,7 @@ pub async fn deploy_fee_collector(
     account_file: AccountFile,
     validator_urls: Vec<Url>,
     validator_timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> anyhow::Result<()> {
     miden_span_record!(account.id = account_file.account().id());
     anyhow::ensure!(
@@ -63,7 +64,11 @@ pub async fn deploy_fee_collector(
         &state.view(),
     )
     .await?;
-    let validator = BlockProducerValidatorClient::new(validator_urls, validator_timeout)?;
+    let validator = BlockProducerValidatorClient::new(
+        validator_urls,
+        validator_timeout,
+        max_decoding_message_size,
+    )?;
 
     let (executed, header, blockchain, genesis) = state
         .with_view(async |view| {

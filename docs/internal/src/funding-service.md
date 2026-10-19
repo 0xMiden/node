@@ -4,7 +4,7 @@ The operator documentation covers the configuration and the API. This page cover
 
 ## The funding account
 
-The service owns one wallet account. The account is created at genesis from a named `[[wallet]]` entry, which prefunds it and writes its account file to a fixed path.
+The service owns one wallet account. The account is created at genesis from a named `[[wallet]]` entry, which funds it and writes its account file to a fixed path.
 
 The account is public, so the node serves its full state. A long-lived funding wallet holds the account state, signing key, unspent deposits, and synchronization progress in memory. The worker synchronizes it to the transaction's reference block before preparing a transaction.
 

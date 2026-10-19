@@ -737,3 +737,124 @@ mod proofs;
 fn test_config() -> Config {
     Config::new("http://127.0.0.1:1".parse().unwrap())
 }
+
+#[tokio::test]
+async fn configured_decoding_limit_applies_to_requests_and_health() {
+    use std::num::NonZeroUsize;
+
+    use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
+    use tonic_health::pb::HealthCheckRequest;
+    use tonic_health::pb::health_client::HealthClient;
+    use tonic_reflection::pb::v1::ServerReflectionRequest;
+    use tonic_reflection::pb::v1::server_reflection_client::ServerReflectionClient;
+    use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
+
+    for limit in [64, 256] {
+        let mut config = test_config();
+        config.grpc.message_size.max_decoding_message_size = NonZeroUsize::new(limit).unwrap();
+        let (_dir, server) = server(config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut health = HealthClient::new(channel.clone());
+        let status =
+            health.check(HealthCheckRequest { service: "x".repeat(128) }).await.unwrap_err();
+        assert_eq!(
+            status.code(),
+            if limit == 64 {
+                tonic::Code::OutOfRange
+            } else {
+                tonic::Code::NotFound
+            }
+        );
+        let mut client = NoteTransportServiceClient::new(channel);
+        let response =
+            client.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None }).await;
+        if limit == 64 {
+            assert_eq!(response.unwrap_err().code(), tonic::Code::OutOfRange);
+        } else {
+            assert!(response.is_ok());
+        }
+        let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+            .unwrap()
+            .connect()
+            .await
+            .unwrap();
+        let mut reflection = ServerReflectionClient::new(channel);
+        let mut stream = reflection
+            .server_reflection_info(tokio_stream::iter([ServerReflectionRequest {
+                host: "x".repeat(128),
+                message_request: Some(MessageRequest::ListServices(String::new())),
+            }]))
+            .await
+            .unwrap()
+            .into_inner();
+        if limit == 64 {
+            match stream.message().await {
+                Ok(None) => {},
+                Err(status) => assert_eq!(status.code(), tonic::Code::OutOfRange),
+                Ok(Some(_)) => panic!("oversized reflection request was processed"),
+            }
+        } else {
+            assert!(stream.message().await.unwrap().is_some());
+        }
+        drop(stream);
+        let web = grpc_web_request(
+            address,
+            "FetchNotes",
+            FetchNotesRequest { tags: vec![1; 32], cursor: None },
+        )
+        .await;
+        let header_status =
+            web.headers().get("grpc-status").map(|value| value.to_str().unwrap().to_owned());
+        let body = web.bytes().await.unwrap();
+        if limit == 64 {
+            assert!(
+                header_status.as_deref() == Some("11")
+                    || String::from_utf8_lossy(&body).contains("grpc-status:11")
+            );
+        } else {
+            assert_eq!(body[0], 0);
+        }
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn decoding_override_receives_requests_over_four_mib() {
+    use std::num::NonZeroUsize;
+
+    use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
+    let request = FetchNotesRequest { tags: vec![1; 1024 * 1024], cursor: None };
+    assert!(request.encoded_len() > 4_194_304);
+    for limit in [4_194_304, 16_777_216] {
+        let mut config = test_config();
+        config.grpc.message_size.max_decoding_message_size = NonZeroUsize::new(limit).unwrap();
+        let (_dir, server) = server(config);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
+        let mut client =
+            NoteTransportServiceClient::connect(format!("http://{address}")).await.unwrap();
+        let error = client.fetch_notes(request.clone()).await.unwrap_err();
+        // Once decoding succeeds, the request reaches the independent application tag limit.
+        assert_eq!(
+            error.code(),
+            if limit == 4_194_304 {
+                tonic::Code::OutOfRange
+            } else {
+                tonic::Code::InvalidArgument
+            }
+        );
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+    }
+}

@@ -33,6 +33,7 @@ use std::time::Duration;
 use http::header::ACCEPT;
 use miden_node_tracing::grpc::OtelInterceptor;
 use miden_node_tracing::{debug, info, warn};
+use miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 use miden_protocol::Word;
 use miden_protocol::batch::ProposedBatch;
 use tonic::metadata::AsciiMetadataValue;
@@ -130,6 +131,7 @@ impl tonic::service::Interceptor for Interceptor {
 
 #[cfg(test)]
 mod tests {
+    mod message_size;
     use super::*;
 
     #[test]
@@ -319,9 +321,17 @@ impl Deref for SequencerClient {
 /// Trait for building gRPC clients from a common [`Builder`] configuration.
 pub trait GrpcClient {
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self;
+
+    /// Sets the maximum encoded size of a received response or stream item.
+    #[must_use]
+    fn max_decoding_message_size(self, limit: usize) -> Self;
 }
 
 impl GrpcClient for RpcClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
     }
@@ -342,49 +352,73 @@ impl DerefMut for NoteTransportClient {
 }
 
 impl GrpcClient for NoteTransportClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedNoteTransportClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
 impl GrpcClient for RemoteProverProxyStatusClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedProxyStatusClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
 impl GrpcClient for RemoteProverClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedProverClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
 impl GrpcClient for ValidatorClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
 impl GrpcClient for NtxBuilderClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedNtxBuilderClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
 impl GrpcClient for SequencerClient {
+    fn max_decoding_message_size(self, limit: usize) -> Self {
+        Self(self.0.max_decoding_message_size(limit))
+    }
+
     fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
         Self(GeneratedSequencerClient::new(InterceptedService::new(channel, interceptor)))
     }
 }
 
-// STRICT TYPE-SAFE BUILDER (NO DEFAULTS)
+// TYPE-SAFE CLIENT BUILDER
 // ================================================================================================
 
 /// A type-safe builder that forces the caller to make an explicit decision for each
 /// configuration item (TLS, timeout, metadata version, metadata genesis) before connecting.
 ///
-/// This builder replaces the previous defaulted builder. Callers must explicitly choose TLS,
-/// timeout, and metadata options before connecting.
+/// Callers must explicitly choose TLS, timeout, and metadata options before connecting. Received
+/// messages default to a 4 MiB limit, configurable with [`Builder::max_decoding_message_size`].
 ///
 /// Usage example:
 ///
@@ -411,6 +445,7 @@ impl GrpcClient for SequencerClient {
 pub struct Builder<State> {
     endpoint: Endpoint,
     endpoint_url: Url,
+    max_decoding_message_size: usize,
     metadata_version: Option<String>,
     metadata_genesis: Option<Word>,
     metadata_auth_header_value: Option<AsciiMetadataValue>,
@@ -432,11 +467,19 @@ pub struct WantsOTel;
 pub struct WantsConnection;
 
 impl<State> Builder<State> {
+    /// Sets the maximum encoded size of a received response or stream item.
+    #[must_use]
+    pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+        self.max_decoding_message_size = limit;
+        self
+    }
+
     /// Convenience function to cast the state type and carry internal configuration forward.
     fn next_state<Next>(self) -> Builder<Next> {
         Builder {
             endpoint: self.endpoint,
             endpoint_url: self.endpoint_url,
+            max_decoding_message_size: self.max_decoding_message_size,
             metadata_version: self.metadata_version,
             metadata_genesis: self.metadata_genesis,
             metadata_auth_header_value: self.metadata_auth_header_value,
@@ -469,6 +512,7 @@ impl Builder<WantsTls> {
         Builder {
             endpoint,
             endpoint_url: url,
+            max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
             metadata_version: None,
             metadata_genesis: None,
             metadata_auth_header_value: None,
@@ -634,7 +678,7 @@ impl Builder<WantsConnection> {
                         "Configured service connection timed out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),
-                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
+                        timeout.ms = CONNECT_TIMEOUT
                     );
                 },
                 Ok(Err(err)) => {
@@ -650,7 +694,7 @@ impl Builder<WantsConnection> {
                         "Configured service connection still timing out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),
-                        timeout.ms = CONNECT_TIMEOUT.as_millis() as u64
+                        timeout.ms = CONNECT_TIMEOUT
                     );
                 },
             }
@@ -676,6 +720,7 @@ impl Builder<WantsConnection> {
             self.metadata_auth_header_value,
         );
         T::with_interceptor(channel, interceptor)
+            .max_decoding_message_size(self.max_decoding_message_size)
     }
 }
 

@@ -85,6 +85,7 @@ const QUEUE_CAPACITY_PER_TX: usize = 4;
 
 /// The configuration of the funding service.
 pub struct FundingServiceConfig {
+    max_decoding_message_size: usize,
     rpc_url: Url,
     account_file: PathBuf,
     validator_signing_public_keys: Vec<ValidatorPublicKey>,
@@ -99,6 +100,13 @@ pub struct FundingServiceConfig {
 }
 
 impl FundingServiceConfig {
+    /// Sets the maximum encoded size accepted by each outgoing gRPC client.
+    #[must_use]
+    pub fn with_max_decoding_message_size(mut self, limit: usize) -> Self {
+        self.max_decoding_message_size = limit;
+        self
+    }
+
     /// Creates a configuration with default timeouts and limits.
     pub fn new(
         rpc_url: Url,
@@ -107,6 +115,7 @@ impl FundingServiceConfig {
     ) -> Self {
         Self {
             rpc_url,
+            max_decoding_message_size: miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
             account_file,
             validator_signing_public_keys,
             tx_prover_url: None,
@@ -191,6 +200,7 @@ impl FundingServiceConfig {
             &self.rpc_url,
             self.rpc_timeout,
             self.validator_signing_public_keys,
+            self.max_decoding_message_size,
         )
         .await
         .context("failed to connect to the node RPC API")?;
@@ -224,8 +234,10 @@ impl FundingServiceConfig {
             .context("--max-amount is not a valid amount of the native asset")?;
 
         let prover = match self.tx_prover_url {
-            Some(url) => Prover::remote(url, self.tx_prover_timeout)
-                .context("failed to build the remote prover client")?,
+            Some(url) => {
+                Prover::remote(url, self.tx_prover_timeout, self.max_decoding_message_size)
+                    .context("failed to build the remote prover client")?
+            },
             None => Prover::local(),
         };
 

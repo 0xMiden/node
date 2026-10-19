@@ -46,6 +46,8 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Command {
     CreateProofs {
+        #[command(flatten)]
+        grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// RPC endpoint of the target miden node — used to discover the genesis commitment that the
         /// generated proofs are bound to. Must match the node you intend to submit the proofs
         /// against.
@@ -64,6 +66,8 @@ pub enum Command {
         remote_prover_url: Option<String>,
     },
     RunBenchmark {
+        #[command(flatten)]
+        grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// RPC endpoint of the target miden node.
         #[arg(long, default_value = "http://127.0.0.1:57291")]
         rpc_url: Url,
@@ -106,13 +110,21 @@ impl Cli {
     async fn run(self) -> Result<()> {
         match self.command {
             Command::CreateProofs {
+                grpc,
                 rpc_url,
                 num_transactions,
                 remote_prover_url,
             } => {
-                create_proofs::run(rpc_url, num_transactions, remote_prover_url).await;
+                create_proofs::run(
+                    rpc_url,
+                    num_transactions,
+                    remote_prover_url,
+                    grpc.max_decoding_message_size.get(),
+                )
+                .await;
             },
             Command::RunBenchmark {
+                grpc,
                 rpc_url,
                 concurrency,
                 connections,
@@ -127,6 +139,7 @@ impl Cli {
                     wait_blocks,
                     validator_signing_public_key,
                     fail_on_error,
+                    grpc.max_decoding_message_size.get(),
                 )
                 .await?;
             },
@@ -144,10 +157,12 @@ async fn build_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
     genesis: Option<Word>,
+    max_decoding_message_size: usize,
 ) -> Result<RpcClient> {
     let use_tls = rpc_url.scheme() == "https";
 
-    let tls_stage = Builder::new(rpc_url.clone());
+    let tls_stage =
+        Builder::new(rpc_url.clone()).max_decoding_message_size(max_decoding_message_size);
     let timeout_stage = if use_tls {
         tls_stage.with_tls().context("Failed to configure TLS for RPC client")?
     } else {
@@ -167,8 +182,12 @@ async fn build_rpc_client(
 
 /// Discover the genesis commitment of the node at `rpc_url`. This is the value write RPCs such as
 /// `SubmitProvenTransaction` expect echoed back in request metadata.
-async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
-    let mut rpc = build_rpc_client(rpc_url, timeout, None)
+async fn discover_genesis(
+    rpc_url: &Url,
+    timeout: Duration,
+    max_decoding_message_size: usize,
+) -> Result<Word> {
+    let mut rpc = build_rpc_client(rpc_url, timeout, None, max_decoding_message_size)
         .await
         .context("Failed to create RPC client for genesis discovery")?;
 
@@ -195,9 +214,10 @@ async fn discover_genesis(rpc_url: &Url, timeout: Duration) -> Result<Word> {
 pub(crate) async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> Result<RpcClient> {
-    let genesis = discover_genesis(rpc_url, timeout).await?;
-    build_rpc_client(rpc_url, timeout, Some(genesis)).await
+    let genesis = discover_genesis(rpc_url, timeout, max_decoding_message_size).await?;
+    build_rpc_client(rpc_url, timeout, Some(genesis), max_decoding_message_size).await
 }
 
 /// Create a pool of `size` genesis-aware RPC clients, each on its own gRPC connection.
@@ -213,12 +233,15 @@ pub(crate) async fn create_genesis_aware_rpc_client_pool(
     timeout: Duration,
     size: usize,
     trusted_validator_signing_key: ValidatorPublicKey,
+    max_decoding_message_size: usize,
 ) -> Result<(Vec<RpcClient>, TransactionInputsSealer)> {
     let size = size.max(1);
-    let genesis = discover_genesis(rpc_url, timeout).await?;
+    let genesis = discover_genesis(rpc_url, timeout, max_decoding_message_size).await?;
     let mut pool = Vec::with_capacity(size);
     for _ in 0..size {
-        pool.push(build_rpc_client(rpc_url, timeout, Some(genesis)).await?);
+        pool.push(
+            build_rpc_client(rpc_url, timeout, Some(genesis), max_decoding_message_size).await?,
+        );
     }
     let key = pool[0]
         .clone()

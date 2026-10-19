@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_proto::BlockProofRequest;
 use miden_node_tracing::{info, miden_instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -33,7 +34,25 @@ pub struct ValidatorDbReader {
     reader: DbReader,
 }
 
+/// A signed block and its proving request, if retained.
+pub struct BlockBackup {
+    pub block: SignedBlock,
+    pub proving_inputs: Option<BlockProofRequest>,
+}
+
 impl ValidatorDbReader {
+    /// Loads a signed block and any retained proving request from one database snapshot.
+    ///
+    /// The request must reconstruct the stored block; corrupt or mismatched inputs cause an error.
+    pub async fn load_block_backup(
+        &self,
+        block_num: BlockNumber,
+    ) -> Result<Option<BlockBackup>, DatabaseError> {
+        self.reader
+            .read("load_block_backup", move |tx| queries::load_block_backup(tx, block_num))
+            .await
+    }
+
     /// Returns whether a transaction with the given id has already been validated.
     pub(crate) async fn transaction_exists(
         &self,
@@ -240,16 +259,20 @@ impl ValidatorDbWriter {
             .write("upsert_block_header_with_protocol_config", move |tx| {
                 record_protocol_config_activation(tx, &header, protocol_config)?;
                 queries::delete_block(tx, header.block_num())?;
-                queries::insert_block(tx, &block_with_header(header))
+                queries::insert_block(tx, &block_with_header(header), None)
             })
             .await
     }
 
-    /// Persists a signed block's bytes, header, configuration activation, and transaction positions
+    /// Persists a signed block, its proving request, configuration activation, and transaction positions
     /// in one database transaction.
     ///
     /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
     /// one.
+    ///
+    /// `proving_inputs` must be the request `block` was built from. It is stored without being
+    /// checked, because rebuilding the block to compare it would repeat the signing path's most
+    /// expensive step; [`ValidatorDbReader::load_block_backup`] checks it when it is read back.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -258,10 +281,17 @@ impl ValidatorDbWriter {
         block: SignedBlock,
         protocol_config: ProtocolConfig,
         transactions: Vec<TransactionId>,
+        proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("insert_signed_block", move |tx| {
-                persist_signed_block(tx, &block, protocol_config, &transactions)
+                persist_signed_block(
+                    tx,
+                    &block,
+                    protocol_config,
+                    &transactions,
+                    Some(&proving_inputs),
+                )
             })
             .await
     }
@@ -269,7 +299,8 @@ impl ValidatorDbWriter {
     /// Replaces the block signed at `block`'s height, in one database transaction: deletes the
     /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
     /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
-    /// then persists the new header and links exactly as [`Self::insert_signed_block`] does.
+    /// then persists the new header, links, and proving request exactly as
+    /// [`Self::insert_signed_block`] does.
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -278,28 +309,65 @@ impl ValidatorDbWriter {
         block: SignedBlock,
         protocol_config: ProtocolConfig,
         transactions: Vec<TransactionId>,
+        proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("replace_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
-                persist_signed_block(tx, &block, protocol_config, &transactions)
+                persist_signed_block(
+                    tx,
+                    &block,
+                    protocol_config,
+                    &transactions,
+                    Some(&proving_inputs),
+                )
+            })
+            .await
+    }
+    /// Inserts a signed block without proving inputs to model a legacy backup.
+    #[cfg(test)]
+    pub(crate) async fn insert_legacy_signed_block(
+        &self,
+        block: SignedBlock,
+        protocol_config: ProtocolConfig,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("insert_legacy_signed_block", move |tx| {
+                persist_signed_block(tx, &block, protocol_config, &transactions, None)
+            })
+            .await
+    }
+
+    /// Replaces a signed block without proving inputs to model a legacy backup.
+    #[cfg(test)]
+    pub(crate) async fn replace_legacy_signed_block(
+        &self,
+        block: SignedBlock,
+        protocol_config: ProtocolConfig,
+        transactions: Vec<TransactionId>,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("replace_legacy_signed_block", move |tx| {
+                queries::delete_block(tx, block.header().block_num())?;
+                persist_signed_block(tx, &block, protocol_config, &transactions, None)
             })
             .await
     }
 }
 
-/// Persists a signed block's bytes, header, configuration activation, and transaction links within
-/// the caller's database transaction: the shared tail of [`ValidatorDbWriter::insert_signed_block`]
-/// and [`ValidatorDbWriter::replace_signed_block`].
+/// Persists a signed block, any proving request, configuration activation, and transaction links
+/// within the caller's database transaction.
 fn persist_signed_block(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     block: &SignedBlock,
     protocol_config: ProtocolConfig,
     transactions: &[TransactionId],
+    proving_inputs: Option<&BlockProofRequest>,
 ) -> Result<(), DatabaseError> {
     let header = block.header();
     record_protocol_config_activation(tx, header, Some(protocol_config))?;
-    queries::insert_block(tx, block)?;
+    queries::insert_block(tx, block, proving_inputs)?;
     queries::link_block_transactions(tx, header.block_num(), transactions)
 }
 
@@ -408,7 +476,7 @@ async fn setup_with_pool_size(
 
 /// Creates and initializes the database, then stores the genesis block as the chain tip.
 ///
-/// Returns an error if the database has already been bootstrapped.
+/// Returns an error if the database has already been bootstrapped or the supplied block is not genesis.
 #[miden_instrument(
     target = COMPONENT,
     fields(path = database_filepath),
@@ -420,9 +488,18 @@ pub async fn bootstrap(
     genesis_block: SignedBlock,
     protocol_config: ProtocolConfig,
 ) -> Result<(), DatabaseError> {
+    if genesis_block.header().block_num() != BlockNumber::GENESIS {
+        return Err(DatabaseError::deserialization(
+            "genesis block",
+            io::Error::other("bootstrap block must be genesis"),
+        ));
+    }
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
-
-    db.insert_signed_block(genesis_block, protocol_config, Vec::new()).await
+    db.writer
+        .write("bootstrap", move |tx| {
+            persist_signed_block(tx, &genesis_block, protocol_config, &[], None)
+        })
+        .await
 }
 
 /// Applies all pending migrations to an existing DB.
@@ -452,11 +529,23 @@ fn open_with_pool_size(
     })
 }
 
+/// Rejects block inserts that contain proving inputs so tests can verify transaction rollback.
+#[cfg(test)]
+pub(crate) async fn reject_proving_input_writes_for_test(
+    db: &ValidatorDbWriter,
+) -> Result<(), DatabaseError> {
+    db.writer.write("reject proving inputs", |tx| {
+        tx.execute("CREATE TRIGGER reject_proving_inputs BEFORE INSERT ON blocks WHEN NEW.proving_inputs IS NOT NULL BEGIN SELECT RAISE(ABORT, 'proving inputs rejected'); END", &[])?;
+        Ok(())
+    }).await
+}
+
 #[cfg(test)]
 mod tests {
     mod block_data;
     mod migrations;
     mod protocol_config_history;
+    mod proving_inputs;
 
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::Word;
@@ -848,7 +937,7 @@ mod tests {
         }
 
         let header = BlockHeader::mock(7, None, None, &[]);
-        db.insert_signed_block(
+        db.insert_legacy_signed_block(
             block_with_header(header.clone()),
             ProtocolConfig::mock(),
             vec![transaction_ids[0], transaction_ids[1]],
@@ -877,7 +966,7 @@ mod tests {
         // Replace the block at the same height with one that only includes the third transaction.
         // The two transactions the replacement drops go back to being uncommitted, and stop being
         // listed.
-        db.replace_signed_block(
+        db.replace_legacy_signed_block(
             block_with_header(header),
             ProtocolConfig::mock(),
             vec![transaction_ids[2]],
@@ -916,22 +1005,26 @@ mod tests {
         let original_block = block_with_header(header.clone());
         let replacement_header = header_with_next_timestamp(&header);
         let replacement_block = block_with_header(replacement_header.clone());
-        db.insert_signed_block(original_block.clone(), ProtocolConfig::mock(), vec![original_id])
-            .await
-            .unwrap();
+        db.insert_legacy_signed_block(
+            original_block.clone(),
+            ProtocolConfig::mock(),
+            vec![original_id],
+        )
+        .await
+        .unwrap();
 
         let snapshot = db.reader.reader.begin_read().await.unwrap();
         let tip = snapshot.run("pin_listing_snapshot", queries::load_chain_tip).await.unwrap();
         assert_eq!(tip.unwrap().block_num(), BlockNumber::from(1u32));
 
-        db.replace_signed_block(
+        db.replace_legacy_signed_block(
             replacement_block.clone(),
             ProtocolConfig::mock(),
             vec![replacement_id],
         )
         .await
         .unwrap();
-        db.insert_signed_block(
+        db.insert_legacy_signed_block(
             block_with_header(BlockHeader::mock(2, None, None, &[])),
             ProtocolConfig::mock(),
             Vec::new(),
@@ -991,14 +1084,14 @@ mod tests {
         // rather than insertion order.
         let block_1 = BlockHeader::mock(1, None, None, &[]);
         let block_2 = BlockHeader::mock(2, None, None, &[]);
-        db.insert_signed_block(
+        db.insert_legacy_signed_block(
             block_with_header(block_1),
             ProtocolConfig::mock(),
             vec![transaction_ids[3], transaction_ids[0]],
         )
         .await
         .unwrap();
-        db.insert_signed_block(
+        db.insert_legacy_signed_block(
             block_with_header(block_2),
             ProtocolConfig::mock(),
             vec![transaction_ids[1], transaction_ids[2]],
@@ -1074,7 +1167,11 @@ mod tests {
         let unknown = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
 
         let result = db
-            .insert_signed_block(block_with_header(header), ProtocolConfig::mock(), vec![unknown])
+            .insert_legacy_signed_block(
+                block_with_header(header),
+                ProtocolConfig::mock(),
+                vec![unknown],
+            )
             .await;
         assert!(result.is_err(), "linking an unvalidated transaction must fail");
     }

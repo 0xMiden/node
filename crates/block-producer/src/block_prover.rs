@@ -55,8 +55,8 @@ impl BlockProver {
         Self::Local(LocalBlockProver::default())
     }
 
-    pub fn remote(url: Url) -> anyhow::Result<Self> {
-        Ok(Self::Remote(Box::new(RemoteBlockProver::new(url)?)))
+    pub fn remote(url: Url, max_decoding_message_size: usize) -> anyhow::Result<Self> {
+        Ok(Self::Remote(Box::new(RemoteBlockProver::new(url, max_decoding_message_size)?)))
     }
 
     #[miden_instrument(
@@ -116,8 +116,9 @@ pub struct RemoteBlockProver {
 
 impl RemoteBlockProver {
     /// Creates a new [`RemoteBlockProver`] with a lazy connection to the given gRPC endpoint.
-    fn new(url: Url) -> anyhow::Result<Self> {
+    fn new(url: Url, max_decoding_message_size: usize) -> anyhow::Result<Self> {
         let client = Builder::new(url)
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .without_timeout()
             .without_metadata_version()

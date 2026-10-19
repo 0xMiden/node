@@ -131,9 +131,10 @@ impl TransactionSubmissionClient {
         rpc_url: &Url,
         timeout: Duration,
         trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
+        max_decoding_message_size: usize,
     ) -> Result<Self> {
         let (rpc_client, genesis_commitment) =
-            create_genesis_aware_rpc_client(rpc_url, timeout).await?;
+            create_genesis_aware_rpc_client(rpc_url, timeout, max_decoding_message_size).await?;
         let client = Self {
             rpc_client,
             genesis_commitment,
@@ -206,7 +207,7 @@ impl TransactionSubmissionClient {
                     target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
-                    retry.delay_ms = delay.as_millis() as u64
+                    retry.delay_ms = delay
                 );
             })
             .await?;
@@ -309,11 +310,13 @@ fn genesis_discovery_backoff() -> ExponentialBuilder {
 pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> Result<(RpcClient, Word)> {
     (|| async {
         // First, create a temporary client without genesis metadata to discover the genesis block
         // header and its commitment.
         let mut rpc: RpcClient = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("Failed to configure TLS for RPC client")?
             .with_timeout(timeout)
@@ -348,6 +351,7 @@ pub async fn create_genesis_aware_rpc_client(
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
         let rpc_client = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("Failed to configure TLS for RPC client")?
             .with_timeout(timeout)
@@ -366,7 +370,7 @@ pub async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await
@@ -1030,12 +1034,17 @@ fn counter_creation_tx_args(counter_account: &Account) -> Result<TransactionArgs
 /// is never submitted, so the note is never spent on-chain: one claim serves every probe run.
 pub async fn build_probe_transaction_inputs(
     rpc_url: &Url,
+    max_decoding_message_size: usize,
     funding: Option<&FundingClient>,
 ) -> Result<TransactionInputs> {
     let (wallet_account, _secret_key) = create_wallet_account()?;
 
-    let (mut rpc_client, genesis_commitment) =
-        create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
+    let (mut rpc_client, genesis_commitment) = create_genesis_aware_rpc_client(
+        rpc_url,
+        Duration::from_secs(10),
+        max_decoding_message_size,
+    )
+    .await?;
     let anchor = fetch_tip_chain_state(&mut rpc_client, genesis_commitment).await?;
     let fee_faucet_id = anchor.protocol_config.fee_asset_id().faucet_id();
     let mut funder = active_fee_funder(&anchor.block_header, funding, fee_faucet_id)?;

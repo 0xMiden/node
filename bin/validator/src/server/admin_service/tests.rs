@@ -115,7 +115,7 @@ async fn list(
 /// transactions are listed, so listing tests have to place their records in a block.
 async fn commit(writer: &ValidatorDbWriter, block_num: u32, transactions: &[TransactionId]) {
     writer
-        .insert_signed_block(
+        .insert_legacy_signed_block(
             block_with_header(BlockHeader::mock(block_num, None, None, &[])),
             ProtocolConfig::mock(),
             transactions.to_vec(),
@@ -353,7 +353,7 @@ async fn list_serves_a_replaced_tip_block_from_its_first_position() {
     );
 
     writer
-        .replace_signed_block(
+        .replace_legacy_signed_block(
             block_with_header(BlockHeader::mock(1, None, None, &[])),
             ProtocolConfig::mock(),
             vec![transaction_ids[2]],

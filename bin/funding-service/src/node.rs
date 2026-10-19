@@ -70,6 +70,7 @@ impl RpcNodeClient {
         rpc_url: &Url,
         timeout: Duration,
         trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
+        max_decoding_message_size: usize,
     ) -> Result<Self> {
         anyhow::ensure!(
             !trusted_validator_signing_keys.is_empty(),
@@ -78,7 +79,7 @@ impl RpcNodeClient {
         );
 
         let (rpc_client, genesis_commitment, protocol_config) =
-            create_genesis_aware_rpc_client(rpc_url, timeout).await?;
+            create_genesis_aware_rpc_client(rpc_url, timeout, max_decoding_message_size).await?;
 
         let client = Self {
             rpc_client,
@@ -385,11 +386,13 @@ fn genesis_discovery_backoff() -> ExponentialBuilder {
 async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> Result<(RpcClient, Word, ProtocolConfig)> {
     (|| async {
         // First, create a temporary client without genesis metadata to discover the genesis block
         // header and its commitment.
         let mut rpc: RpcClient = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("failed to configure TLS for the RPC client")?
             .with_timeout(timeout)
@@ -407,6 +410,7 @@ async fn create_genesis_aware_rpc_client(
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
         let rpc_client = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("failed to configure TLS for the RPC client")?
             .with_timeout(timeout)
@@ -426,7 +430,7 @@ async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await

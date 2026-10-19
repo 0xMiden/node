@@ -135,7 +135,7 @@ impl FundingWallet {
                 err,
                 target: COMPONENT,
                 "Funding wallet synchronization failed; retrying after backoff",
-                retry.delay_ms = delay.as_millis() as u64
+                retry.delay_ms = delay
             );
         })
         .await;

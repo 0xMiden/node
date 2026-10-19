@@ -42,6 +42,8 @@ const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING
 pub enum FundingServiceCommand {
     /// Starts the funding service.
     Start {
+        #[command(flatten)]
+        grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// Socket address at which to serve the funding service's HTTP API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
@@ -142,6 +144,7 @@ pub enum FundingServiceCommand {
 impl FundingServiceCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
+            grpc_message_size,
             listen,
             http_timeout,
             rpc_url,
@@ -179,6 +182,7 @@ impl FundingServiceCommand {
             .context("failed to bind to the funding service's HTTP socket")?;
 
         FundingServiceConfig::new(rpc_url, account_file, validator_signing_public_keys)
+            .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
             .with_tx_prover_url(tx_prover_url)
             .with_http_timeout(http_timeout)
             .with_rpc_timeout(rpc_timeout)

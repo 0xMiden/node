@@ -111,7 +111,7 @@ impl Command {
             Command::Migrate(migrate_command) => migrate_command.handle(),
             Command::Sequencer(sequencer_command) => sequencer_command.handle(shutdown).await,
             Command::Full(full_node_command) => full_node_command.handle(shutdown).await,
-            Command::Recover(recover_command) => recover_command.handle().await,
+            Command::Recover(recover_command) => recover_command.handle(shutdown).await,
         }
     }
 }
