@@ -1,3 +1,4 @@
+mod proving_inputs;
 use std::collections::BTreeMap;
 
 use miden_node_proto::domain::encryption::{
@@ -102,7 +103,7 @@ struct TestValidator {
     protocol_config: ProtocolConfig,
     // Keeps the database's temp directory alive for the validator's lifetime: the reader pool opens
     // connections lazily, so the file must still exist when the first read runs.
-    _temp_dir: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
 }
 
 impl TestValidator {
@@ -126,7 +127,7 @@ impl TestValidator {
             chain: PartialBlockchain::default(),
             chain_tip: genesis_header,
             protocol_config,
-            _temp_dir: temp_dir,
+            temp_dir,
         }
     }
 
@@ -330,9 +331,13 @@ async fn setup_db_with_genesis(
 
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    db.insert_signed_block(genesis_block.inner().clone(), protocol_config.clone(), Vec::new())
-        .await
-        .unwrap();
+    db.insert_legacy_signed_block(
+        genesis_block.inner().clone(),
+        protocol_config.clone(),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     (dir, db, genesis_header, protocol_config)
 }
@@ -919,6 +924,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
     use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
     use rand_chacha_03::rand_core::SeedableRng;
+    use tokio_stream::StreamExt;
 
     use crate::db::ListTransactionsParams;
     use crate::private_record::test_private_record_sealer;
@@ -979,6 +985,28 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     );
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
     tv.call_sign_block(&proposed).await.expect("block should be signed");
+
+    // Backup streaming retains the ordered nonempty batches and the original state witnesses.
+    let mut backup = tv.call_block_subscription(1).await;
+    let event = tokio::time::timeout(std::time::Duration::from_secs(5), backup.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let restored: miden_node_proto::BlockProofRequest =
+        event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
+    assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
+    let expected_inputs = BlockInputs::new(
+        proposed.prev_block_header().clone(),
+        proposed.partial_blockchain().clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    assert_eq!(restored.block_inputs.to_bytes(), expected_inputs.to_bytes());
+    let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
+    restored.validate_against(&signed).unwrap();
+    drop(backup);
 
     // The signed block links its transaction to block 1 at index 0.
     let listed = tv
@@ -1193,7 +1221,7 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
     );
     tv.server
         .db
-        .replace_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
+        .replace_legacy_signed_block(transitioned_block.clone(), next_config.clone(), Vec::new())
         .await
         .unwrap();
     tv.chain_tip = transitioned_header;
@@ -1802,7 +1830,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     let parent = genesis.inner().header().clone();
     let dir = tempfile::tempdir().unwrap();
     let db = setup(dir.path().join("validator.sqlite3")).await.unwrap();
-    db.insert_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
+    db.insert_legacy_signed_block(genesis.inner().clone(), config.clone(), Vec::new())
         .await
         .unwrap();
     let service = ValidatorService::new(
@@ -1862,6 +1890,9 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     .unwrap();
     let item = stream.next().await.unwrap().unwrap();
     let streamed: SignedBlock = item.block.unwrap().decode_and_build_unchecked().unwrap();
+    let proving_inputs: miden_node_proto::BlockProofRequest =
+        item.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
+    proving_inputs.validate_against(&streamed).unwrap();
     assert_eq!(streamed, backed_up);
     assert_eq!(streamed.header(), &header);
     assert!(stream.next().await.is_none());

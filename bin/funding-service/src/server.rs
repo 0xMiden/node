@@ -8,8 +8,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::asset::AssetId;
-use miden_protocol::note::Note;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
@@ -34,7 +34,7 @@ const REQUEST_FUNDS_PATH: &str = "/request-funds";
 #[derive(Clone)]
 pub(crate) struct FundingState {
     /// Where a handler puts the note it built, for the worker to create.
-    pub(crate) requests: mpsc::Sender<Note>,
+    pub(crate) requests: mpsc::Sender<UsdcxP2Id>,
     pub(crate) status: StatusSnapshot,
     /// The native asset the notes hold.
     pub(crate) fee_asset_id: AssetId,
@@ -48,7 +48,7 @@ pub struct FundingServer {
 
 impl FundingServer {
     pub(crate) fn new(
-        requests: mpsc::Sender<Note>,
+        requests: mpsc::Sender<UsdcxP2Id>,
         status: StatusSnapshot,
         fee_asset_id: AssetId,
         request_timeout: Duration,
@@ -109,7 +109,7 @@ pub(crate) mod tests {
 
     /// Builds a server whose worker channel is held by the caller, so a test can assert on what the
     /// handlers queued without running a worker.
-    pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<Note>) {
+    pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<UsdcxP2Id>) {
         let (requests, rx) = mpsc::channel(4);
         let fee_faucet_id = FungibleAsset::mock_issuer();
         let status =

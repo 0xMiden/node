@@ -24,6 +24,7 @@ clap                      = { features = ["env", "string"], workspace = true }
 fs-err                    = { workspace = true }
 humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
+miden-node-persistence    = { workspace = true }
 miden-node-proto          = { workspace = true }
 miden-node-rpc            = { workspace = true }
 miden-node-store          = { workspace = true }
@@ -44,5 +45,8 @@ url                       = { workspace = true }
 
 [dev-dependencies]
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
+miden-protocol     = { features = ["testing"], workspace = true }
+miden-validator    = { path = "../validator" }
 tempfile           = { workspace = true }
+tokio              = { features = ["net"], workspace = true }
 tower              = { features = ["util"], workspace = true }

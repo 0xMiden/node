@@ -115,6 +115,22 @@ async fn node_rpc_script(
     responses: HeaderResponses,
     delay: Duration,
 ) -> (url::Url, tokio::task::JoinHandle<()>, Arc<Mutex<Vec<u32>>>) {
+    let rpc = node_rpc_script_with_connection_age(responses, delay, None).await;
+    (rpc.url, rpc.task, rpc.requests)
+}
+
+struct NodeRpcTestServer {
+    url: url::Url,
+    task: tokio::task::JoinHandle<()>,
+    requests: Arc<Mutex<Vec<u32>>>,
+    connections: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+async fn node_rpc_script_with_connection_age(
+    responses: HeaderResponses,
+    delay: Duration,
+    connection_age: Option<Duration>,
+) -> NodeRpcTestServer {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -123,14 +139,21 @@ async fn node_rpc_script(
         delay,
         requests: requests.clone(),
     };
+    let connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let accepted = connections.clone();
     let task = tokio::spawn(async move {
-        tonic::transport::Server::builder()
-            .add_service(rpc)
-            .serve_with_incoming(TcpListenerStream::new(listener))
-            .await
-            .unwrap();
+        let mut builder = tonic::transport::Server::builder();
+        if let Some(age) = connection_age {
+            builder = builder.max_connection_age(age).max_connection_age_grace(age);
+        }
+        let incoming =
+            tokio_stream::StreamExt::map(TcpListenerStream::new(listener), move |stream| {
+                accepted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                stream
+            });
+        builder.add_service(rpc).serve_with_incoming(incoming).await.unwrap();
     });
-    (url, task, requests)
+    NodeRpcTestServer { url, task, requests, connections }
 }
 
 fn fixture() -> (SendNoteWithProofRequest, GetBlockHeaderByNumberResponse) {
@@ -547,4 +570,67 @@ async fn slow_lookup_retries_stay_within_the_shared_budget() {
     assert_eq!(result.unwrap_err().code(), tonic::Code::DeadlineExceeded);
     assert_eq!(*requests.lock().unwrap(), vec![42, 42, 42]);
     upstream.abort();
+}
+
+#[tokio::test]
+async fn decoding_limit_controls_both_directions_and_survives_reconnection() {
+    use std::sync::atomic::Ordering;
+
+    use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
+    use miden_node_proto::generated::primitives::{MerklePath, Word};
+
+    let response = GetBlockHeaderByNumberResponse {
+        mmr_path: Some(MerklePath {
+            siblings: vec![Word { encoded: vec![0; 128] }],
+        }),
+        ..Default::default()
+    };
+    assert!(response.encoded_len() > 64 && response.encoded_len() < 256);
+    for limit in [64, 256] {
+        let upstream = node_rpc_script_with_connection_age(
+            BTreeMap::from([(42, VecDeque::from([Ok(response.clone())]))]),
+            Duration::ZERO,
+            Some(Duration::from_millis(25)),
+        )
+        .await;
+        let mut config = test_config();
+        config.rpc_url = upstream.url;
+        config.grpc.message_size.max_decoding_message_size = NonZeroUsize::new(limit).unwrap();
+        let (_dir, server) = server(config);
+        let mut outbound = server.rpc.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
+        let mut inbound =
+            NoteTransportServiceClient::connect(format!("http://{address}")).await.unwrap();
+        let received =
+            inbound.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None }).await;
+        if limit == 64 {
+            assert_eq!(received.unwrap_err().code(), tonic::Code::OutOfRange);
+        } else {
+            assert!(received.is_ok());
+        }
+        for attempt in 0..2 {
+            if attempt == 1 {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            let received = outbound
+                .get_block_header_by_number(GetBlockHeaderByNumberRequest {
+                    block_num: Some(42),
+                    include_mmr_proof: None,
+                    include_protocol_config: None,
+                })
+                .await;
+            if limit == 64 {
+                assert_eq!(received.unwrap_err().code(), tonic::Code::OutOfRange);
+            } else {
+                assert_eq!(received.unwrap().into_inner(), response);
+            }
+        }
+        assert!(upstream.connections.load(Ordering::SeqCst) >= 2);
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+        upstream.task.abort();
+    }
 }

@@ -83,9 +83,11 @@ impl RpcService {
         interval: Duration,
         request_timeout: Duration,
         stale_threshold: Duration,
+        max_decoding_message_size: usize,
     ) -> Self {
         let url = rpc_url.to_string();
-        let rpc = build_tls_client::<RpcClient>(rpc_url, request_timeout);
+        let rpc =
+            build_tls_client::<RpcClient>(rpc_url, request_timeout, max_decoding_message_size);
         Self {
             url,
             rpc,
