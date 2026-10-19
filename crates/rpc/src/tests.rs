@@ -109,7 +109,7 @@ mod error_details;
 static TEMP_DIRS: std::sync::OnceLock<std::sync::Mutex<Vec<TempDir>>> = std::sync::OnceLock::new();
 
 /// Creates a temp directory, registers it in the global registry, and returns its path.
-fn new_tempdir() -> std::path::PathBuf {
+pub(crate) fn new_tempdir() -> std::path::PathBuf {
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let path = dir.path().to_path_buf();
     TEMP_DIRS

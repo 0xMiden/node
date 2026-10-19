@@ -27,7 +27,6 @@ use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders};
 use miden_standards::account::wallets::BasicWallet;
-use tempfile::TempDir;
 use tonic::Code;
 
 use super::*;
@@ -89,7 +88,6 @@ struct Fixture {
     writer: BlockWriter,
     account: Account,
     genesis: BlockHeader,
-    _directory: TempDir,
 }
 
 impl Fixture {
@@ -110,16 +108,10 @@ impl Fixture {
         .into_block()
         .unwrap();
         let header = genesis.inner().header().clone();
-        let directory = tempfile::tempdir().unwrap();
-        State::bootstrap(genesis, directory.path()).await.unwrap();
-        let (state, writer, _) = State::for_tests(directory.path()).await;
-        Self {
-            state,
-            writer,
-            account,
-            genesis: header,
-            _directory: directory,
-        }
+        let directory = crate::tests::new_tempdir();
+        State::bootstrap(genesis, &directory).await.unwrap();
+        let (state, writer, _) = State::for_tests(&directory).await;
+        Self { state, writer, account, genesis: header }
     }
 
     /// Builds transaction inputs for store validation; proof verification happens before this
