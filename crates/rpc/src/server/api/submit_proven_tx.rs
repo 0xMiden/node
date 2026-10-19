@@ -7,7 +7,6 @@ use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
-use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
@@ -19,6 +18,9 @@ use tonic::{Request, Status};
 
 use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
 use crate::LOG_TARGET;
+
+#[cfg(test)]
+mod tests;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
@@ -168,7 +170,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
                 // Check nullifiers and expiration against the local store before forwarding so that
                 // provably-invalid transactions are rejected at the edge rather than consuming
                 // sequencer resources.
-                check_nullifiers_and_expiration(&self.state, &rebuilt_tx).await?;
+                check_nullifiers_and_expiration(&self.state, rebuilt_tx).await?;
 
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
@@ -231,56 +233,25 @@ impl RpcService {
 // HELPERS
 // ================================================================================================
 
-/// Checks that none of the transaction's input nullifiers are already spent and that the
-/// transaction has not yet expired, using a single consistent snapshot of the local store.
-///
-/// This is called on the `FullNode { pre_auth: None }` forwarding path before the transaction
-/// is sent upstream, so that provably-invalid transactions are rejected at the edge rather than
-/// consuming sequencer resources.
+/// Checks committed transaction inputs and expiration against one store snapshot.
 async fn check_nullifiers_and_expiration(
     state: &State,
-    tx: &ProvenTransaction,
+    tx: ProvenTransaction,
 ) -> tonic::Result<()> {
-    let view = state.view();
-
-    // Expiration check: reject if the transaction has already expired at the local chain tip.
-    let chain_tip = *view.tip();
-    if tx.expiration_block_num() <= chain_tip {
-        return Err(Status::invalid_argument(format!(
-            "transaction {} has expired: expiration block {} <= chain tip {}",
-            tx.id(),
-            tx.expiration_block_num(),
-            chain_tip,
-        )));
-    }
-
-    // Nullifier check: collect the nullifiers of all input notes and verify none are already
-    // committed in the local store.
-    let nullifiers: Vec<_> = tx.nullifiers().collect();
-
-    if nullifiers.is_empty() {
-        return Ok(());
-    }
-
-    let inputs = view
-        .get_transaction_inputs(tx.account_id(), &nullifiers, Vec::new())
+    let inputs = get_tx_inputs(state, &tx)
         .await
-        .map_err(|err| Status::internal(format!("nullifier check failed: {err}")))?;
-
-    let spent: Vec<_> = inputs
-        .nullifiers
-        .iter()
-        .filter(|info| info.block_num != BlockNumber::GENESIS)
-        .collect();
-
-    if !spent.is_empty() {
-        return Err(Status::invalid_argument(format!(
-            "transaction {} consumes already-spent nullifiers: {:?}",
-            tx.id(),
-            spent.iter().map(|info| info.nullifier).collect::<Vec<_>>(),
-        )));
+        .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+    let chain_tip = inputs.current_block_height;
+    if tx.expiration_block_num() <= chain_tip {
+        return Err(MempoolSubmissionError::Expired {
+            expired_at: tx.expiration_block_num(),
+            limit: chain_tip,
+        }
+        .into());
     }
 
+    AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+        .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
     Ok(())
 }
 
