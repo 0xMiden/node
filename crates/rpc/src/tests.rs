@@ -2132,8 +2132,13 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             None,
         );
         let registration = proto::miden::node::v1::RegisterAccountRequest {
-            invitation_code: code,
+            invitation_code: code.clone(),
             account_id: Some(account.into()),
+        };
+        let code_query = || {
+            Request::new(proto::miden::node::v1::IsInvitationCodeValidRequest {
+                invitation_code: code.clone(),
+            })
         };
         let request = || {
             let mut request = Request::new(registration.clone());
@@ -2153,6 +2158,7 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             query
         };
         assert!(!rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
+        assert!(!rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
         assert_eq!(
             rpc.register_account(request()).await.unwrap_err().code(),
             tonic::Code::NotFound
@@ -2164,9 +2170,11 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             })
             .await
             .unwrap();
+        assert!(rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
         rpc.register_account(request()).await.unwrap();
         rpc.register_account(request()).await.unwrap();
         assert!(rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
+        assert!(!rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
         let mut wrong_network = query();
         wrong_network.metadata_mut().insert(
             ACCEPT.as_str(),

@@ -6,9 +6,8 @@
 //! blocks on those calls, so the tests stay plain `#[test]` functions while still exercising the
 //! same pools, PRAGMAs, and transaction behaviour the node uses.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use diesel::Connection;
 use miden_node_db::sqlite::{DbReader, DbWriter, ReadTx, WriteTx};
 use miden_node_db::{DatabaseError, default_connection_pool_size};
 use tokio::runtime::Runtime;
@@ -16,17 +15,12 @@ use tokio::runtime::Runtime;
 use crate::db::migrations::bootstrap_database;
 
 /// A database with framework handles over it, driven synchronously.
-///
-/// While the store is mid-migration off diesel, [`TestDb::diesel_conn`] also hands out diesel
-/// connections over the same file so tests can drive the read queries still living in
-/// [`crate::db::models`].
 pub(crate) struct TestDb {
     // Held as `Option` so [`Drop`] can drop the pools inside the runtime's context: their pooled
     // connections are closed on a blocking task, which panics without a runtime to spawn it on.
     writer: Option<DbWriter>,
     reader: Option<DbReader>,
     runtime: Runtime,
-    path: PathBuf,
 }
 
 impl TestDb {
@@ -57,22 +51,7 @@ impl TestDb {
             writer: Some(writer),
             reader: Some(reader),
             runtime,
-            path: path.to_path_buf(),
         }
-    }
-
-    /// Opens a fresh diesel connection over the same database file.
-    ///
-    /// Reads not yet migrated to the framework still run on diesel; WAL mode makes the extra
-    /// connection safe alongside the framework pools.
-    pub(crate) fn diesel_conn(&self) -> diesel::SqliteConnection {
-        let mut conn = diesel::SqliteConnection::establish(
-            self.path.to_str().expect("temp database path should be valid UTF-8"),
-        )
-        .expect("temp file sqlite should always work");
-        miden_node_db::configure_connection_on_creation(&mut conn)
-            .expect("connection PRAGMAs should apply");
-        conn
     }
 
     /// Runs `query` inside a read-only transaction.

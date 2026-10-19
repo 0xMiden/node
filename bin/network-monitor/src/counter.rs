@@ -59,7 +59,8 @@ use crate::deploy::{
     fetch_account_at_tip,
     refresh_counter_anchor,
 };
-use crate::funding::{FeeFunder, FundingClient, wallet_funding_amount, wallet_topup_threshold};
+use crate::funding::{FeeFunder, FundingClient, wallet_topup_threshold};
+use crate::registration::RegistrationPool;
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -190,6 +191,8 @@ impl FailureTracker {
 /// Periodically submits a network note that increments the counter account.
 pub struct IncrementService {
     config: MonitorConfig,
+    /// Registration budget transferred from bootstrap to account regeneration.
+    pub(crate) registration: Option<RegistrationPool>,
     rpc_client: RpcClient,
     tx: TxBuilder,
     prover: LocalTransactionProver,
@@ -232,6 +235,7 @@ impl IncrementService {
         )?;
         Ok(Self {
             config,
+            registration: None,
             rpc_client,
             tx,
             prover,
@@ -324,6 +328,8 @@ impl IncrementService {
             &self.submission_client,
             &self.prover,
             self.funding.as_ref(),
+            self.config.wallet_funding_amount,
+            self.registration.as_mut(),
         ))
         .await
         .context("failed to regenerate accounts")?;
@@ -476,7 +482,8 @@ impl IncrementService {
             .map_or(0, |amount| amount.as_u64());
         self.details.fee_balance = Some(balance);
 
-        if balance >= wallet_topup_threshold(verification_base_fee) {
+        let funding_amount = self.config.wallet_funding_amount;
+        if balance >= wallet_topup_threshold(funding_amount) {
             self.details.fee_topup_error = None;
             return;
         }
@@ -492,10 +499,7 @@ impl IncrementService {
             asset.balance = balance
         );
         let mut funder = FeeFunder::new(funding, fee_faucet_id);
-        match funder
-            .fund(self.tx.wallet_account.id(), wallet_funding_amount(verification_base_fee))
-            .await
-        {
+        match funder.fund(self.tx.wallet_account.id(), funding_amount.get()).await {
             Ok(note) => {
                 self.pending_funding_note = Some(note);
                 self.details.fee_topup_error = None;
@@ -563,6 +567,8 @@ impl Service for IncrementService {
                         Ok(()) => self.failures.reset(),
                         Err(regen_err) => {
                             self.failures.mark_regeneration_failed();
+                            last_error =
+                                Some(format!("account regeneration failed: {regen_err:#}"));
                             error!(&regen_err, target: LOG_TARGET, "Account regeneration failed");
                         },
                     }
@@ -1218,6 +1224,7 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use miden_protocol::Word;
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::account::{Account, AccountId};
@@ -1243,6 +1250,7 @@ mod tests {
     use miden_tx::TransactionExecutor;
     use miden_tx::auth::BasicAuthenticator;
 
+    use crate::config::MonitorConfig;
     use crate::counter::{
         FailureTracker,
         PENDING_UNHEALTHY_CONFIRMATION_POLLS,
@@ -1257,7 +1265,7 @@ mod tests {
     use crate::deploy::counter::create_counter_account;
     use crate::deploy::wallet::{WALLET_COUNTER_SLOT_NAME, create_wallet_account};
     use crate::deploy::{MonitorDataStore, execute_counter_genesis_tx};
-    use crate::funding::{counter_funding_amount, max_fee_per_transaction, wallet_funding_amount};
+    use crate::funding::{counter_funding_amount, max_fee_per_transaction};
     use crate::status::{CounterTrackingDetails, Status};
 
     const THRESHOLD: u64 = 5;
@@ -1542,7 +1550,7 @@ mod tests {
             BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
-        let funded = wallet_funding_amount(BASE_FEE);
+        let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount.get();
         let wallet_funding = funding_note(fee_faucet_id, wallet.id(), funded);
         let input_notes = InputNotes::new(vec![InputNote::unauthenticated(wallet_funding)])?;
 

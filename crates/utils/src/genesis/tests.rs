@@ -14,6 +14,22 @@ use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use super::*;
 
+#[test]
+fn official_network_endpoints() {
+    use clap::ValueEnum;
+
+    for (name, genesis_url, rpc_url) in [
+        ("mainnet", "https://genesis.mainnet.miden.io", "https://rpc.mainnet.miden.io/"),
+        ("testnet", "https://genesis.testnet.miden.io", "https://rpc.testnet.miden.io/"),
+        ("devnet", "https://genesis.devnet.miden.io", "https://rpc.devnet.miden.io/"),
+    ] {
+        let network = OfficialNetwork::from_str(name, false).unwrap();
+        assert_eq!(network.to_string(), name);
+        assert_eq!(network.genesis_block_url(), genesis_url);
+        assert_eq!(network.rpc_url().as_str(), rpc_url);
+    }
+}
+
 fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
     let body = BlockBody::new_unchecked(
         Vec::new(),

@@ -25,8 +25,6 @@ use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 
-use crate::db::models::conv::DatabaseTypeConversionError;
-
 /// Errors produced while preparing or rebuilding account-state forest updates.
 ///
 /// The underlying [`LargeSmtForestError`] is preserved so callers can distinguish fatal backend
@@ -80,8 +78,6 @@ pub enum DatabaseError {
     #[error("storage map error")]
     StorageMapError(#[from] StorageMapError),
     #[error(transparent)]
-    Diesel(#[from] diesel::result::Error),
-    #[error(transparent)]
     QueryParamLimit(#[from] QueryLimitError),
     #[error(transparent)]
     RangeBeyondTip(#[from] RangeBeyondTip),
@@ -113,8 +109,6 @@ pub enum DatabaseError {
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
-    #[error(transparent)]
-    SqlValueConversion(#[from] DatabaseTypeConversionError),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
     StorageRootNotFound {
         account_id: AccountId,
@@ -295,12 +289,6 @@ pub enum StateSyncError {
     RangeBeyondTip(#[from] RangeBeyondTip),
 }
 
-impl From<diesel::result::Error> for StateSyncError {
-    fn from(value: diesel::result::Error) -> Self {
-        Self::DatabaseError(DatabaseError::from(value))
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum NoteSyncError {
     #[error("database error")]
@@ -317,12 +305,6 @@ pub enum NoteSyncError {
     RangeBeyondTip(#[from] RangeBeyondTip),
     #[error("malformed note tags")]
     DeserializationFailed(#[from] ConversionError),
-}
-
-impl From<diesel::result::Error> for NoteSyncError {
-    fn from(value: diesel::result::Error) -> Self {
-        Self::DatabaseError(DatabaseError::from(value))
-    }
 }
 
 #[derive(Error, Debug)]
@@ -403,14 +385,8 @@ mod compile_tests {
         ensure_is_error::<DeserializationError>(PhantomData);
         ensure_is_error::<NoteError>(PhantomData);
         ensure_is_error::<hex::FromHexError>(PhantomData);
-        ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
-        ensure_is_error::<diesel::result::Error>(PhantomData);
-        ensure_is_error::<deadpool_diesel::Error>(PhantomData);
-        ensure_is_error::<deadpool::managed::RecycleError<deadpool_diesel::Error>>(PhantomData);
 
         ensure_is_error::<DatabaseError>(PhantomData);
-        ensure_is_error::<diesel::result::Error>(PhantomData);
         ensure_is_error::<StateInitializationError>(PhantomData);
-        ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
     }
 }

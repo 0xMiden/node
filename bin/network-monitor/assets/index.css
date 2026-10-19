@@ -268,6 +268,70 @@ body {
     margin-bottom: 8px;
 }
 
+.validators-card {
+    grid-column: 1 / -1;
+}
+
+.validators-card.unknown {
+    border-left: 4px solid var(--color-text-secondary);
+}
+
+.validator-summary {
+    text-transform: none;
+}
+
+.validators-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.validators-table th,
+.validators-table td {
+    padding: 12px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+}
+
+.validators-table thead th {
+    color: var(--color-text-secondary);
+    font-weight: 500;
+}
+
+.validators-table th:first-child {
+    width: 30%;
+}
+
+.validators-table tbody {
+    border-top: 1px solid var(--color-border-light);
+}
+
+.validators-table .service-status {
+    font-size: 12px;
+}
+
+.validator-meta {
+    margin-top: 6px;
+    color: var(--color-text-faint);
+    font-size: 11px;
+    font-weight: 400;
+}
+
+.validator-error-row td {
+    padding-top: 0;
+}
+
+.validator-error summary {
+    cursor: pointer;
+    color: var(--color-unhealthy);
+}
+
+.validator-error .error-message {
+    margin-top: 8px;
+}
+
 
 .service-details {
     margin: 12px 0;
@@ -592,6 +656,43 @@ body {
 
 /* Responsive: 768px and below */
 @media (max-width: 768px) {
+    .validators-table,
+    .validators-table tbody,
+    .validators-table tr {
+        display: block;
+    }
+
+    .validators-table thead {
+        display: none;
+    }
+
+    .validators-table tbody {
+        padding: 12px 0;
+    }
+
+    .validators-table th:first-child {
+        display: block;
+        width: auto;
+        padding: 0 0 8px;
+        font-size: 14px;
+    }
+
+    .validators-table td {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 6px 0;
+    }
+
+    .validators-table td[data-label]::before {
+        content: attr(data-label);
+        color: var(--color-text-secondary);
+    }
+
+    .validators-table .validator-error-row td {
+        display: block;
+    }
+
     .container {
         padding: 40px 16px 0;
     }

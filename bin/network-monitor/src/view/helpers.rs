@@ -125,3 +125,39 @@ pub(super) fn format_timestamp(secs: u64) -> String {
     let fmt = format_description!("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
     dt.format(&fmt).unwrap_or_else(|_| "-".to_string())
 }
+
+/// Formats base units as an exact token amount, omitting trailing fractional zeros.
+///
+/// The unit is the token symbol when available, or "tokens" when metadata omits the symbol.
+pub(super) fn token_amount(amount: u64, decimals: u8, unit: &str) -> String {
+    let decimals = usize::from(decimals);
+    let mut value = format!("{amount:0width$}", width = decimals + 1);
+    let value = if decimals == 0 {
+        value.as_str()
+    } else {
+        value.insert(value.len() - decimals, '.');
+        value.trim_end_matches('0').trim_end_matches('.')
+    };
+    format!("{value} {unit}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::token_amount;
+
+    #[test]
+    fn token_amounts_preserve_precision() {
+        for (amount, decimals, expected) in [
+            (0, 6, "0 MIDEN"),
+            (1, 6, "0.000001 MIDEN"),
+            (123_456, 6, "0.123456 MIDEN"),
+            (1_000_000, 6, "1 MIDEN"),
+            (1_230_000, 6, "1.23 MIDEN"),
+            (1000, 0, "1000 MIDEN"),
+            (u64::MAX, 18, "18.446744073709551615 MIDEN"),
+            (1, 20, "0.00000000000000000001 MIDEN"),
+        ] {
+            assert_eq!(token_amount(amount, decimals, "MIDEN"), expected);
+        }
+    }
+}

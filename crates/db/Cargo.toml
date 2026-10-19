@@ -18,10 +18,8 @@ workspace = true
 anyhow                 = { workspace = true }
 build-rs               = { workspace = true }
 codegen                = { workspace = true }
-deadpool               = { default-features = false, workspace = true }
-deadpool-diesel        = { features = ["sqlite"], workspace = true }
+deadpool               = { default-features = false, features = ["managed", "rt_tokio_1"], workspace = true }
 deadpool-sync          = { default-features = false, workspace = true }
-diesel                 = { features = ["sqlite"], workspace = true }
 fs-err                 = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-tracing     = { workspace = true }

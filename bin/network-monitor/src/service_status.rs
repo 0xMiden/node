@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::LOG_TARGET;
 use crate::faucet::FaucetTestDetails;
+use crate::funding_service::FundingStatusResponse;
 use crate::remote_prover::{ProofType, ProverTestDetails};
 
 // STATUS
@@ -135,6 +136,7 @@ pub enum ServiceDetails {
     RpcStatus(RpcStatusDetails),
     RemoteProverStatus(RemoteProverDetails),
     FaucetTest(FaucetTestDetails),
+    FundingStatus(FundingStatusDetails),
     NtxIncrement(IncrementDetails),
     NtxTracking(CounterTrackingDetails),
     ExplorerStatus(ExplorerStatusDetails),
@@ -232,6 +234,13 @@ pub struct ValidatorStatusDetails {
     pub chain_tip: u32,
     pub validated_transactions_count: u64,
     pub signed_blocks_count: u64,
+}
+
+/// The funding endpoint and its latest successful response, if the current check succeeded.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FundingStatusDetails {
+    pub url: String,
+    pub status: Option<FundingStatusResponse>,
 }
 
 /// Details of the Agglayer bridge, as reported by the agglayer-monitor status endpoint.

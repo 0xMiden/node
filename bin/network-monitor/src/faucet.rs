@@ -26,8 +26,6 @@ use crate::{COMPONENT, LOG_TARGET};
 
 /// Maximum number of attempts to solve a `PoW` challenge.
 const MAX_CHALLENGE_ATTEMPTS: u64 = 100_000_000;
-/// Amount of tokens to mint.
-const MINT_AMOUNT: u64 = 1_000_000; // 1 token with 6 decimals
 
 // FAUCET TEST TYPES
 // ================================================================================================
@@ -45,24 +43,16 @@ pub struct FaucetTestDetails {
 
 /// Response from the faucet's `/pow` endpoint.
 ///
-/// `deny_unknown_fields` makes the monitor flag schema drift loudly — a new field on the faucet
-/// response will fail deserialization and surface in the error message, instead of being
-/// silently dropped.
+/// Only the fields the monitor uses are declared. Other fields, including ones added by newer
+/// faucet releases, are ignored.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct PowChallengeResponse {
     challenge: String,
     target: u64,
-    #[expect(
-        dead_code,
-        reason = "Part of the API response, unused but required for `deny_unknown_fields`"
-    )]
-    timestamp: u64,
 }
 
 /// Response from the faucet's `/get_tokens` endpoint.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct GetTokensResponse {
     /// The ID of the note that holds the minted tokens.
     #[serde(deserialize_with = "deserialize_note_id")]
@@ -77,11 +67,9 @@ fn deserialize_note_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Not
 
 /// Response from the faucet's `/get_metadata` endpoint.
 ///
-/// Field set mirrors the faucet's `GetMetadataResponse` in
-/// `bin/faucet/src/api/get_metadata.rs` on the `next` branch. Keep these in sync; the
-/// `deny_unknown_fields` attribute will surface any drift loudly.
+/// Mirrors the faucet's `GetMetadataResponse`. Unknown fields are ignored so that a faucet release
+/// adding a field does not break the faucet check.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct GetMetadataResponse {
     pub version: String,
     pub id: String,
@@ -89,6 +77,9 @@ pub struct GetMetadataResponse {
     pub explorer_url: Option<String>,
     pub pow_load_difficulty: u64,
     pub base_amount: u64,
+    /// The token amounts, in base units, that the faucet offers.
+    #[serde(default)]
+    pub token_amounts: Vec<u64>,
     /// The remaining balance of the funding account in base units. It is `None` when the funding
     /// service did not answer.
     pub balance: Option<u64>,
@@ -103,6 +94,8 @@ pub struct FaucetService {
     /// A valid public account ID used as the recipient for faucet token requests. Generated once at
     /// construction from a throwaway wallet account; the minted tokens are never spent.
     account_id: String,
+    /// Amount of tokens, in base units, requested by each check.
+    mint_amount: u64,
     success_count: u64,
     failure_count: u64,
     last_note_id: Option<String>,
@@ -110,13 +103,14 @@ pub struct FaucetService {
 }
 
 impl FaucetService {
-    pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
+    pub fn new(url: Url, interval: Duration, request_timeout: Duration, mint_amount: u64) -> Self {
         let (wallet_account, _secret_key) =
             create_wallet_account().expect("failed to create faucet recipient account");
         Self {
             faucet: FaucetClient::new(url, request_timeout),
             interval,
             account_id: wallet_account.id().to_string(),
+            mint_amount,
             success_count: 0,
             failure_count: 0,
             last_note_id: None,
@@ -164,7 +158,8 @@ impl Service for FaucetService {
             ),
         }
 
-        let last_error = match self.faucet.request_tokens(&self.account_id, MINT_AMOUNT).await {
+        let mint_result = self.faucet.request_tokens(&self.account_id, self.mint_amount).await;
+        let last_error = match mint_result {
             Ok(minted_tokens) => {
                 self.success_count += 1;
                 self.last_note_id = Some(minted_tokens.note_id.to_hex());
@@ -315,9 +310,8 @@ async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String
 }
 
 /// Deserialize a faucet response using [`serde_path_to_error`] so that the failing JSON path (e.g.
-/// `balance`, `explorer_url`) is included in the error message. Combined with
-/// `#[serde(deny_unknown_fields)]` on each response type, this means renamed, removed, or newly
-/// added fields all surface a precise field name rather than a generic "unexpected response".
+/// `balance`, `explorer_url`) is included in the error message. A missing or mistyped field
+/// surfaces its name rather than a generic "unexpected response".
 fn parse_faucet_response<T>(body: &str) -> anyhow::Result<T>
 where
     T: for<'de> Deserialize<'de>,

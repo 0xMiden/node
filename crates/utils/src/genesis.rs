@@ -89,11 +89,12 @@ impl ProtobufValue for GenesisBlock {
     }
 }
 
-/// Official Miden networks with a hosted genesis block.
+/// Official Miden networks with hosted genesis blocks and public RPC endpoints.
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OfficialNetwork {
     Devnet,
     Testnet,
+    Mainnet,
 }
 
 impl OfficialNetwork {
@@ -101,11 +102,18 @@ impl OfficialNetwork {
         match self {
             Self::Devnet => "devnet",
             Self::Testnet => "testnet",
+            Self::Mainnet => "mainnet",
         }
     }
 
     pub fn genesis_block_url(self) -> String {
         format!("https://genesis.{}.miden.io", self.as_str())
+    }
+
+    pub fn rpc_url(self) -> url::Url {
+        format!("https://rpc.{}.miden.io", self.as_str())
+            .parse()
+            .expect("official network RPC URLs are valid")
     }
 }
 

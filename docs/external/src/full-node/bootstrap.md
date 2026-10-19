@@ -10,7 +10,7 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 # Bootstrap
 
 A full node must perform one-time initialization by bootstrapping its local chain state to the target network's genesis
-block.
+block. Use `mainnet`, `testnet`, or `devnet` for `<network>`.
 
 <Tabs groupId="full-node-runtime" defaultValue="native">
   <TabItem value="native" label="Native binary">

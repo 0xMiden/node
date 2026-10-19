@@ -44,4 +44,8 @@ miden-node bootstrap \
   --network testnet
 ```
 
-Use `--network devnet` for devnet.
+Use `--network mainnet` for mainnet or `--network devnet` for devnet. Genesis downloads use
+`https://genesis.<network>.miden.io`.
+
+Full nodes also accept `--network mainnet`, `--network testnet`, or `--network devnet` to sync from
+`https://rpc.<network>.miden.io`. See [Full Node Operation](/full-node/operation) for startup options.

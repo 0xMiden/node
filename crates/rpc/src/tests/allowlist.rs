@@ -546,3 +546,78 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         .await
         .unwrap();
 }
+
+#[tokio::test]
+async fn is_invitation_code_valid_respects_enforcement() {
+    let store = TestStore::start().await;
+    let allowlist = store.bootstrap_allowlist();
+    let guard = TestServerGuard(CancellationToken::new());
+    let block_producer = BlockProducerApi::new(
+        Arc::clone(&store.state),
+        0.into(),
+        BlockProducerApiConfig::default(),
+        guard.0.clone(),
+    );
+    let account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let [unused, registered, unknown] = ["unused", "registered", "unknown"];
+    for code in [unused, registered] {
+        allowlist
+            .import_invitation(InvitationEntry {
+                invitation_code: InvitationCode::new(code).unwrap(),
+                account_id: None,
+            })
+            .await
+            .unwrap();
+    }
+    allowlist
+        .register_account(InvitationCode::new(registered).unwrap(), account)
+        .await
+        .unwrap();
+    let path = DataDirectory::load(store.data_directory.clone())
+        .unwrap()
+        .allowlist_database_path();
+    let disabled_allowlist = Arc::new(AccountAllowlist::load(&path).unwrap());
+
+    for (admission, enforced) in [
+        (AccountAdmission::enabled(allowlist), true),
+        (AccountAdmission::disabled(disabled_allowlist), false),
+    ] {
+        // Disabled enforcement must not depend on database availability.
+        if !enforced {
+            fs_err::remove_file(&path).unwrap();
+        }
+        let rpc = RpcService::new(
+            Arc::clone(&store.state),
+            RpcBackend::sequencer(
+                block_producer.clone(),
+                ValidatorClients::new(vec![dummy_client::<ValidatorClient>()]).unwrap(),
+                admission,
+            ),
+            None,
+            NonZeroUsize::new(1).unwrap(),
+            None,
+        );
+        let query = |code: &str| {
+            Request::new(proto::miden::node::v1::IsInvitationCodeValidRequest {
+                invitation_code: code.to_owned(),
+            })
+        };
+        if enforced {
+            assert_eq!(
+                rpc.is_invitation_code_valid(query("")).await.unwrap_err().code(),
+                tonic::Code::InvalidArgument
+            );
+        } else {
+            assert!(rpc.is_invitation_code_valid(query("")).await.unwrap().into_inner().valid);
+        }
+        for (code, expected) in [(unused, true), (registered, !enforced), (unknown, !enforced)] {
+            let response = rpc.is_invitation_code_valid(query(code)).await.unwrap();
+            assert_eq!(response.into_inner().valid, expected, "code {code:?}");
+        }
+    }
+}

@@ -16,6 +16,7 @@ NODE_BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
 REMOTE_PROVER_BINARY="${MIDEN_REMOTE_PROVER_BIN:-./target/debug/miden-remote-prover}"
+USDCX_GENESIS_BINARY="$(realpath "${MIDEN_USDCX_GENESIS_BIN:-./target/debug/miden-usdcx-genesis}")"
 # Runs two validators, hard-coded for local development. Genesis commits both validators' keys
 # but is not signed; both must sign every block after genesis, and the sequencer fans block
 # signing and transaction submission out to both.
@@ -36,24 +37,16 @@ VALIDATOR_2_KEY_HEX="02020202020202020202020202020202020202020202020202020202020
 ENCRYPTION_KEY_HEX="0303030303030303030303030303030303030303030303030303030303030303"
 
 # Insecure, hard-coded local dev storage encryption setup.
-VALIDATOR_STORAGE_KEY_EPOCH="0909090909090909090909090909090909090909090909090909090909090909"
 VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY="scripts/testdata/insecure-storage-key"
-VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/setup-context.wire"
-VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/public-key-set.wire"
-VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-1/secret-share.wire"
-VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE="${VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY}/validator-2/secret-share.wire"
 
 ACCOUNTS_CONFIG="${ACCOUNTS_CONFIG:-}"
-if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
-    : "${MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET:?Set the native faucet account file}"
-    : "${MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT:?Set the funding account file}"
-fi
 NODE_DIR="/tmp/node"
 FULL_NODE_1_DIR="/tmp/full-node-1"
 FULL_NODE_2_DIR="/tmp/full-node-2"
 VALIDATOR_1_DIR="/tmp/validator-1"
 VALIDATOR_2_DIR="/tmp/validator-2"
 NTX_BUILDER_DIR="/tmp/ntx-builder"
+USDCX_DIR="/tmp/usdcx"
 GENESIS_DIR="/tmp/genesis"
 ACCOUNTS_DIR="/tmp/accounts"
 
@@ -157,8 +150,47 @@ kill_ports
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     echo "=== Bootstrapping ==="
 
-    rm -rf "$VALIDATOR_1_DIR" "$VALIDATOR_2_DIR" "$GENESIS_DIR" "$ACCOUNTS_DIR" \
-        "$NODE_DIR" "$FULL_NODE_1_DIR" "$FULL_NODE_2_DIR" "$NTX_BUILDER_DIR"
+    rm -rf "$VALIDATOR_1_DIR" "$VALIDATOR_2_DIR" "$GENESIS_DIR" "$ACCOUNTS_DIR" "$USDCX_DIR" \
+        "$NODE_DIR" "$FULL_NODE_1_DIR" "$FULL_NODE_2_DIR" "$NTX_BUILDER_DIR" "$USDCX_DIR"
+
+    echo "Building the USDCx genesis faucet"
+    mkdir "$USDCX_DIR"
+    pushd "$USDCX_DIR"
+
+    DISTRIBUTOR_OUTPUT="$("$USDCX_GENESIS_BINARY" new-distributor)"
+    DISTRIBUTOR_ID="$(printf '%s\n' "${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
+    if [ -z "${DISTRIBUTOR_ID}" ]; then
+      echo "USDCx genesis did not report the distributor account ID." >&2
+      exit 1
+    fi
+
+    cat > config.json <<EOF
+    {
+        "accounts": {
+        "owner": "${DISTRIBUTOR_ID}",
+        "attest_admins": [],
+        "pausers": [],
+        "unpausers": [],
+        "blocklist_managers": []
+        },
+        "faucet": {
+        "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
+        "token_supply": 1000000000000000,
+        "domain": 10007,
+        "min_burn_amount": 1,
+        "verification_base_fee": 7,
+        "attesters": []
+        }
+    }
+EOF
+
+    "$USDCX_GENESIS_BINARY" faucet
+    "$USDCX_GENESIS_BINARY" prefund
+
+    MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET="${USDCX_DIR}/usdcx-faucet.mac"
+    MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT="${USDCX_DIR}/distributor.genesis.mac"
+
+    popd
 
     echo "Building the unsigned genesis block (commits both validators' public keys)..."
     if [[ -n "$KMS_KEY_ID" ]]; then
@@ -172,6 +204,8 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     GENESIS_ARGS=(
         --genesis-block-directory "$GENESIS_DIR"
         --accounts-directory "$ACCOUNTS_DIR"
+        --native-faucet "$MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET"
+        --funding-account "$MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT"
         --verification-base-fee "${MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE:-7}"
         --timestamp "${MIDEN_VALIDATOR_GENESIS_TIMESTAMP:-$(date +%s)}"
         --validator.key "$VALIDATOR_1_PUBKEY"
@@ -220,11 +254,8 @@ fi
 echo "Starting validator 1..."
 "$VALIDATOR_BINARY" start --listen "0.0.0.0:$VALIDATOR_1_PORT" \
     --data-directory "$VALIDATOR_1_DIR" \
+    --storage-key.file "$VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY/validator-1/storage-key.bundle" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX" \
-    --storage-key.epoch "$VALIDATOR_STORAGE_KEY_EPOCH" \
-    --storage-key.setup-context "$VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT" \
-    --storage-key.public-key-set "$VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET" \
-    --storage-key.secret-share "$VALIDATOR_1_INSECURE_STORAGE_KEY_SECRET_SHARE" \
     $EXTRA_ARGS \
     "${KMS_START_ARGS_1[@]}" &
 PIDS+=($!)
@@ -232,11 +263,8 @@ PIDS+=($!)
 echo "Starting validator 2..."
 "$VALIDATOR_BINARY" start --listen "0.0.0.0:$VALIDATOR_2_PORT" \
     --data-directory "$VALIDATOR_2_DIR" \
+    --storage-key.file "$VALIDATOR_INSECURE_STORAGE_KEY_DIRECTORY/validator-2/storage-key.bundle" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX" \
-    --storage-key.epoch "$VALIDATOR_STORAGE_KEY_EPOCH" \
-    --storage-key.setup-context "$VALIDATOR_INSECURE_STORAGE_KEY_SETUP_CONTEXT" \
-    --storage-key.public-key-set "$VALIDATOR_INSECURE_STORAGE_KEY_PUBLIC_KEY_SET" \
-    --storage-key.secret-share "$VALIDATOR_2_INSECURE_STORAGE_KEY_SECRET_SHARE" \
     $EXTRA_ARGS \
     "${KMS_START_ARGS_2[@]}" &
 PIDS+=($!)

@@ -11,6 +11,7 @@ use miden_node_proto::generated::miden::note_transport::v1::SendNoteWithProofReq
 use miden_node_proto::server::miden_note_transport_v1_note_transport_service::SendNoteWithProof;
 use miden_protocol::block::{BlockHeader, BlockNoteIndex, BlockNoteTree};
 use miden_protocol::note::NoteInclusionProof;
+use tokio_stream::wrappers::TcpListenerStream;
 use tonic::codegen::{BoxFuture, http};
 
 use super::*;

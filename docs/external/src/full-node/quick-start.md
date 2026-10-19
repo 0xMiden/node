@@ -28,7 +28,7 @@ Start the full node and sync from the official testnet RPC endpoint:
 miden-node full \
   --data-directory full-node-data \
   --rpc.listen 127.0.0.1:57291 \
-  --sync.block-source.url https://rpc.testnet.miden.io
+  --network testnet
 ```
 
   </TabItem>
@@ -55,7 +55,7 @@ docker run --rm --name miden-full-node \
   miden-node full \
   --data-directory /data \
   --rpc.listen 0.0.0.0:57291 \
-  --sync.block-source.url https://rpc.testnet.miden.io
+  --network testnet
 ```
 
 The Docker port publish binds the RPC endpoint to `127.0.0.1` on the host. The node listens on `0.0.0.0` inside the
@@ -74,5 +74,5 @@ grpcurl -plaintext localhost:57291 miden.node.v1.NodeService/Status
 
 The `-plaintext` flag is required for the local full node RPC listener because it does not use TLS.
 
-Replace `testnet`, `<release-tag>`, and `https://rpc.testnet.miden.io` with the network, version, and upstream source
-you intend to follow. See [Official Network URLs](/official-network-urls) for public official network endpoints.
+Replace `testnet` with `mainnet` or `devnet` in both commands to follow another official network, and select the
+appropriate `<release-tag>`. See [Official Network URLs](/official-network-urls) for public official network endpoints.

@@ -7,6 +7,7 @@ help:
 # -- variables ------------------------------------------------------------------------------------
 
 WARNINGS=RUSTDOCFLAGS="-D warnings"
+XTASK ?= cargo xtask
 STRESS_TEST_DATA_DIR ?= stress-test-store-$(shell date +%Y%m%d-%H%M%S)
 COMPOSE_PROFILE_ARGS = --profile telemetry --profile monitor
 COMPOSE_OVERRIDE_FILE ?=
@@ -23,11 +24,10 @@ EXTERNAL_DOCS_MARKDOWN_FILES = $(shell git ls-files 'docs/external/**/*.md' | $(
 MARKDOWN_FILES = $(README_FILES) $(EXTERNAL_DOCS_MARKDOWN_FILES)
 PRETTIER_CONFIG = $(CONFIG_DIR)/prettier.json
 PRETTIER_LOG_LEVEL = warn
-PRETTIER_VERSION ?= 3.8.3
+MARKDOWN_TOOLS_DIR = $(CONFIG_DIR)/markdown
+MARKDOWN_TOOLS_BIN = $(MARKDOWN_TOOLS_DIR)/node_modules/.bin
 MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
-MARKDOWNLINT_CLI2_VERSION ?= 0.22.1
 CSPELL_CONFIG = $(CONFIG_DIR)/cspell.yaml
-CSPELL_VERSION ?= 10.0.1
 RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
 TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
@@ -35,50 +35,55 @@ TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 .PHONY: clippy
 clippy: ## Runs Clippy with configs
+	cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets --all-features -- -D warnings
 	cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 	cargo clippy --locked --all-targets --all-features -p miden-remote-prover -- -D warnings
 
 
 .PHONY: fix
 fix: ## Runs Fix with configs
+	cargo fix --allow-staged --allow-dirty --all-targets --all-features --manifest-path xtask/Cargo.toml
 	cargo fix --allow-staged --allow-dirty --all-targets --all-features --workspace
 	cargo fix --allow-staged --allow-dirty --all-targets --all-features -p miden-remote-prover
 
 
 .PHONY: format
 format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: format-check
 format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
-	cargo xtask fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
+	$(XTASK) fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
+	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all --check -- --config-path $(RUSTFMT_CONFIG)
 
 
 .PHONY: markdown-format
 markdown-format: ## Formats Markdown files
-	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --write $(MARKDOWN_FILES)
+	@$(MARKDOWN_TOOLS_BIN)/prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --write $(MARKDOWN_FILES)
 
 
 .PHONY: markdown-format-check
 markdown-format-check: ## Checks Markdown formatting
-	@prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --check $(MARKDOWN_FILES)
+	@$(MARKDOWN_TOOLS_BIN)/prettier --config $(PRETTIER_CONFIG) --log-level $(PRETTIER_LOG_LEVEL) --check $(MARKDOWN_FILES)
 
 
 .PHONY: markdown-lint
 markdown-lint: ## Lints Markdown files
-	markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(MARKDOWN_FILES)
+	$(MARKDOWN_TOOLS_BIN)/markdownlint-cli2 --config $(MARKDOWNLINT_CONFIG) $(MARKDOWN_FILES)
 
 
 .PHONY: markdown-spellcheck
 markdown-spellcheck: ## Spellchecks Markdown files
-	cspell --config $(CSPELL_CONFIG) --no-progress --show-suggestions $(MARKDOWN_FILES)
+	$(MARKDOWN_TOOLS_BIN)/cspell --config $(CSPELL_CONFIG) --no-progress --show-suggestions $(MARKDOWN_FILES)
 
 
 .PHONY: shear
 shear: ## Runs cargo-shear to find unused or misplaced dependencies
+	cd xtask && cargo shear --check-test-targets --deny-warnings
 	cargo shear --check-test-targets --deny-warnings
 
 
@@ -121,12 +126,14 @@ serve-docs: ## Serves the docs
 
 .PHONY: test
 test:  ## Runs all tests
+	cargo test --locked --manifest-path xtask/Cargo.toml --all-targets --all-features
 	cargo nextest run --all-features --workspace
 
 # --- checking ------------------------------------------------------------------------------------
 
 .PHONY: check
 check: ## Check all targets and features for errors without code generation
+	cargo check --all-features --all-targets --locked --manifest-path xtask/Cargo.toml
 	cargo check --all-features --all-targets --locked --workspace
 
 .PHONY: check-features
@@ -137,6 +144,7 @@ check-features: ## Checks all feature combinations compile without warnings usin
 
 .PHONY: build
 build: ## Builds all crates and re-builds protobuf bindings for proto crates
+	cargo build --locked --manifest-path xtask/Cargo.toml
 	cargo build --locked --workspace
 
 # --- installing ----------------------------------------------------------------------------------
@@ -358,18 +366,18 @@ check-tools: ## Checks if development tools are installed
 	@command -v taplo         >/dev/null 2>&1 && echo "[OK] taplo is installed"         || echo "[MISSING] taplo        (make install-tools)"
 	@command -v cargo-shear >/dev/null 2>&1 && echo "[OK] cargo-shear is installed" || echo "[MISSING] cargo-shear is not installed (run: make install-tools)"
 	@command -v npm >/dev/null 2>&1 && echo "[OK] npm is installed" || echo "[MISSING] npm is not installed (run: make install-tools)"
-	@command -v prettier >/dev/null 2>&1 && echo "[OK] prettier is installed" || echo "[MISSING] prettier is not installed (run: make install-tools)"
-	@command -v markdownlint-cli2 >/dev/null 2>&1 && echo "[OK] markdownlint-cli2 is installed" || echo "[MISSING] markdownlint-cli2 is not installed (run: make install-tools)"
-	@command -v cspell >/dev/null 2>&1 && echo "[OK] cspell is installed" || echo "[MISSING] cspell is not installed (run: make install-tools)"
+	@test -x $(MARKDOWN_TOOLS_BIN)/prettier >/dev/null 2>&1 && echo "[OK] prettier is installed" || echo "[MISSING] prettier is not installed (run: make install-tools)"
+	@test -x $(MARKDOWN_TOOLS_BIN)/markdownlint-cli2 >/dev/null 2>&1 && echo "[OK] markdownlint-cli2 is installed" || echo "[MISSING] markdownlint-cli2 is not installed (run: make install-tools)"
+	@test -x $(MARKDOWN_TOOLS_BIN)/cspell >/dev/null 2>&1 && echo "[OK] cspell is installed" || echo "[MISSING] cspell is not installed (run: make install-tools)"
 
 .PHONY: install-tools
 install-tools: ## Installs tools required by the Makefile
 	@echo "Installing development tools..."
 	# Rust-related
-	cargo install mdbook --locked
-	cargo install typos-cli --locked
-	cargo install cargo-nextest --locked
-	cargo install taplo-cli --locked
+	cargo install mdbook --version 0.4.52 --locked
+	cargo install typos-cli --version 1.42.0 --locked
+	cargo install cargo-nextest --version 0.9.122 --locked
+	cargo install taplo-cli --version 0.10.0 --locked
 	cargo install cargo-shear --version 1.12.4 --locked
 	@if ! command -v node >/dev/null 2>&1; then \
 		echo "Node.js not found. Please install Node.js from https://nodejs.org/ or using your package manager"; \
@@ -378,5 +386,13 @@ install-tools: ## Installs tools required by the Makefile
 		echo "On Windows: Download from https://nodejs.org/"; \
 		exit 1; \
 	fi
-	npm install --global prettier@$(PRETTIER_VERSION) markdownlint-cli2@$(MARKDOWNLINT_CLI2_VERSION) cspell@$(CSPELL_VERSION)
+	$(MAKE) install-markdown-tools
 	@echo "Development tools installation complete!"
+
+.PHONY: install-markdown-tools
+install-markdown-tools: ## Installs locked Markdown tools for local checks and CI
+	npm ci --prefix $(MARKDOWN_TOOLS_DIR) --include=dev --ignore-scripts
+
+.PHONY: actions-lock-check
+actions-lock-check: ## Checks workflow lockfile coverage without network access
+	gh actions-lock --verify-local

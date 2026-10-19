@@ -12,12 +12,8 @@ use crate::DatabaseTypeConversionError;
 /// Errors that can occur during schema verification.
 #[derive(Debug, Error)]
 pub enum SchemaVerificationError {
-    #[error("failed to create in-memory reference database")]
-    InMemoryDbCreation(#[source] diesel::ConnectionError),
     #[error("failed to apply migrations to reference database")]
     MigrationApplication(#[source] Box<dyn std::error::Error + Send + Sync + 'static>),
-    #[error("failed to extract schema from database")]
-    SchemaExtraction(#[source] diesel::result::Error),
     #[error(
         "schema mismatch: expected {expected_count} objects, found {actual_count} \
          ({missing_count} missing, {extra_count} unexpected)"
@@ -39,15 +35,12 @@ pub enum DatabaseError {
     InteractError(String),
     #[error("setup deadpool connection pool failed")]
     ConnectionPoolObtainError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
-    // This error can be removed after completing the removal of Diesel.
     #[error("conversion from SQL to rust type {to} failed")]
     ConversionSqlToRust {
         #[source]
         inner: Option<Box<dyn std::error::Error + Send + Sync + 'static>>,
         to: &'static str,
     },
-    #[error(transparent)]
-    Diesel(#[from] diesel::result::Error),
     #[error(transparent)]
     Rusqlite(#[from] rusqlite::Error),
     #[error("failed to apply database migrations")]
@@ -58,8 +51,6 @@ pub enum DatabaseError {
     Io(#[from] io::Error),
     #[error("pool build error")]
     PoolBuild(#[from] deadpool::managed::BuildError),
-    #[error("Setup deadpool connection pool failed")]
-    Pool(#[from] deadpool::managed::PoolError<deadpool_diesel::Error>),
     #[error("failed to cast")]
     ConversionError(#[from] DatabaseTypeConversionError),
 }

@@ -25,7 +25,6 @@ use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::BlockNumber;
 use rand::RngExt;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
@@ -340,7 +339,7 @@ impl Rpc {
         let rpc_version =
             semver::Version::parse(rpc_version).context("failed to parse crate version")?;
 
-        let rpc = tonic::transport::Server::builder()
+        let rpc = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
@@ -377,7 +376,7 @@ impl Rpc {
             // Enables gRPC reflection service.
             .add_service(reflection_service)
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(self.listener),
+                grpc::tcp_incoming(self.listener),
                 shutdown.clone().cancelled_owned(),
             );
         tasks.spawn("RPC server", async move { rpc.await.map_err(|e| anyhow::anyhow!(e)) });
@@ -496,13 +495,13 @@ impl SequencerInternal {
 
         // Note: deliberately no accept-header / auth layers; this is a private, trusted interface
         // and is expected to be network-isolated.
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(miden_sequencer_v1_sequencer_service::service(service))
             .serve_with_incoming_shutdown(
-                TcpListenerStream::new(self.listener),
+                grpc::tcp_incoming(self.listener),
                 shutdown.cancelled_owned(),
             )
             .await

@@ -3,7 +3,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{copyable_value, format_success_rate, metric_row};
+use super::super::helpers::{copyable_value, format_success_rate, metric_row, token_amount};
 use crate::faucet::{FaucetTestDetails, GetMetadataResponse};
 
 pub(in crate::view) fn render_faucet_test(details: &FaucetTestDetails, healthy: bool) -> Markup {
@@ -67,10 +67,10 @@ fn render_faucet_metadata(metadata: &GetMetadataResponse, healthy: bool) -> Mark
                 ))
                 (metric_row(
                     "Balance:",
-                    &metadata.balance.map_or_else(|| "-".to_string(), |balance| balance.to_string()),
+                    &metadata.balance.map_or_else(|| "-".to_string(), |balance| token_amount(balance, metadata.decimals, "tokens")),
                 ))
                 (metric_row("Decimals:", &metadata.decimals.to_string()))
-                (metric_row("Base Amount:", &metadata.base_amount.to_string()))
+                (metric_row("Base Amount:", &token_amount(metadata.base_amount, metadata.decimals, "tokens")))
                 (metric_row("PoW Difficulty:", &metadata.pow_load_difficulty.to_string()))
                 @if let Some(url) = &metadata.explorer_url {
                     div class="metric-row" {

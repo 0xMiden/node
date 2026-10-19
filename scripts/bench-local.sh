@@ -22,8 +22,8 @@
 #   - miden-usdcx-genesis
 #
 # Usage:
-#   Export MIDEN_VALIDATOR_STORAGE_KEY_EPOCH, MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT,
-#   MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET, and MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE first.
+#   Export MIDEN_VALIDATOR_STORAGE_KEY_FILE with the path to a completed bundle first.
+#   The runner passes this path directly to the validator.
 #   scripts/bench-local.sh                       # 5 tx pairs, local prover
 #   N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
 #   USE_REMOTE_PROVER=1 scripts/bench-local.sh   # offload create-proofs to the remote-prover
@@ -109,15 +109,7 @@ for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
 
-required_storage_key_vars=(
-    MIDEN_VALIDATOR_STORAGE_KEY_EPOCH
-    MIDEN_VALIDATOR_STORAGE_KEY_SETUP_CONTEXT
-    MIDEN_VALIDATOR_STORAGE_KEY_PUBLIC_SET
-    MIDEN_VALIDATOR_STORAGE_KEY_SECRET_SHARE
-)
-for var in "${required_storage_key_vars[@]}"; do
-    [ -n "${!var:-}" ] || die "$var is required"
-done
+[ -n "${MIDEN_VALIDATOR_STORAGE_KEY_FILE:-}" ] || die "MIDEN_VALIDATOR_STORAGE_KEY_FILE is required"
 
 if [ -e "$DATA/node" ] || [ -e "$DATA/validator" ] || [ -e "$DATA/genesis" ] \
     || [ -e "$DATA/ntx-builder" ] || [ -e "$DATA/usdcx" ]; then
@@ -193,6 +185,7 @@ miden-ntx-builder bootstrap \
 start_bg validator miden-validator start \
     --listen             "127.0.0.1:$VALIDATOR_PORT" \
     --data-directory     "$DATA/validator" \
+    --storage-key.file    "$MIDEN_VALIDATOR_STORAGE_KEY_FILE" \
     --signing-key.hex    "$VALIDATOR_SIGNING_KEY_HEX" \
     --encryption-key.hex "$ENCRYPTION_KEY_HEX"
 wait_for_port "$VALIDATOR_PORT" validator

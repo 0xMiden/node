@@ -24,7 +24,8 @@ impl Server {
 
         let response = self.request_block_header(block_num).await?;
 
-        let header = response.block_header
+        let header = response
+            .block_header
             .ok_or_else(|| tonic::Status::failed_precondition("proof block is not available"))?
             .decode_fields()
             // The configured node supplies the canonical header. No parent check is required.

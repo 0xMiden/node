@@ -1,5 +1,5 @@
 [alias]
-xtask = "run --locked --package xtask --"
+xtask = "run --locked --manifest-path xtask/Cargo.toml --"
 
 [env]
 # These compile-time flags are used to disable SQLite's memory

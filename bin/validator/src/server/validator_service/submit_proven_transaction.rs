@@ -4,13 +4,13 @@ use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
 use miden_node_proto::prost::Message;
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument, miden_span_record};
+use miden_node_tracing::{Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
 use tonic::Status;
 
-use super::ValidatorService;
+use super::{StatusResultExt, ValidatorService};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
 
@@ -45,9 +45,11 @@ impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         // Short-circuit transactions that have already been validated.
-        let already_validated = self.db.transaction_exists(tx_id).await.map_err(|err| {
-            Status::internal(err.as_report_context("Failed to query transaction"))
-        })?;
+        let already_validated = self
+            .db
+            .transaction_exists(tx_id)
+            .await
+            .or_internal("Failed to query transaction")?;
         if already_validated {
             return Ok(());
         }
@@ -59,12 +61,12 @@ impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
             .acquire()
             .instrument(info_span!("acquire_validation_permit"))
             .await
-            .map_err(|err| Status::internal(format!("validation semaphore closed: {err}")))?;
+            .or_internal("validation semaphore closed")?;
 
         // Validate the transaction.
-        let effects = validate_transaction(tx, inputs).await.map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction"))
-        })?;
+        let effects = validate_transaction(tx, inputs)
+            .await
+            .or_invalid_argument("Invalid transaction")?;
 
         // Encode the transaction effects in their canonical Protobuf form. The effects are the
         // forensic record of what the transaction did. They exclude the account, blockchain and
@@ -86,18 +88,14 @@ impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
         })
         .await
         .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
-        .map_err(|err| {
-            Status::internal(err.as_report_context("Failed to protect transaction effects"))
-        })?;
+        .or_internal("Failed to protect transaction effects")?;
 
         // Store the validated transaction and private record atomically.
-        let count =
-            self.db
-                .insert_validated_private_transaction(private_record)
-                .await
-                .map_err(|err| {
-                    Status::internal(err.as_report_context("Failed to insert transaction"))
-                })?;
+        let count = self
+            .db
+            .insert_validated_private_transaction(private_record)
+            .await
+            .or_internal("Failed to insert transaction")?;
 
         self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
         Ok(())
@@ -176,8 +174,7 @@ impl ValidatorService {
                 ))
             })?;
 
-        TransactionInputs::read_from_bytes(&plaintext).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
-        })
+        TransactionInputs::read_from_bytes(&plaintext)
+            .or_invalid_argument("Invalid transaction inputs")
     }
 }

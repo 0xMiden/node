@@ -64,7 +64,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
     for &(proto_path, rust_path) in miden_objects::EXTERN_PATHS {
         prost_config.extern_path(proto_path, rust_path);
     }
-    prost_config.skip_debug(["RegisterAccountRequest"]);
+    prost_config.skip_debug(["RegisterAccountRequest", "IsInvitationCodeValidRequest"]);
 
     let mut messages = Vec::new();
     for file in &file_descriptors.file {
@@ -112,7 +112,9 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
         // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
-        if name == "miden.node.v1.RegisterAccountRequest" {
+        if name == "miden.node.v1.RegisterAccountRequest"
+            || name == "miden.node.v1.IsInvitationCodeValidRequest"
+        {
             continue;
         }
         collect_message_names(&name, &descriptor.nested_type, names);
