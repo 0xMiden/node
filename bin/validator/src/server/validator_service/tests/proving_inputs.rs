@@ -195,3 +195,118 @@ async fn backup_retains_requests_across_two_configuration_activations() {
     }
     assert!(stream.next().await.is_none());
 }
+
+async fn restart_with_retention(tv: TestValidator, retention: u32) -> TestValidator {
+    let signer = match &tv.server.signer {
+        ValidatorSigner::Local(key) => ValidatorSigner::new_local(key.clone()),
+        ValidatorSigner::Kms(_) => unreachable!("fixture uses a local signer"),
+    };
+    let TestValidator {
+        server,
+        chain,
+        chain_tip,
+        protocol_config,
+        temp_dir,
+    } = tv;
+    drop(server);
+    let db = crate::db::load_with_retention(
+        temp_dir.path().join("validator.sqlite3"),
+        std::num::NonZeroUsize::new(2).unwrap(),
+        std::num::NonZeroU32::new(retention).unwrap(),
+    )
+    .await
+    .unwrap();
+    let server = ValidatorService::new(
+        signer,
+        db,
+        std::sync::Arc::new(test_decrypter()),
+        PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        InitialMetrics {
+            chain_tip: chain_tip.block_num().as_u32(),
+            ..InitialMetrics::default()
+        },
+    )
+    .await
+    .unwrap();
+    TestValidator {
+        server,
+        chain,
+        chain_tip,
+        protocol_config,
+        temp_dir,
+    }
+}
+
+async fn assert_backup_window(tv: &TestValidator, retained: &[u32]) {
+    use tokio_stream::StreamExt;
+    let mut stream = tv.call_block_subscription(0).await;
+    for height in 0..=tv.chain_tip.block_num().as_u32() {
+        let response = stream.next().await.unwrap().unwrap();
+        let block: SignedBlock = response.block.unwrap().decode_and_build_unchecked().unwrap();
+        assert_eq!(block, tv.server.db.load_block(height.into()).await.unwrap().unwrap());
+        assert_eq!(
+            response.proving_inputs.is_some(),
+            retained.contains(&height),
+            "inputs at height {height}"
+        );
+        if let Some(inputs) = response.proving_inputs {
+            let inputs: miden_node_proto::BlockProofRequest =
+                inputs.decode_and_build_unchecked().unwrap();
+            inputs.validate_against(&block).unwrap();
+        }
+        assert!(
+            tv.server
+                .db
+                .load_protocol_config(block.header().protocol_config_commitment())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn pruned_backups_stream_signed_blocks_and_recent_inputs_after_restart() {
+    let mut tv = TestValidator::new().await;
+    for _ in 0..4 {
+        tv.apply_empty_block().await;
+    }
+    assert_backup_window(&tv, &[1, 2, 3, 4]).await;
+    let mut tv = restart_with_retention(tv, 2).await;
+    assert_backup_window(&tv, &[3, 4]).await;
+    tv.apply_empty_block().await;
+    assert_backup_window(&tv, &[4, 5]).await;
+    let tv = restart_with_retention(tv, 2).await;
+    assert_backup_window(&tv, &[4, 5]).await;
+}
+
+#[tokio::test]
+async fn pruning_failure_does_not_acknowledge_or_publish_a_new_tip() {
+    let mut tv = restart_with_retention(TestValidator::new().await, 1).await;
+    tv.apply_empty_block().await;
+    let before = tv.call_status().await;
+    let tip = *tv.server.committed_tip.borrow();
+    let connection =
+        miden_node_db::Connection::open(tv.temp_dir.path().join("validator.sqlite3")).unwrap();
+    connection.execute("CREATE TRIGGER reject_pruning BEFORE UPDATE OF proving_inputs ON blocks WHEN OLD.proving_inputs IS NOT NULL AND NEW.proving_inputs IS NULL BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END", []).unwrap();
+    let error = tv.call_sign_block(&tv.propose_empty_block()).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Internal);
+    assert_eq!(*tv.server.committed_tip.borrow(), tip);
+    assert_eq!(tv.call_status().await.signed_blocks_count, before.signed_blocks_count);
+    assert!(
+        tv.server
+            .db
+            .load_block_backup(1.into())
+            .await
+            .unwrap()
+            .unwrap()
+            .proving_inputs
+            .is_some()
+    );
+    assert!(tv.server.db.load_block_backup(2.into()).await.unwrap().is_none());
+    connection.execute("DROP TRIGGER reject_pruning", []).unwrap();
+    drop(connection);
+    tv.apply_empty_block().await;
+    assert_backup_window(&tv, &[2]).await;
+}
