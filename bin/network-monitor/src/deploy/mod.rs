@@ -205,7 +205,7 @@ impl TransactionSubmissionClient {
                     target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
-                    retry.delay_ms = delay.as_millis() as u64
+                    retry.delay_ms = delay
                 );
             })
             .await?;
@@ -365,7 +365,7 @@ pub async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await

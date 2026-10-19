@@ -264,7 +264,7 @@ impl RpcClient {
                 err,
                 target: COMPONENT,
                 "RPC request failed while verifying the persisted chain tip, retrying",
-                retry.delay_ms = dur.as_millis() as u64
+                retry.delay_ms = dur
             );
         })
         .await
@@ -328,7 +328,7 @@ impl RpcClient {
                 err,
                 target: COMPONENT,
                 "RPC connection failed while opening block subscription, retrying",
-                retry.delay_ms = dur.as_millis() as u64
+                retry.delay_ms = dur
             );
         })
         .await
