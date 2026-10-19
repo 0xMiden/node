@@ -64,7 +64,7 @@ fn generate_bindings(file_descriptors: &FileDescriptorSet, dst_dir: &Path) -> mi
     for &(proto_path, rust_path) in miden_objects::EXTERN_PATHS {
         prost_config.extern_path(proto_path, rust_path);
     }
-    prost_config.skip_debug(["RegisterAccountRequest"]);
+    prost_config.skip_debug(["RegisterAccountRequest", "IsInvitationCodeValidRequest"]);
 
     let mut messages = Vec::new();
     for file in &file_descriptors.file {
@@ -112,7 +112,9 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
         // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
-        if name == "miden.node.v1.RegisterAccountRequest" {
+        if name == "miden.node.v1.RegisterAccountRequest"
+            || name == "miden.node.v1.IsInvitationCodeValidRequest"
+        {
             continue;
         }
         collect_message_names(&name, &descriptor.nested_type, names);
@@ -412,25 +414,14 @@ impl Service {
         ret
     }
 
-    /// Constructs the underlying tonic server for this service behind an opaque tower service type.
+    /// Constructs the underlying tonic server so callers can configure its transport limits.
     fn service_constructor(&self) -> Function {
         let mut ret = Function::new("service");
         ret.vis("pub")
             .attr("allow(deprecated)")
             .generic("T")
             .arg("service", "T")
-            .ret(
-                "impl tower::Service<
-    http::Request<tonic::body::Body>,
-    Response = http::Response<tonic::body::Body>,
-    Error = std::convert::Infallible,
-    Future: Send + 'static,
-> + tonic::server::NamedService
-  + Clone
-  + Send
-  + Sync
-  + 'static",
-            )
+            .ret(format!("{}<T>", self.tonic_server_path()))
             .bound("T", self.service_trait().ty())
             .bound("T", "Send")
             .bound("T", "Sync")

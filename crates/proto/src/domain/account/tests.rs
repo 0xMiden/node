@@ -29,6 +29,18 @@ fn registration_request_debug_hides_invitation_code() {
     assert_eq!(verified.account_id, account_id);
 }
 
+#[test]
+fn invitation_check_request_debug_hides_invitation_code() {
+    let code = "private invitation code";
+    let request =
+        proto::miden::node::v1::IsInvitationCodeValidRequest { invitation_code: code.to_owned() };
+    assert!(!format!("{request:?}").contains(code));
+
+    let decoded = request.decode_fields().unwrap();
+    assert!(!format!("{decoded:?}").contains(code));
+    assert_eq!(decoded.verify().unwrap(), code);
+}
+
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
 }

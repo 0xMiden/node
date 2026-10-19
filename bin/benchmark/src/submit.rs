@@ -42,6 +42,7 @@ pub(crate) async fn run(
     wait_blocks: u32,
     validator_signing_public_key: String,
     fail_on_error: bool,
+    max_decoding_message_size: usize,
 ) -> Result<()> {
     let in_dir = PathBuf::from(PROOFS_DIR);
 
@@ -74,6 +75,7 @@ pub(crate) async fn run(
         Duration::from_secs(30),
         connections,
         trusted_validator_signing_key,
+        max_decoding_message_size,
     )
     .await
     .expect("failed to create RPC client pool");

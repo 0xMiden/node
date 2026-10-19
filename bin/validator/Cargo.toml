@@ -14,6 +14,10 @@ version.workspace      = true
 [lints]
 workspace = true
 
+[package.metadata.cargo-shear]
+# Rust migrations are linked by the generated db_migrator.rs module.
+ignored-paths = ["src/db/migrations/*.rs"]
+
 [features]
 tracing-forest = ["miden-node-tracing/tracing-forest"]
 
@@ -73,5 +77,6 @@ miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }
 rand_chacha_03   = { workspace = true }
 rstest           = { workspace = true }
+serde_json       = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "sync"], workspace = true }
 tower            = { features = ["util"], workspace = true }

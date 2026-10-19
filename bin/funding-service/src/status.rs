@@ -1,20 +1,13 @@
-//! The status the service reports, and the task which keeps it current.
+//! The status snapshot published by the funding worker.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::Duration;
 
-use anyhow::Result;
-use miden_node_tracing::warn;
-use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_standards::account::faucets::FungibleFaucet;
 use serde::{Deserialize, Serialize};
-
-use crate::LOG_TARGET;
-use crate::node::RpcNodeClient;
 
 // NATIVE ASSET
 // ================================================================================================
@@ -106,69 +99,5 @@ impl StatusSnapshot {
 
     pub fn verification_base_fee(&self) -> u32 {
         self.verification_base_fee.load(Ordering::Relaxed)
-    }
-}
-
-// STATUS REFRESHER
-// ================================================================================================
-
-/// Reads the funding account on an interval so the reported balance stays current.
-pub struct StatusRefresher {
-    node: RpcNodeClient,
-    account_id: AccountId,
-    fee_asset_id: AssetId,
-    status: StatusSnapshot,
-    interval: Duration,
-}
-
-impl StatusRefresher {
-    pub fn new(
-        node: RpcNodeClient,
-        account_id: AccountId,
-        fee_asset_id: AssetId,
-        status: StatusSnapshot,
-        interval: Duration,
-    ) -> Self {
-        Self {
-            node,
-            account_id,
-            fee_asset_id,
-            status,
-            interval,
-        }
-    }
-
-    /// Reads the funding account until the service shuts down.
-    ///
-    /// A failed read is not fatal: the node may be restarting, and the reported balance simply
-    /// stays at the value of the last successful read.
-    pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
-        loop {
-            if let Err(err) = self.refresh().await {
-                warn!(
-                    &err,
-                    target: LOG_TARGET,
-                    "Failed to read the funding account"
-                );
-            }
-
-            tokio::select! {
-                () = tokio::time::sleep(self.interval) => {},
-                () = shutdown.cancelled() => return Ok(()),
-            }
-        }
-    }
-
-    /// Reads the funding account at the chain tip and publishes its balance.
-    async fn refresh(&self) -> Result<()> {
-        let (vault, block_num) = self.node.public_account_vault(self.account_id).await?;
-        // The fee parameters are read at the block the vault came from, so the reported base fee
-        // belongs to the block the status reports.
-        let fee_parameters = self.node.fee_parameters(Some(block_num)).await?;
-
-        let balance = vault.get_balance(self.fee_asset_id).map_or(0, |amount| amount.as_u64());
-        self.status.update(balance, block_num, fee_parameters.verification_base_fee());
-
-        Ok(())
     }
 }

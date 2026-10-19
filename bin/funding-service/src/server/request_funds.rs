@@ -76,7 +76,8 @@ pub(super) async fn request_funds(
     )
     .map_err(RequestFundsError::Internal)?;
 
-    let response = RequestFundsResponse::from(&note);
+    let response = RequestFundsResponse::from(note.note());
+    let note_id = note.note().id();
 
     state.requests.try_send(note).map_err(|err| match err {
         mpsc::error::TrySendError::Full(_) => RequestFundsError::Busy,
@@ -85,6 +86,7 @@ pub(super) async fn request_funds(
         },
     })?;
 
+    miden_node_tracing::miden_span_record!(note.id = note_id);
     Ok(Json(response))
 }
 
@@ -134,7 +136,6 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::deposit::native_amount;
     use crate::server::REQUEST_FUNDS_PATH;
     use crate::server::tests::{test_router, test_state};
 
@@ -170,6 +171,7 @@ mod tests {
     /// The answer carries the note the worker will create, before any transaction exists.
     #[tokio::test]
     async fn the_answer_carries_the_queued_note() {
+        let (telemetry, _guard) = crate::test_utils::telemetry::Telemetry::capture();
         let (state, mut rx) = test_state(MAX_AMOUNT);
         let funder = state.status.account_id();
         let fee_asset_id = state.fee_asset_id;
@@ -198,7 +200,14 @@ mod tests {
         let answered = Note::read_from_bytes(&hex::decode(&body.note).unwrap()).unwrap();
 
         assert_eq!(answered.metadata().sender(), funder);
-        assert_eq!(native_amount(&answered, fee_asset_id), 500);
+        assert_eq!(
+            answered.assets().iter().copied().collect::<Vec<_>>(),
+            vec![
+                miden_protocol::asset::FungibleAsset::new(fee_asset_id.faucet_id(), 500)
+                    .unwrap()
+                    .into()
+            ]
+        );
         let storage =
             P2idNoteStorage::try_from(answered.recipient().storage().to_elements().as_slice())
                 .unwrap();
@@ -206,7 +215,12 @@ mod tests {
 
         // The worker receives exactly the note the requester was answered with.
         let queued = rx.try_recv().expect("the note should be queued");
-        assert_eq!(queued.id(), answered.id());
+        assert_eq!(queued.note().id(), answered.id());
+        let span = telemetry.span("request_funds");
+        assert_eq!(
+            crate::test_utils::telemetry::attribute(&span, "note.id"),
+            Some(queued.note().id().to_string().into())
+        );
     }
 
     /// A request the balance cannot cover must not reach the worker.

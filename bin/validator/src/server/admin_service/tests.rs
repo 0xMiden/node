@@ -36,7 +36,7 @@ use super::list_transactions::{
     list_validated_private_transactions,
 };
 use super::{ISSUE_SHARE_PATH, LIST_TRANSACTIONS_PATH, ValidatorAdminService, router};
-use crate::db::{ValidatorDbReader, ValidatorDbWriter};
+use crate::db::{ValidatorDbReader, ValidatorDbWriter, block_with_header};
 use crate::storage_key::tests::operator_keys;
 use crate::{
     GoldenOperatorKey,
@@ -115,8 +115,8 @@ async fn list(
 /// transactions are listed, so listing tests have to place their records in a block.
 async fn commit(writer: &ValidatorDbWriter, block_num: u32, transactions: &[TransactionId]) {
     writer
-        .insert_signed_block(
-            BlockHeader::mock(block_num, None, None, &[]),
+        .insert_legacy_signed_block(
+            block_with_header(BlockHeader::mock(block_num, None, None, &[])),
             ProtocolConfig::mock(),
             transactions.to_vec(),
         )
@@ -353,8 +353,8 @@ async fn list_serves_a_replaced_tip_block_from_its_first_position() {
     );
 
     writer
-        .replace_signed_block(
-            BlockHeader::mock(1, None, None, &[]),
+        .replace_legacy_signed_block(
+            block_with_header(BlockHeader::mock(1, None, None, &[])),
             ProtocolConfig::mock(),
             vec![transaction_ids[2]],
         )
@@ -703,4 +703,210 @@ async fn router_distinguishes_extractor_and_handler_errors() {
             assert_eq!(body.as_ref(), br#"{"error":"limit must be between 1 and 1000"}"#);
         }
     }
+}
+
+/// Shares issued by two validators recover a third validator's stored record over HTTP.
+#[tokio::test]
+async fn http_private_record_recovery() {
+    let mut keys = operator_keys();
+    let owner = keys.pop().unwrap();
+    let second = keys.pop().unwrap();
+    let first = keys.pop().unwrap();
+    let (_dir, writer, reader) = test_database().await;
+    let tx = TransactionId::from_raw(Word::from([8u32, 7, 6, 5]));
+    let inputs = transaction_inputs();
+    let record = target_record(&owner, tx, 10, &inputs.to_bytes());
+    writer.insert_validated_private_transaction(record.clone()).await.unwrap();
+    let request = share_request(&record);
+    let issue_body = format!(
+        r#"{{"ciphertext":"{}","decryption_context":"{}"}}"#,
+        request.ciphertext, request.decryption_context,
+    );
+    let mut shares = Vec::new();
+    for key in [first, second] {
+        let response = router(key, reader.clone())
+            .oneshot(
+                Request::post(ISSUE_SHARE_PATH)
+                    .header("content-type", "application/json")
+                    .body(Body::from(issue_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: IssueDecryptionShareResponse = serde_json::from_slice(&body).unwrap();
+        shares.push(response.decryption_share);
+    }
+    let response = router(owner, reader.clone())
+        .oneshot(
+            Request::post(format!("/admin/v1/transactions/{}/decrypt", hex::encode(tx.to_bytes())))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(
+                    r#"{{"decryption_shares":["{}","{}"]}}"#,
+                    shares[0], shares[1],
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let plaintext = hex::decode(response["plaintext"].as_str().unwrap()).unwrap();
+    assert_eq!(plaintext, inputs.to_bytes());
+    assert_eq!(reader.load_private_record(tx).await.unwrap().unwrap(), record);
+}
+
+/// Posts real share bytes through the decryption route and decodes its public JSON response.
+async fn decrypt_http(
+    app: axum::Router,
+    transaction_id: &str,
+    shares: &[String],
+) -> (StatusCode, serde_json::Value) {
+    let response = app
+        .oneshot(
+            Request::post(format!("/admin/v1/transactions/{transaction_id}/decrypt"))
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::json!({"decryption_shares": shares}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// Invalid shares cannot recover plaintext or alter the stored record.
+#[tokio::test]
+async fn decrypt_rejects_invalid_share_sets() {
+    let keys = operator_keys();
+    let (_dir, writer, reader) = test_database().await;
+    let tx = TransactionId::from_raw(Word::from([8u32, 7, 6, 5]));
+    let record = target_record(&keys[2], tx, 10, b"private record");
+    writer.insert_validated_private_transaction(record.clone()).await.unwrap();
+    let shares = keys
+        .iter()
+        .map(|key| {
+            hex::encode(
+                key.issue_private_record_share(
+                    &mut rand_core_06::OsRng,
+                    &PrivateRecordShareRequest::for_record(&record),
+                    &record,
+                )
+                .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let other = target_record(&keys[2], tx, 11, b"private record");
+    let other_share = hex::encode(
+        keys[0]
+            .issue_private_record_share(
+                &mut rand_core_06::OsRng,
+                &PrivateRecordShareRequest::for_record(&other),
+                &other,
+            )
+            .unwrap(),
+    );
+    let app = router(operator_keys().remove(2), reader.clone());
+    for (name, shares) in [
+        ("empty", vec![]),
+        ("insufficient", vec![shares[0].clone()]),
+        ("duplicate", vec![shares[0].clone(), shares[0].clone()]),
+        ("excess", shares.clone()),
+        ("invalid hex", vec!["zz".into(), shares[1].clone()]),
+        ("invalid encoding", vec!["00".into(), shares[1].clone()]),
+        ("wrong ciphertext", vec![other_share, shares[1].clone()]),
+    ] {
+        let (status, body) = decrypt_http(app.clone(), &hex::encode(tx.to_bytes()), &shares).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
+        assert!(body.get("plaintext").is_none(), "{name}");
+        assert!(body["error"].is_string(), "{name}");
+    }
+    assert_eq!(reader.load_private_record(tx).await.unwrap().unwrap(), record);
+}
+
+/// Transaction selection rejects malformed identifiers and distinguishes absent records.
+#[tokio::test]
+async fn decrypt_validates_transaction_selection() {
+    let (_dir, _writer, reader) = test_database().await;
+    let app = router(operator_keys().remove(0), reader);
+    let tx = hex::encode(TransactionId::from_raw(Word::from([8u32, 7, 6, 5])).to_bytes());
+    for (id, expected) in [
+        ("zz".to_owned(), StatusCode::BAD_REQUEST),
+        (format!("{tx}00"), StatusCode::BAD_REQUEST),
+        (tx, StatusCode::NOT_FOUND),
+    ] {
+        let (status, body) = decrypt_http(app.clone(), &id, &[]).await;
+        assert_eq!(status, expected);
+        assert!(body.get("plaintext").is_none());
+    }
+}
+
+/// Incompatible setup metadata is actionable; authenticated payload corruption is internal.
+#[rstest::rstest]
+#[case::epoch("epoch", StatusCode::BAD_REQUEST)]
+#[case::setup("setup", StatusCode::BAD_REQUEST)]
+#[case::corrupt_payload("payload", StatusCode::INTERNAL_SERVER_ERROR)]
+#[tokio::test]
+async fn decrypt_classifies_record_failures(#[case] defect: &str, #[case] expected: StatusCode) {
+    let keys = operator_keys();
+    let (_dir, writer, reader) = test_database().await;
+    let tx = TransactionId::from_raw(Word::from([8u32, 7, 6, 5]));
+    let record = target_record(&keys[2], tx, 10, b"secret plaintext");
+    let shares = keys[..2]
+        .iter()
+        .map(|key| {
+            hex::encode(
+                key.issue_private_record_share(
+                    &mut rand_core_06::OsRng,
+                    &PrivateRecordShareRequest::for_record(&record),
+                    &record,
+                )
+                .unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut fields = record.into_storage_fields();
+    match defect {
+        "epoch" => {
+            // Seal a valid record under a different epoch, so decoding succeeds before
+            // compatibility with the active operator key is checked.
+            let context = PrivateRecordContext::new(
+                PrivateRecordChainId::new([7; 32]),
+                StorageKeyEpoch::new([99; 32]),
+                tx,
+            );
+            let sealer = crate::private_record::test_private_record_sealer(
+                context.key_epoch(),
+                keys[2].setup_context_id(),
+            );
+            fields = sealer
+                .seal(&mut rand_core_06::OsRng, fields.record_id, context, b"secret plaintext")
+                .unwrap()
+                .into_storage_fields();
+        },
+        "setup" => fields.setup_context_id = [99; 32],
+        "payload" => fields.encrypted_record[0] ^= 1,
+        _ => unreachable!(),
+    }
+    let record = StoredPrivateRecord::from_storage_fields(fields).unwrap();
+    writer.insert_validated_private_transaction(record.clone()).await.unwrap();
+    let (status, body) = decrypt_http(
+        router(operator_keys().remove(2), reader.clone()),
+        &hex::encode(tx.to_bytes()),
+        &shares,
+    )
+    .await;
+    assert_eq!(status, expected);
+    assert!(body.get("plaintext").is_none());
+    assert!(!body.to_string().contains("secret plaintext"));
+    for share in shares {
+        assert!(!body.to_string().contains(&share));
+    }
+    if expected == StatusCode::INTERNAL_SERVER_ERROR {
+        assert_eq!(body["error"], "failed to decrypt private record");
+    }
+    assert_eq!(reader.load_private_record(tx).await.unwrap().unwrap(), record);
 }

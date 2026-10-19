@@ -1,10 +1,7 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use miden_protocol::Word;
-use miden_protocol::account::Account;
-use miden_protocol::asset::{Asset, AssetAmount};
+use miden_protocol::asset::{Asset, AssetAmount, AssetId};
 use miden_protocol::note::{Note, NoteId, Nullifier};
 use miden_standards::note::AccountTargetNetworkNote;
 
@@ -37,12 +34,9 @@ impl SponsoredFeatureNote {
     ///
     /// This must run before applying the per-feature sponsorship cap so notes carrying an
     /// unrelated asset cannot crowd valid sponsorships out of the candidate.
-    pub fn retain_sponsorships_for_fee_asset(&mut self, fee_asset_id: Word) {
+    pub fn retain_sponsorships_for_fee_asset(&mut self, fee_asset_id: AssetId) {
         self.sponsorships.retain(|note| {
-            note.assets()
-                .as_slice()
-                .first()
-                .is_some_and(|asset| asset.id().to_word() == fee_asset_id)
+            note.assets().as_slice().first().is_some_and(|asset| asset.id() == fee_asset_id)
         });
     }
 
@@ -80,17 +74,11 @@ fn sponsorship_amount(note: &Note) -> AssetAmount {
 
 /// A candidate network transaction.
 ///
-/// Contains the data pertaining to a specific network account which can be used to build a network
-/// transaction.
+/// Contains the notes selected for a specific network account and the chain snapshot they were
+/// selected against. The account itself is loaded at the snapshot's reference block when the
+/// candidate is executed.
 #[derive(Clone, Debug)]
 pub struct TransactionCandidate {
-    /// The current inflight state of the account.
-    ///
-    /// Wrapped in `Arc` so building a candidate shares the account the attempt loaded instead of
-    /// deep-cloning it, which is expensive for accounts with large storage maps. The account is
-    /// only ever read during execution.
-    pub account: Arc<Account>,
-
     /// The sponsored feature notes selected for this transaction: each feature note addressed to
     /// the account together with the sponsorships that pay its fee.
     pub notes: Vec<SponsoredFeatureNote>,
@@ -159,7 +147,6 @@ mod tests {
             miden_protocol::protocol_config::ProtocolConfig::mock(),
         );
         let candidate = TransactionCandidate {
-            account: Arc::new(crate::test_utils::mock_account(mock_network_account_id())),
             notes: sponsored_notes.to_vec(),
             chain_state,
         };

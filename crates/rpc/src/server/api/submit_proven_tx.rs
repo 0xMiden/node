@@ -4,10 +4,10 @@ use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::State;
-use miden_protocol::block::BlockNumber;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
@@ -165,9 +165,9 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // Check nullifiers and expiration against the local store before forwarding so
-                // that provably-invalid transactions are rejected at the edge rather than
-                // consuming sequencer resources.
+                // Check nullifiers and expiration against the local store before forwarding so that
+                // provably-invalid transactions are rejected at the edge rather than consuming
+                // sequencer resources.
                 check_nullifiers_and_expiration(&self.state, &rebuilt_tx).await?;
 
                 let mut forwarded_request = Request::new(request);

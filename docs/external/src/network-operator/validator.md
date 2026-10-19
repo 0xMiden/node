@@ -21,6 +21,23 @@ inputs needed to independently check proposed blocks, which gives the network an
 block is committed. Those inputs arrive encrypted against the shared transaction encryption key, so the validator is the
 only component that can read them, and submissions that are not encrypted are rejected.
 
+## Storage and Snapshots
+
+Validator storage includes signed blocks and their proving inputs for [sequencer recovery](/network-operator/recovery).
+Proving inputs are retained indefinitely, even after proofs become available elsewhere. Plan disk and backup capacity
+for continued database growth; inputs are not automatically pruned.
+
+Before relying on these backups for failover, coordinate with the sequencer operator to verify that they meet the
+[recovery prerequisites](/network-operator/recovery#prerequisites). Retaining a signed block does not guarantee that its
+proving inputs are available; recovery requires usable inputs for each block that still needs a proof.
+
+For backups while the validator is running, take a consistent volume snapshot of the complete data directory, including
+the database and its write-ahead log (WAL). Keep the signing and storage keys available as well; restoring the data
+directory alone is not sufficient to restart the validator.
+
+For storage compatibility and migration procedures, see
+[Upgrades and Migrations](/network-operator/upgrades-and-migrations).
+
 ## Key Rotation
 
 Each block header includes the validator key that must be used for the next block. Because the current validator signs
@@ -53,7 +70,7 @@ a genesis block. For initial network setup, use the same validator keys as the n
 Generate a persistent Iroh endpoint identity for each validator:
 
 ```bash
-miden-validator dkg generate-endpoint --output-file endpoint.secret
+miden-validator privacy dkg generate-endpoint --output-file endpoint.secret
 ```
 
 Keep the endpoint secret private and share the printed public endpoint ID with the other operators. Reuse the endpoint
@@ -65,7 +82,7 @@ public Iroh relays and address discovery, so no peer socket addresses are needed
 development and testing; do not rely on them for guaranteed production availability.
 
 ```bash
-miden-validator dkg participate \
+miden-validator privacy dkg participate \
   --endpoint-secret endpoint.secret \
   --enable-public-relay \
   --peer <other-validator-public-key> <other-validator-endpoint-id> \
@@ -143,11 +160,12 @@ Enforce authentication and authorization externally, and prevent direct access t
 operator network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for
 remote access.
 
-| Method | Path                                      | Request                                               | Result                                                                                          |
-| ------ | ----------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GET`  | `/admin/v1/transactions`                  | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
-| `GET`  | `/admin/v1/transactions/{transaction_id}` | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
-| `POST` | `/admin/v1/decryption-share`              | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
+| Method | Path                                              | Request                                               | Result                                                                                          |
+| ------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `GET`  | `/admin/v1/transactions`                          | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
+| `GET`  | `/admin/v1/transactions/{transaction_id}`         | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
+| `POST` | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
+| `POST` | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                     | `{"plaintext":"<hex>"}`                                                                         |
 
 Byte values are hexadecimal strings without a `0x` prefix. Errors from request handlers have the form
 `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return `500`. Requests rejected
@@ -225,3 +243,77 @@ that it does not store.
 A validator issues a share only when the `decryption_context` names a transaction that it validated. Otherwise it
 returns `404`. It returns `400` when the context is not a canonical record context, or when the context names a key
 epoch other than the `--storage-key.epoch` of the validator.
+
+### Decrypt a Stored Record
+
+Decryption recovers the authenticated bytes stored for a validated transaction. Collect shares from exactly the
+configured threshold number of distinct validators, all for the same record's `encrypted_record_key` and
+`decryption_context`. Do not combine shares requested for different validators' copies of the transaction.
+
+Send the collected shares to the validator from which you retrieved the record. Its active storage-key bundle must match
+the record's epoch and setup. Create `decrypt-request.json` with the hexadecimal shares:
+
+```json
+{ "decryption_shares": ["<first-share-hex>", "<second-share-hex>"] }
+```
+
+The example assumes a threshold of two. Replace the transaction ID and use your authenticated admin endpoint:
+
+```bash
+curl --fail-with-body --silent --show-error \
+  --header 'Content-Type: application/json' \
+  --data-binary @decrypt-request.json \
+  "${VALIDATOR_ADMIN_URL}/admin/v1/transactions/${TRANSACTION_ID}/decrypt" \
+  --output decrypted-record.json
+```
+
+A `200` response contains `{"plaintext":"<hex>"}`. Decode that hexadecimal string to obtain the original binary record
+(currently serialized transaction inputs). Success verifies the shares and authenticates the decrypted bytes; it does
+not change the stored record or issue another share. Protect the response as private transaction data.
+
+A `400` response means the identifier or shares are invalid, the share count is not exactly the threshold, or the record
+does not match the active storage-key setup. Check that every share targets the selected record and comes from a
+distinct participant. A `404` means the receiving validator has no such record; check the transaction ID and record
+owner. A `500` indicates a database, configuration, or stored-record failure; consult the validator's logs before
+retrying. No plaintext is returned on failure.
+
+### Recover a Record Offline
+
+Offline recovery uses an exported record bundle and binary share files. Operators need the transaction ID, the signing
+public key of the validator that stores the selected record, and storage-key bundles from the same epoch and setup.
+Coordinate a threshold of distinct participants before starting. The operator doing the final combination also needs a
+matching storage-key bundle; the combination uses only its public setup information.
+
+Export the record once on its owning validator:
+
+```bash
+miden-validator privacy record export \
+  --data-directory /var/lib/miden/validator \
+  --transaction-id "$TRANSACTION_ID" --validator-id "$VALIDATOR_ID" \
+  --output record.bin
+```
+
+Distribute that exact `record.bin` to each participating operator. Each operator issues a share with their own bundle:
+
+```bash
+miden-validator privacy record issue-share \
+  --record record.bin --storage-key.file /secure/operator.bundle --output share.bin
+```
+
+Collect exactly the threshold number of share files from distinct participants. For a threshold of two:
+
+```bash
+miden-validator privacy record decrypt \
+  --record record.bin --share share-1.bin --share share-2.bin \
+  --storage-key.file /secure/operator.bundle --output plaintext.bin
+```
+
+The record bundle and shares use their existing binary encodings. Share files contain raw canonical share bytes, not the
+hexadecimal strings returned by the HTTP API. A successful decrypt command writes authenticated binary record bytes,
+currently serialized transaction inputs, to `plaintext.bin`. It does not write plaintext to the terminal. The output
+file is readable and writable only by its owner. Keep storage-key bundles and recovered plaintext in access-controlled
+locations.
+
+Successful recovery replaces the output file with the complete plaintext. Any failure, including malformed files,
+mismatched keys, invalid shares, authentication failures, and filesystem errors, leaves an existing output file
+untouched and creates none if it did not exist.

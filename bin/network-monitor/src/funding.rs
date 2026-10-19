@@ -9,11 +9,14 @@
 //! fees, because a network does not always run a public faucet. The monitor still talks to the
 //! faucet for its faucet checks, which is what [`FaucetClient`] is for.
 
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_tracing::info;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
 use miden_protocol::note::Note;
 use miden_protocol::utils::serde::Deserializable;
 use reqwest::Client;
@@ -33,15 +36,11 @@ use crate::faucet::{
 /// (ilog2(total_cycles) + 1)` with cycles capped at `2^29`.
 const MAX_FEE_VERIFICATION_CYCLES: u64 = 30;
 
-/// Increments one wallet funding request should cover, roughly a week at the default cadence.
-const WALLET_FUNDING_INCREMENTS: u64 = 20_000;
-
-/// Remaining-increment level at which the wallet requests a top-up.
-const WALLET_TOPUP_THRESHOLD_INCREMENTS: u64 = 1_000;
-
-/// Largest amount requested per funding call, matching the funding service's default
-/// `--max-amount`. A larger request is rejected.
-const MAX_FUNDING_REQUEST_AMOUNT: u64 = 1_000_000_000;
+/// Divisor of the wallet funding amount that gives the wallet's top-up threshold.
+///
+/// A tenth keeps a reserve for funding service outages while bounding the wallet's balance, and so
+/// what a restart abandons, to about 1.1 times the funding amount.
+const WALLET_TOPUP_THRESHOLD_DIVISOR: u64 = 10;
 
 /// Transactions the counter is funded for at deployment. It only pays its own creation fee from
 /// this; later network transactions are paid by the sponsorship note each increment attaches. Kept
@@ -59,23 +58,14 @@ pub fn wallet_budget_per_increment(verification_base_fee: u32) -> u64 {
     max_fee_per_transaction(verification_base_fee) * 2
 }
 
-/// Amount requested when funding or topping up the wallet.
-pub fn wallet_funding_amount(verification_base_fee: u32) -> u64 {
-    (wallet_budget_per_increment(verification_base_fee) * WALLET_FUNDING_INCREMENTS)
-        .min(MAX_FUNDING_REQUEST_AMOUNT)
-}
-
-/// Wallet balance below which a top-up is requested. Clamped to half the request cap so a capped
-/// funding request still clears the threshold.
-pub fn wallet_topup_threshold(verification_base_fee: u32) -> u64 {
-    (wallet_budget_per_increment(verification_base_fee) * WALLET_TOPUP_THRESHOLD_INCREMENTS)
-        .min(MAX_FUNDING_REQUEST_AMOUNT / 2)
+/// Wallet balance below which a top-up of `wallet_funding_amount` is requested.
+pub fn wallet_topup_threshold(wallet_funding_amount: NonZeroU64) -> u64 {
+    wallet_funding_amount.get().div_ceil(WALLET_TOPUP_THRESHOLD_DIVISOR)
 }
 
 /// Amount requested when funding the counter account at deployment.
 pub fn counter_funding_amount(verification_base_fee: u32) -> u64 {
-    (max_fee_per_transaction(verification_base_fee) * COUNTER_FUNDING_TXS)
-        .min(MAX_FUNDING_REQUEST_AMOUNT)
+    max_fee_per_transaction(verification_base_fee) * COUNTER_FUNDING_TXS
 }
 
 /// HTTP client for the chain's faucet service, used by the monitor's faucet checks.
@@ -217,19 +207,28 @@ impl FeeFunder {
     }
 
     /// Requests `amount` base units for `account_id` and returns the P2ID note the service creates.
-    pub async fn fund(&mut self, account_id: AccountId, amount: u64) -> Result<Note> {
+    pub async fn fund(&mut self, account_id: AccountId, amount: u64) -> Result<UsdcxP2Id> {
         let note = self.client.request_funds(account_id, amount).await?;
 
-        ensure_note_carries_fee_asset(&note, self.fee_faucet_id).context(
-            "the funding service did not send the chain's fee asset: is it configured for this \
-             chain?",
+        let note = UsdcxP2Id::from_note(note, AssetId::new_fungible(self.fee_faucet_id)).context(
+            "the funding service must return a public P2ID note holding only the chain's fee asset",
         )?;
+        anyhow::ensure!(
+            note.target() == account_id,
+            "the funding note targets {} instead of {account_id}",
+            note.target()
+        );
+        anyhow::ensure!(
+            note.amount() == amount,
+            "the funding note holds {} base units instead of {amount}",
+            note.amount()
+        );
 
         info!(
             target: LOG_TARGET,
             "Received fee tokens from the funding service",
             account.id = account_id,
-            note.id = note.id(),
+            note.id = note.note().id(),
             asset.amount = amount
         );
 
@@ -237,34 +236,27 @@ impl FeeFunder {
     }
 }
 
-/// Checks that the note holds a non-zero amount of the fee faucet's fungible asset.
-pub(crate) fn ensure_note_carries_fee_asset(note: &Note, fee_faucet_id: AccountId) -> Result<()> {
-    let funded = note.assets().iter().any(|asset| {
-        asset
-            .as_fungible()
-            .is_some_and(|asset| asset.faucet_id() == fee_faucet_id && asset.amount().as_u64() > 0)
-    });
-    anyhow::ensure!(
-        funded,
-        "note {} does not hold the fee asset issued by faucet {fee_faucet_id}",
-        note.id().to_hex()
-    );
-    Ok(())
-}
-
 // TESTS
 // ================================================================================================
 
 #[cfg(test)]
 mod tests {
+    use axum::routing::post;
+    use axum::{Json, Router};
     use clap::Parser;
     use miden_protocol::Word;
     use miden_protocol::asset::FungibleAsset;
     use miden_protocol::note::NoteType;
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PRIVATE_SENDER,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+        ACCOUNT_ID_SENDER,
+    };
+    use miden_protocol::utils::serde::Serializable;
     use miden_standards::note::P2idNote;
+    use tokio::sync::watch;
 
     use super::*;
-    use crate::deploy::wallet::create_wallet_account;
 
     /// Parses a monitor configuration which holds the given arguments and nothing else of interest.
     fn config_with(arguments: &[&str]) -> MonitorConfig {
@@ -273,27 +265,19 @@ mod tests {
         MonitorConfig::parse_from(command)
     }
 
-    /// Requested amounts must stay within the funding service's maximum, and a capped request must
-    /// still clear the top-up threshold.
+    /// An empty wallet must request funds, and a wallet that just received a top-up must not
+    /// request another one, whatever amount the operator configures.
     #[test]
-    fn funding_amounts_respect_the_request_maximum() {
-        for base_fee in [1, 500, 834, 10_000, u32::MAX] {
-            assert!(wallet_funding_amount(base_fee) <= MAX_FUNDING_REQUEST_AMOUNT);
-            assert!(counter_funding_amount(base_fee) <= MAX_FUNDING_REQUEST_AMOUNT);
+    fn one_topup_clears_the_threshold() {
+        for amount in [1, 2, 3, 9, 11, 1_000, 1_000_000, u64::MAX] {
+            let threshold =
+                wallet_topup_threshold(NonZeroU64::new(amount).expect("amounts are non-zero"));
+            assert!(threshold > 0, "an empty wallet must request funds for amount {amount}");
             assert!(
-                wallet_funding_amount(base_fee) >= 2 * wallet_topup_threshold(base_fee),
-                "a single funding request must cover at least two thresholds at base fee \
-                 {base_fee}"
+                amount >= threshold,
+                "a topped-up empty wallet must clear the threshold for amount {amount}"
             );
         }
-
-        // Small base fees stay on the uncapped formula.
-        assert_eq!(
-            wallet_funding_amount(1),
-            wallet_budget_per_increment(1) * WALLET_FUNDING_INCREMENTS
-        );
-        // Large base fees hit the cap instead of producing a rejected request.
-        assert_eq!(wallet_funding_amount(10_000), MAX_FUNDING_REQUEST_AMOUNT);
     }
 
     /// Fees come from the funding service only, so a configured faucet must not produce a funding
@@ -319,25 +303,55 @@ mod tests {
         );
     }
 
-    /// A source sending the wrong token must fail at claim time, not as later fee aborts.
-    #[test]
-    fn funding_note_must_carry_the_fee_asset() {
+    /// The response must match the requested recipient, amount, and note format.
+    #[tokio::test]
+    async fn funding_responses_are_validated_before_use() {
         let fee_faucet_id = FungibleAsset::mock_issuer();
-        let (wallet, _secret_key) = create_wallet_account().expect("wallet account should build");
-        let note: Note = P2idNote::builder()
-            .sender(fee_faucet_id)
-            .target(wallet.id())
-            .serial_number(Word::from([7u32; 4]))
-            .note_type(NoteType::Public)
-            .asset(FungibleAsset::new(fee_faucet_id, 100).expect("valid asset"))
-            .build()
-            .expect("the note should build")
-            .into();
+        let target: AccountId = ACCOUNT_ID_SENDER.try_into().unwrap();
+        let other_target = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
+        let other_faucet = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap();
+        let note = |target, faucet, amount, note_type| -> Note {
+            P2idNote::builder()
+                .sender(faucet)
+                .target(target)
+                .serial_number(Word::from([7u32; 4]))
+                .note_type(note_type)
+                .asset(FungibleAsset::new(faucet, amount).unwrap())
+                .build()
+                .unwrap()
+                .into()
+        };
+        let valid = note(target, fee_faucet_id, 100, NoteType::Public);
+        let (tx, rx) = watch::channel(hex::encode(valid.to_bytes()));
+        let app = Router::new().route(
+            "/request-funds",
+            post(move || {
+                let note = rx.borrow().clone();
+                async move { Json(RequestFundsResponse { note }) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut funder =
+            FeeFunder::new(FundingClient::new(url, Duration::from_secs(5)), fee_faucet_id);
 
-        ensure_note_carries_fee_asset(&note, fee_faucet_id)
-            .expect("a note carrying the fee asset must be accepted");
-        // Any other issuer id must be rejected; the wallet id stands in for a wrong faucet.
-        ensure_note_carries_fee_asset(&note, wallet.id())
-            .expect_err("a note without the fee asset must be rejected");
+        let received = funder.fund(target, 100).await.unwrap();
+        assert_eq!(received.target(), target);
+        assert_eq!(received.amount(), 100);
+        assert_eq!(received.note(), &valid);
+        for (note, expected_error) in [
+            (note(other_target, fee_faucet_id, 100, NoteType::Public), "targets"),
+            (note(target, fee_faucet_id, 0, NoteType::Public), "base units"),
+            (note(target, fee_faucet_id, 99, NoteType::Public), "base units"),
+            (note(target, fee_faucet_id, 101, NoteType::Public), "base units"),
+            (note(target, other_faucet, 100, NoteType::Public), "public P2ID"),
+            (note(target, fee_faucet_id, 100, NoteType::Private), "public P2ID"),
+        ] {
+            tx.send_replace(hex::encode(note.to_bytes()));
+            let error = funder.fund(target, 100).await.expect_err("invalid funding response");
+            assert!(error.to_string().contains(expected_error), "unexpected error: {error:#}");
+        }
+        server.abort();
     }
 }

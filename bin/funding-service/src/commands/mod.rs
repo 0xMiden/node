@@ -6,7 +6,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use miden_funding_service::{
-    DEFAULT_DEPOSIT_SCAN_INTERVAL,
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
     DEFAULT_MAX_NOTES_PER_TX,
@@ -33,7 +32,6 @@ const ENV_TX_PROVER_URL: &str = "MIDEN_FUNDING_TX_PROVER_URL";
 const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_FUNDING_TX_PROVER_TIMEOUT";
 const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
-const ENV_DEPOSIT_SCAN_INTERVAL: &str = "MIDEN_FUNDING_DEPOSIT_SCAN_INTERVAL";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
@@ -44,6 +42,8 @@ const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING
 pub enum FundingServiceCommand {
     /// Starts the funding service.
     Start {
+        #[command(flatten)]
+        grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// Socket address at which to serve the funding service's HTTP API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
@@ -117,7 +117,7 @@ pub enum FundingServiceCommand {
         )]
         tx_expiration_delta: NonZeroU16,
 
-        /// Interval for processing pending notes and checking submitted transactions.
+        /// Interval for syncing the wallet and checking submitted transactions.
         #[arg(
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,
@@ -126,16 +126,6 @@ pub enum FundingServiceCommand {
             value_name = "DURATION"
         )]
         poll_interval: Duration,
-
-        /// Interval at which the service scans for the pay-to-ID notes sent to the funding account.
-        #[arg(
-            long = "deposit-scan-interval",
-            env = ENV_DEPOSIT_SCAN_INTERVAL,
-            default_value = duration_to_human_readable_string(DEFAULT_DEPOSIT_SCAN_INTERVAL),
-            value_parser = humantime::parse_duration,
-            value_name = "DURATION"
-        )]
-        deposit_scan_interval: Duration,
 
         /// Hex-encoded validator signing public key trusted to attest the transaction encryption
         /// key.
@@ -154,6 +144,7 @@ pub enum FundingServiceCommand {
 impl FundingServiceCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
+            grpc_message_size,
             listen,
             http_timeout,
             rpc_url,
@@ -165,7 +156,6 @@ impl FundingServiceCommand {
             max_notes_per_tx,
             tx_expiration_delta,
             poll_interval,
-            deposit_scan_interval,
             validator_signing_public_keys,
         } = self;
 
@@ -184,9 +174,7 @@ impl FundingServiceCommand {
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string(),
-            funding_service.deposit_scan_interval =
-                humantime::Duration::from(deposit_scan_interval).to_string()
+            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
         );
 
         let listener = TcpListener::bind(listen)
@@ -194,6 +182,7 @@ impl FundingServiceCommand {
             .context("failed to bind to the funding service's HTTP socket")?;
 
         FundingServiceConfig::new(rpc_url, account_file, validator_signing_public_keys)
+            .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
             .with_tx_prover_url(tx_prover_url)
             .with_http_timeout(http_timeout)
             .with_rpc_timeout(rpc_timeout)
@@ -202,7 +191,6 @@ impl FundingServiceCommand {
             .with_max_notes_per_tx(max_notes_per_tx)
             .with_tx_expiration_delta(tx_expiration_delta)
             .with_poll_interval(poll_interval)
-            .with_deposit_scan_interval(deposit_scan_interval)
             .build()
             .await
             .context("failed to initialize the funding service")?

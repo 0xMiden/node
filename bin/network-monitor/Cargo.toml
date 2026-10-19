@@ -19,6 +19,7 @@ anyhow              = { workspace = true }
 axum                = { workspace = true }
 backon              = { workspace = true }
 clap                = { features = ["env"], workspace = true }
+fs-err              = { workspace = true }
 futures             = { workspace = true }
 hex                 = { workspace = true }
 humantime           = { workspace = true }

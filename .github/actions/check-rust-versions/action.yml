@@ -27,7 +27,8 @@ runs:
         fi
 
         check_version rust-toolchain.toml "$(toml_version channel rust-toolchain.toml)"
-        check_version Dockerfile "$(sed -nE 's/^ARG[[:space:]]+RUST_VERSION=([^[:space:]]+)[[:space:]]*$/\1/p' Dockerfile)"
+        check_version Dockerfile \
+          "$(sed -nE 's/^ARG[[:space:]]+RUST_VERSION=([^[:space:]]+)[[:space:]]*$/\1/p' Dockerfile)"
 
         while IFS= read -r -d '' manifest; do
           if grep -Eq '^rust-version\.workspace[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$' "${manifest}"; then

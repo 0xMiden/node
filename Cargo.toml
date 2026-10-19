@@ -37,7 +37,7 @@ license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/node"
 rust-version = "1.98.1"
-version      = "0.17.2"
+version      = "0.17.6"
 
 # Optimize the cryptography for faster tests involving account creation.
 [profile.test.package.miden-crypto]
@@ -48,18 +48,18 @@ debug = true
 
 [workspace.dependencies]
 # Workspace crates.
-miden-node-block-producer   = { path = "crates/block-producer", version = "0.17.2" }
-miden-node-db               = { path = "crates/db", version = "0.17.2" }
-miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.17.2" }
-miden-node-persistence      = { path = "crates/persistence", version = "0.17.2" }
-miden-node-proto            = { path = "crates/proto", version = "0.17.2" }
-miden-node-proto-build      = { path = "proto", version = "0.17.2" }
-miden-node-rpc              = { path = "crates/rpc", version = "0.17.2" }
-miden-node-store            = { path = "crates/store", version = "0.17.2" }
+miden-node-block-producer   = { path = "crates/block-producer", version = "0.17.6" }
+miden-node-db               = { path = "crates/db", version = "0.17.6" }
+miden-node-grpc-error-macro = { path = "crates/grpc-error-macro", version = "0.17.6" }
+miden-node-persistence      = { path = "crates/persistence", version = "0.17.6" }
+miden-node-proto            = { path = "crates/proto", version = "0.17.6" }
+miden-node-proto-build      = { path = "proto", version = "0.17.6" }
+miden-node-rpc              = { path = "crates/rpc", version = "0.17.6" }
+miden-node-store            = { path = "crates/store", version = "0.17.6" }
 miden-node-test-macro       = { path = "crates/test-macro" }
-miden-node-tracing          = { path = "crates/tracing", version = "0.17.2" }
-miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.17.2" }
-miden-node-utils            = { path = "crates/utils", version = "0.17.2" }
+miden-node-tracing          = { path = "crates/tracing", version = "0.17.6" }
+miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.17.6" }
+miden-node-utils            = { path = "crates/utils", version = "0.17.6" }
 
 # miden-protocol dependencies. These should be updated in sync.
 miden-block-prover = { version = "0.17.1" }
@@ -109,46 +109,47 @@ proc-macro2        = { version = "1.0" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
-prost              = { default-features = false, version = "=0.14.3" }
-prost-build        = { version = "=0.14.3" }
-prost-types        = { default-features = false, version = "=0.14.3" }
-protox             = { version = "=0.9.1" }
-quote              = { version = "1.0" }
-rand               = { version = "0.10" }
-rand_chacha        = { default-features = false, version = "0.10" }
-rand_chacha_03     = { package = "rand_chacha", version = "0.3" }
-rand_core_06       = { features = ["getrandom"], package = "rand_core", version = "0.6" }
-rayon              = { version = "1.10" }
-reqwest            = { version = "0.13" }
-rstest             = { version = "0.26" }
-rusqlite           = { features = ["array", "bundled"], version = "0.37" }
-semver             = { version = "1.0" }
-serde              = { features = ["derive"], version = "1" }
-serde_json         = { version = "1.0" }
-serial_test        = { version = "3.2" }
-sha2               = { version = "0.10" }
-syn                = { version = "2.0" }
-tempfile           = { version = "3.12" }
-thiserror          = { default-features = false, version = "2.0" }
-thread-priority    = { version = "3.1" }
-tokio              = { default-features = false, version = "1.46" }
-tokio-stream       = { version = "0.1" }
-tokio-util         = { features = ["rt"], version = "0.7" }
-toml               = { version = "1.0" }
-tonic              = { default-features = false, version = "0.14" }
-tonic-health       = { version = "0.14" }
-tonic-prost        = { version = "0.14" }
-tonic-prost-build  = { version = "0.14" }
-tonic-reflection   = { version = "0.14" }
-tonic-web          = { version = "0.14" }
-tower              = { version = "0.5" }
-tower-http         = { features = ["cors", "trace"], version = "0.6" }
-tower_governor     = { version = "0.8" }
-tracing            = { version = "0.1" }
-tracing-subscriber = { features = ["env-filter", "fmt", "json"], version = "0.3" }
-trybuild           = { version = "1.0" }
-url                = { features = ["serde"], version = "2.5" }
-zeroize            = { version = "1.8" }
+prost                 = { default-features = false, version = "=0.14.3" }
+prost-build           = { version = "=0.14.3" }
+prost-types           = { default-features = false, version = "=0.14.3" }
+protox                = { version = "=0.9.1" }
+quote                 = { version = "1.0" }
+rand                  = { version = "0.10" }
+rand_chacha           = { default-features = false, version = "0.10" }
+rand_chacha_03        = { package = "rand_chacha", version = "0.3" }
+rand_core_06          = { features = ["getrandom"], package = "rand_core", version = "0.6" }
+rayon                 = { version = "1.10" }
+reqwest               = { version = "0.13" }
+rstest                = { version = "0.26" }
+rusqlite              = { features = ["array", "bundled"], version = "0.37" }
+semver                = { version = "1.0" }
+serde                 = { features = ["derive"], version = "1" }
+serde_json            = { version = "1.0" }
+serial_test           = { version = "3.2" }
+sha2                  = { version = "0.10" }
+syn                   = { version = "2.0" }
+tempfile              = { version = "3.12" }
+thiserror             = { default-features = false, version = "2.0" }
+thread-priority       = { version = "3.1" }
+tokio                 = { default-features = false, version = "1.46" }
+tokio-stream          = { version = "0.1" }
+tokio-util            = { features = ["rt"], version = "0.7" }
+toml                  = { version = "1.0" }
+tonic                 = { default-features = false, version = "0.14" }
+tonic-health          = { version = "0.14" }
+tonic-prost           = { version = "0.14" }
+tonic-prost-build     = { version = "0.14" }
+tonic-reflection      = { version = "0.14" }
+tonic-web             = { version = "0.14" }
+tower                 = { version = "0.5" }
+tower-http            = { features = ["cors", "trace"], version = "0.6" }
+tower_governor        = { version = "0.8" }
+tracing               = { version = "0.1" }
+tracing-opentelemetry = { version = "0.32" }
+tracing-subscriber    = { features = ["env-filter", "fmt", "json"], version = "0.3" }
+trybuild              = { version = "1.0" }
+url                   = { features = ["serde"], version = "2.5" }
+zeroize               = { version = "1.8" }
 
 [workspace.metadata.cargo-shear]
 # libsqlite3-sys is kept to control the bundled SQLite linkage.

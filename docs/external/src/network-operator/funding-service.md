@@ -39,8 +39,7 @@ miden-funding-service start \
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
-| `--poll-interval`                | `1s`         | Interval for processing pending notes and checking submitted transactions.                                                                                              |
-| `--deposit-scan-interval`        | `1m`         | How often the service scans for the pay-to-ID notes sent to the funding account.                                                                                        |
+| `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                             |
 | `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
@@ -92,6 +91,9 @@ that tops up several accounts at once is therefore served by one transaction rat
 The service has no health endpoint. `GET /status` answers while the service still synchronizes, so it reports that the
 process runs and does not track whether the node is reachable. A request that cannot be served fails on its own.
 
+The reported balance, block, and fee reflect the worker's latest completed wallet sync. They remain unchanged while the
+worker proves a transaction, waits for confirmation, or retries a failed sync.
+
 A failed request answers with a JSON body that holds the reason:
 
 ```json
@@ -121,10 +123,11 @@ operator action, which is what the status code reports.
 `GET /status` reports the funding account's balance, which is the value to alert on.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
-notes and consumes them on its own, so no operator action is needed beyond sending the note. The scan runs every
-`--deposit-scan-interval`, which defaults to one minute. At startup, the worker first scans from genesis through the
-current chain tip. It completes that discovery before it processes funding requests. A restart recovers unspent
-deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved cursor.
+notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs when a
+request batch fills and every `--poll-interval`, which defaults to one second, while no transaction is in flight. At
+startup, the worker first scans from genesis through the current chain tip. It completes that discovery before it
+processes funding requests. A restart recovers unspent deposits, including deposits sent while the service was stopped.
+Periodic scans continue from the saved cursor.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds

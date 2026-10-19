@@ -1,6 +1,8 @@
 //! Test support: a funding account and a fee faucet shaped like the ones genesis creates, on a
 //! [`MockChain`].
 
+pub(crate) mod telemetry;
+
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -31,7 +33,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::Mutex;
 
-use crate::account::FunderKey;
+use crate::account::FundingWallet;
 use crate::status::NativeAsset;
 
 /// The base fee used by the tests which exercise the fee path.
@@ -78,6 +80,14 @@ pub fn test_native_asset() -> NativeAsset {
 
 /// Builds a network fungible faucet shaped like the genesis native faucet.
 pub fn genesis_style_native_faucet(operator: AccountId, seed: [u8; 32]) -> Result<Account> {
+    native_faucet_with_transfer_policy(operator, seed, TransferPolicy::allow_all())
+}
+
+fn native_faucet_with_transfer_policy(
+    operator: AccountId,
+    seed: [u8; 32],
+    transfer_policy: TransferPolicy,
+) -> Result<Account> {
     let faucet_component = FungibleFaucetComponent::builder()
         .name(TokenName::new("MIDEN").expect("valid token name"))
         .symbol(TokenSymbol::new("MIDEN").expect("valid token symbol"))
@@ -87,8 +97,8 @@ pub fn genesis_style_native_faucet(operator: AccountId, seed: [u8; 32]) -> Resul
     let policies = TokenPolicyManager::builder()
         .active_mint_policy(MintPolicy::owner_only())
         .active_burn_policy(BurnPolicy::allow_all())
-        .active_send_policy(TransferPolicy::allow_all())
-        .active_receive_policy(TransferPolicy::allow_all())
+        .active_send_policy(transfer_policy.clone())
+        .active_receive_policy(transfer_policy)
         .build();
     let fee_policy = BasicConstantFeePolicy::new()
         .with_fees([
@@ -115,12 +125,16 @@ pub fn genesis_style_native_faucet(operator: AccountId, seed: [u8; 32]) -> Resul
 }
 
 /// Writes an account file the way `miden-validator genesis` does, and loads it back.
-pub fn funder_key_from(account: &Account, secret_key: &SecretKey) -> Result<FunderKey> {
+pub fn funding_wallet_from(
+    account: &Account,
+    secret_key: &SecretKey,
+    fee_asset_id: AssetId,
+) -> Result<FundingWallet> {
     let dir = tempfile::tempdir()?;
     let path = dir.path().join("funding_service.mac");
     AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Poseidon2(secret_key.clone())])
         .write(&path)?;
-    FunderKey::load(&path)
+    FundingWallet::load(&path, fee_asset_id)
 }
 
 // MOCK CHAIN FIXTURE
@@ -130,20 +144,30 @@ pub fn funder_key_from(account: &Account, secret_key: &SecretKey) -> Result<Fund
 pub struct Fixture {
     pub chain: Arc<Mutex<MockChain>>,
     pub funder: Account,
-    pub funder_key: FunderKey,
+    pub wallet: FundingWallet,
     pub fee_faucet_id: AccountId,
 }
 
 impl Fixture {
     /// Builds a chain which charges `base_fee` and holds a funding wallet with `balance`.
     pub fn new(balance: u64, base_fee: u32) -> Result<Self> {
+        Self::with_transfer_policy(balance, base_fee, TransferPolicy::allow_all())
+    }
+
+    /// Builds a funding fixture with the same transfer policy for sending and receiving assets.
+    pub fn with_transfer_policy(
+        balance: u64,
+        base_fee: u32,
+        policy: TransferPolicy,
+    ) -> Result<Self> {
         // The faucet's owner does not matter for these tests, so the wallet built first stands in.
         let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [1; 32])?;
-        let faucet = genesis_style_native_faucet(owner.id(), [7; 32])?;
+        let faucet = native_faucet_with_transfer_policy(owner.id(), [7; 32], policy)?;
         let fee_faucet_id = faucet.id();
 
         let (funder, secret_key) = genesis_style_wallet(fee_faucet_id, balance, [9; 32])?;
-        let funder_key = funder_key_from(&funder, &secret_key)?;
+        let wallet =
+            funding_wallet_from(&funder, &secret_key, AssetId::new_fungible(fee_faucet_id))?;
 
         let mut builder = MockChain::builder()
             .fee_faucet_id(fee_faucet_id)
@@ -155,7 +179,7 @@ impl Fixture {
         Ok(Self {
             chain: Arc::new(Mutex::new(chain)),
             funder,
-            funder_key,
+            wallet,
             fee_faucet_id,
         })
     }

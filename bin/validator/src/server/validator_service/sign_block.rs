@@ -2,9 +2,9 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, Instrument, info_span, miden_instrument};
+use miden_node_tracing::{Instrument, info_span, miden_instrument};
 use miden_protocol::Word;
-use miden_protocol::block::{BlockHeader, BlockNumber, ProposedBlock};
+use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
@@ -60,7 +60,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_internal("sign_block semaphore closed")?;
 
-        let (proposed_block, protocol_config, protocol_config_commitment) =
+        let (proposed_block, protocol_config, protocol_config_commitment, proving_inputs) =
             spawn_blocking_in_current_span(move || {
                 let request = request
                     // SAFETY: Construction checks local batch invariants and block witnesses.
@@ -72,6 +72,13 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
                     // blocks and expiration. Full validation needs more data or protocol support.
                     .decode_and_build_unchecked()
                     .map_err(miden_node_proto::errors::ConversionError::into_status)?;
+                let proving_inputs = miden_node_proto::BlockProofRequest {
+                    tx_batches: miden_protocol::batch::OrderedBatches::new(
+                        request.tx_batches.as_slice().to_vec(),
+                    ),
+                    block_header: request.block_header.clone(),
+                    block_inputs: request.block_inputs.clone(),
+                };
                 let protocol_config = request.protocol_config;
                 let protocol_config_commitment = request.block_header.protocol_config_commitment();
                 let proposed_block = ProposedBlock::new_at(
@@ -91,6 +98,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
                     proposed_block,
                     protocol_config,
                     protocol_config_commitment,
+                    proving_inputs,
                 ))
             })
             .await
@@ -98,13 +106,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         let protocol_config = self
             .resolve_protocol_config(protocol_config_commitment, protocol_config)
             .await?;
-
-        let block_num = proposed_block.block_num();
-        let previous_backup = self
-            .block_store
-            .load_block(block_num)
-            .await
-            .or_internal("Failed to load previous block backup")?;
 
         // Load the current chain tip from the database.
         let chain_tip = self
@@ -124,33 +125,43 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         let chain_tip_num = chain_tip.block_num();
 
         // Validate the block against the current chain tip.
-        let (signature, header) = self
+        let (signature, signed_block) = self
             .validate_block(proposed_block, chain_tip)
             .await
             .or_invalid_argument("Failed to validate block")?;
 
-        // Capture the commitment that was signed before `header` is moved into the persistence
+        // Capture the commitment that was signed before the block is moved into the persistence
         // closure, so it can be returned to the block producer for cross-checking.
-        let block_commitment = header.commitment();
+        let block_commitment = signed_block.header().commitment();
 
-        // Persist the signed header together with the block position of each of its transactions. A
-        // validated block at the tip's height replaces the current tip, which also deletes the
-        // replaced block — atomically with persisting its successor, so a crash cannot leave the
-        // replaced block's links behind.
-        let new_block_num = header.block_num().as_u32();
-        let is_replacement = header.block_num() == chain_tip_num;
-        self.persist_signed_block(
-            header,
-            protocol_config,
-            block_transactions,
-            is_replacement,
-            previous_backup,
-        )
-        .await?;
+        // The signed block, proving inputs, and transaction positions are persisted atomically.
+        //
+        // A block at the current tip's height replaces that tip in the same transaction, so a crash
+        // cannot leave transaction links from the replaced block behind.
+        let new_block_num = signed_block.header().block_num().as_u32();
+        let is_replacement = signed_block.header().block_num() == chain_tip_num;
+        if is_replacement {
+            self.db
+                .replace_signed_block(
+                    signed_block,
+                    protocol_config,
+                    block_transactions,
+                    proving_inputs,
+                )
+                .await
+        } else {
+            self.db
+                .insert_signed_block(
+                    signed_block,
+                    protocol_config,
+                    block_transactions,
+                    proving_inputs,
+                )
+                .await
+        }
+        .or_internal("Failed to persist signed block")?;
 
-        // Update the in-memory counters after successful persistence. The block has already been
-        // backed up to the block store by `validate_block`, so it is available to subscribers by
-        // the time they observe this new tip.
+        // Publish the tip only after the block and its metadata have committed together.
         self.committed_tip.send_replace(BlockNumber::from(new_block_num));
         // A replacement stores no additional block. The count must stay equal to the number of
         // stored block headers, which is the value a restart reads.
@@ -185,41 +196,5 @@ impl ValidatorService {
                 "Protocol config {commitment} is not stored"
             ))),
         }
-    }
-
-    /// Persists the signed block and restores an existing backup if persistence fails.
-    async fn persist_signed_block(
-        &self,
-        header: BlockHeader,
-        protocol_config: ProtocolConfig,
-        transactions: Vec<TransactionId>,
-        is_replacement: bool,
-        previous_backup: Option<Vec<u8>>,
-    ) -> tonic::Result<()> {
-        let block_num = header.block_num();
-        let persisted = if is_replacement {
-            self.db.replace_signed_block(header, protocol_config, transactions).await
-        } else {
-            self.db.insert_signed_block(header, protocol_config, transactions).await
-        };
-        let Err(err) = persisted else {
-            return Ok(());
-        };
-
-        if let Some(previous_backup) = previous_backup {
-            self.block_store
-                .save_block(block_num, &previous_backup)
-                .await
-                .map_err(|restore_err| {
-                    tonic::Status::internal(format!(
-                        "Failed to persist block header: {}; failed to restore block backup: {restore_err}",
-                        err.as_report()
-                    ))
-                })?;
-        }
-        Err(tonic::Status::internal(format!(
-            "Failed to persist block header: {}",
-            err.as_report()
-        )))
     }
 }

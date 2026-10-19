@@ -168,25 +168,16 @@ funding service directly to fund an account after a failed or interrupted reques
 
 ## Failover
 
-Full nodes replicate the committed sequencer state from their upstream block source. Because of this, a full node can be
-promoted to sequencer if the active sequencer needs to be replaced.
-
-The promotion target must be in sync with the current sequencer state. A full node that is behind the sequencer is not a
-valid replacement until it has caught up to the committed chain tip.
-
-There is always some risk of data loss during failover because full nodes follow the sequencer asynchronously. Blocks
-committed by the sequencer but not yet replicated to the promoted full node may be missing from that node's local state.
-The validator also retains a copy of the blocks it validated and signed, and can be used to recover missing committed
-block data when this occurs. See [Recovery](/network-operator/recovery) for the procedure.
+A full node can replace the active sequencer once it has recovered the committed chain and can prove any outstanding
+blocks. Follow [Recovery](/network-operator/recovery) to prepare the replacement, including when its latest committed
+block already matches the sequencer's. The procedure covers stopping the old sequencer, restoring blocks and proving
+inputs, and choosing when to generate missing proofs.
 
 ### Fee Collector Account
 
-Copy the existing `fee-collector.mac` file to the replacement node's data directory before starting it as a sequencer.
-This file contains the collector's signing key and is not replicated with chain state. The account is already deployed
-and does not need to be deployed again.
-
-If the file is lost, complete chain recovery, then create and deploy a new collector with the same
-[Fee Collection](#fee-collection) procedure. Keep the replacement node stopped until deployment completes.
+The replacement needs the existing `fee-collector.mac` file or a newly deployed collector account. Have the file
+available when planning failover: losing it requires completing proofs before deploying a replacement collector. The
+[recovery procedure](/network-operator/recovery#procedure) covers both cases and when the node is ready to start.
 
 ## Common Configuration
 
