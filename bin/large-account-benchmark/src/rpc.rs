@@ -47,6 +47,7 @@ impl SubmissionClient {
         rpc_url: &Url,
         timeout: Duration,
         validator_signing_public_keys: &[String],
+        max_decoding_message_size: usize,
     ) -> Result<Self> {
         anyhow::ensure!(
             !validator_signing_public_keys.is_empty(),
@@ -68,7 +69,8 @@ impl SubmissionClient {
         // Step one: a client with no genesis metadata, used only to learn the genesis header. TLS
         // follows the URL scheme, so a local `http://` stack needs no extra flags. The builder is a
         // typestate, so the scheme branch is inlined rather than factored into a helper.
-        let discovery = Builder::new(rpc_url.clone());
+        let discovery =
+            Builder::new(rpc_url.clone()).max_decoding_message_size(max_decoding_message_size);
         let discovery = if rpc_url.scheme() == "https" {
             discovery.with_tls().context("failed to configure TLS for the RPC client")?
         } else {
@@ -87,7 +89,8 @@ impl SubmissionClient {
         let genesis_commitment = genesis_header.commitment();
 
         // Step two: the real client, carrying the genesis commitment so writes are accepted.
-        let genesis_aware = Builder::new(rpc_url.clone());
+        let genesis_aware =
+            Builder::new(rpc_url.clone()).max_decoding_message_size(max_decoding_message_size);
         let genesis_aware = if rpc_url.scheme() == "https" {
             genesis_aware.with_tls().context("failed to configure TLS for the RPC client")?
         } else {
@@ -156,7 +159,7 @@ impl SubmissionClient {
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
-                asset_vault_commitment: None,
+                vault_request: None,
                 storage_request: None,
             }),
         };

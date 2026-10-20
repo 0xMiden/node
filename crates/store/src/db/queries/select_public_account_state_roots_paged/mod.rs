@@ -1,4 +1,4 @@
-//! Returns a page of public account state roots, to verify the account state forest at startup.
+//! Returns pages of public account state roots, to verify the account state forest at startup.
 
 use std::num::NonZeroUsize;
 
@@ -6,11 +6,11 @@ use miden_node_db::sqlite::{ReadTx, Row};
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountStorageHeader};
 
+use crate::db::pagination::{Page, Paginated, key_cursor};
 use crate::db::queries::VALID_FOREVER;
 use crate::errors::DatabaseError;
 
-const SQL_FIRST_PAGE: &str = include_str!("select_public_account_state_roots_page.sql");
-const SQL_AFTER_CURSOR: &str = include_str!("select_public_account_state_roots_page_after.sql");
+const SQL: &str = include_str!("select_public_account_state_roots_page.sql");
 
 /// Latest account state forest roots for a public account.
 #[derive(Debug)]
@@ -20,75 +20,63 @@ pub struct PublicAccountStateRoots {
     pub storage_header: AccountStorageHeader,
 }
 
-/// Page of public account state roots returned by [`select_public_account_state_roots_paged`].
-#[derive(Debug)]
-pub struct PublicAccountStateRootsPage {
-    /// The public account state roots in this page.
-    pub accounts: Vec<PublicAccountStateRoots>,
-    /// If `Some`, there are more results. Use this as the `after_account_id` for the next page.
-    pub next_cursor: Option<AccountId>,
-}
-
 /// A stored public account row. The vault root and the storage header columns are nullable.
 type StateRootsRow = (AccountId, Option<Word>, Option<AccountStorageHeader>);
 
-/// Selects public account vault roots and storage headers with pagination.
+/// Paginated query over the latest vault root and storage header of every public account, ordered
+/// by account ID. The cursor is the account ID where a page starts, or `None` for the first account.
 ///
-/// Returns up to `page_size` public account states, starting after `after_account_id` if provided.
-/// Results are ordered by `account_id` for stable pagination.
-///
-/// Public accounts are those with `AccountType::Public`. We identify them by checking
-/// against the store. Public accounts store their `code_commitment`, while private accounts only
-/// store the `account_commitment`.
-///
-/// # Errors
-///
-/// Returns [`DatabaseError::DataCorrupted`] if a public account has no vault root or no storage
-/// header.
-pub(crate) fn select_public_account_state_roots_paged(
-    tx: &ReadTx<'_>,
-    page_size: NonZeroUsize,
-    after_account_id: Option<AccountId>,
-) -> Result<PublicAccountStateRootsPage, DatabaseError> {
-    // Fetch one extra to determine if there are more results
-    let limit = i64::try_from(page_size.get() + 1).expect("page size fits within i64");
+/// Public accounts are recognized by their stored `code_commitment`, because private accounts only
+/// store an `account_commitment`. Both columns are nullable in the schema, but a public account
+/// always has them, so a page fails with [`DatabaseError::DataCorrupted`] if either is missing.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PublicAccountStateRootsPaged {
+    /// Maximum number of public account states in a page.
+    pub page_size: NonZeroUsize,
+}
 
-    let rows = match after_account_id {
-        Some(cursor) => {
-            tx.query(SQL_AFTER_CURSOR, &[&limit, &VALID_FOREVER, &cursor], state_roots_from_row)?
-        },
-        None => tx.query(SQL_FIRST_PAGE, &[&limit, &VALID_FOREVER], state_roots_from_row)?,
-    };
+impl Paginated for PublicAccountStateRootsPaged {
+    type Item = PublicAccountStateRoots;
+    type Cursor = Option<AccountId>;
 
-    // The columns are nullable in the schema, but a public account always has both.
-    let mut accounts = rows
-        .into_iter()
-        .map(|(account_id, vault_root, storage_header)| {
-            Ok(PublicAccountStateRoots {
-                account_id,
-                vault_root: vault_root.ok_or_else(|| {
-                    DatabaseError::DataCorrupted(format!(
-                        "public account {account_id} is missing a vault root"
-                    ))
-                })?,
-                storage_header: storage_header.ok_or_else(|| {
-                    DatabaseError::DataCorrupted(format!(
-                        "public account {account_id} is missing a storage header"
-                    ))
-                })?,
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &Option<AccountId>,
+    ) -> Result<Page<PublicAccountStateRoots, Option<AccountId>>, DatabaseError> {
+        // Fetch one extra to determine if there are more results
+        let limit = i64::try_from(self.page_size.get() + 1).expect("page size fits within i64");
+
+        let rows = tx.query(
+            SQL,
+            &[&limit, &VALID_FOREVER, &key_cursor(next.as_ref())],
+            state_roots_from_row,
+        )?;
+
+        // The columns are nullable in the schema, but a public account always has both.
+        let accounts = rows
+            .into_iter()
+            .map(|(account_id, vault_root, storage_header)| {
+                Ok(PublicAccountStateRoots {
+                    account_id,
+                    vault_root: vault_root.ok_or_else(|| {
+                        DatabaseError::DataCorrupted(format!(
+                            "public account {account_id} is missing a vault root"
+                        ))
+                    })?,
+                    storage_header: storage_header.ok_or_else(|| {
+                        DatabaseError::DataCorrupted(format!(
+                            "public account {account_id} is missing a storage header"
+                        ))
+                    })?,
+                })
             })
-        })
-        .collect::<Result<Vec<_>, DatabaseError>>()?;
+            .collect::<Result<Vec<_>, DatabaseError>>()?;
 
-    // If we got more than page_size, there are more results.
-    let next_cursor = if accounts.len() > page_size.get() {
-        accounts.pop();
-        accounts.last().map(|account| account.account_id)
-    } else {
-        None
-    };
-
-    Ok(PublicAccountStateRootsPage { accounts, next_cursor })
+        Ok(Page::from_overflow(accounts, self.page_size, |account| {
+            Some(account.account_id)
+        }))
+    }
 }
 
 /// Maps a `SELECT account_id, vault_root, storage_header` row to its [`StateRootsRow`].

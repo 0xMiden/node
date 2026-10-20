@@ -15,7 +15,7 @@
 //!         warn!(
 //!             err,
 //!             "retrying",
-//!             retry.delay_ms = dur.as_millis() as u64
+//!             retry.delay_ms = dur
 //!         );
 //!     })
 //!     .await?;

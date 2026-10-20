@@ -3,6 +3,7 @@ use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_f
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -18,6 +19,9 @@ use tonic::{Request, Status};
 use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
 use crate::LOG_TARGET;
 
+#[cfg(test)]
+mod tests;
+
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
     type Input = miden_node_proto::ProvenTransactionSubmission;
@@ -31,11 +35,9 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
             .ok_or_else(|| tonic::Status::invalid_argument("missing submission"))?;
         request
             // SAFETY: The handler checks the reference block and proof before forwarding. Decoding
-            // does not authenticate the transaction against current chain state.
-            //
-            // FIXME: Check committed nullifiers and expiration against one local state snapshot
-            // on every submission path. Forwarding skips the local nullifier check, and
-            // expiration is checked later by the sequencer mempool.
+            // does not authenticate the transaction against current chain state. The forwarding
+            // path performs a nullifier and expiration check via `check_nullifiers_and_expiration`
+            // before the transaction reaches the upstream sequencer.
             .decode_and_build_unchecked()
             .map_err(miden_node_proto::errors::ConversionError::into_status)
     }
@@ -165,8 +167,11 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
                 .await
             },
             RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
-                // FIXME: Preserve and forward the original request. This request contains the
-                // transaction rebuilt above with output-note decorators removed.
+                // Check nullifiers and expiration against the local store before forwarding so that
+                // provably-invalid transactions are rejected at the edge rather than consuming
+                // sequencer resources.
+                check_nullifiers_and_expiration(&self.state, rebuilt_tx).await?;
+
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {
                     forwarded_request.metadata_mut().insert(http::header::ACCEPT.as_str(), accept);
@@ -227,6 +232,28 @@ impl RpcService {
 
 // HELPERS
 // ================================================================================================
+
+/// Checks committed transaction inputs and expiration against one store snapshot.
+async fn check_nullifiers_and_expiration(
+    state: &State,
+    tx: ProvenTransaction,
+) -> tonic::Result<()> {
+    let inputs = get_tx_inputs(state, &tx)
+        .await
+        .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+    let chain_tip = inputs.current_block_height;
+    if tx.expiration_block_num() <= chain_tip {
+        return Err(MempoolSubmissionError::Expired {
+            expired_at: tx.expiration_block_num(),
+            limit: chain_tip,
+        }
+        .into());
+    }
+
+    AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+        .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
+    Ok(())
+}
 
 /// Strips decorators from public output notes' scripts.
 ///

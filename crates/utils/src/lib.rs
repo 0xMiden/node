@@ -17,6 +17,7 @@ pub mod shutdown;
 pub mod tasks;
 #[cfg(feature = "testing-prover")]
 pub mod testing;
+pub mod usdcx_p2id;
 
 /// Extends nested results types, allowing them to be flattened.
 ///

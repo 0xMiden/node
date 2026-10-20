@@ -41,7 +41,7 @@ impl ConnectedPeer {
                     target: miden_validator::LOG_TARGET,
                     "Retrying DKG peer connection",
                     dkg.peer.endpoint = peer_endpoint.to_string() #[nonstandard],
-                    retry.delay_ms = delay.as_millis() as u64
+                    retry.delay_ms = delay
                 );
             })
             .await

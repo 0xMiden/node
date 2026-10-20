@@ -635,7 +635,11 @@ mod tests {
             state,
             batch_prover: BatchProver::new(),
             fee_collector,
-            validator: BlockProducerValidatorClient::new(Vec::new(), Duration::from_secs(1))?,
+            validator: BlockProducerValidatorClient::new(
+                Vec::new(),
+                Duration::from_secs(1),
+                miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+            )?,
             mempool,
         };
 

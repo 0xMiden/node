@@ -20,13 +20,14 @@ use miden_protocol::account::{
     StoragePatchOperation,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetId, AssetIdHash};
+use miden_protocol::asset::{Asset, AssetId, AssetIdHash, PartialVault};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::smt::{
     ForestConfig,
     LargeSmtForest,
     LargeSmtForestError,
     LineageId,
+    PartialSmt,
     RootInfo,
     SMT_DEPTH,
     SmtForestMutationSet,
@@ -66,6 +67,10 @@ pub enum WitnessError {
     StorageMapError(#[from] StorageMapError),
     #[error("failed to construct asset")]
     AssetError(#[from] AssetError),
+    #[error("invalid partial vault")]
+    PartialVault(#[source] Box<miden_protocol::errors::PartialAssetVaultError>),
+    #[error("too many requested vault assets")]
+    TooManyVaultAssets,
 }
 
 #[cfg(feature = "rocksdb")]
@@ -607,6 +612,40 @@ impl<B: BackendReader> AccountStateForest<B> {
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Some(AccountVaultDetails::from_assets(assets)))
+    }
+
+    /// Returns proofs of inclusion or absence for the requested assets at a specific block.
+    #[miden_instrument(target = COMPONENT)]
+    pub(crate) fn get_vault_details_for_assets(
+        &self,
+        account_id: AccountId,
+        block_num: BlockNumber,
+        asset_ids: Vec<AssetId>,
+    ) -> Result<AccountVaultDetails, WitnessError> {
+        if asset_ids.len() > AccountVaultDetails::MAX_PROOF_ENTRIES {
+            return Err(WitnessError::TooManyVaultAssets);
+        }
+        let lineage = Self::vault_lineage_id(account_id);
+        let tree = self.get_tree_id(lineage, block_num).ok_or(WitnessError::RootNotFound)?;
+        let partial_smt = if asset_ids.is_empty() {
+            PartialSmt::new(match self.forest.root_info(tree) {
+                RootInfo::LatestVersion(root) | RootInfo::HistoricalVersion(root) => root,
+                RootInfo::Missing => return Err(WitnessError::RootNotFound),
+            })
+        } else {
+            let proofs = asset_ids
+                .iter()
+                .map(|id| {
+                    self.forest
+                        .open(tree, id.hash().into())
+                        .map_err(Self::map_forest_error_to_witness)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            PartialSmt::from_proofs(proofs)?
+        };
+        let vault = PartialVault::try_from_parts(partial_smt, asset_ids.iter().copied())
+            .map_err(|err| WitnessError::PartialVault(Box::new(err)))?;
+        Ok(AccountVaultDetails::Partial { asset_ids, vault })
     }
 
     /// Opens a storage map and returns one partial SMT covering the requested keys.

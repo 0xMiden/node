@@ -36,6 +36,7 @@ async fn connection_errors_identify_each_validator_endpoint() {
     let client = BlockProducerValidatorClient::new(
         endpoints.iter().map(|endpoint| endpoint.parse().unwrap()).collect(),
         Duration::from_secs(1),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
     )
     .unwrap();
     let capture = Capture::default();

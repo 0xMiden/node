@@ -107,6 +107,8 @@ pub enum DatabaseError {
          use a stricter filter to reduce the number of transactions returned"
     )]
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
+    #[error("block {block_num} holds more rows than one page can return")]
+    BlockExceedsPageLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
@@ -295,8 +297,6 @@ pub enum NoteSyncError {
     DatabaseError(#[from] DatabaseError),
     #[error("database error")]
     UnderlyingDatabaseError(#[from] miden_node_db::DatabaseError),
-    #[error("block headers table is empty")]
-    EmptyBlockHeadersTable,
     #[error("error retrieving the merkle proof for the block")]
     MmrError(#[from] MmrError),
     #[error("invalid block range")]

@@ -4,6 +4,7 @@
 -- ?3 is the row limit plus one. The extra candidate detects another page.
 -- ?4 is the payload byte limit.
 -- ?5 is the returned row limit.
+-- ?6 is the inclusive upper bound.
 WITH candidates AS (
     -- First, we select candidates that match tags and are after the cursor.
     -- We're fetching one extra row so that callers can detect if there are
@@ -12,7 +13,7 @@ WITH candidates AS (
     -- for computing cumulative sizes.
     SELECT seq, LENGTH(header) + LENGTH(details) AS bytes
     FROM notes
-    WHERE seq > ?1 AND tag IN (SELECT value FROM rarray(?2))
+    WHERE seq > ?1 AND seq <= ?6 AND tag IN (SELECT value FROM rarray(?2))
     ORDER BY seq
     LIMIT ?3
 ), bounded AS (

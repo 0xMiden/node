@@ -71,6 +71,8 @@ struct SeedArgs {
 
 #[derive(clap::Args)]
 struct VerifyArgs {
+    #[command(flatten)]
+    grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// Directory holding the `wallet.mac` and `counter.mac` written by `seed`.
     #[arg(long, value_name = "DIR")]
     accounts_dir: PathBuf,
@@ -206,6 +208,7 @@ async fn verify(args: &VerifyArgs) -> Result<()> {
         &args.rpc_url,
         args.request_timeout,
         &args.validator_signing_public_keys,
+        args.grpc.max_decoding_message_size.get(),
     )
     .await?;
 

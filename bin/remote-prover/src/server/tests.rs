@@ -187,6 +187,7 @@ impl Server {
     /// Capacity is set to 10 with a timeout of 60 seconds.
     fn with_arbitrary_port(kind: ProofKind) -> Self {
         Self {
+            grpc: miden_node_utils::clap::GrpcMessageSizeOptions::default(),
             port: 0,
             kind,
             timeout: Duration::from_mins(1),
