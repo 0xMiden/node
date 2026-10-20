@@ -51,16 +51,25 @@ message FetchNotesRequest {
     // Duplicate tags do not cause duplicate results.
     repeated fixed32 tags = 1;
 
-    // Continue from the cursor returned by the previous response.
-    // Omit the cursor to start from the first retained note.
+    // Exclusive lower bound. Omit it to start from the first retained note.
+    // Continue a page using the response cursor and the same tags and sync_to.
     //
-    // Reuse the cursor only for the same set of tags. Clear it when you add or remove a tag.
-    // Reordering tags or adding or removing duplicate tags does not require a reset.
-    //
-    // If the cursor nonce does not match the database nonce, the request returns
-    // FAILED_PRECONDITION. Clear the cursor and retry from the first retained note.
-    // This restart can return notes already fetched. Use note IDs to remove duplicates.
+    // For a chunked round, start every chunk from the shared round cursor.
+    // Persist the response sync_to only after all chunks have been processed.
+    // Removing tags needs no reset. Backfill newly added tags separately when
+    // their retained history is required. Reordering or duplicating tags is harmless.
+    // A nonce from another database generation returns FAILED_PRECONDITION.
+    // Clear both bounds and restart after this error, deduplicating by note ID.
     FetchNotesCursor cursor = 2;
+
+    // Inclusive upper bound. Omit it to use the database head for this request.
+    // Use the resolved response bound for every page and chunk in one round.
+    //
+    // Both bounds must identify the current database generation. The upper bound
+    // must not precede the lower bound or exceed the current database head.
+    // Future lower bounds and sequences above i64::MAX return INVALID_ARGUMENT.
+    // The bound does not prevent retention from removing expired notes.
+    FetchNotesCursor sync_to = 3;
 }
 
 message FetchNotesResponse {
@@ -69,6 +78,9 @@ message FetchNotesResponse {
     // An empty page keeps the validated request cursor.
     // An initial empty page returns the current nonce and sequence zero.
     FetchNotesCursor cursor = 2;
-    // Indicates that another page is available for these tags.
+    // More matching retained notes remain after this page and at or below sync_to.
     bool has_more = 3;
+    // Always present. The inclusive upper bound used for this request.
+    // When has_more is false, these tags are complete through this bound.
+    FetchNotesCursor sync_to = 4;
 }

@@ -11,8 +11,8 @@ and the authenticated data structures needed to answer state queries.
 
 ## Crate-Specific Notes
 
-The default `rocksdb` feature enables disk-backed storage for large Sparse Merkle Trees. Building with this feature
-requires a C/C++ toolchain and the system support needed by RocksDB bindings.
+The store uses RocksDB for disk-backed storage of large Sparse Merkle Trees. Building the crate requires a C/C++
+toolchain and the system support needed by RocksDB bindings.
 
 For operator-facing storage configuration, use the `node` help output and start from the
 [primary README](https://github.com/0xMiden/node#readme).

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{ForeignAccount, RpcClient};
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
@@ -1066,7 +1067,7 @@ fn build_account_request(
         details: Some(
             miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment,
-                asset_vault_commitment,
+                vault_request: asset_vault_commitment.map(VaultRequest::AssetVaultCommitment),
                 storage_request: None,
             },
         ),

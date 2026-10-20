@@ -1,18 +1,17 @@
-use miden_node_proto::DecodeMessageExt;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::sync::RwLock;
-
 use backon::ExponentialBuilder;
 use futures::stream::{BoxStream, TryStreamExt};
 use futures::{Stream, StreamExt};
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
-use miden_node_proto::VerifyWith;
 use miden_node_proto::domain::account::{
-    AccountDetails, GetAccountResponse, AccountVaultDetails, StorageMapEntries
+    AccountDetails,
+    AccountVaultDetails,
+    GetAccountResponse,
+    StorageMapEntries,
 };
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
@@ -20,17 +19,24 @@ use miden_node_proto::domain::encryption::{
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
 use miden_node_proto::errors::ConversionError;
-use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{StorageMapDetailRequest, StorageMapDetailRequests, StorageRequest, storage_map_detail_request};
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
+    StorageMapDetailRequest,
+    StorageMapDetailRequests,
+    StorageRequest,
+    VaultAssetIds,
+    VaultRequest,
+    storage_map_detail_request,
+};
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::MapKeys;
 use miden_node_proto::generated::miden::node::v1::{
+    BlockSubscriptionRequest,
     GetBlockHeaderByNumberRequest,
     GetBlockHeaderByNumberResponse,
-    BlockSubscriptionRequest,
 };
 use miden_node_proto::generated::{self as proto};
-use miden_node_tracing::ErrorReport;
+use miden_node_proto::{DecodeMessageExt, VerifyWith};
+use miden_node_tracing::{ErrorReport, debug, info, miden_instrument, warn};
 use miden_node_utils::retry::{self, Retryable};
-use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountCode,
@@ -41,7 +47,7 @@ use miden_protocol::account::{
     StorageMapWitness,
     StorageSlotName,
 };
-use miden_protocol::asset::{Asset, AssetVault, AssetId, AssetWitness, PartialVault};
+use miden_protocol::asset::{AssetId, AssetWitness, PartialVault};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::note::NoteScript;
@@ -49,11 +55,16 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
+use tokio::sync::RwLock;
 use tonic::Status;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
 
 use crate::COMPONENT;
+
+#[cfg(test)]
+#[path = "rpc/vault_tests.rs"]
+mod vault_tests;
 
 // RPC CLIENT
 // ================================================================================================
@@ -547,15 +558,13 @@ impl RpcClient {
             block_num: Some(block_num.into()),
             details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment: Some(code_commitment.into()),
-                asset_vault_commitment: None,
+                vault_request: None,
                 storage_request: None,
             }),
         };
 
         let response = self.get_account(request).await?;
-        let details = response.details.as_ref().ok_or_else(|| {
-            RpcError::InvalidResponse("response did not include account details".into())
-        })?;
+        let details = response.details.as_ref().expect("requested account details were verified");
         let partial_account = build_minimal_partial_account(details, known_code)?;
 
         Ok(AccountInputs::new(partial_account, response.witness))
@@ -565,41 +574,47 @@ impl RpcClient {
     pub async fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
+        vault_root: Word,
         vault_keys: BTreeSet<AssetId>,
-        block_num: Option<BlockNumber>,
+        block_num: BlockNumber,
     ) -> Result<Vec<AssetWitness>, RpcError> {
         if vault_keys.is_empty() {
             return Ok(Vec::new());
         }
 
-        let request = proto::miden::node::v1::GetAccountRequest {
-            account_id: Some(account_id.into()),
-            block_num: block_num.map(Into::into),
-            details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
-                code_commitment: None,
-                asset_vault_commitment: Some(Word::default().into()),
-                storage_request: None,
-            }),
-        };
+        let mut witnesses = Vec::with_capacity(vault_keys.len());
+        let vault_keys = vault_keys.into_iter().collect::<Vec<_>>();
+        for keys in vault_keys.chunks(AccountVaultDetails::MAX_PROOF_ENTRIES) {
+            let request = proto::miden::node::v1::GetAccountRequest {
+                account_id: Some(account_id.into()),
+                block_num: Some(block_num.into()),
+                details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
+                    code_commitment: None,
+                    vault_request: Some(VaultRequest::AssetIds(VaultAssetIds {
+                        asset_ids: keys.iter().copied().map(Into::into).collect(),
+                    })),
+                    storage_request: None,
+                }),
+            };
 
-        let response = self.get_account(request).await?;
-        let assets: Vec<Asset> = match response.details.map(|details| details.vault_details) {
-            Some(AccountVaultDetails::Assets(assets)) => assets,
-            Some(AccountVaultDetails::LimitExceeded) => {
-                // NOTE: in the tx kernel, `get_vault_asset_witnesses` is called either for single
-                // asset keys, or when pre-loading all the assets related to input notes involved in
-                // the transaction. This should never exceed the maximum amount of keys you can
-                // request to RPC, but this needs double-checking. If it able to exceed them,
-                // batching needs to be implemented as a workaround.
-                panic!("should never exceed maximum number of requested keys")
-            },
-            None => Vec::new(),
-        };
-
-        let vault =
-            AssetVault::new(&assets).map_err(|err| RpcError::InvalidResponse(err.as_report()))?;
-
-        Ok(vault_keys.into_iter().map(|key| vault.open(key)).collect())
+            let response = self.get_account(request).await?;
+            let AccountVaultDetails::Partial { vault, .. } =
+                response.details.expect("requested account details were verified").vault_details
+            else {
+                unreachable!("requested partial vault was verified")
+            };
+            if vault.root() != vault_root {
+                return Err(RpcError::InvalidResponse(
+                    "partial vault root does not match the expected vault root".into(),
+                ));
+            }
+            for key in keys {
+                witnesses.push(
+                    vault.open(*key).map_err(|err| RpcError::InvalidResponse(err.as_report()))?,
+                );
+            }
+        }
+        Ok(witnesses)
     }
 
     /// Fetches a storage map witness for a single key at the reference block.
@@ -615,7 +630,7 @@ impl RpcClient {
             block_num: block_num.map(Into::into),
             details: Some(proto::miden::node::v1::get_account_request::AccountDetailRequest {
                 code_commitment: None,
-                asset_vault_commitment: None,
+                vault_request: None,
                 storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                     storage_maps: vec![StorageMapDetailRequest {
                         slot_name: slot_name.to_string(),
@@ -628,9 +643,7 @@ impl RpcClient {
         };
 
         let response = self.get_account(request).await?;
-        let details = response.details.as_ref().ok_or_else(|| {
-            RpcError::InvalidResponse("response did not include account details".into())
-        })?;
+        let details = response.details.as_ref().expect("requested account details were verified");
 
         let map_details = details
             .storage_details
@@ -688,12 +701,13 @@ impl RpcClient {
             .map_err(RpcError::Conversion)
     }
 
-    /// Issues a `GetAccount` request and decodes the response into the domain
-    /// [`GetAccountResponse`].
+    /// Issues a `GetAccount` request and verifies the response against the requested account and
+    /// block.
     async fn get_account(
         &self,
         request: proto::miden::node::v1::GetAccountRequest,
     ) -> Result<GetAccountResponse, RpcError> {
+        let expected = request.clone().decode_and_verify().map_err(RpcError::Conversion)?;
         let response = self
             .inner
             .clone()
@@ -702,7 +716,7 @@ impl RpcClient {
             .map_err(RpcError::GrpcClientError)?
             .into_inner();
 
-        response.decode_and_verify().map_err(RpcError::Conversion)
+        response.decode_and_verify_with(&expected).map_err(RpcError::Conversion)
     }
 }
 

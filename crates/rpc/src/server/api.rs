@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -276,7 +277,7 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
         DatabaseError::TransactionPageExceedsPayloadLimit { .. }
         | DatabaseError::BlockExceedsPageLimit { .. } => Status::out_of_range(message),
-        DatabaseError::InvalidBlockRange { .. } => {
+        DatabaseError::RangeBelowRetention(_) | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
         _ => internal_error(message),
@@ -328,6 +329,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
+    use QueryParamVaultAssetLimit as VaultAsset;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
@@ -346,6 +348,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
                 endpoint_limits(&[
                     (StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT),
                     (StorageMapSlot::PARAM_NAME, StorageMapSlot::LIMIT),
+                    (VaultAsset::PARAM_NAME, VaultAsset::LIMIT),
                 ]),
             ),
         ]),
@@ -404,5 +407,16 @@ mod tests {
         let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(error));
         assert_eq!(status.code(), tonic::Code::Internal);
         assert_eq!(status.details(), &[0]);
+    }
+
+    #[test]
+    fn range_below_retention_is_an_invalid_block_range() {
+        let error = DatabaseError::from(miden_node_store::RangeBelowRetention {
+            oldest_retained: BlockNumber::from(50),
+            block_to: BlockNumber::from(49),
+        });
+        let status = database_error_to_status(&error);
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[SyncErrorCode::InvalidBlockRange as u8]);
     }
 }

@@ -9,7 +9,10 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::generated::miden::node::v1::GetAccountRequest as ProtoAccountRequest;
 use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
-use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
+    StorageRequest,
+    VaultRequest,
+};
 use miden_node_tracing::{miden_instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
@@ -194,7 +197,7 @@ impl FundingWallet {
             block_num: Some(block_num.into()),
             details: Some(AccountDetailRequest {
                 code_commitment: Some(self.account.code().commitment().into()),
-                asset_vault_commitment: Some(dummy),
+                vault_request: Some(VaultRequest::AssetVaultCommitment(dummy)),
                 storage_request: Some(StorageRequest::AllStorageMaps(true)),
             }),
         };
@@ -237,6 +240,9 @@ impl FundingWallet {
         let vault = match details.vault_details {
             AccountVaultDetails::Assets(assets) => miden_protocol::asset::AssetVault::new(&assets)
                 .context("failed to build the vault")?,
+            AccountVaultDetails::Partial { .. } => {
+                anyhow::bail!("server returned a partial vault when full contents were requested")
+            },
             AccountVaultDetails::LimitExceeded => {
                 anyhow::bail!("account {account_id} holds too many assets to fetch in full")
             },
