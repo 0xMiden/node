@@ -406,19 +406,19 @@ impl BatchJob {
         let note_inclusion_proofs = view
             .get_note_inclusion_proofs(reference_block, note_ids)
             .await
-            .map_err(StoreError::GetNoteInclusionProofsFailed)
+            .map_err(StoreError::GetNoteInclusionProofs)
             .map_err(BuildBatchError::FetchBatchInputsFailed)?;
         block_numbers
             .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
         let partial_blockchain = view
             .get_block_inclusion_proofs(reference_block, block_numbers)
             .await
-            .map_err(StoreError::GetBlockInclusionProofsFailed)
+            .map_err(StoreError::GetBlockInclusionProofs)
             .map_err(BuildBatchError::FetchBatchInputsFailed)?;
         let reference_block_header = view
             .get_block_header(Some(reference_block), false)
             .await
-            .map_err(StoreError::GetBlockHeaderFailed)
+            .map_err(StoreError::GetBlockHeader)
             .map_err(BuildBatchError::FetchBatchInputsFailed)?
             .0
             .expect("reference block header should exist");
@@ -442,13 +442,13 @@ impl BatchJob {
         let protocol_config = view
             .get_protocol_config(inputs.reference_block_header.protocol_config_commitment())
             .await
-            .map_err(StoreError::GetProtocolConfigFailed)
+            .map_err(StoreError::GetProtocolConfig)
             .map_err(BuildBatchError::FetchBatchInputsFailed)?
             .expect("the reference block's protocol configuration should exist");
         let genesis = view
             .get_block_header(Some(BlockNumber::GENESIS), false)
             .await
-            .map_err(StoreError::GetBlockHeaderFailed)
+            .map_err(StoreError::GetBlockHeader)
             .map_err(BuildBatchError::FetchBatchInputsFailed)?
             .0
             .expect("the genesis block header should exist")

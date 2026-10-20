@@ -224,25 +224,17 @@ impl BuildBlockError {
 
 /// Errors returned by the store state.
 #[derive(Debug, Error)]
-// Clippy skips this lint for the exported enum the `testing` feature makes public.
-#[cfg_attr(
-    not(feature = "testing"),
-    expect(
-        clippy::enum_variant_names,
-        reason = "each variant names the store operation that failed"
-    )
-)]
 pub enum StoreError {
     #[error("failed to get block inclusion proofs from store")]
-    GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
+    GetBlockInclusionProofs(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
-    GetBlockHeaderFailed(#[source] GetBlockHeaderError),
+    GetBlockHeader(#[source] GetBlockHeaderError),
     #[error("failed to get protocol configuration from store")]
-    GetProtocolConfigFailed(#[source] DatabaseError),
+    GetProtocolConfig(#[source] DatabaseError),
     #[error("failed to get note inclusion proofs from store")]
-    GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
+    GetNoteInclusionProofs(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]
-    ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
+    ApplyBlock(#[source] ApplyBlockWithProvingInputsError),
 }
 
 #[cfg(test)]
