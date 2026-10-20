@@ -43,7 +43,8 @@ use syn::{Data, DeriveInput, Fields, Ident, parse_macro_input};
 /// 1. A companion `*GrpcError` enum with `#[repr(u8)]` for wire serialization
 /// 2. An implementation of the `GrpcError` trait for the companion enum
 /// 3. A method `api_error()` on the original enum that maps to the companion enum
-/// 4. An implementation of `From<Error> for tonic::Status` for automatic error conversion
+/// 4. An implementation of `From<Error> for tonic::Status` for automatic error conversion, which
+///    logs an internal error at `ERROR` since the status hides its cause
 #[proc_macro_derive(GrpcError, attributes(grpc))]
 pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -160,6 +161,8 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
                 let api_error = value.api_error();
 
                 let message = if api_error.is_internal() {
+                    // The client only sees a generic message, so the cause is logged here.
+                    miden_node_tracing::error!(value, "Internal error");
                     "Internal error".to_owned()
                 } else {
                     // Use ErrorReport trait to get detailed error message

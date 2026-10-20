@@ -24,7 +24,6 @@ impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
     #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_transaction",
-        err,
     )]
     async fn handle(
         &self,
