@@ -159,6 +159,21 @@ A selective vault query may return proofs for the requested assets or the comple
 limit. Clients must verify a complete vault's root against the account header before deriving the requested witnesses,
 including proofs for assets absent from the vault.
 
+## Historical State Retention
+
+`GetAccount` can return the state of a public account as of a specific past block. The node keeps this history only for
+the most recent `50` blocks: vault assets, storage map values, and account code that can no longer affect any block
+inside that window are pruned as new blocks are applied. The window is a compile-time constant of the store
+(`HISTORICAL_BLOCK_RETENTION`) rather than a runtime option, and it is measured in blocks, so its wall-clock duration
+depends on the network's block time.
+
+Requesting a block that has fallen outside the window fails with `INVALID_ARGUMENT` and the `BlockPruned` detail code
+(`5`). Use the detail code rather than matching on the error message. The effective boundary may also lag the chain tip
+by a few blocks while in-flight reads still pin older snapshots, so treat the window as approximate rather than exact.
+
+Flows that execute against a captured reference block, such as collecting several signatures before submitting a
+transaction, must complete within this window or re-anchor to a newer block.
+
 ## Content Negotiation
 
 The RPC server checks the `Accept` header for Miden-specific media parameters:
