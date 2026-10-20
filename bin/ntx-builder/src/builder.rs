@@ -105,6 +105,7 @@ impl NetworkTransactionBuilder {
             self.db.reader(),
             self.config.max_note_attempts,
             self.config.grpc_timeout,
+            self.config.max_decoding_message_size,
         );
         let server_shutdown = shutdown.clone();
         tasks.spawn("grpc-server", async move {

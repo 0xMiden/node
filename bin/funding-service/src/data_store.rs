@@ -1,7 +1,9 @@
 //! In-memory transaction data store.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use miden_node_proto::clients::{ForeignAccount, RpcClient};
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -12,7 +14,6 @@ use miden_protocol::account::{
     StorageSlotContent,
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
-use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -32,11 +33,11 @@ use miden_tx::{
 /// An in-memory [`DataStore`] which holds the accounts one transaction needs.
 ///
 /// The store is built for a single transaction: it holds the reference block, the partial
-/// blockchain proving that block, the executing account, and any account the transaction reaches
-/// through a foreign procedure invocation.
+/// blockchain proving that block, the funding wallet, and the fee faucet.
 pub struct InMemoryDataStore {
-    accounts: HashMap<AccountId, Account>,
-    account_witnesses: HashMap<AccountId, AccountWitness>,
+    wallet: Arc<Account>,
+    faucet: ForeignAccount,
+    rpc_client: RpcClient,
     block_header: BlockHeader,
     partial_block_chain: PartialBlockchain,
     /// The protocol configuration committed by `block_header`.
@@ -49,35 +50,31 @@ impl InMemoryDataStore {
         block_header: BlockHeader,
         partial_block_chain: PartialBlockchain,
         protocol_config: ProtocolConfig,
+        rpc_client: RpcClient,
+        wallet: Arc<Account>,
+        faucet: ForeignAccount,
     ) -> Self {
+        let mast_store = TransactionMastStore::new();
+        mast_store.load_account_code(wallet.code());
+        mast_store.load_account_code(faucet.inputs().account().code());
         Self {
-            accounts: HashMap::new(),
-            account_witnesses: HashMap::new(),
+            wallet,
+            faucet,
+            rpc_client,
             block_header,
             partial_block_chain,
             protocol_config,
-            mast_store: TransactionMastStore::new(),
+            mast_store,
         }
-    }
-
-    /// Add or replace an account in the store and load its code into the MAST store.
-    pub fn add_account(&mut self, account: Account) {
-        self.mast_store.load_account_code(account.code());
-        self.accounts.insert(account.id(), account);
-    }
-
-    /// Register an account the transaction reaches through a foreign procedure invocation, together
-    /// with the account-tree witness proving its state in the store's reference block.
-    pub fn add_foreign_account(&mut self, account: Account, witness: AccountWitness) {
-        self.add_account(account);
-        self.account_witnesses.insert(witness.id(), witness);
     }
 
     /// Returns a reference to the account or a standardized "unknown account" error.
     fn get_account(&self, account_id: AccountId) -> Result<&Account, DataStoreError> {
-        self.accounts.get(&account_id).ok_or_else(|| DataStoreError::Other {
-            error_msg: "unknown account".into(),
-            source: None,
+        (account_id == self.wallet.id()).then_some(self.wallet.as_ref()).ok_or_else(|| {
+            DataStoreError::Other {
+                error_msg: "unknown account".into(),
+                source: None,
+            }
         })
     }
 }
@@ -110,6 +107,23 @@ impl DataStore for InMemoryDataStore {
         map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
+            if account_id == self.faucet.inputs().account().id() {
+                let account = &self.faucet;
+                if let Some(map) =
+                    account.inputs().account().storage().maps().find(|map| map.root() == map_root)
+                    && let Ok(witness) = map.open(&map_key)
+                {
+                    return Ok(witness);
+                }
+                let mut rpc = self.rpc_client.clone();
+                return account
+                    .storage_map_witness(&mut rpc, self.block_header.block_num(), map_root, map_key)
+                    .await
+                    .map_err(|err| DataStoreError::Other {
+                        error_msg: "failed to load foreign account storage proof".into(),
+                        source: Some(err.into()),
+                    });
+            }
             let account = self.get_account(account_id)?;
 
             account
@@ -138,19 +152,15 @@ impl DataStore for InMemoryDataStore {
         _ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
         async move {
-            let account = self.get_account(foreign_account_id)?;
-            let witness =
-                self.account_witnesses.get(&foreign_account_id).cloned().ok_or_else(|| {
-                    DataStoreError::Other {
-                        error_msg: format!(
-                            "no account witness for foreign account {foreign_account_id}"
-                        )
-                        .into(),
-                        source: None,
-                    }
-                })?;
-
-            Ok(AccountInputs::new(PartialAccount::from(account), witness))
+            (foreign_account_id == self.faucet.inputs().account().id())
+                .then(|| self.faucet.inputs().clone())
+                .ok_or_else(|| DataStoreError::Other {
+                    error_msg: format!(
+                        "no account witness for foreign account {foreign_account_id}"
+                    )
+                    .into(),
+                    source: None,
+                })
         }
     }
 

@@ -1,6 +1,5 @@
 //! Node access.
 
-use std::collections::{HashMap, HashSet};
 use std::error::Error as _;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,22 +7,16 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use backon::ExponentialBuilder;
 use miden_node_proto::clients::{Builder, RpcClient};
-use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
-use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
 use miden_node_proto::generated::miden::node::v1::{
     BlockRange,
     FinalityLevel,
-    GetAccountRequest as ProtoAccountRequest,
     GetBlockHeaderByNumberRequest,
-    GetNotesByIdRequest,
     SyncChainMmrRequest,
-    SyncNotesRequest,
-    SyncNullifiersRequest,
     SyncTransactionsRequest,
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
@@ -37,34 +30,18 @@ use miden_node_tracing::{
     miden_span_record,
     warn,
 };
-use miden_node_utils::limiter::{
-    QueryParamLimiter,
-    QueryParamNoteIdLimit,
-    QueryParamNullifierPrefixLimit,
-};
 use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
-use miden_protocol::account::{
-    Account,
-    AccountId,
-    AccountStorage,
-    StorageMap,
-    StorageSlot,
-    StorageSlotType,
-};
-use miden_protocol::asset::{AssetId, AssetVault};
-use miden_protocol::block::account_tree::AccountWitness;
-use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
+use miden_protocol::account::AccountId;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
-use miden_protocol::note::{Note, NoteId, NoteTag, Nullifier};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction, TransactionId};
 use tokio::sync::Mutex;
 use url::Url;
 
 use crate::COMPONENT;
-use crate::deposit::is_deposit;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -93,6 +70,7 @@ impl RpcNodeClient {
         rpc_url: &Url,
         timeout: Duration,
         trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
+        max_decoding_message_size: usize,
     ) -> Result<Self> {
         anyhow::ensure!(
             !trusted_validator_signing_keys.is_empty(),
@@ -101,7 +79,7 @@ impl RpcNodeClient {
         );
 
         let (rpc_client, genesis_commitment, protocol_config) =
-            create_genesis_aware_rpc_client(rpc_url, timeout).await?;
+            create_genesis_aware_rpc_client(rpc_url, timeout, max_decoding_message_size).await?;
 
         let client = Self {
             rpc_client,
@@ -126,74 +104,6 @@ impl RpcNodeClient {
         &self.protocol_config
     }
 
-    /// The fee parameters of `block_num`, or at the chain tip when it is `None`.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.fee_parameters",
-        fields(
-            block.number = block_num,
-        ),
-        err,
-    )]
-    pub async fn fee_parameters(&self, block_num: Option<BlockNumber>) -> Result<FeeParameters> {
-        let header = fetch_block_header(&mut self.rpc_client.clone(), block_num).await?;
-
-        Ok(header.fee_parameters().clone())
-    }
-
-    /// The asset vault of a public account, with the block number the node observed it at.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.public_account_vault",
-        fields(
-            account.id = account_id,
-        ),
-        err,
-    )]
-    pub async fn public_account_vault(
-        &self,
-        account_id: AccountId,
-    ) -> Result<(AssetVault, BlockNumber)> {
-        // A dummy commitment never matches the vault root, which makes the node return the vault in
-        // full. Code and storage are not requested.
-        let dummy = Word::default().into();
-        let request = ProtoAccountRequest {
-            account_id: Some(account_id.into()),
-            // Without a block number the node answers at its chain tip.
-            block_num: None,
-            details: Some(AccountDetailRequest {
-                code_commitment: None,
-                asset_vault_commitment: Some(dummy),
-                storage_request: None,
-            }),
-        };
-
-        let response = self
-            .rpc_client
-            .clone()
-            .get_account(request)
-            .await
-            .with_context(|| format!("failed to fetch account {account_id}"))?
-            .into_inner();
-        let response =
-            response.decode_and_verify().context("failed to convert the account response")?;
-
-        let details = response
-            .details
-            .with_context(|| format!("no details returned for public account {account_id}"))?;
-
-        let vault = match details.vault_details {
-            AccountVaultDetails::Assets(assets) => {
-                AssetVault::new(&assets).context("failed to build the vault")?
-            },
-            AccountVaultDetails::LimitExceeded => {
-                anyhow::bail!("account {account_id} holds too many assets to fetch in full")
-            },
-        };
-
-        Ok((vault, response.block_num))
-    }
-
     /// The committed chain tip header with a partial blockchain which proves it.
     #[miden_instrument(
         target = COMPONENT,
@@ -204,203 +114,9 @@ impl RpcNodeClient {
         fetch_tip_chain_state(&mut self.rpc_client.clone(), self.genesis_commitment).await
     }
 
-    /// A public account in full with its account-tree witness at `block_num`.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.public_account",
-        fields(
-            account.id = account_id,
-            block.number = block_num,
-        ),
-        err,
-    )]
-    pub async fn public_account(
-        &self,
-        account_id: AccountId,
-        block_num: BlockNumber,
-    ) -> Result<(Account, AccountWitness)> {
-        fetch_public_account(&mut self.rpc_client.clone(), account_id, block_num).await
-    }
-
-    /// Returns one page of deposits and the last block checked in the given range.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.sync_deposits",
-        level = "debug",
-        fields(
-            account.id = funder,
-            block_range.from = from_block,
-            block_range.to = to_block,
-        ),
-        err(level = "debug"),
-    )]
-    pub async fn sync_deposits(
-        &self,
-        funder: AccountId,
-        fee_asset_id: AssetId,
-        from_block: BlockNumber,
-        to_block: BlockNumber,
-    ) -> Result<SyncedDeposits> {
-        let response = self
-            .rpc_client
-            .clone()
-            .sync_notes(SyncNotesRequest {
-                block_range: Some(BlockRange {
-                    block_from: from_block.as_u32(),
-                    block_to: to_block.as_u32(),
-                }),
-                note_tags: vec![NoteTag::with_account_target(funder).as_u32()],
-            })
-            .await
-            .context("failed to synchronize notes")?
-            .into_inner();
-
-        let last_checked_block: BlockNumber = response
-            .pagination_info
-            .context("the sync_notes response did not include pagination information")?
-            .block_num
-            .into();
-        anyhow::ensure!(
-            (from_block..=to_block).contains(&last_checked_block),
-            "the node answered a note scan from {from_block} to {to_block} with block {last_checked_block}",
-        );
-
-        let mut note_ids = Vec::new();
-        for block in response.blocks {
-            for record in block.notes {
-                let proof = record
-                    .inclusion_proof
-                    .context("a note sync record did not include an inclusion proof")?;
-                let note_id = proof
-                    .note_id
-                    .context("a note inclusion proof did not include a note ID")?
-                    .decode_and_verify()
-                    .context("failed to verify a synced note ID")?;
-                note_ids.push(note_id);
-            }
-        }
-
-        if enabled!(target: COMPONENT, Level::DEBUG) {
-            miden_span_record!(note.count = note_ids.len(), block.number = last_checked_block);
-        }
-        let deposits: Vec<_> = self
-            .get_public_notes_by_id(&note_ids)
-            .await?
-            .into_iter()
-            .filter(|note| is_deposit(note, funder, fee_asset_id))
-            .collect();
-
-        if enabled!(target: COMPONENT, Level::DEBUG) {
-            miden_span_record!(deposit.count = deposits.len());
-        }
-        Ok(SyncedDeposits { deposits, last_checked_block })
-    }
-
-    /// The notes among `note_ids` whose details the node stores.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.get_notes",
-        level = "debug",
-        fields(
-            note.count = note_ids.len(),
-        ),
-        err(level = "debug"),
-    )]
-    async fn get_public_notes_by_id(&self, note_ids: &[NoteId]) -> Result<Vec<Note>> {
-        let mut notes = Vec::new();
-
-        // The node rejects a request which asks for more note IDs than it accepts, so the IDs are
-        // requested in chunks of the limit it enforces.
-        for chunk in note_ids.chunks(QueryParamNoteIdLimit::LIMIT) {
-            let note_ids = chunk.iter().map(|note_id| note_id.as_word().into()).collect();
-
-            let response = self
-                .rpc_client
-                .clone()
-                .get_notes_by_id(GetNotesByIdRequest { note_ids })
-                .await
-                .context("failed to fetch notes from RPC")?
-                .into_inner();
-
-            for committed in response.notes {
-                let Some(note) = committed.note else {
-                    continue;
-                };
-                if note.note_details.is_none() {
-                    continue;
-                }
-
-                let note = note.decode_and_verify().context("failed to verify a committed note")?;
-                notes.push(note);
-            }
-        }
-
-        Ok(notes)
-    }
-
-    /// Returns the requested nullifiers spent from genesis through `tip`.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.node.spent_nullifiers",
-        fields(
-            nullifier.count = nullifiers.len(),
-            block_range.to = tip,
-        ),
-        err,
-    )]
-    pub async fn spent_nullifiers(
-        &self,
-        nullifiers: &[Nullifier],
-        tip: BlockNumber,
-    ) -> Result<HashSet<Nullifier>> {
-        let requested: HashSet<_> = nullifiers.iter().copied().collect();
-        let mut prefixes: Vec<_> = nullifiers.iter().map(|n| u32::from(n.prefix())).collect();
-        prefixes.sort_unstable();
-        prefixes.dedup();
-        let mut spent = HashSet::new();
-        let mut pages = 0_usize;
-
-        for chunk in prefixes.chunks(QueryParamNullifierPrefixLimit::LIMIT) {
-            let mut start = BlockNumber::GENESIS;
-            loop {
-                let response = self
-                    .rpc_client
-                    .clone()
-                    .sync_nullifiers(SyncNullifiersRequest {
-                        block_range: Some(BlockRange {
-                            block_from: start.as_u32(),
-                            block_to: tip.as_u32(),
-                        }),
-                        prefix_len: 16,
-                        nullifiers: chunk.to_vec(),
-                    })
-                    .await
-                    .context("failed to synchronize nullifiers")?
-                    .into_inner()
-                    .decode_and_verify()
-                    .context("failed to convert the nullifier sync response")?;
-
-                pages += 1;
-                let last_checked = response.pagination_info.block_num;
-                anyhow::ensure!(
-                    (start..=tip).contains(&last_checked),
-                    "the node answered a nullifier scan from {start} to {tip} with block {last_checked}",
-                );
-                for nullifier in response.nullifiers.into_keys() {
-                    // Prefix matches can include nullifiers that were not requested.
-                    if requested.contains(&nullifier) {
-                        spent.insert(nullifier);
-                    }
-                }
-                if last_checked == tip {
-                    break;
-                }
-                start = last_checked + 1;
-            }
-        }
-
-        miden_span_record!(page.count = pages, nullifier.spent.count = spent.len());
-        Ok(spent)
+    /// Returns an RPC connection to the node.
+    pub fn rpc_client(&self) -> RpcClient {
+        self.rpc_client.clone()
     }
 
     /// Checks for commitment before reporting expiration. Reads every page in the block range.
@@ -647,14 +363,6 @@ pub enum TransactionStatus {
     Expired,
 }
 
-/// The result of one deposit synchronization.
-pub struct SyncedDeposits {
-    /// The matching deposits. These notes can already be spent.
-    pub deposits: Vec<Note>,
-    /// The last block the node checked. The next scan starts after it.
-    pub last_checked_block: BlockNumber,
-}
-
 // RPC HELPERS
 // ================================================================================================
 
@@ -678,11 +386,13 @@ fn genesis_discovery_backoff() -> ExponentialBuilder {
 async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> Result<(RpcClient, Word, ProtocolConfig)> {
     (|| async {
         // First, create a temporary client without genesis metadata to discover the genesis block
         // header and its commitment.
         let mut rpc: RpcClient = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("failed to configure TLS for the RPC client")?
             .with_timeout(timeout)
@@ -700,6 +410,7 @@ async fn create_genesis_aware_rpc_client(
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
         let rpc_client = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("failed to configure TLS for the RPC client")?
             .with_timeout(timeout)
@@ -719,36 +430,10 @@ async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await
-}
-
-/// Fetches a block header from RPC.
-async fn fetch_block_header(
-    rpc_client: &mut RpcClient,
-    block_num: Option<BlockNumber>,
-) -> Result<BlockHeader> {
-    let request = GetBlockHeaderByNumberRequest {
-        block_num: block_num.map(|block_num| block_num.as_u32()),
-        include_mmr_proof: None,
-        include_protocol_config: None,
-    };
-
-    let response = rpc_client
-        .get_block_header_by_number(request)
-        .await
-        .context("failed to get the block header from RPC")?;
-
-    let block_header = response
-        .into_inner()
-        .block_header
-        .context("the block header response holds no header")?;
-
-    block_header
-        .decode_and_build_unchecked()
-        .context("failed to build the block header")
 }
 
 /// Fetches the genesis block header and the protocol configuration it commits to.
@@ -832,101 +517,4 @@ async fn fetch_tip_chain_state(
         .context("failed to build the partial blockchain")?;
 
     Ok((tip_header, blockchain))
-}
-
-/// Fetches a public account in full, with code, vault and storage maps, plus its account-tree
-/// witness at the given block.
-async fn fetch_public_account(
-    rpc_client: &mut RpcClient,
-    account_id: AccountId,
-    block_num: BlockNumber,
-) -> Result<(Account, AccountWitness)> {
-    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
-    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::StorageRequest;
-
-    // Dummy commitments force the server to include code and vault data in the response.
-    let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
-    let request = ProtoAccountRequest {
-        account_id: Some(account_id.into()),
-        block_num: Some(block_num.into()),
-        details: Some(AccountDetailRequest {
-            code_commitment: Some(dummy.clone()),
-            asset_vault_commitment: Some(dummy),
-            storage_request: Some(StorageRequest::AllStorageMaps(true)),
-        }),
-    };
-
-    let response = rpc_client
-        .get_account(request)
-        .await
-        .with_context(|| format!("failed to fetch account {account_id}"))?
-        .into_inner();
-    let response =
-        response.decode_and_verify().context("failed to convert the account response")?;
-
-    let witness = response.witness;
-    anyhow::ensure!(
-        witness.id() == account_id,
-        "the account tree returned a witness for {} when {account_id} was requested",
-        witness.id(),
-    );
-
-    let details = response
-        .details
-        .with_context(|| format!("no details returned for public account {account_id}"))?;
-
-    let code = details.account_code.context("the server did not return the account code")?;
-
-    let vault = match details.vault_details {
-        AccountVaultDetails::Assets(assets) => {
-            miden_protocol::asset::AssetVault::new(&assets).context("failed to build the vault")?
-        },
-        AccountVaultDetails::LimitExceeded => {
-            anyhow::bail!("account {account_id} holds too many assets to fetch in full")
-        },
-    };
-
-    // Value slots come from the header, map slots from the map details.
-    let mut map_entries = HashMap::new();
-    for map_detail in details.storage_details.map_details {
-        let StorageMapEntries::AllEntries(entries) = map_detail.entries else {
-            anyhow::bail!("storage map {} was not returned in full", map_detail.slot_name);
-        };
-        map_entries.insert(map_detail.slot_name, entries);
-    }
-
-    let mut slots = Vec::new();
-    for slot in details.storage_details.header.slots() {
-        match slot.slot_type() {
-            StorageSlotType::Value => {
-                slots.push(StorageSlot::with_value(slot.name().clone(), slot.value()));
-            },
-            StorageSlotType::Map => {
-                let entries = map_entries.remove(slot.name()).with_context(|| {
-                    format!("no map entries returned for storage slot {}", slot.name())
-                })?;
-                let map =
-                    StorageMap::with_entries(entries).context("failed to build the storage map")?;
-                anyhow::ensure!(
-                    map.root() == slot.value(),
-                    "the storage map root for slot {} does not match the storage header",
-                    slot.name()
-                );
-                slots.push(StorageSlot::with_map(slot.name().clone(), map));
-            },
-        }
-    }
-    let storage = AccountStorage::new(slots).context("failed to build the account storage")?;
-
-    let account =
-        Account::new(account_id, vault, storage, code, details.account_header.nonce(), None)
-            .context("failed to build the account")?;
-
-    // The witness and the details come from one response, so a mismatch means a bad reconstruction.
-    anyhow::ensure!(
-        account.to_commitment() == witness.state_commitment(),
-        "the reconstructed account {account_id} does not match its witness at block {block_num}",
-    );
-
-    Ok((account, witness))
 }

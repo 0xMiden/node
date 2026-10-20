@@ -89,6 +89,7 @@ pub struct ProbeSnapshot {
 /// Parameters captured at construction time for spawning (and respawning) the probe task once the
 /// status service observes the prover reporting [`ProofType::Transaction`].
 struct ProbeSpawner {
+    max_decoding_message_size: usize,
     client: RemoteProverClient,
     rpc_url: Url,
     /// The funding service client for the probe payload's fee payment on fee-charging chains.
@@ -108,6 +109,7 @@ impl ProbeSpawner {
             self.interval,
             self.probe_tx.clone(),
             self.name.clone(),
+            self.max_decoding_message_size,
         ))
     }
 }
@@ -141,11 +143,17 @@ impl ProverStatusService {
         request_timeout: Duration,
         probe_interval: Duration,
         test_client: RemoteProverClient,
+        max_decoding_message_size: usize,
     ) -> Self {
         let url = prover_url.to_string();
-        let client = build_tls_client::<RemoteProverProxyStatusClient>(prover_url, request_timeout);
+        let client = build_tls_client::<RemoteProverProxyStatusClient>(
+            prover_url,
+            request_timeout,
+            max_decoding_message_size,
+        );
         let (probe_tx, probe_rx) = watch::channel(ProbeSnapshot::default());
         let probe_spawner = ProbeSpawner {
+            max_decoding_message_size,
             client: test_client,
             rpc_url,
             funding,
@@ -395,6 +403,7 @@ async fn run_prover_test(
     interval: Duration,
     probe_tx: watch::Sender<ProbeSnapshot>,
     name: String,
+    max_decoding_message_size: usize,
 ) {
     let payload = loop {
         if probe_tx.is_closed() {
@@ -405,7 +414,9 @@ async fn run_prover_test(
             );
             return;
         }
-        match generate_prover_test_payload(&rpc_url, funding.as_ref()).await {
+        match generate_prover_test_payload(&rpc_url, max_decoding_message_size, funding.as_ref())
+            .await
+        {
             Ok(payload) => break payload,
             Err(e) => {
                 warn!(
@@ -542,9 +553,12 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 )]
 async fn generate_prover_test_payload(
     rpc_url: &Url,
+    max_decoding_message_size: usize,
     funding: Option<&FundingClient>,
 ) -> anyhow::Result<proto::miden::remote_prover::v1::ProveRequest> {
-    let tx_inputs = crate::deploy::build_probe_transaction_inputs(rpc_url, funding).await?;
+    let tx_inputs =
+        crate::deploy::build_probe_transaction_inputs(rpc_url, max_decoding_message_size, funding)
+            .await?;
     Ok(proto::miden::remote_prover::v1::ProveRequest {
         request: Some(proto::miden::remote_prover::v1::prove_request::Request::Transaction(
             tx_inputs.into(),

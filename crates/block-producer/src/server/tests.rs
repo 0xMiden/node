@@ -82,6 +82,7 @@ async fn block_producer_starts_with_store_state() {
     let shutdown = miden_node_utils::shutdown::CancellationToken::new();
 
     let block_producer = Sequencer {
+        max_decoding_message_size: miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
         state,
         block_writer,
         proof_writer,

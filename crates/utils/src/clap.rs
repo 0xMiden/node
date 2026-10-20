@@ -1,6 +1,9 @@
 //! Public module for share clap pieces to reduce duplication
 
+use std::num::NonZeroUsize;
 use std::time::Duration;
+
+use crate::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 
 #[cfg(feature = "rocksdb")]
 mod rocksdb;
@@ -16,8 +19,27 @@ pub fn duration_to_human_readable_string(duration: Duration) -> &'static str {
     Box::new(humantime::format_duration(duration).to_string()).leak()
 }
 
+/// Maximum encoded size accepted by every gRPC client and server in a process.
+#[derive(clap::Args, Copy, Clone, Debug, PartialEq, Eq)]
+pub struct GrpcMessageSizeOptions {
+    /// Maximum encoded bytes in each received gRPC request or response, including stream items.
+    #[arg(long = "grpc.max-decoding-message-size", default_value_t = NonZeroUsize::new(DEFAULT_MAX_DECODING_MESSAGE_SIZE).unwrap(), value_name = "BYTES")]
+    pub max_decoding_message_size: NonZeroUsize,
+}
+
+impl Default for GrpcMessageSizeOptions {
+    fn default() -> Self {
+        Self {
+            max_decoding_message_size: NonZeroUsize::new(DEFAULT_MAX_DECODING_MESSAGE_SIZE)
+                .unwrap(),
+        }
+    }
+}
+
 #[derive(clap::Args, Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GrpcOptions {
+    #[command(flatten)]
+    pub message_size: GrpcMessageSizeOptions,
     /// Maximum duration a gRPC request is allocated before being dropped by the server.
     ///
     /// This may occur if the server is overloaded or due to an internal bug.
@@ -32,13 +54,19 @@ pub struct GrpcOptions {
 
 impl Default for GrpcOptions {
     fn default() -> Self {
-        Self { request_timeout: DEFAULT_REQUEST_TIMEOUT }
+        Self {
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            message_size: GrpcMessageSizeOptions::default(),
+        }
     }
 }
 
 impl GrpcOptions {
     pub fn test() -> Self {
-        Self { request_timeout: TEST_REQUEST_TIMEOUT }
+        Self {
+            request_timeout: TEST_REQUEST_TIMEOUT,
+            ..Self::default()
+        }
     }
 }
 

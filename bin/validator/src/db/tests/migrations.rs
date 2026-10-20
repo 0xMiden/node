@@ -1,4 +1,5 @@
 mod migration_004_block_data;
+mod migration_005_proving_inputs;
 
 use super::*;
 

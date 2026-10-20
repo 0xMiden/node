@@ -9,9 +9,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use miden_node_proto::DecodeMessageExt;
-use miden_node_proto::clients::RpcClient;
+use miden_node_proto::clients::{ForeignAccount, RpcClient};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, error, info, miden_instrument, warn};
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
     Account,
@@ -208,7 +209,7 @@ pub struct IncrementService {
     /// The funding service client; `None` when none is configured (zero-fee chains only).
     funding: Option<FundingClient>,
     /// Committed faucet note to be consumed by the next increment. Cleared once consumed.
-    pending_funding_note: Option<Note>,
+    pending_funding_note: Option<UsdcxP2Id>,
 }
 
 impl IncrementService {
@@ -367,7 +368,7 @@ impl IncrementService {
     async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {
         let anchor = refresh_counter_anchor(
             &mut self.rpc_client,
-            self.tx.counter_id,
+            &self.tx.counter_anchor,
             self.submission_client.genesis_commitment(),
         )
         .await
@@ -398,7 +399,7 @@ impl IncrementService {
         // A pending faucet note rides along as an unauthenticated input note; its assets land
         // before the epilogue withdraws the fee.
         let input_notes = match &self.pending_funding_note {
-            Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note.clone())])
+            Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note.note().clone())])
                 .context("failed to build the funding input notes")?,
             None => InputNotes::default(),
         };
@@ -407,6 +408,7 @@ impl IncrementService {
         let anchor = self.tx.counter_anchor.clone();
         let secret_key = self.tx.secret_key.clone();
         let prover = self.prover.clone();
+        let rpc_client = self.rpc_client.clone();
         let (proven_tx, tx_inputs, account_patch) = spawn_blocking_in_current_span(move || {
             let account_id = wallet_account.id();
             let block_num = anchor.block_header.block_num();
@@ -414,12 +416,16 @@ impl IncrementService {
                 anchor.block_header.clone(),
                 anchor.protocol_config.clone(),
                 anchor.blockchain.clone(),
+                rpc_client,
             );
             data_store.add_account(wallet_account);
-            data_store.add_foreign_account(anchor.counter_account.clone(), anchor.witness.clone());
+            data_store.add_foreign_account(ForeignAccount::from_account(
+                anchor.counter_account.clone(),
+                anchor.witness.clone(),
+            ));
             // Moving the callback-enabled fee asset loads the issuing faucet.
-            if let Some((faucet_account, faucet_witness)) = &anchor.fee_faucet {
-                data_store.add_foreign_account(faucet_account.clone(), faucet_witness.clone());
+            if let Some(faucet) = &anchor.fee_faucet {
+                data_store.add_foreign_account(faucet.clone().into_foreign_account());
             }
 
             let authenticator =
@@ -616,8 +622,12 @@ impl CounterTrackingService {
         accounts_receiver: watch::Receiver<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
-        let (mut rpc_client, _) =
-            create_genesis_aware_rpc_client(&config.rpc_url, config.request_timeout).await?;
+        let (mut rpc_client, _) = create_genesis_aware_rpc_client(
+            &config.rpc_url,
+            config.request_timeout,
+            config.grpc.max_decoding_message_size.get(),
+        )
+        .await?;
         let TrackedAccounts {
             wallet: wallet_account,
             counter: counter_account,
@@ -1225,12 +1235,14 @@ async fn fetch_chain_tip(rpc_client: &mut RpcClient) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use clap::Parser;
+    use miden_node_proto::clients::{ForeignAccount, UsdcxFaucet};
+    use miden_node_utils::usdcx_p2id::UsdcxP2Id;
     use miden_protocol::Word;
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::account::{Account, AccountId};
     use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
     use miden_protocol::crypto::rand::RandomCoin;
-    use miden_protocol::note::{Note, NoteType};
+    use miden_protocol::note::NoteType;
     use miden_protocol::transaction::{InputNote, InputNotes, TransactionArgs};
     use miden_standards::account::access::AccessControl;
     use miden_standards::account::faucets::{
@@ -1268,11 +1280,23 @@ mod tests {
     use crate::funding::{counter_funding_amount, max_fee_per_transaction};
     use crate::status::{CounterTrackingDetails, Status};
 
+    /// Builds an unconnected client for tests that supply all account state locally.
+    fn lazy_rpc_client() -> miden_node_proto::clients::RpcClient {
+        miden_node_proto::clients::Builder::new("http://127.0.0.1:0".parse().unwrap())
+            .without_tls()
+            .with_timeout(std::time::Duration::from_millis(100))
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_auth_header()
+            .without_otel_context_injection()
+            .connect_lazy()
+    }
+
     const THRESHOLD: u64 = 5;
 
     /// Builds the public P2ID note the faucet would mint for the given recipient.
-    fn funding_note(fee_faucet_id: AccountId, target: AccountId, amount: u64) -> Note {
-        P2idNote::builder()
+    fn funding_note(fee_faucet_id: AccountId, target: AccountId, amount: u64) -> UsdcxP2Id {
+        let note = P2idNote::builder()
             .sender(fee_faucet_id)
             .target(target)
             .serial_number(Word::from([42u32; 4]))
@@ -1280,7 +1304,8 @@ mod tests {
             .asset(FungibleAsset::new(fee_faucet_id, amount).expect("amount is a valid asset"))
             .build()
             .expect("the funding note should build")
-            .into()
+            .into();
+        UsdcxP2Id::from_note(note, AssetId::new_fungible(fee_faucet_id)).unwrap()
     }
 
     /// Executes one increment transaction end to end against a chain that holds the deployed
@@ -1302,6 +1327,7 @@ mod tests {
             bootstrap_chain.latest_partial_blockchain(),
             None,
             None,
+            lazy_rpc_client(),
         )
         .await?;
         let mut committed_counter = counter.clone();
@@ -1339,9 +1365,10 @@ mod tests {
             block_header.clone(),
             chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
+            lazy_rpc_client(),
         );
         data_store.add_account(wallet.clone());
-        data_store.add_foreign_account(committed_counter, witness);
+        data_store.add_foreign_account(ForeignAccount::from_account(committed_counter, witness));
 
         let authenticator =
             BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
@@ -1439,6 +1466,7 @@ mod tests {
             chain.latest_partial_blockchain(),
             Some(note.clone()),
             None,
+            lazy_rpc_client(),
         )
         .await
         .expect_err("moving a callback-enabled asset requires the issuing faucet");
@@ -1462,7 +1490,8 @@ mod tests {
             chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
             Some(note),
-            Some((committed_faucet, witness)),
+            Some(UsdcxFaucet::new(ForeignAccount::from_account(committed_faucet, witness))),
+            lazy_rpc_client(),
         )
         .await?;
         let mut committed_counter = counter.clone();
@@ -1503,6 +1532,7 @@ mod tests {
             bootstrap_chain.latest_partial_blockchain(),
             Some(counter_funding),
             None,
+            lazy_rpc_client(),
         )
         .await?;
         let mut committed_counter = counter.clone();
@@ -1542,9 +1572,10 @@ mod tests {
             block_header.clone(),
             chain.protocol_config().clone(),
             chain.latest_partial_blockchain(),
+            lazy_rpc_client(),
         );
         data_store.add_account(wallet.clone());
-        data_store.add_foreign_account(committed_counter, witness);
+        data_store.add_foreign_account(ForeignAccount::from_account(committed_counter, witness));
 
         let authenticator =
             BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
@@ -1552,7 +1583,8 @@ mod tests {
 
         let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount.get();
         let wallet_funding = funding_note(fee_faucet_id, wallet.id(), funded);
-        let input_notes = InputNotes::new(vec![InputNote::unauthenticated(wallet_funding)])?;
+        let input_notes =
+            InputNotes::new(vec![InputNote::unauthenticated(wallet_funding.into_note())])?;
 
         let executed_tx = executor
             .execute_transaction(wallet.id(), block_header.block_num(), input_notes, tx_args)

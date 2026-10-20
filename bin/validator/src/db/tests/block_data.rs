@@ -15,9 +15,13 @@ async fn block_data_write_failure_rolls_back_insert_and_replacement() {
     for (id, seed) in [(original_id, 1), (replacement_id, 2)] {
         db.insert_validated_private_transaction(private_record(id, seed)).await.unwrap();
     }
-    db.insert_signed_block(original_block.clone(), ProtocolConfig::mock(), vec![original_id])
-        .await
-        .unwrap();
+    db.insert_legacy_signed_block(
+        original_block.clone(),
+        ProtocolConfig::mock(),
+        vec![original_id],
+    )
+    .await
+    .unwrap();
     let initial_history = protocol_config_history::history(&db).await;
     db.writer.write("reject block data", |tx| {
         tx.execute("CREATE TRIGGER reject_block_data BEFORE INSERT ON blocks BEGIN SELECT RAISE(ABORT, 'block data rejected'); END", &[])?;
@@ -25,7 +29,7 @@ async fn block_data_write_failure_rolls_back_insert_and_replacement() {
     }).await.unwrap();
     let replacement = header_with_next_timestamp(&original);
     assert!(
-        db.replace_signed_block(
+        db.replace_legacy_signed_block(
             block_with_header(replacement),
             ProtocolConfig::mock(),
             vec![replacement_id],
@@ -36,9 +40,13 @@ async fn block_data_write_failure_rolls_back_insert_and_replacement() {
     let next_config = test_protocol_config();
     let next = protocol_config_history::header_at(&original, 2, &next_config);
     assert!(
-        db.insert_signed_block(block_with_header(next), next_config.clone(), vec![replacement_id],)
-            .await
-            .is_err()
+        db.insert_legacy_signed_block(
+            block_with_header(next),
+            next_config.clone(),
+            vec![replacement_id],
+        )
+        .await
+        .is_err()
     );
     assert_eq!(db.load_chain_tip().await.unwrap(), Some(original));
     assert_eq!(db.load_block(1.into()).await.unwrap(), Some(original_block));

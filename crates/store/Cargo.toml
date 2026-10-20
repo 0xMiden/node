@@ -21,6 +21,7 @@ doctest = false
 anyhow                 = { workspace = true }
 arc-swap               = { workspace = true }
 fs-err                 = { workspace = true }
+futures                = { workspace = true }
 hex                    = { workspace = true }
 indexmap               = { workspace = true }
 libsqlite3-sys         = { workspace = true }

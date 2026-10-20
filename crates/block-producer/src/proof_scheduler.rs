@@ -162,6 +162,37 @@ pub(crate) async fn run(
     }
 }
 
+/// Proves committed, unproven blocks in order up to the tip captured when this call begins.
+///
+/// Completed proofs survive errors and cancellation. Each proof commit finishes before cancellation
+/// is checked again, keeping the stored proofs and published proven tip consistent.
+pub async fn prove_pending_blocks(
+    state: &State,
+    writer: &mut ProofWriter,
+    prover_url: Option<url::Url>,
+    max_decoding_message_size: usize,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
+    let target = state.committed_tip();
+    if state.proven_tip() == target {
+        return Ok(());
+    }
+    let prover = match prover_url {
+        Some(url) => BlockProver::remote(url, max_decoding_message_size)?,
+        None => BlockProver::local(),
+    };
+    while state.proven_tip() < target {
+        let next = state.proven_tip().child();
+        let (height, proof) = tokio::select! {
+            biased;
+            () = shutdown.cancelled() => anyhow::bail!("recovery proving cancelled"),
+            result = prove_block(state, &prover, next) => result?,
+        };
+        writer.apply_proof(height, proof).await?;
+    }
+    Ok(())
+}
+
 // PROVE BLOCK
 // ================================================================================================
 
@@ -362,3 +393,6 @@ mod persistence_tests {
             .unwrap();
     }
 }
+
+#[cfg(test)]
+mod recovery_tests;
