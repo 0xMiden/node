@@ -72,7 +72,6 @@ impl AccountAdmission {
         target = COMPONENT,
         name = "account_admission.check",
         fields(account.id = update.account_id()),
-        err,
     )]
     pub(crate) async fn check(&self, update: &TxAccountUpdate) -> tonic::Result<()> {
         if self.disabled || !update.initial_state_commitment().is_empty() {
