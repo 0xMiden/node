@@ -9,7 +9,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
-use crate::errors::{MempoolSubmissionError, StateConflict, StoreError};
+use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::{COMPONENT, LOG_TARGET};
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
@@ -48,7 +48,6 @@ pub async fn get_tx_inputs(
             )
             .await
             .map(|inputs| (view.tip(), inputs))
-            .map_err(StoreError::GetTransactionInputsFailed)
             .map_err(MempoolSubmissionError::StoreStateReadFailed)
         })
         .await?;

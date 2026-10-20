@@ -41,7 +41,7 @@ pub enum ProofSchedulerError {
 pub enum MempoolSubmissionError {
     #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreStateReadFailed(#[source] StoreError),
+    StoreStateReadFailed(#[source] DatabaseError),
 
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
@@ -233,8 +233,6 @@ impl BuildBlockError {
     )
 )]
 pub enum StoreError {
-    #[error("failed to get transaction inputs from store")]
-    GetTransactionInputsFailed(#[source] DatabaseError),
     #[error("failed to get block inclusion proofs from store")]
     GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
@@ -287,9 +285,7 @@ mod tests {
     #[test]
     fn internal_submission_failure_hides_cause() {
         let status = Status::from(MempoolSubmissionError::StoreStateReadFailed(
-            StoreError::GetTransactionInputsFailed(DatabaseError::DataCorrupted(
-                "private database data".into(),
-            )),
+            DatabaseError::DataCorrupted("private database data".into()),
         ));
 
         assert_eq!(status.code(), Code::Internal);
