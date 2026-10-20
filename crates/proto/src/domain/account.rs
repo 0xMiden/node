@@ -1,8 +1,20 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 
-use miden_node_utils::limiter::{QueryParamLimiter, QueryParamStorageMapKeyTotalLimit};
-use miden_protobuf::{ConversionResultExt, DecodeMessage, Decoded, RequiredField, Verify, decode};
+use miden_node_utils::limiter::{
+    QueryParamLimiter,
+    QueryParamStorageMapKeyTotalLimit,
+    QueryParamVaultAssetLimit,
+};
+use miden_protobuf::{
+    ConversionResultExt,
+    DecodeMessage,
+    Decoded,
+    RequiredField,
+    Verify,
+    VerifyWith,
+    decode,
+};
 use miden_protocol::Word;
 #[cfg(test)]
 use miden_protocol::account::StorageSlotHeader;
@@ -17,7 +29,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::Asset;
+use miden_protocol::asset::{Asset, AssetId, PartialVault};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::MerkleError;
@@ -204,12 +216,22 @@ impl Verify for proto::miden::node::v1::DecodedGetAccountRequest {
     }
 }
 
-/// Represents a request for account details alongside specific storage data.
+/// Selects the code, vault, and storage details to return with an account proof.
 #[derive(Debug)]
 pub struct AccountDetailRequest {
     pub code_commitment: Option<Word>,
-    pub asset_vault_commitment: Option<Word>,
+    pub vault_request: AccountVaultRequest,
     pub storage_request: AccountStorageRequest,
+}
+
+/// Selects full vault contents or proofs for specific assets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AccountVaultRequest {
+    None,
+    /// Full contents, returned only when the vault root differs from this commitment.
+    All(Word),
+    /// Proofs for the requested assets, including assets absent from the vault.
+    Assets(Vec<AssetId>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,13 +246,32 @@ impl Verify for proto::miden::node::v1::get_account_request::DecodedAccountDetai
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        use proto::miden::node::v1::get_account_request::account_detail_request::DecodedStorageRequest as ProtoStorageRequest;
+        use proto::miden::node::v1::get_account_request::account_detail_request::{
+            DecodedStorageRequest as ProtoStorageRequest,
+            DecodedVaultRequest,
+        };
 
         let Self {
             code_commitment,
-            asset_vault_commitment,
+            vault_request,
             storage_request,
         } = self;
+
+        let vault_request = match vault_request.into_inner() {
+            None => AccountVaultRequest::None,
+            Some(DecodedVaultRequest::AssetVaultCommitment(commitment)) => {
+                AccountVaultRequest::All(commitment)
+            },
+            Some(DecodedVaultRequest::AssetIds(ids)) => {
+                let ids = ids.asset_ids.verify().context("vault_request.asset_ids")?;
+                if has_duplicate_asset_ids(&ids) {
+                    return Err(ConversionError::message(
+                        "vault request contains duplicate asset IDs",
+                    ));
+                }
+                AccountVaultRequest::Assets(ids)
+            },
+        };
 
         let storage_request = match storage_request.into_inner() {
             None => AccountStorageRequest::None,
@@ -249,7 +290,7 @@ impl Verify for proto::miden::node::v1::get_account_request::DecodedAccountDetai
 
         Ok(AccountDetailRequest {
             code_commitment: code_commitment.into_inner(),
-            asset_vault_commitment: asset_vault_commitment.into_inner(),
+            vault_request,
             storage_request,
         })
     }
@@ -316,6 +357,11 @@ fn has_duplicate_storage_map_keys(keys: &[StorageMapKey]) -> bool {
     keys.iter().any(|key| !seen.insert(key))
 }
 
+fn has_duplicate_asset_ids(ids: &[AssetId]) -> bool {
+    let mut seen = BTreeSet::new();
+    ids.iter().any(|id| !seen.insert(id))
+}
+
 // ACCOUNT VAULT DETAILS
 //================================================================================================
 
@@ -333,12 +379,21 @@ pub enum AccountVaultDetails {
 
     /// The assets in the vault (up to `MAX_RETURN_ENTRIES`).
     Assets(Vec<Asset>),
+
+    /// Requested asset IDs and proofs of their inclusion or absence.
+    Partial {
+        asset_ids: Vec<AssetId>,
+        vault: PartialVault,
+    },
 }
 
 impl AccountVaultDetails {
     /// Maximum number of vault entries that can be returned in a single response. Accounts with
     /// more assets will have `LimitExceeded` variant.
     pub const MAX_RETURN_ENTRIES: usize = 1000;
+
+    /// Maximum number of assets whose proofs can be requested together.
+    pub const MAX_PROOF_ENTRIES: usize = QueryParamVaultAssetLimit::LIMIT;
 
     pub fn empty() -> Self {
         Self::Assets(Vec::new())
@@ -359,13 +414,31 @@ impl Verify for proto::miden::node::v1::DecodedAccountVaultDetails {
     type Error = ConversionError;
 
     fn verify(self) -> Result<Self::Verified, Self::Error> {
-        let Self { too_many_assets, assets } = self;
+        let Self { too_many_assets, assets, partial_vault } = self;
+        let assets = assets.verify()?;
+
+        if let Some(partial) = partial_vault.into_inner() {
+            if too_many_assets || !assets.is_empty() {
+                return Err(ConversionError::message(
+                    "partial vault cannot include full vault contents or a limit flag",
+                ));
+            }
+            let asset_ids: Vec<AssetId> = partial.asset_ids.verify().context("asset_ids")?;
+            if asset_ids.len() > AccountVaultDetails::MAX_PROOF_ENTRIES {
+                return Err(ConversionError::message(
+                    "partial vault exceeds the asset proof limit",
+                ));
+            }
+            let smt = partial.partial_smt.verify().context("partial_smt")?;
+            let vault = PartialVault::try_from_parts(smt, asset_ids.iter().copied())
+                .context("partial_vault")?;
+            return Ok(AccountVaultDetails::Partial { asset_ids, vault });
+        }
 
         if too_many_assets {
             Ok(AccountVaultDetails::LimitExceeded)
         } else {
-            let parsed_assets = assets.verify()?;
-            Ok(AccountVaultDetails::Assets(parsed_assets))
+            Ok(AccountVaultDetails::Assets(assets))
         }
     }
 }
@@ -376,10 +449,20 @@ impl From<AccountVaultDetails> for proto::miden::node::v1::AccountVaultDetails {
             AccountVaultDetails::LimitExceeded => Self {
                 too_many_assets: true,
                 assets: Vec::new(),
+                partial_vault: None,
+            },
+            AccountVaultDetails::Partial { asset_ids, vault } => Self {
+                too_many_assets: false,
+                assets: Vec::new(),
+                partial_vault: Some(proto::miden::node::v1::account_vault_details::PartialVault {
+                    asset_ids: asset_ids.into_iter().map(Into::into).collect(),
+                    partial_smt: Some(vault.partial_smt().clone().into()),
+                }),
             },
             AccountVaultDetails::Assets(assets) => Self {
                 too_many_assets: false,
                 assets: assets.into_iter().map(proto::asset::Asset::from).collect::<Vec<_>>(),
+                partial_vault: None,
             },
         }
     }
@@ -740,6 +823,50 @@ impl Verify for proto::miden::node::v1::DecodedGetAccountResponse {
     }
 }
 
+impl VerifyWith<&GetAccountRequest> for proto::miden::node::v1::DecodedGetAccountResponse {
+    type Verified = GetAccountResponse;
+    type Error = ConversionError;
+
+    /// Checks response consistency, the requested account and block, and requested asset proofs.
+    ///
+    /// The caller must authenticate the witness root against trusted chain state.
+    fn verify_with(self, request: &GetAccountRequest) -> Result<Self::Verified, Self::Error> {
+        let response = self.verify()?;
+        if response.witness.id() != request.account_id {
+            return Err(ConversionError::message("account ID does not match request")
+                .context("witness.account_id"));
+        }
+        if let Some(block_num) = request.block_num
+            && response.block_num != block_num
+        {
+            return Err(ConversionError::message("block number does not match request")
+                .context("block_num"));
+        }
+        if let Some(requested) = &request.details {
+            let details = response.details.as_ref().ok_or_else(|| {
+                ConversionError::message("requested account details are missing").context("details")
+            })?;
+            if let AccountVaultRequest::Assets(requested_ids) = &requested.vault_request {
+                let AccountVaultDetails::Partial { asset_ids, .. } = &details.vault_details else {
+                    return Err(ConversionError::message(
+                        "response did not include a partial vault",
+                    )
+                    .context("details.vault_details"));
+                };
+                if asset_ids.iter().collect::<BTreeSet<_>>()
+                    != requested_ids.iter().collect::<BTreeSet<_>>()
+                {
+                    return Err(ConversionError::message(
+                        "partial vault does not cover the requested assets",
+                    )
+                    .context("details.vault_details"));
+                }
+            }
+        }
+        Ok(response)
+    }
+}
+
 impl From<GetAccountResponse> for proto::miden::node::v1::GetAccountResponse {
     fn from(value: GetAccountResponse) -> Self {
         let GetAccountResponse { block_num, witness, details } = value;
@@ -806,6 +933,14 @@ impl Verify for proto::miden::node::v1::get_account_response::DecodedAccountDeta
         }
 
         let vault_details = vault_details.verify().context("vault_details")?;
+        if let AccountVaultDetails::Partial { vault, .. } = &vault_details
+            && vault.root() != account_header.vault_root()
+        {
+            return Err(ConversionError::message(
+                "partial vault root does not match account header",
+            )
+            .context("vault_details"));
+        }
         let account_code = code.verify()?;
         if let Some(code) = &account_code
             && code.commitment() != account_header.code_commitment()

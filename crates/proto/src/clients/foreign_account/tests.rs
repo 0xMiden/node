@@ -110,7 +110,10 @@ impl TestState {
                         *commitment != account.code().commitment() && !self.omit_account_code
                     })
                     .map(|_| account.code().clone()),
-                vault_details: if requested.asset_vault_commitment.is_some() {
+                vault_details: if matches!(
+                    requested.vault_request,
+                    crate::domain::account::AccountVaultRequest::All(_)
+                ) {
                     AccountVaultDetails::from_assets(account.vault().assets().collect())
                 } else {
                     AccountVaultDetails::empty()
@@ -287,7 +290,7 @@ async fn foreign_account_reads_only_requested_keys_from_large_maps() -> Result<(
         let request = request.clone().decode_and_verify()?;
         assert_eq!(request.block_num, Some(block));
         let details = request.details.unwrap();
-        assert!(details.asset_vault_commitment.is_none());
+        assert_eq!(details.vault_request, crate::domain::account::AccountVaultRequest::None);
         match details.storage_request {
             crate::domain::account::AccountStorageRequest::None => {},
             crate::domain::account::AccountStorageRequest::Explicit(maps) => {
@@ -403,7 +406,7 @@ async fn foreign_account_sync_reuses_code_and_preserves_existing_snapshots() -> 
         let details = sync_request.details.as_ref().unwrap();
         assert_eq!(details.code_commitment, Some(code.into()));
         assert!(details.storage_request.is_none());
-        assert!(details.asset_vault_commitment.is_none());
+        assert!(details.vault_request.is_none());
     }
     foreign.sync_to(&mut server.rpc.clone(), next_block).await?;
     assert!(

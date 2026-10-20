@@ -139,7 +139,7 @@ The limits are returned in `json` format as follows:
 ```json
 {
   "endpoints": {
-    "GetAccount": { "parameters": { "storage_map_key": 64 } },
+    "GetAccount": { "parameters": { "storage_map_key": 64, "storage_maps": 255, "vault_asset": 64 } },
     "GetNotesById": { "parameters": { "note_id": 100 } },
     "SyncNotes": { "parameters": { "note_tag": 1000 } },
     "SyncNullifiers": { "parameters": { "nullifier_prefix": 1000 } },
@@ -147,6 +147,11 @@ The limits are returned in `json` format as follows:
   }
 }
 ```
+
+`GetAccount` advertises separate limits for requested vault assets (`vault_asset`), total storage map keys across slots
+(`storage_map_key`), and explicitly requested storage map slots (`storage_maps`). The vault limit counts asset IDs whose
+inclusion or absence is proved, regardless of the total number of assets in the account. When splitting vault queries,
+set the same `block_num` for each batch so all proofs refer to the same account state.
 
 ## Content Negotiation
 

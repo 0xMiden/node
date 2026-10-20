@@ -32,13 +32,15 @@ the store) to keep database queries bounded and to keep response payloads within
 
 `GENERAL_REQUEST_LIMIT` is currently `1000`, and endpoint-specific limits are:
 
-| Endpoint           | Parameter          | Limit  | Rationale                                                            |
-| ------------------ | ------------------ | ------ | -------------------------------------------------------------------- |
-| `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive |
-| `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter       |
-| `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                      |
-| `SyncNullifiers`   | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans                                  |
-| `SyncTransactions` | `account_id`       | `1000` | Bounds account filter fan-out and response size                      |
+| Endpoint           | Parameter          | Limit  | Rationale                                                                     |
+| ------------------ | ------------------ | ------ | ----------------------------------------------------------------------------- |
+| `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive          |
+| `GetAccount`       | `storage_maps`     | `255`  | Bounds explicit slot lookups to the maximum account storage layout            |
+| `GetAccount`       | `vault_asset`      | `64`   | Matches the storage map proof cap to bound proof generation and response size |
+| `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter                |
+| `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                               |
+| `SyncNullifiers`   | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans                                           |
+| `SyncTransactions` | `account_id`       | `1000` | Bounds account filter fan-out and response size                               |
 
 Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by `GetLimits`) include:
 

@@ -7,6 +7,7 @@ use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountStorageRequest,
     AccountVaultDetails,
+    AccountVaultRequest,
     GetAccountRequest,
     GetAccountResponse,
     SlotData,
@@ -203,7 +204,7 @@ impl StateView {
     ) -> Result<AccountDetails, GetAccountError> {
         let AccountDetailRequest {
             code_commitment,
-            asset_vault_commitment,
+            vault_request,
             storage_request,
         } = detail_request;
 
@@ -232,16 +233,11 @@ impl StateView {
             None => None,
         };
 
-        // Query account state forest for vault details on commitment mismatch.
-        //
-        // The forest can only reconstruct the vault if all hashed vault keys are known in the
-        // reverse-key LRU cache. If any hashed key is unknown, the forest returns `None` and we
-        // fall back to reconstructing the vault details from the database.
-        let vault_details = match asset_vault_commitment {
-            Some(commitment) if commitment == account_header.vault_root() => {
+        let vault_details = match vault_request {
+            AccountVaultRequest::All(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
             },
-            Some(_) => {
+            AccountVaultRequest::All(_) => {
                 let forest_details = self.with_forest_read_blocking(|forest| {
                     forest.get_vault_details(account_id, *scoped_block).map_err(|err| {
                         DatabaseError::DataCorrupted(format!(
@@ -258,7 +254,17 @@ impl StateView {
                     },
                 }
             },
-            None => AccountVaultDetails::empty(),
+            AccountVaultRequest::None => AccountVaultDetails::empty(),
+            AccountVaultRequest::Assets(asset_ids) => self.with_forest_read_blocking(|forest| {
+                forest
+                    .get_vault_details_for_assets(account_id, *scoped_block, asset_ids)
+                    .map_err(|err| {
+                        DatabaseError::DataCorrupted(format!(
+                            "failed to open vault for account {account_id} at block {}: {err}",
+                            *scoped_block,
+                        ))
+                    })
+            })?,
         };
 
         // Split storage map requests into two categories:

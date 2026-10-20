@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use miden_node_proto::domain::account::{
     AccountStorageRequest,
+    AccountVaultRequest,
     GetAccountRequest,
     GetAccountResponse,
     SlotData,
@@ -9,7 +10,11 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
 use miden_node_tracing::{debug, info_span, miden_instrument, miden_span_record};
-use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
+use miden_node_utils::limiter::{
+    QueryParamStorageMapKeyTotalLimit,
+    QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
+};
 use tonic::Status;
 
 use super::error_codes::GetAccountErrorCode;
@@ -50,10 +55,13 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
             block.number = request.block_num
         );
 
-        // Validate storage map request limits before forwarding to store.
+        // Bound requested proofs before forwarding to the store.
         if let Some(details) = &request.details {
-            let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
+            let _span = info_span!(target: COMPONENT, "validate_account_details").entered();
             validate_storage_request(&details.storage_request)?;
+            if let AccountVaultRequest::Assets(ids) = &details.vault_request {
+                check::<QueryParamVaultAssetLimit>(ids.len())?;
+            }
         }
 
         let account_data = self

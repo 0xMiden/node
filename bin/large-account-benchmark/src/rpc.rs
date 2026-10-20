@@ -159,7 +159,7 @@ impl SubmissionClient {
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
-                asset_vault_commitment: None,
+                vault_request: None,
                 storage_request: None,
             }),
         };

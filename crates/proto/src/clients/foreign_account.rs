@@ -77,7 +77,7 @@ impl ForeignAccount {
                 block_num: Some(block.into()),
                 details: Some(AccountDetailRequest {
                     code_commitment: Some(code_commitment.into()),
-                    asset_vault_commitment: None,
+                    vault_request: None,
                     storage_request: None,
                 }),
             })
@@ -131,7 +131,7 @@ impl ForeignAccount {
                 block_num: Some(block.into()),
                 details: Some(AccountDetailRequest {
                     code_commitment: None,
-                    asset_vault_commitment: None,
+                    vault_request: None,
                     storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                         storage_maps: vec![StorageMapDetailRequest {
                             slot_name: slot.name().to_string(),
