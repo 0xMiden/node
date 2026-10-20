@@ -38,6 +38,7 @@ pub use errors::{
     GetBlockInclusionProofsError,
     GetNoteInclusionProofsError,
     NoteSyncError,
+    RangeBelowRetention,
     RangeBeyondTip,
     StateSyncError,
 };
