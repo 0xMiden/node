@@ -1,6 +1,169 @@
+use std::time::Duration;
+
+use http::HeaderMap;
 use http::header::HeaderName;
 use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
-use tracing::field;
+use tower_http::classify::GrpcFailureClass;
+use tower_http::trace::{
+    DefaultOnBodyChunk,
+    DefaultOnRequest,
+    DefaultOnResponse,
+    GrpcMakeClassifier,
+    MakeSpan,
+    OnEos,
+    OnFailure,
+    OnResponse,
+    TraceLayer,
+};
+use tracing::{Level, field};
+
+/// The [`TraceLayer`] returned by [`grpc_trace_layer`] and [`public_grpc_trace_layer`].
+pub type GrpcTraceLayer = TraceLayer<
+    GrpcMakeClassifier,
+    GrpcMakeSpan,
+    DefaultOnRequest,
+    GrpcOnResponse,
+    DefaultOnBodyChunk,
+    GrpcOnEos,
+    GrpcOnFailure,
+>;
+
+/// Returns the trace layer for a gRPC server that only trusted components call.
+///
+/// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
+/// code as `rpc.grpc.status_code`. A failed request is logged once on that span at `ERROR`, with
+/// its status code and message.
+pub fn grpc_trace_layer() -> GrpcTraceLayer {
+    trace_layer(GrpcFailureLevels { public: false })
+}
+
+/// Returns the trace layer for a gRPC server exposed to the public, such as the RPC.
+///
+/// This is [`grpc_trace_layer`], except that only `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE`
+/// responses are logged at `ERROR`. Other failed requests are logged at `INFO`.
+///
+/// Clients cause the other codes, for example by requesting an unknown account or, for scanners,
+/// a method that does not exist. Logging them at `INFO` keeps them out of the error logs and
+/// leaves the request span's status unset.
+pub fn public_grpc_trace_layer() -> GrpcTraceLayer {
+    trace_layer(GrpcFailureLevels { public: true })
+}
+
+fn trace_layer(levels: GrpcFailureLevels) -> GrpcTraceLayer {
+    TraceLayer::new_for_grpc()
+        .make_span_with(GrpcMakeSpan)
+        .on_response(GrpcOnResponse {
+            levels,
+            inner: DefaultOnResponse::default(),
+        })
+        .on_eos(GrpcOnEos { levels })
+        .on_failure(GrpcOnFailure)
+}
+
+/// Creates the root span of each request with [`grpc_trace_fn`].
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcMakeSpan;
+
+impl<B> MakeSpan<B> for GrpcMakeSpan {
+    fn make_span(&mut self, request: &http::Request<B>) -> tracing::Span {
+        grpc_trace_fn(request)
+    }
+}
+
+/// Records the gRPC status of a response that carries it in its headers.
+///
+/// A handler's error is returned in the headers. Other responses carry their status in the
+/// trailers, which [`GrpcOnEos`] records.
+#[derive(Clone, Debug)]
+pub struct GrpcOnResponse {
+    levels: GrpcFailureLevels,
+    inner: DefaultOnResponse,
+}
+
+impl<B> OnResponse<B> for GrpcOnResponse {
+    fn on_response(self, response: &http::Response<B>, latency: Duration, span: &tracing::Span) {
+        if let Some(status) = tonic::Status::from_header_map(response.headers()) {
+            self.levels.record(&status, latency, span);
+        }
+        self.inner.on_response(response, latency, span);
+    }
+}
+
+/// Records the gRPC status of a response that carries it in its trailers.
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcOnEos {
+    levels: GrpcFailureLevels,
+}
+
+impl OnEos for GrpcOnEos {
+    fn on_eos(self, trailers: Option<&HeaderMap>, stream_duration: Duration, span: &tracing::Span) {
+        if let Some(status) = trailers.and_then(tonic::Status::from_header_map) {
+            self.levels.record(&status, stream_duration, span);
+        }
+    }
+}
+
+/// Logs a request that failed without a gRPC status, such as a response stream that failed.
+///
+/// Failed statuses are logged by [`GrpcOnResponse`] and [`GrpcOnEos`], which can read the status
+/// message.
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcOnFailure;
+
+impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
+    fn on_failure(
+        &mut self,
+        classification: GrpcFailureClass,
+        latency: Duration,
+        span: &tracing::Span,
+    ) {
+        if let GrpcFailureClass::Error(error) = classification {
+            tracing::error!(parent: span, error = %error, latency = ?latency, "response failed");
+        }
+    }
+}
+
+/// Chooses the level at which a failed request is logged.
+#[derive(Clone, Copy, Debug)]
+struct GrpcFailureLevels {
+    public: bool,
+}
+
+impl GrpcFailureLevels {
+    /// Records `status` as the request's status code, and logs it if it is a failure.
+    fn record(self, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
+        let code = status.code();
+        span.record("rpc.grpc.status_code", code as i32);
+        match code {
+            tonic::Code::Ok => {},
+            tonic::Code::Internal | tonic::Code::DataLoss | tonic::Code::Unavailable => {
+                log_failure(Level::ERROR, status, latency, span);
+            },
+            _ if self.public => log_failure(Level::INFO, status, latency, span),
+            _ => log_failure(Level::ERROR, status, latency, span),
+        }
+    }
+}
+
+fn log_failure(level: Level, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
+    macro_rules! log {
+        ($level:expr) => {
+            tracing::event!(
+                parent: span,
+                $level,
+                grpc.code = ?status.code(),
+                grpc.message = status.message(),
+                latency = ?latency,
+                "request failed"
+            )
+        };
+    }
+    if level == Level::ERROR {
+        log!(Level::ERROR);
+    } else {
+        log!(Level::INFO);
+    }
+}
 
 /// Returns a [`trace_fn`](tonic::transport::server::Server) implementation for gRPC requests
 /// which adds open-telemetry information to the span.
@@ -27,6 +190,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         rpc.system = field::Empty,
         rpc.request.size = field::Empty,
         rpc.response.size = field::Empty,
+        rpc.grpc.status_code = field::Empty,
         server.address = field::Empty,
         server.port = field::Empty,
         client.address = field::Empty,
