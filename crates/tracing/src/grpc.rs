@@ -1,6 +1,147 @@
+use std::time::Duration;
+
 use http::header::HeaderName;
 use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
+use tower_http::classify::GrpcFailureClass;
+use tower_http::trace::{
+    DefaultOnBodyChunk,
+    DefaultOnEos,
+    DefaultOnRequest,
+    DefaultOnResponse,
+    GrpcMakeClassifier,
+    MakeSpan,
+    OnFailure,
+    OnResponse,
+    TraceLayer,
+};
 use tracing::field;
+
+use crate::FailureClass;
+
+/// The [`TraceLayer`] for gRPC servers returned by [`grpc_trace_layer`] and
+/// [`public_grpc_trace_layer`].
+pub type GrpcTraceLayer = TraceLayer<
+    GrpcMakeClassifier,
+    GrpcMakeSpan,
+    DefaultOnRequest,
+    GrpcOnResponse,
+    DefaultOnBodyChunk,
+    DefaultOnEos,
+    GrpcOnFailure,
+>;
+
+/// Returns the trace layer for a gRPC server that only trusted components call.
+///
+/// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
+/// code as `rpc.grpc.status_code`, `0` on success. A failed request also records the
+/// [`FailureClass`] of its code as `failure.class` and `failure.kind`. Only a node failure marks
+/// the span as failed; a rejected request is logged at `DEBUG`.
+pub fn grpc_trace_layer() -> GrpcTraceLayer {
+    trace_layer(GrpcOnFailure { public: false })
+}
+
+/// Returns the trace layer for a gRPC server exposed to the public, such as the RPC.
+///
+/// This is [`grpc_trace_layer`], except that `UNKNOWN` and `UNIMPLEMENTED` responses are
+/// rejections rather than faults.
+///
+/// Scanners probing a public endpoint for paths such as `.env` or for methods that do not exist
+/// receive these codes. They describe the request, not a node failure, and would otherwise flood
+/// the alerts on failed spans.
+pub fn public_grpc_trace_layer() -> GrpcTraceLayer {
+    trace_layer(GrpcOnFailure { public: true })
+}
+
+fn trace_layer(on_failure: GrpcOnFailure) -> GrpcTraceLayer {
+    TraceLayer::new_for_grpc()
+        .make_span_with(GrpcMakeSpan)
+        .on_response(GrpcOnResponse::default())
+        .on_failure(on_failure)
+}
+
+/// Creates the root span of each request with [`grpc_trace_fn`].
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcMakeSpan;
+
+impl<B> MakeSpan<B> for GrpcMakeSpan {
+    fn make_span(&mut self, request: &http::Request<B>) -> tracing::Span {
+        grpc_trace_fn(request)
+    }
+}
+
+/// Records the gRPC status code of a response as `rpc.grpc.status_code`.
+///
+/// A unary error response carries its status in the headers. Other responses carry it in the
+/// trailers, so `0` is recorded until [`GrpcOnFailure`] overwrites it with a failed status.
+#[derive(Clone, Debug, Default)]
+pub struct GrpcOnResponse(DefaultOnResponse);
+
+impl<B> OnResponse<B> for GrpcOnResponse {
+    fn on_response(self, response: &http::Response<B>, latency: Duration, span: &tracing::Span) {
+        let code = response
+            .headers()
+            .get("grpc-status")
+            .and_then(|code| code.to_str().ok()?.parse::<i32>().ok())
+            .unwrap_or(tonic::Code::Ok as i32);
+        span.record("rpc.grpc.status_code", code);
+        self.0.on_response(response, latency, span);
+    }
+}
+
+/// Records the status code and failure class of a failed request, and marks its span as failed
+/// unless the request was rejected.
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcOnFailure {
+    public: bool,
+}
+
+impl GrpcOnFailure {
+    fn classify(self, code: tonic::Code) -> FailureClass {
+        let class = FailureClass::from_grpc_code(code);
+        match code {
+            tonic::Code::Unknown | tonic::Code::Unimplemented if self.public => {
+                FailureClass::Rejected(class.kind())
+            },
+            _ => class,
+        }
+    }
+}
+
+impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
+    fn on_failure(
+        &mut self,
+        classification: GrpcFailureClass,
+        latency: Duration,
+        span: &tracing::Span,
+    ) {
+        let (code, failure) = match &classification {
+            GrpcFailureClass::Code(code) => {
+                let code = tonic::Code::from_i32(code.get());
+                (code, self.classify(code))
+            },
+            // The response stream failed without a gRPC status.
+            GrpcFailureClass::Error(_) => (tonic::Code::Unknown, FailureClass::Fault("stream")),
+        };
+        span.record("rpc.grpc.status_code", code as i32);
+        span.record("failure.class", failure.name());
+        span.record("failure.kind", failure.kind());
+        if failure.is_rejection() {
+            tracing::debug!(
+                parent: span,
+                classification = %classification,
+                latency = ?latency,
+                "request rejected"
+            );
+        } else {
+            tracing::error!(
+                parent: span,
+                classification = %classification,
+                latency = ?latency,
+                "response failed"
+            );
+        }
+    }
+}
 
 /// Returns a [`trace_fn`](tonic::transport::server::Server) implementation for gRPC requests
 /// which adds open-telemetry information to the span.
@@ -27,6 +168,9 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         rpc.system = field::Empty,
         rpc.request.size = field::Empty,
         rpc.response.size = field::Empty,
+        rpc.grpc.status_code = field::Empty,
+        failure.class = field::Empty,
+        failure.kind = field::Empty,
         server.address = field::Empty,
         server.port = field::Empty,
         client.address = field::Empty,

@@ -54,6 +54,11 @@ attributes.
 
 `tonic::Status` is classified by its code with `FailureClass::from_grpc_code`.
 
+The gRPC servers trace requests with `grpc_trace_layer`, or `public_grpc_trace_layer` for servers exposed to the public.
+Each request's root span records the response's status code as `rpc.grpc.status_code`, `0` on success, and a failed
+request's class and kind from that code. A public server also treats `UNKNOWN` and `UNIMPLEMENTED` as rejections, since
+scanners probing for paths and methods that do not exist receive them.
+
 ## License
 
 This project is [MIT licensed](../../LICENSE).

@@ -14,7 +14,7 @@ use miden_node_proto::clients::{
 use miden_node_proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
-use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::grpc::{grpc_trace_layer, public_grpc_trace_layer};
 use miden_node_tracing::info;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::clap::GrpcOptions;
@@ -28,8 +28,6 @@ use tokio::net::TcpListener;
 use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
-use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
-use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
 use crate::server::api::SequencerInternalService;
@@ -346,17 +344,7 @@ impl Rpc {
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(
-                TraceLayer::new(SharedClassifier::new(
-                    GrpcErrorsAsFailures::new()
-                        .with_success(GrpcCode::InvalidArgument)
-                        .with_success(GrpcCode::NotFound)
-                        .with_success(GrpcCode::ResourceExhausted)
-                        .with_success(GrpcCode::Unimplemented)
-                        .with_success(GrpcCode::Unknown),
-                ))
-                .make_span_with(grpc_trace_fn),
-            )
+            .layer(public_grpc_trace_layer())
             .layer(HealthCheckLayer)
             .layer(cors_for_grpc_web_layer())
             // Note: must wrap the accept layer so grpc-web callers receive grpc-web-compatible
@@ -500,7 +488,7 @@ impl SequencerInternal {
         // and is expected to be network-isolated.
         grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .layer(grpc_trace_layer())
             .timeout(self.grpc_options.request_timeout)
             .add_service(
                 miden_sequencer_v1_sequencer_service::service(service).max_decoding_message_size(
