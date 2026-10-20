@@ -289,7 +289,7 @@ fn rejections_are_recorded_without_failing_the_span() {
     for (span, kind) in spans.iter().zip(["expired", "failed_precondition"]) {
         assert_eq!(span.status, Status::Unset, "{span:?}");
         assert_eq!(failure_attributes(span), (Some(&"rejected".into()), Some(&kind.into())));
-        assert_eq!(event_level(span), Some(&Value::from("DEBUG")));
+        assert_eq!(event_level(span), Some(&Value::from("INFO")));
     }
 }
 
@@ -319,7 +319,7 @@ fn configured_levels_apply_to_failures_and_never_raise_rejections() {
     });
     assert_eq!(spans.len(), 3);
     let levels: Vec<_> = spans.iter().map(event_level).collect();
-    assert_eq!(levels, [Some(&"WARN".into()), Some(&"DEBUG".into()), Some(&"TRACE".into())]);
+    assert_eq!(levels, [Some(&"WARN".into()), Some(&"INFO".into()), Some(&"TRACE".into())]);
     for span in &spans {
         assert_eq!(span.status, Status::Unset, "{span:?}");
     }

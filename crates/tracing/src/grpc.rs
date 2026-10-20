@@ -35,7 +35,7 @@ pub type GrpcTraceLayer = TraceLayer<
 /// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
 /// code as `rpc.grpc.status_code`, `0` on success. A failed request also records the
 /// [`FailureClass`] of its code as `failure.class` and `failure.kind`. Only a node failure marks
-/// the span as failed; a rejected request is logged at `DEBUG`.
+/// the span as failed; a rejected request is logged at `INFO`.
 pub fn grpc_trace_layer() -> GrpcTraceLayer {
     trace_layer(GrpcOnFailure { public: false })
 }
@@ -126,7 +126,7 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
         span.record("failure.class", failure.name());
         span.record("failure.kind", failure.kind());
         if failure.is_rejection() {
-            tracing::debug!(
+            tracing::info!(
                 parent: span,
                 classification = %classification,
                 latency = ?latency,

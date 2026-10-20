@@ -39,11 +39,11 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
             )
         }
     };
-    let debug_level = quote!(::miden_node_tracing::Level::DEBUG);
+    let info_level = quote!(::miden_node_tracing::Level::INFO);
     let error_event = event(&error_level);
-    let rejection_event = event(&debug_level);
-    // A rejection is reported at `DEBUG`, or at the configured level when that is more verbose, so
-    // it never sets the span status to error.
+    let rejection_event = event(&info_level);
+    // A rejection is reported at `INFO`, or at the configured level when that is more verbose, so
+    // it stays in the exported trace but never sets the span status to error.
     let events = quote! {
         if let ::core::result::Result::Err(__miden_error) = &__miden_result {
             use ::miden_node_tracing::__private::{
@@ -57,7 +57,7 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
             }
             match __miden_failure {
                 ::core::option::Option::Some(__miden_failure) if __miden_failure.is_rejection() => {
-                    if #error_level >= #debug_level {
+                    if #error_level >= #info_level {
                         #error_event;
                     } else {
                         #rejection_event;

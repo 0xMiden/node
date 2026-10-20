@@ -47,7 +47,7 @@ An error that implements `Classified` reports a `FailureClass` with a short kind
 | `transient`     | A node failure that is expected to resolve itself.                 | Error at `ERROR` |
 | `fault`         | A node failure that needs an operator.                             | Error at `ERROR` |
 
-A rejection is the node behaving correctly, so its error event is recorded at `DEBUG`, or at the configured level when
+A rejection is the node behaving correctly, so its error event is recorded at `INFO`, or at the configured level when
 that is more verbose, and never sets the span status to error. For other classes, `err(level = ...)` sets the event
 level as described above. Errors that do not implement `Classified` keep the configured level and record no failure
 attributes.
