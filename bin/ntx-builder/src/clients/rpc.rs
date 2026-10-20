@@ -30,7 +30,7 @@ use miden_node_proto::generated::miden::node::v1::{
 use miden_node_proto::generated::{self as proto};
 use miden_node_tracing::ErrorReport;
 use miden_node_utils::retry::{self, Retryable};
-use miden_node_tracing::{debug, info, miden_instrument, warn};
+use miden_node_tracing::{Classified, debug, info, miden_instrument, warn};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountCode,
@@ -738,9 +738,10 @@ fn build_minimal_partial_account(
 // RPC ERROR
 // ================================================================================================
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Classified)]
 pub enum RpcError {
     #[error("RPC gRPC call failed")]
+    #[failure(dependency)]
     GrpcClientError(#[source] tonic::Status),
     #[error("failed to convert RPC response")]
     Conversion(#[source] ConversionError),

@@ -2,7 +2,7 @@ mod data_store;
 
 pub use data_store::TransactionInputsDataStore;
 use miden_node_tracing::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
-use miden_node_tracing::{Classified, FailureClass, Instrument, info_span, miden_instrument};
+use miden_node_tracing::{Classified, Instrument, info_span, miden_instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::errors::TransactionVerifierError;
 use miden_protocol::transaction::{
@@ -20,7 +20,10 @@ use crate::COMPONENT;
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
 
-#[derive(thiserror::Error, Debug)]
+/// Every validation failure is a rejection: the transaction is returned to the caller as an invalid
+/// argument.
+#[derive(thiserror::Error, Debug, Classified)]
+#[failure(rejected)]
 pub enum TransactionValidationError {
     #[error("failed to re-executed the transaction")]
     ExecutionError(#[from] TransactionExecutorError),
@@ -31,18 +34,6 @@ pub enum TransactionValidationError {
     },
     #[error("transaction proof verification failed")]
     ProofVerificationFailed(#[from] TransactionVerifierError),
-}
-
-/// Every validation failure is a rejection: the transaction is returned to the caller as an invalid
-/// argument.
-impl Classified for TransactionValidationError {
-    fn failure_class(&self) -> FailureClass {
-        FailureClass::Rejected(match self {
-            Self::ExecutionError(_) => "execution_failed",
-            Self::Mismatch { .. } => "header_mismatch",
-            Self::ProofVerificationFailed(_) => "invalid_proof",
-        })
-    }
 }
 
 // TRANSACTION VALIDATION

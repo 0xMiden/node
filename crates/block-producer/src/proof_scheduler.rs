@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{ProofWriter, State};
-use miden_node_tracing::{Instrument, debug, info, miden_instrument};
+use miden_node_tracing::{Classified, Instrument, debug, info, miden_instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
@@ -305,13 +305,14 @@ async fn generate_block_proof(
 // ================================================================================================
 
 /// Errors that can occur during block proving.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Classified)]
 enum ProveBlockError {
     /// An irrecoverable error that should cause node shutdown.
     #[error("fatal error")]
     Fatal(#[source] ProofSchedulerError),
     /// A transient error (I/O, prover failure). The outer loop will retry.
     #[error("transient error: {0}")]
+    #[failure(transient)]
     Transient(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 

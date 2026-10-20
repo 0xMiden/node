@@ -7,8 +7,8 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BlockProofRequest, DecodeMessage};
-use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{Classified, miden_instrument};
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::errors::ProposedBlockError;
@@ -17,22 +17,24 @@ use url::Url;
 
 use crate::COMPONENT;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Classified)]
 pub enum ProverError {
     #[error("failed to build proposed block")]
     ProposeBlock(#[source] ProposedBlockError),
     #[error("local proving failed")]
     LocalProvingFailed(#[source] LocalBlockProverError),
     #[error("remote proving failed")]
+    #[failure(transparent)]
     RemoteProvingFailed(#[source] RemoteProverError),
     #[error("local proving task join error")]
     LocalProvingTaskJoin(#[source] tokio::task::JoinError),
 }
 
 /// Errors returned by [`RemoteBlockProver`].
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Classified)]
 pub enum RemoteProverError {
     #[error("remote prover request failed")]
+    #[failure(dependency)]
     Grpc(#[source] tonic::Status),
     #[error("failed to decode block proof from remote prover")]
     Conversion(#[source] miden_node_proto::errors::ConversionError),

@@ -5,7 +5,14 @@ use std::sync::Arc;
 use anyhow::Context;
 use miden_node_store::state::{BlockWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorSpanExt, Span, debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{
+    Classified,
+    ErrorSpanExt,
+    Span,
+    debug,
+    miden_instrument,
+    miden_span_record,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{
@@ -117,7 +124,7 @@ impl BlockBuilder {
             let block = Self::prepare_block(&self.state, &self.validator, selected).await?;
             self.commit_block(mempool, block).await
         }
-        .inspect_err(|err| Span::current().set_error(err))
+        .inspect_err(|err| Span::current().set_failure(err.failure_class(), err))
         .or_else(|err| async {
             Self::rollback_block(mempool, block_num)?;
             Err(err)

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error, info, miden_instrument};
+use miden_node_tracing::{Classified, error, info, miden_instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -347,13 +347,24 @@ impl NetworkTransactionContext {
                 NetworkTransactionResult::Submitted { tx_id }
             },
             Err(err) => {
-                error!(
-                    &err,
-                    target: LOG_TARGET,
-                    "network transaction failed",
-                    account.id = account_id,
-                    note.ids = note_ids.as_slice()
-                );
+                // Notes that cannot be consumed are expected, so only node failures are errors.
+                if err.failure_class().is_rejection() {
+                    info!(
+                        &err,
+                        target: LOG_TARGET,
+                        "network transaction failed",
+                        account.id = account_id,
+                        note.ids = note_ids.as_slice()
+                    );
+                } else {
+                    error!(
+                        err,
+                        target: LOG_TARGET,
+                        "network transaction failed",
+                        account.id = account_id,
+                        note.ids = note_ids.as_slice()
+                    );
+                }
 
                 let failed = match err {
                     NtxError::AllNotesFailed(per_note) => {

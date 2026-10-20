@@ -10,6 +10,7 @@ use miden_node_store::{
     GetBlockInclusionProofsError,
     GetNoteInclusionProofsError,
 };
+use miden_node_tracing::Classified;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -170,7 +171,7 @@ pub enum BuildBatchError {
 // Block building errors
 // =================================================================================================
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Classified)]
 pub enum BuildBlockError {
     #[error("failed to apply block to store")]
     StoreApplyBlockFailed(#[source] StoreError),
@@ -186,6 +187,7 @@ pub enum BuildBlockError {
     #[error("failed to propose block")]
     ProposeBlockFailed(#[source] ProposedBlockError),
     #[error("failed to validate block")]
+    #[failure(transparent)]
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signatures are invalid")]
     InvalidSignature,

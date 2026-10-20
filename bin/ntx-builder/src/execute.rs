@@ -5,7 +5,8 @@ use std::time::Duration;
 use backon::ExponentialBuilder;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{
-    ErrorSpanExt,
+    Classified,
+    FailureClass,
     Instrument,
     info,
     miden_instrument,
@@ -65,28 +66,53 @@ use crate::clients::{RemoteTransactionProver, RpcClient, RpcError};
 use crate::db::NtxDbReader;
 use crate::{COMPONENT, LOG_TARGET};
 
-#[derive(Debug, thiserror::Error)]
+/// Failures caused by the notes a network transaction consumes, or by the network account that
+/// executes them, are rejections: the builder handles them by penalizing the notes.
+#[derive(Debug, thiserror::Error, Classified)]
 pub enum NtxError {
     #[error("note inputs were invalid")]
+    #[failure(rejected)]
     InputNotes(#[source] TransactionInputError),
     #[error("failed to filter notes")]
     NoteFilter(#[source] NoteCheckerError),
     #[error("all notes failed to be executed")]
+    #[failure(rejected)]
     AllNotesFailed(Vec<FailedNote>),
     #[error("failed to execute transaction")]
+    #[failure(with = execution_failure)]
     Execution(#[source] TransactionExecutorError),
     #[error("failed to prove transaction")]
     Proving(#[source] TransactionProverError),
+    /// The RPC judges the transaction, which is built from the notes it consumes.
     #[error("failed to submit transaction")]
+    #[failure(transparent)]
     Submission(#[source] tonic::Status),
     #[error("failed to read the fee asset ID from the network account")]
+    #[failure(rejected)]
     FeeAssetStorage(#[source] AccountError),
     #[error("invalid fee asset ID in the network account")]
+    #[failure(rejected)]
     FeeAsset(#[source] AssetError),
     #[error("network account fee asset does not match the protocol configuration")]
+    #[failure(rejected)]
     FeeAssetMismatch,
     #[error("protocol configuration does not match the reference block")]
     ProtocolConfigCommitmentMismatch,
+}
+
+/// Classifies a transaction execution failure: a note script that fails is a rejection, and a
+/// failure to fetch data is transient.
+fn execution_failure(error: &TransactionExecutorError) -> FailureClass {
+    match error {
+        TransactionExecutorError::TransactionProgramExecutionFailed(_) => {
+            FailureClass::Rejected("execution")
+        },
+        TransactionExecutorError::FetchTransactionInputsFailed(_)
+        | TransactionExecutorError::FetchAssetWitnessFailed(_) => {
+            FailureClass::Transient("data_store")
+        },
+        _ => FailureClass::Fault("execution"),
+    }
 }
 
 type NtxResult<T> = Result<T, NtxError>;
@@ -95,9 +121,10 @@ type NtxResult<T> = Result<T, NtxError>;
 ///
 /// None of these are attributable to the notes of the transaction, so the caller aborts the attempt
 /// without penalizing any note.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, Classified)]
 pub enum AccountLoadError {
     #[error("failed to fetch the account from the RPC service")]
+    #[failure(transparent)]
     Rpc(#[source] RpcError),
     #[error("account witness is malformed")]
     MalformedWitness(#[source] SmtProofError),
@@ -400,7 +427,6 @@ impl NtxContext {
             })
             .in_current_span()
             .await
-            .inspect_err(|err| miden_node_tracing::Span::current().set_error(err))
         }
     }
 
@@ -1037,6 +1063,58 @@ impl DataStore for NtxDataStore {
 impl MastForestStore for NtxDataStore {
     fn get(&self, procedure_hash: &miden_protocol::Word) -> Option<LoadedMastForest> {
         self.mast_store.get(procedure_hash)
+    }
+}
+
+#[cfg(test)]
+mod failure_class_tests {
+    use miden_node_tracing::{Classified, FailureClass};
+    use miden_tx::{DataStoreError, TransactionExecutorError};
+
+    use super::{AccountLoadError, NtxError, RpcError};
+
+    #[test]
+    fn note_failures_are_rejections() {
+        assert_eq!(
+            NtxError::AllNotesFailed(Vec::new()).failure_class(),
+            FailureClass::Rejected("all_notes_failed")
+        );
+        assert_eq!(
+            NtxError::FeeAssetMismatch.failure_class(),
+            FailureClass::Rejected("fee_asset_mismatch")
+        );
+        assert_eq!(
+            NtxError::Submission(tonic::Status::invalid_argument("bad")).failure_class(),
+            FailureClass::Rejected("invalid_argument")
+        );
+    }
+
+    #[test]
+    fn data_and_availability_failures_are_transient() {
+        let fetch = TransactionExecutorError::FetchTransactionInputsFailed(DataStoreError::other(
+            "rpc unavailable",
+        ));
+        assert_eq!(
+            NtxError::Execution(fetch).failure_class(),
+            FailureClass::Transient("data_store")
+        );
+        assert_eq!(
+            NtxError::Submission(tonic::Status::unavailable("down")).failure_class(),
+            FailureClass::Transient("unavailable")
+        );
+    }
+
+    #[test]
+    fn rejections_of_the_builders_own_requests_are_faults() {
+        let rejected = RpcError::GrpcClientError(tonic::Status::invalid_argument("bad"));
+        assert_eq!(
+            AccountLoadError::Rpc(rejected).failure_class(),
+            FailureClass::Fault("invalid_argument")
+        );
+        assert_eq!(
+            NtxError::ProtocolConfigCommitmentMismatch.failure_class(),
+            FailureClass::Fault("protocol_config_commitment_mismatch")
+        );
     }
 }
 
