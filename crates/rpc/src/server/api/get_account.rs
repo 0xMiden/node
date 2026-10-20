@@ -32,7 +32,7 @@ impl proto::server::rpc_api::GetAccount for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "get_account",
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

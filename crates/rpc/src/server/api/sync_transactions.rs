@@ -32,7 +32,7 @@ impl proto::server::rpc_api::SyncTransactions for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "sync_transactions",
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

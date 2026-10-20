@@ -3,10 +3,11 @@ use miden_node_proto::server::ntx_builder_api;
 use miden_node_proto_build::ntx_builder_api_descriptor;
 use miden_node_utils::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::grpc::grpc_trace_layer;
+use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tonic_reflection::server;
+use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
 use crate::db::NtxDbReader;
@@ -56,7 +57,7 @@ impl NtxBuilderRpcServer {
 
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(grpc_trace_layer())
+            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .add_service(api_service)
             .add_service(reflection_service)
             .serve_with_incoming_shutdown(

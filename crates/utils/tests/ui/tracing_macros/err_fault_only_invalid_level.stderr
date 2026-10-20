@@ -1,5 +1,0 @@
-error: unknown level "loud"; expected one of "trace", "debug", "info", "warn" or "error"
- --> tests/ui/tracing_macros/err_fault_only_invalid_level.rs:3:85
-  |
-3 | #[miden_instrument(target = "test", name = "invalid_level", err(fault_only, level = "loud"))]
-  |                                                                                     ^^^^^^

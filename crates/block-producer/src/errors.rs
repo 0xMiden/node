@@ -62,18 +62,15 @@ pub enum MempoolSubmissionError {
     #[error(
         "transaction expired at block height {expired_at} but the block height limit was {limit}"
     )]
-    #[grpc(failed_precondition)]
     Expired {
         expired_at: BlockNumber,
         limit: BlockNumber,
     },
 
     #[error("transaction conflicts with current mempool state")]
-    #[grpc(failed_precondition)]
     StateConflict(#[source] StateConflict),
 
     #[error("the mempool is at capacity")]
-    #[grpc(resource_exhausted)]
     CapacityExceeded,
 
     #[error("mempool lock is poisoned")]

@@ -23,7 +23,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_transaction",
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

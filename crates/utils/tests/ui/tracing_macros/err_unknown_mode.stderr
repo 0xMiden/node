@@ -1,5 +1,0 @@
-error: unsupported `err` option; expected `fault_only`, `Debug`, `Display` or `level = "..."`
- --> tests/ui/tracing_macros/err_unknown_mode.rs:3:64
-  |
-3 | #[miden_instrument(target = "test", name = "unknown_mode", err(faultonly))]
-  |                                                                ^^^^^^^^^

@@ -44,7 +44,7 @@ tokio                    = { features = ["macros", "rt", "signal", "time"], work
 tokio-util               = { workspace = true }
 tonic                    = { default-features = true, workspace = true }
 tower                    = { workspace = true }
-tower-http               = { features = ["catch-panic", "trace"], workspace = true }
+tower-http               = { features = ["catch-panic"], workspace = true }
 tower_governor           = { version = "0.8" }
 tracing                  = { workspace = true }
 tracing-forest           = { features = ["chrono"], optional = true, version = "0.3" }

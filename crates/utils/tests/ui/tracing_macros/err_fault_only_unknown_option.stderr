@@ -1,5 +1,0 @@
-error: unsupported `err(fault_only)` option; only `level = "..."` can be combined with `fault_only`
- --> tests/ui/tracing_macros/err_fault_only_unknown_option.rs:3:78
-  |
-3 | #[miden_instrument(target = "test", name = "unknown_option", err(fault_only, Debug))]
-  |                                                                              ^^^^^

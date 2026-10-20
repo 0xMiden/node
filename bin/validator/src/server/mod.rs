@@ -7,10 +7,11 @@ use miden_node_store::BlockStore;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::panic::catch_panic_layer_fn;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::grpc::grpc_trace_layer;
+use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::trace::TraceLayer;
 
 use crate::db::{ValidatorDbReader, ValidatorDbWriter};
 use crate::{
@@ -152,7 +153,7 @@ impl ValidatorServer {
         // Build the gRPC server with the API service and trace layer.
         tonic::transport::Server::builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(grpc_trace_layer())
+            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
             .add_service(validator_api::service(service))
             .add_service(reflection_service)

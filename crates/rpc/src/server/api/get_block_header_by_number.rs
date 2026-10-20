@@ -25,7 +25,7 @@ impl proto::server::rpc_api::GetBlockHeaderByNumber for RpcService {
         fields(
             block.number = %request.block_num(),
         ),
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

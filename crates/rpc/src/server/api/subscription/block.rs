@@ -31,7 +31,7 @@ impl proto::server::rpc_api::BlockSubscription for RpcService {
         fields(
             block.from = %input,
         ),
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

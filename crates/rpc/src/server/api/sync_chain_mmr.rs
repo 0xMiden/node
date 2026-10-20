@@ -28,7 +28,7 @@ impl proto::server::rpc_api::SyncChainMmr for RpcService {
             current_client_block_height = %request.current_client_block_height,
             finality_level = %request.finality_level().as_str_name(),
         ),
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

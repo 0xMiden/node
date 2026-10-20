@@ -29,7 +29,7 @@ impl proto::server::rpc_api::GetNetworkNoteStatus for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "get_network_note_status",
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

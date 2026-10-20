@@ -26,7 +26,7 @@ impl grpc::server::ntx_builder_api::GetNetworkNoteStatus for NtxBuilderRpcServer
         fields (
             note.id = %note_id,
         ),
-        err(fault_only),
+        err,
     )]
     async fn handle(
         &self,

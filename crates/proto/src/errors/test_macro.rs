@@ -22,18 +22,6 @@ pub enum TestError {
 
     #[error("client error 3")]
     ClientError3,
-
-    #[error("not found")]
-    #[grpc(not_found)]
-    NotFoundError,
-
-    #[error("failed precondition")]
-    #[grpc(failed_precondition)]
-    PreconditionError,
-
-    #[error("resource exhausted")]
-    #[grpc(resource_exhausted)]
-    ExhaustedError,
 }
 
 #[cfg(test)]
@@ -77,36 +65,5 @@ mod tests {
         let client_status: tonic::Status = TestError::ClientError1.into();
         assert_eq!(client_status.code(), tonic::Code::InvalidArgument);
         assert_eq!(client_status.message(), "client error 1");
-    }
-
-    #[test]
-    fn test_explicit_grpc_codes() {
-        // Explicitly coded variants keep their own companion variant and discriminant but map to
-        // the requested tonic code with an unmasked message.
-        assert_eq!(TestErrorGrpcError::NotFoundError.api_code(), 4);
-        assert_eq!(TestErrorGrpcError::PreconditionError.api_code(), 5);
-        assert_eq!(TestErrorGrpcError::ExhaustedError.api_code(), 6);
-
-        let status: tonic::Status = TestError::NotFoundError.into();
-        assert_eq!(status.code(), tonic::Code::NotFound);
-        assert_eq!(status.message(), "not found");
-
-        let status: tonic::Status = TestError::PreconditionError.into();
-        assert_eq!(status.code(), tonic::Code::FailedPrecondition);
-
-        let status: tonic::Status = TestError::ExhaustedError.into();
-        assert_eq!(status.code(), tonic::Code::ResourceExhausted);
-    }
-
-    #[test]
-    fn test_grpc_fault_classification() {
-        use miden_node_utils::tracing::GrpcFault;
-
-        // Only internal errors indicate a node fault; client-caused codes do not.
-        assert!(TestError::InternalError1.is_server_fault());
-        assert!(!TestError::ClientError1.is_server_fault());
-        assert!(!TestError::NotFoundError.is_server_fault());
-        assert!(!TestError::PreconditionError.is_server_fault());
-        assert!(!TestError::ExhaustedError.is_server_fault());
     }
 }
