@@ -2088,7 +2088,7 @@ async fn allowlist_database_failures_hide_the_cause(#[case] disabled: bool) {
 
     let error = rpc.register_account(request).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
-    assert!(!error.message().contains("unable to open database file"), "{error}");
+    assert_eq!(error.message(), "account registry database operation failed");
 
     let query =
         proto::miden::node::v1::IsAccountAllowedRequest { account_id: Some(account.into()) };
@@ -2097,7 +2097,7 @@ async fn allowlist_database_failures_hide_the_cause(#[case] disabled: bool) {
     } else {
         let error = rpc.is_account_allowed(query).await.unwrap_err();
         assert_eq!(error.code(), tonic::Code::Internal);
-        assert!(!error.message().contains("unable to open database file"), "{error}");
+        assert_eq!(error.message(), "database error");
     }
 }
 
