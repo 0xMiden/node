@@ -29,40 +29,15 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
     };
     let error_level = error_level(err)?;
     let target = argument_value(&args, "target")?.unwrap_or_else(|| parse_quote!(module_path!()));
-    let event = |level: &TokenStream| {
-        quote! {
+    let events = quote! {
+        if let ::core::result::Result::Err(__miden_error) = &__miden_result {
+            use ::miden_node_tracing::__private::AsDynError as _;
             ::miden_node_tracing::event!(
                 name: "exception",
                 target: #target,
-                #level,
-                error = __miden_error.as_dyn_error()
-            )
-        }
-    };
-    let info_level = quote!(::miden_node_tracing::Level::INFO);
-    let error_event = event(&error_level);
-    let rejection_event = event(&info_level);
-    // A rejection is reported at `INFO`, or at the configured level when that is more verbose, so
-    // it stays in the exported trace but never sets the span status to error.
-    let events = quote! {
-        if let ::core::result::Result::Err(__miden_error) = &__miden_result {
-            use ::miden_node_tracing::__private::{
-                AsDynError as _,
-                ClassifiedFailure as _,
-                UnclassifiedFailure as _,
-            };
-            if ::miden_node_tracing::__private::record_failure(
-                __miden_error.miden_failure_class(),
                 #error_level,
-            ) {
-                if #error_level >= #info_level {
-                    #error_event;
-                } else {
-                    #rejection_event;
-                }
-            } else {
-                #error_event;
-            }
+                error = __miden_error.as_dyn_error()
+            );
         }
         __miden_result
     };

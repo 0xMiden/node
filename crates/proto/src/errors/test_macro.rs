@@ -26,8 +26,6 @@ pub enum TestError {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_tracing::{Classified, FailureClass};
-
     use super::*;
 
     #[test]
@@ -67,17 +65,5 @@ mod tests {
         let client_status: tonic::Status = TestError::ClientError1.into();
         assert_eq!(client_status.code(), tonic::Code::InvalidArgument);
         assert_eq!(client_status.message(), "client error 1");
-    }
-
-    #[test]
-    fn variants_are_classified_by_their_grpc_codes() {
-        assert_eq!(
-            TestError::InternalError2.failure_class(),
-            FailureClass::Fault("internal_error2")
-        );
-        assert_eq!(
-            TestError::ClientError1.failure_class(),
-            FailureClass::Rejected("client_error1")
-        );
     }
 }

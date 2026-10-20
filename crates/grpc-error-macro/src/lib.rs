@@ -5,7 +5,6 @@
 //! - Implementing the `GrpcError` trait
 //! - Providing proper error code mappings
 //! - Generating `From<Error> for tonic::Status` conversion
-//! - Classifying each variant for telemetry by its gRPC status code
 //!
 //! # Example
 //!
@@ -45,8 +44,6 @@ use syn::{Data, DeriveInput, Fields, Ident, parse_macro_input};
 /// 2. An implementation of the `GrpcError` trait for the companion enum
 /// 3. A method `api_error()` on the original enum that maps to the companion enum
 /// 4. An implementation of `From<Error> for tonic::Status` for automatic error conversion
-/// 5. An implementation of `miden_node_tracing::Classified` that classifies each variant by its
-///    gRPC status code, with the variant's name in snake case as the failure kind
 #[proc_macro_derive(GrpcError, attributes(grpc))]
 pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -67,7 +64,6 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
     // Build the GrpcError enum variants
     let mut grpc_variants = Vec::new();
     let mut api_error_arms = Vec::new();
-    let mut failure_kind_arms = Vec::new();
 
     // Always add Internal variant (standard practice for gRPC errors)
     grpc_variants.push(quote! {
@@ -78,9 +74,6 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
 
     for variant in variants {
         let variant_name = &variant.ident;
-        let pattern = variant_pattern(name, variant);
-        let kind = snake_case(&variant_name.to_string());
-        failure_kind_arms.push(quote! { #pattern => #kind });
 
         // Check if this variant is marked as internal
         let is_internal = variant.attrs.iter().any(|attr| {
@@ -94,6 +87,12 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
 
         if is_internal {
             // Map to Internal variant
+            let pattern = match &variant.fields {
+                Fields::Unit => quote! { #name::#variant_name },
+                Fields::Unnamed(_) => quote! { #name::#variant_name(..) },
+                Fields::Named(_) => quote! { #name::#variant_name { .. } },
+            };
+
             api_error_arms.push(quote! {
                 #pattern => #grpc_name::Internal
             });
@@ -103,6 +102,12 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
                 #(#docs)*
                 #variant_name = #discriminant
             });
+
+            let pattern = match &variant.fields {
+                Fields::Unit => quote! { #name::#variant_name },
+                Fields::Unnamed(_) => quote! { #name::#variant_name(..) },
+                Fields::Named(_) => quote! { #name::#variant_name { .. } },
+            };
 
             api_error_arms.push(quote! {
                 #pattern => #grpc_name::#variant_name
@@ -149,16 +154,6 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
             }
         }
 
-        impl ::miden_node_tracing::Classified for #name {
-            fn failure_class(&self) -> ::miden_node_tracing::FailureClass {
-                let kind = match self {
-                    #(#failure_kind_arms,)*
-                };
-                ::miden_node_tracing::FailureClass::from_grpc_code(self.api_error().tonic_code())
-                    .with_kind(kind)
-            }
-        }
-
         // Automatically implement From<Error> for tonic::Status
         impl From<#name> for tonic::Status {
             fn from(value: #name) -> Self {
@@ -182,30 +177,4 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
-}
-
-/// Returns the pattern that matches a variant regardless of its fields.
-fn variant_pattern(name: &Ident, variant: &syn::Variant) -> proc_macro2::TokenStream {
-    let variant_name = &variant.ident;
-    match &variant.fields {
-        Fields::Unit => quote! { #name::#variant_name },
-        Fields::Unnamed(_) => quote! { #name::#variant_name(..) },
-        Fields::Named(_) => quote! { #name::#variant_name { .. } },
-    }
-}
-
-/// Converts an `UpperCamelCase` identifier to `snake_case`.
-fn snake_case(name: &str) -> String {
-    let mut snake = String::with_capacity(name.len() + 4);
-    for (index, character) in name.char_indices() {
-        if character.is_uppercase() {
-            if index > 0 {
-                snake.push('_');
-            }
-            snake.extend(character.to_lowercase());
-        } else {
-            snake.push(character);
-        }
-    }
-    snake
 }

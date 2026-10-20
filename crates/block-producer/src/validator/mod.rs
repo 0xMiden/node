@@ -9,7 +9,7 @@ use miden_node_proto::domain::encryption::{
 use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, VerifyWith, generated as proto};
-use miden_node_tracing::{Classified, info, miden_instrument};
+use miden_node_tracing::{info, miden_instrument};
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -28,10 +28,9 @@ mod tests;
 // VALIDATOR ERROR
 // ================================================================================================
 
-#[derive(Debug, Error, Classified)]
+#[derive(Debug, Error)]
 pub enum ValidatorError {
     #[error("gRPC transport error: {0}")]
-    #[failure(dependency)]
     Transport(#[from] tonic::Status),
     #[error("failed to convert block signature response: {0}")]
     Conversion(#[from] ConversionError),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{failure, info, miden_instrument};
+use miden_node_tracing::{error, info, miden_instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -347,8 +347,8 @@ impl NetworkTransactionContext {
                 NetworkTransactionResult::Submitted { tx_id }
             },
             Err(err) => {
-                failure!(
-                    err,
+                error!(
+                    &err,
                     target: LOG_TARGET,
                     "network transaction failed",
                     account.id = account_id,
