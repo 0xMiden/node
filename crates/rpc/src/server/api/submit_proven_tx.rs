@@ -203,9 +203,7 @@ impl RpcService {
         request: proto::submission::ProvenTransactionSubmission,
         rebuilt_tx: ProvenTransaction,
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
-        let tx_inputs = get_tx_inputs(&self.state, &rebuilt_tx).await.map_err(|err| {
-            Status::internal(err.as_report_context("failed to get transaction inputs"))
-        })?;
+        let tx_inputs = get_tx_inputs(&self.state, &rebuilt_tx).await?;
 
         let authenticated_tx =
             AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs)
@@ -237,9 +235,7 @@ async fn check_nullifiers_and_expiration(
     state: &State,
     tx: ProvenTransaction,
 ) -> tonic::Result<()> {
-    let inputs = get_tx_inputs(state, &tx)
-        .await
-        .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+    let inputs = get_tx_inputs(state, &tx).await?;
     let chain_tip = inputs.current_block_height;
     if tx.expiration_block_num() <= chain_tip {
         return Err(MempoolSubmissionError::Expired {

@@ -351,9 +351,7 @@ impl BlockProducerApi {
         debug!(target: COMPONENT, "Transaction proof received");
 
         // Authenticate against the local store, then add to the mempool.
-        let inputs = get_tx_inputs(&self.state, &tx)
-            .await
-            .map_err(MempoolSubmissionError::StoreStateReadFailed)?;
+        let inputs = get_tx_inputs(&self.state, &tx).await?;
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
         let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
             .map_err(StateConflict::from)
@@ -395,11 +393,7 @@ impl BlockProducerApi {
         // Authenticate each transaction against the local store, then add the batch to the mempool.
         let mut inputs = Vec::with_capacity(batch.transactions().len());
         for tx in batch.transactions() {
-            inputs.push(
-                get_tx_inputs(&self.state, tx)
-                    .await
-                    .map_err(MempoolSubmissionError::StoreStateReadFailed)?,
-            );
+            inputs.push(get_tx_inputs(&self.state, tx).await?);
         }
 
         self.submit_authenticated_tx_batch(proof, batch, inputs).await

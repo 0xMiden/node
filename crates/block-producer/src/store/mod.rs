@@ -9,7 +9,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
-use crate::errors::StoreError;
+use crate::errors::{MempoolSubmissionError, StateConflict, StoreError};
 use crate::{COMPONENT, LOG_TARGET};
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
@@ -27,7 +27,7 @@ use crate::{COMPONENT, LOG_TARGET};
 #[miden_instrument(
     target = COMPONENT,
     name = "store.state.get_tx_inputs",
-    err,
+    err(level = "debug"),
     fields(
         transaction.id = proven_tx.id()
     ),
@@ -35,7 +35,7 @@ use crate::{COMPONENT, LOG_TARGET};
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,
-) -> Result<TransactionInputs, StoreError> {
+) -> Result<TransactionInputs, MempoolSubmissionError> {
     let nullifiers = proven_tx.nullifiers().collect::<Vec<_>>();
     let unauthenticated_note_ids = proven_tx.unauthenticated_notes().map(NoteHeader::id).collect();
 
@@ -49,6 +49,7 @@ pub async fn get_tx_inputs(
             .await
             .map(|inputs| (view.tip(), inputs))
             .map_err(StoreError::GetTransactionInputsFailed)
+            .map_err(MempoolSubmissionError::StoreStateReadFailed)
         })
         .await?;
 
@@ -57,7 +58,9 @@ pub async fn get_tx_inputs(
             proven_tx.account_update().initial_state_commitment().is_empty(),
             "account id prefix uniqueness should not be validated unless transaction creates a new account"
         );
-        return Err(StoreError::DuplicateAccountIdPrefix(proven_tx.account_id()));
+        return Err(MempoolSubmissionError::AuthenticationFailed(
+            StateConflict::AccountIdPrefixAlreadyExists(proven_tx.account_id()),
+        ));
     }
 
     let tx_inputs = from_store_inputs(proven_tx.account_id(), store_inputs, *current_block_height);

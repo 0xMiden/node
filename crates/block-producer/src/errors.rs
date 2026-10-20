@@ -123,6 +123,8 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
+    #[error("the ID prefix of new account {0} already exists")]
+    AccountIdPrefixAlreadyExists(AccountId),
 }
 
 impl From<TransactionAuthenticationError> for StateConflict {
@@ -223,8 +225,6 @@ impl BuildBlockError {
 /// Errors returned by the store state.
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("account Id prefix already exists: {0}")]
-    DuplicateAccountIdPrefix(AccountId),
     #[error("failed to get transaction inputs from store")]
     GetTransactionInputsFailed(#[source] DatabaseError),
     #[error("failed to get block inclusion proofs from store")]

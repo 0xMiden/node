@@ -175,9 +175,7 @@ impl RpcService {
 
         let mut auth_inputs = Vec::with_capacity(proposed_batch.transactions().len());
         for tx in proposed_batch.transactions() {
-            let inputs = get_tx_inputs(&self.state, tx).await.map_err(|err| {
-                Status::internal(err.as_report_context("failed to authenticate transaction"))
-            })?;
+            let inputs = get_tx_inputs(&self.state, tx).await?;
             auth_inputs.push(inputs.into());
         }
 
