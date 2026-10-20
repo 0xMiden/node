@@ -619,8 +619,13 @@ async fn decoding_limit_controls_both_directions_and_survives_reconnection() {
         let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));
         let mut inbound =
             NoteTransportServiceClient::connect(format!("http://{address}")).await.unwrap();
-        let received =
-            inbound.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None }).await;
+        let received = inbound
+            .fetch_notes(FetchNotesRequest {
+                tags: vec![1; 32],
+                cursor: None,
+                sync_to: None,
+            })
+            .await;
         if limit == 64 {
             assert_eq!(received.unwrap_err().code(), tonic::Code::OutOfRange);
         } else {

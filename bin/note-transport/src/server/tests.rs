@@ -869,8 +869,13 @@ async fn configured_decoding_limit_applies_to_requests_and_health() {
             }
         );
         let mut client = NoteTransportServiceClient::new(channel);
-        let response =
-            client.fetch_notes(FetchNotesRequest { tags: vec![1; 32], cursor: None, sync_to: None }).await;
+        let response = client
+            .fetch_notes(FetchNotesRequest {
+                tags: vec![1; 32],
+                cursor: None,
+                sync_to: None,
+            })
+            .await;
         if limit == 64 {
             assert_eq!(response.unwrap_err().code(), tonic::Code::OutOfRange);
         } else {
@@ -903,7 +908,11 @@ async fn configured_decoding_limit_applies_to_requests_and_health() {
         let web = grpc_web_request(
             address,
             "FetchNotes",
-            FetchNotesRequest { tags: vec![1; 32], cursor: None, sync_to: None },
+            FetchNotesRequest {
+                tags: vec![1; 32],
+                cursor: None,
+                sync_to: None,
+            },
         )
         .await;
         let header_status =
@@ -927,7 +936,11 @@ async fn decoding_override_receives_requests_over_four_mib() {
     use std::num::NonZeroUsize;
 
     use miden_node_proto::generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient;
-    let request = FetchNotesRequest { tags: vec![1; 1024 * 1024], cursor: None, sync_to: None };
+    let request = FetchNotesRequest {
+        tags: vec![1; 1024 * 1024],
+        cursor: None,
+        sync_to: None,
+    };
     assert!(request.encoded_len() > 4_194_304);
     for limit in [4_194_304, 16_777_216] {
         let mut config = test_config();
