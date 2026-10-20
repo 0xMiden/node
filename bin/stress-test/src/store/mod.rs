@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
 use miden_node_proto::DecodeMessageExt;
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
@@ -177,7 +178,9 @@ fn get_account_request(
         block_num: None,
         details: Some(AccountDetailRequest {
             code_commitment: None,
-            asset_vault_commitment: Some(proto::primitives::Word::from(Word::empty())),
+            vault_request: Some(VaultRequest::AssetVaultCommitment(proto::primitives::Word::from(
+                Word::empty(),
+            ))),
             storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
                 storage_maps: vec![StorageMapDetailRequest {
                     slot_name: storage_map_slot,
@@ -205,7 +208,7 @@ mod tests {
 
         let details = request.details.expect("details should be requested");
         assert!(
-            details.asset_vault_commitment.is_some(),
+            details.vault_request.is_some(),
             "benchmark get-account should request vault asset details"
         );
     }

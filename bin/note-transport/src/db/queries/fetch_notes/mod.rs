@@ -15,8 +15,9 @@ pub fn fetch_notes(
     tx: &ReadTx<'_>,
     tags: Vec<NoteTag>,
     cursor: i64,
-    nonce: u64,
+    sync_to: Cursor,
 ) -> Result<FetchPage, StorageError> {
+    let upper = i64::try_from(sync_to.sequence).map_err(|_| StorageError::InvalidSyncRange)?;
     let tags = InList::from_values(tags);
     let rows = tx.query(
         include_str!("fetch_notes.sql"),
@@ -26,6 +27,7 @@ pub fn fetch_notes(
             &i64::try_from(FETCH_NOTES_MAX_ROWS + 1).expect("page limit fits i64"),
             &i64::try_from(FETCH_NOTES_MAX_BYTES).expect("byte limit fits i64"),
             &i64::try_from(FETCH_NOTES_MAX_ROWS).expect("page limit fits i64"),
+            &upper,
         ],
         |row| {
             Ok((
@@ -49,6 +51,7 @@ pub fn fetch_notes(
     Ok(FetchPage {
         notes,
         has_more,
-        cursor: Cursor { nonce, sequence },
+        cursor: Cursor { nonce: sync_to.nonce, sequence },
+        sync_to,
     })
 }

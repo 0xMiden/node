@@ -44,6 +44,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::testing::{
@@ -103,13 +104,14 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
 /// can always flush on drop regardless of test outcome or drop ordering.
 static TEMP_DIRS: std::sync::OnceLock<std::sync::Mutex<Vec<TempDir>>> = std::sync::OnceLock::new();
 
 /// Creates a temp directory, registers it in the global registry, and returns its path.
-fn new_tempdir() -> std::path::PathBuf {
+pub(crate) fn new_tempdir() -> std::path::PathBuf {
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let path = dir.path().to_path_buf();
     TEMP_DIRS
@@ -2266,6 +2268,10 @@ async fn get_limits_endpoint() {
 
     // Verify GetAccount endpoint advertises both the per-key and per-slot storage map limits.
     let get_account = limits.endpoints.get("GetAccount").expect("GetAccount should exist");
+    assert_eq!(
+        get_account.parameters.get(QueryParamVaultAssetLimit::PARAM_NAME),
+        Some(&(QueryParamVaultAssetLimit::LIMIT as u32)),
+    );
     assert_eq!(
         get_account.parameters.get(QueryParamStorageMapKeyTotalLimit::PARAM_NAME),
         Some(&(QueryParamStorageMapKeyTotalLimit::LIMIT as u32)),

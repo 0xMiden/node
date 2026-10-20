@@ -28,6 +28,7 @@ pub struct NtxBuilderRpcServer {
     db: NtxDbReader,
     max_note_attempts: usize,
     request_timeout: Duration,
+    max_decoding_message_size: usize,
 }
 
 impl NtxBuilderRpcServer {
@@ -35,8 +36,14 @@ impl NtxBuilderRpcServer {
         db: NtxDbReader,
         max_note_attempts: usize,
         request_timeout: Duration,
+        max_decoding_message_size: usize,
     ) -> Self {
-        Self { db, max_note_attempts, request_timeout }
+        Self {
+            db,
+            max_note_attempts,
+            request_timeout,
+            max_decoding_message_size,
+        }
     }
 
     /// Starts the gRPC server on the given listener.
@@ -46,6 +53,7 @@ impl NtxBuilderRpcServer {
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
         let request_timeout = self.request_timeout;
+        let max_decoding_message_size = self.max_decoding_message_size;
         let api_service = miden_ntx_builder_v1_network_transaction_builder_service::service(self);
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(ntx_builder_api_descriptor())
@@ -66,8 +74,8 @@ impl NtxBuilderRpcServer {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(request_timeout)
-            .add_service(api_service)
-            .add_service(reflection_service)
+            .add_service(api_service.max_decoding_message_size(max_decoding_message_size))
+            .add_service(reflection_service.max_decoding_message_size(max_decoding_message_size))
             .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
             .context("failed to serve NTX builder gRPC API")

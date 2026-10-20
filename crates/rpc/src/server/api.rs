@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -274,7 +275,8 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::AccountNotFoundInDb(_)
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
-        DatabaseError::TransactionPageExceedsPayloadLimit { .. } => Status::out_of_range(message),
+        DatabaseError::TransactionPageExceedsPayloadLimit { .. }
+        | DatabaseError::BlockExceedsPageLimit { .. } => Status::out_of_range(message),
         DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
@@ -327,6 +329,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
+    use QueryParamVaultAssetLimit as VaultAsset;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
@@ -345,6 +348,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
                 endpoint_limits(&[
                     (StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT),
                     (StorageMapSlot::PARAM_NAME, StorageMapSlot::LIMIT),
+                    (VaultAsset::PARAM_NAME, VaultAsset::LIMIT),
                 ]),
             ),
         ]),

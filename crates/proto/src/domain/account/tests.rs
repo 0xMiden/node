@@ -103,6 +103,78 @@ fn account_response_accepts_matching_details_and_omitted_optional_data() {
     assert!(message.decode_fields().and_then(Verify::verify).unwrap().details.is_none());
 }
 
+fn account_request(block_num: Option<BlockNumber>) -> GetAccountRequest {
+    GetAccountRequest {
+        account_id: AccountId::dummy(
+            [7; 15],
+            AccountIdVersion::Version1,
+            AccountType::Public,
+            AssetCallbackFlag::Disabled,
+        ),
+        block_num,
+        details: None,
+    }
+}
+
+#[test]
+fn account_response_verifies_requested_account_and_optional_block() {
+    for (requested_block, returned_block) in [(Some(1), 1), (None, 1), (None, 17)] {
+        for include_details in [true, false] {
+            let mut message = account_response();
+            message.block_num = Some(BlockNumber::from(returned_block).into());
+            if !include_details {
+                message.details = None;
+            }
+            let request = account_request(requested_block.map(BlockNumber::from));
+            let response = message.decode_fields().unwrap().verify_with(&request).unwrap();
+            assert_eq!(response.witness.id(), request.account_id);
+            assert_eq!(response.block_num, BlockNumber::from(returned_block));
+        }
+    }
+}
+
+#[test]
+fn account_response_rejects_an_unrequested_account() {
+    let mut request = account_request(None);
+    request.account_id = AccountId::dummy(
+        [8; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    for include_details in [true, false] {
+        let mut message = account_response();
+        if !include_details {
+            message.details = None;
+        }
+        let error = message.decode_fields().unwrap().verify_with(&request).err().unwrap();
+        assert!(error.to_string().contains("account ID does not match request"), "{error}");
+    }
+}
+
+#[test]
+fn account_response_rejects_an_unrequested_block() {
+    let request = account_request(Some(2.into()));
+    let error = account_response().decode_fields().unwrap().verify_with(&request).err().unwrap();
+    assert!(error.to_string().contains("block number does not match request"), "{error}");
+}
+
+#[test]
+fn account_response_request_verification_rejects_inconsistent_details() {
+    let mut message = account_response();
+    message.details.as_mut().unwrap().header.as_mut().unwrap().nonce += 1;
+    let error = message
+        .decode_fields()
+        .unwrap()
+        .verify_with(&account_request(Some(1.into())))
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("account commitment does not match witness"),
+        "{error}"
+    );
+}
+
 #[test]
 fn account_response_rejects_storage_that_does_not_match_header() {
     let mut message = account_response();
@@ -295,7 +367,7 @@ fn account_detail_request_converts_all_storage_maps() {
 
     let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
-        asset_vault_commitment: None,
+        vault_request: None,
         storage_request: Some(StorageRequest::AllStorageMaps(true)),
     };
 
@@ -310,7 +382,7 @@ fn account_detail_request_rejects_false_all_storage_maps() {
 
     let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
-        asset_vault_commitment: None,
+        vault_request: None,
         storage_request: Some(StorageRequest::AllStorageMaps(false)),
     };
 
@@ -330,7 +402,7 @@ fn account_detail_request_converts_explicit_storage_maps() {
 
     let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
-        asset_vault_commitment: None,
+        vault_request: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
             storage_maps: vec![StorageMapDetailRequest {
                 slot_name: "miden::test::storage::slot".to_string(),
@@ -360,7 +432,7 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
     let map_key: crate::generated::primitives::Word = Word::from([1, 2, 3, 4u32]).into();
     let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
-        asset_vault_commitment: None,
+        vault_request: None,
         storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
             storage_maps: vec![StorageMapDetailRequest {
                 slot_name: "miden::test::storage::slot".to_string(),
@@ -380,11 +452,294 @@ fn account_detail_request_rejects_duplicate_storage_map_keys() {
 fn account_detail_request_allows_no_storage_slot_data() {
     let request = crate::generated::miden::node::v1::get_account_request::AccountDetailRequest {
         code_commitment: None,
-        asset_vault_commitment: None,
+        vault_request: None,
         storage_request: None,
     };
 
     let request = request.decode_fields().and_then(Verify::verify).unwrap();
 
     assert_eq!(request.storage_request, AccountStorageRequest::None);
+}
+
+fn vault_fixture() -> (miden_protocol::asset::AssetVault, Vec<AssetId>) {
+    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    };
+    let asset: Asset =
+        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
+            .unwrap()
+            .into();
+    let absent = AssetId::new_fungible(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap());
+    (
+        miden_protocol::asset::AssetVault::new(&[asset]).unwrap(),
+        vec![asset.id(), absent],
+    )
+}
+
+fn partial_vault_message() -> proto::miden::node::v1::AccountVaultDetails {
+    let (vault, asset_ids) = vault_fixture();
+    let partial = PartialVault::with_witnesses(asset_ids.iter().map(|id| vault.open(*id))).unwrap();
+    AccountVaultDetails::Partial { asset_ids, vault: partial }.into()
+}
+
+fn account_response_with_vault(
+    asset_ids: &[AssetId],
+) -> proto::miden::node::v1::GetAccountResponse {
+    let (vault, _) = vault_fixture();
+    let partial = if asset_ids.is_empty() {
+        PartialVault::new(vault.root())
+    } else {
+        PartialVault::with_witnesses(asset_ids.iter().map(|id| vault.open(*id))).unwrap()
+    };
+    account_response_with_vault_details(
+        vault.root(),
+        AccountVaultDetails::Partial {
+            asset_ids: asset_ids.to_vec(),
+            vault: partial,
+        },
+    )
+}
+
+fn account_response_with_vault_details(
+    root: Word,
+    vault_details: AccountVaultDetails,
+) -> proto::miden::node::v1::GetAccountResponse {
+    let mut response = account_response().decode_fields().and_then(Verify::verify).unwrap();
+    let details = response.details.as_mut().unwrap();
+    let header = &details.account_header;
+    details.account_header = AccountHeader::new(
+        header.id(),
+        header.nonce(),
+        root,
+        header.storage_commitment(),
+        header.code_commitment(),
+    );
+    details.vault_details = vault_details;
+    response.witness = AccountTree::with_entries([(
+        details.account_header.id(),
+        details.account_header.to_commitment(),
+    )])
+    .unwrap()
+    .open(details.account_header.id());
+    response.into()
+}
+
+fn vault_request(asset_ids: Vec<AssetId>) -> GetAccountRequest {
+    GetAccountRequest {
+        details: Some(AccountDetailRequest {
+            code_commitment: None,
+            vault_request: AccountVaultRequest::Assets(asset_ids),
+            storage_request: AccountStorageRequest::None,
+        }),
+        ..account_request(Some(1.into()))
+    }
+}
+
+#[test]
+fn account_response_verifies_requested_vault_proofs_in_any_order() {
+    let (expected, ids) = vault_fixture();
+    for mut requested in [ids.clone(), vec![]] {
+        let message = account_response_with_vault(&requested);
+        requested.reverse();
+        let response = message
+            .decode_fields()
+            .unwrap()
+            .verify_with(&vault_request(requested.clone()))
+            .unwrap();
+        let AccountVaultDetails::Partial { vault, .. } = response.details.unwrap().vault_details
+        else {
+            panic!("expected partial vault")
+        };
+        for id in requested {
+            assert_eq!(vault.open(id).unwrap(), expected.open(id));
+        }
+    }
+}
+
+#[test]
+fn account_response_accepts_full_vault_for_selective_requests() {
+    let (expected, ids) = vault_fixture();
+    for requested in [ids.clone(), vec![ids[1]], vec![]] {
+        let message = account_response_with_vault_details(
+            expected.root(),
+            AccountVaultDetails::Assets(expected.assets().collect()),
+        );
+        let response = message
+            .decode_fields()
+            .unwrap()
+            .verify_with(&vault_request(requested.clone()))
+            .unwrap();
+        let AccountVaultDetails::Partial { asset_ids, vault } =
+            response.details.unwrap().vault_details
+        else {
+            panic!("expected a normalized partial vault")
+        };
+        assert_eq!(asset_ids, requested);
+        for id in requested {
+            assert_eq!(vault.open(id).unwrap(), expected.open(id));
+        }
+    }
+}
+
+#[test]
+fn account_response_accepts_empty_full_vault_for_absence_proofs() {
+    let expected = AssetVault::default();
+    let request = vault_request(vault_fixture().1);
+    let message =
+        account_response_with_vault_details(expected.root(), AccountVaultDetails::empty());
+    let response = message.decode_fields().unwrap().verify_with(&request).unwrap();
+    let AccountVaultDetails::Partial { vault, asset_ids } = response.details.unwrap().vault_details
+    else {
+        panic!("expected a normalized partial vault")
+    };
+    for id in asset_ids {
+        assert_eq!(vault.open(id).unwrap(), expected.open(id));
+    }
+}
+
+#[test]
+fn account_response_rejects_incomplete_full_vault_for_selective_requests() {
+    use miden_protocol::asset::FungibleAsset;
+
+    let (vault, ids) = vault_fixture();
+    let assets = vault.assets().collect::<Vec<_>>();
+    let unrelated: Asset = FungibleAsset::new(ids[1].faucet_id(), 10).unwrap().into();
+    let complete = AssetVault::new(&[assets[0], unrelated]).unwrap();
+    let message =
+        account_response_with_vault_details(complete.root(), AccountVaultDetails::Assets(assets));
+    let error = message
+        .decode_fields()
+        .unwrap()
+        .verify_with(&vault_request(vec![ids[0]]))
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("full vault root does not match account header"),
+        "{error}"
+    );
+}
+
+#[test]
+fn account_response_rejects_invalid_or_oversized_full_vaults() {
+    let (vault, ids) = vault_fixture();
+    let asset = vault.assets().next().unwrap();
+    for assets in [vec![asset, asset], vec![asset; AccountVaultDetails::MAX_RETURN_ENTRIES + 1]] {
+        let message =
+            account_response_with_vault_details(vault.root(), AccountVaultDetails::Assets(assets));
+        assert!(
+            message
+                .decode_fields()
+                .unwrap()
+                .verify_with(&vault_request(ids.clone()))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn account_response_rejects_missing_requested_details_and_vault_data() {
+    let request = vault_request(vault_fixture().1);
+    let message = account_response_with_vault(&vault_fixture().1);
+    for vault_details in [
+        None,
+        Some(AccountVaultDetails::empty()),
+        Some(AccountVaultDetails::LimitExceeded),
+    ] {
+        let mut message = message.clone();
+        if let Some(vault_details) = vault_details {
+            message.details.as_mut().unwrap().vault_details = Some(vault_details.into());
+        } else {
+            message.details = None;
+        }
+        assert!(message.decode_fields().unwrap().verify_with(&request).is_err());
+    }
+}
+
+#[test]
+fn account_response_rejects_missing_or_extra_vault_assets() {
+    let ids = vault_fixture().1;
+    for (requested, returned) in
+        [(ids.clone(), vec![]), (ids.clone(), vec![ids[0]]), (vec![ids[0]], ids)]
+    {
+        let error = account_response_with_vault(&returned)
+            .decode_fields()
+            .unwrap()
+            .verify_with(&vault_request(requested))
+            .err()
+            .unwrap();
+        assert!(error.to_string().contains("does not cover the requested assets"), "{error}");
+    }
+}
+
+#[test]
+fn partial_vault_roundtrip_preserves_inclusion_and_absence_proofs() {
+    let (expected, ids) = vault_fixture();
+    let decoded = partial_vault_message().decode_fields().and_then(Verify::verify).unwrap();
+    let AccountVaultDetails::Partial { asset_ids, vault } = decoded else {
+        panic!("expected partial vault")
+    };
+    assert_eq!(asset_ids, ids);
+    for id in ids {
+        assert_eq!(vault.open(id).unwrap(), expected.open(id));
+    }
+}
+
+#[test]
+fn partial_vault_rejects_ambiguous_or_invalid_responses() {
+    let valid = partial_vault_message();
+    let mut invalid = valid.clone();
+    invalid.too_many_assets = true;
+    assert!(invalid.decode_fields().and_then(Verify::verify).is_err());
+
+    let mut invalid = valid.clone();
+    invalid.assets = vault_fixture().0.assets().map(Into::into).collect();
+    assert!(invalid.decode_fields().and_then(Verify::verify).is_err());
+
+    let mut invalid = valid.clone();
+    let partial = invalid.partial_vault.as_mut().unwrap();
+    partial.asset_ids.push(partial.asset_ids[0]);
+    assert!(invalid.decode_fields().and_then(Verify::verify).is_err());
+
+    let mut invalid = valid.clone();
+    invalid.partial_vault.as_mut().unwrap().partial_smt =
+        Some(PartialSmt::new(Word::empty()).into());
+    assert!(invalid.decode_fields().and_then(Verify::verify).is_err());
+
+    let mut invalid = valid;
+    let partial = invalid.partial_vault.as_mut().unwrap();
+    partial.asset_ids = vec![partial.asset_ids[0]; AccountVaultDetails::MAX_PROOF_ENTRIES + 1];
+    assert!(invalid.decode_fields().and_then(Verify::verify).is_err());
+}
+
+#[test]
+fn account_details_reject_partial_vault_with_wrong_root() {
+    let mut response = account_response();
+    response.details.as_mut().unwrap().vault_details = Some(partial_vault_message());
+    let err = response.decode_fields().and_then(Verify::verify).err().unwrap();
+    assert!(err.to_string().contains("partial vault root"));
+}
+
+#[test]
+fn selective_vault_request_rejects_duplicate_ids() {
+    use proto::miden::node::v1::get_account_request::account_detail_request::{
+        VaultAssetIds,
+        VaultRequest,
+    };
+    let ids = vault_fixture().1;
+    for asset_ids in [ids.clone(), vec![], vec![ids[0], ids[0]]] {
+        let request = proto::miden::node::v1::get_account_request::AccountDetailRequest {
+            vault_request: Some(VaultRequest::AssetIds(VaultAssetIds {
+                asset_ids: asset_ids.iter().copied().map(Into::into).collect(),
+            })),
+            ..Default::default()
+        };
+        let result = request.decode_fields().and_then(Verify::verify);
+        if asset_ids == vec![ids[0], ids[0]] {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap().vault_request, AccountVaultRequest::Assets(asset_ids));
+        }
+    }
 }

@@ -394,12 +394,23 @@ message GetAccountRequest {
         // If the field is ommiteed, the response will not include the account code.
         optional primitives.Word code_commitment = 1;
 
-        // Last known asset vault commitment to the requester. The response will include asset vault data
-        // only if its commitment is different from this value. If the value is not present in the
-        // request, the response will not contain one either.
-        // If the number of to-be-returned asset entries exceed a threshold, they have to be requested
-        // separately, which is signaled in the response message with dedicated flag.
-        optional primitives.Word asset_vault_commitment = 2;
+        // Unique asset IDs whose inclusion or absence should be proven.
+        // The maximum count is advertised by GetLimits as vault_asset.
+        message VaultAssetIds {
+            repeated asset.AssetId asset_ids = 1;
+        }
+
+        // Omit this field to request no vault details.
+        oneof vault_request {
+            // Return the full vault if its commitment differs from this value. Vaults above
+            // the entry limit must be retrieved with SyncAccountVault instead.
+            primitives.Word asset_vault_commitment = 2;
+
+            // Return proofs for these assets, independently of the total vault size. The server
+            // may return the complete vault instead when it fits the full-vault entry limit;
+            // clients must reconstruct the vault and verify its root before using those assets.
+            VaultAssetIds asset_ids = 5;
+        }
 
         // Wrapper required because protobuf `oneof` fields cannot be `repeated`.
         message StorageMapDetailRequests {
@@ -446,7 +457,7 @@ message GetAccountResponse {
         optional account.AccountCode code = 3;
 
         // Account asset vault data. The asset list is empty if the commitments match or
-        // the request does not include a vault commitment.
+        // the request does not include vault details.
         AccountVaultDetails vault_details = 4;
     }
 
@@ -467,9 +478,19 @@ message AccountVaultDetails {
     // account's assets
     bool too_many_assets = 1;
 
-    // When too_many_assets == false, this will contain the list of assets in the
-    // account's vault
+    // Full vault contents, empty when partial_vault is present or too_many_assets is true.
+    // May also satisfy a selective asset request without individual Merkle proofs.
     repeated asset.Asset assets = 2;
+
+    message PartialVault {
+        // Requested IDs, including assets absent from the vault.
+        repeated asset.AssetId asset_ids = 1;
+        primitives.PartialSmt partial_smt = 2;
+    }
+
+    // Proofs for explicitly requested assets. Mutually exclusive with full vault contents
+    // and too_many_assets.
+    optional PartialVault partial_vault = 3;
 }
 
 // Account storage details for GetAccountResponse

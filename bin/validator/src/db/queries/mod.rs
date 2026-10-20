@@ -64,3 +64,9 @@ pub use transaction_exists::transaction_exists;
 
 mod load_block;
 pub use load_block::load_block;
+
+mod load_block_backup;
+pub use load_block_backup::load_block_backup;
+
+mod prune_proving_inputs;
+pub use prune_proving_inputs::prune_proving_inputs;

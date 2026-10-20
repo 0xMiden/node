@@ -19,8 +19,15 @@ pub struct ValidatorService {
 }
 
 impl ValidatorService {
-    pub fn new(name: String, url: Url, interval: Duration, timeout: Duration) -> Self {
-        let client = build_tls_client::<ValidatorClient>(url.clone(), timeout);
+    pub fn new(
+        name: String,
+        url: Url,
+        interval: Duration,
+        timeout: Duration,
+        max_decoding_message_size: usize,
+    ) -> Self {
+        let client =
+            build_tls_client::<ValidatorClient>(url.clone(), timeout, max_decoding_message_size);
         Self { name, url, client, interval }
     }
 }

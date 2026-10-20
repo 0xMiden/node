@@ -10,13 +10,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use backon::{ExponentialBuilder, Retryable};
-use miden_node_proto::clients::{Builder, RpcClient};
+use miden_node_proto::clients::{Builder, ForeignAccount, RpcClient, UsdcxFaucet};
 use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_proto::generated::miden::node::v1::{
     FinalityLevel,
     GetAccountRequest as ProtoAccountRequest,
@@ -29,6 +30,7 @@ use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, miden_instrument, warn};
 use miden_node_utils::retry;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
@@ -107,7 +109,7 @@ pub struct DeployedMonitorAccounts {
     pub counter_anchor: CounterAnchor,
     /// Faucet note funding the wallet's fees, consumed by its first increment transaction. `None`
     /// on zero-fee chains.
-    pub wallet_funding_note: Option<Note>,
+    pub wallet_funding_note: Option<UsdcxP2Id>,
 }
 
 /// RPC client and verified transaction-input sealer shared by monitor submission workflows.
@@ -130,9 +132,10 @@ impl TransactionSubmissionClient {
         rpc_url: &Url,
         timeout: Duration,
         trusted_validator_signing_keys: Vec<ValidatorPublicKey>,
+        max_decoding_message_size: usize,
     ) -> Result<Self> {
         let (rpc_client, genesis_commitment) =
-            create_genesis_aware_rpc_client(rpc_url, timeout).await?;
+            create_genesis_aware_rpc_client(rpc_url, timeout, max_decoding_message_size).await?;
         let client = Self {
             rpc_client,
             genesis_commitment,
@@ -205,7 +208,7 @@ impl TransactionSubmissionClient {
                     target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
-                    retry.delay_ms = delay.as_millis() as u64
+                    retry.delay_ms = delay
                 );
             })
             .await?;
@@ -308,11 +311,13 @@ fn genesis_discovery_backoff() -> ExponentialBuilder {
 pub async fn create_genesis_aware_rpc_client(
     rpc_url: &Url,
     timeout: Duration,
+    max_decoding_message_size: usize,
 ) -> Result<(RpcClient, Word)> {
     (|| async {
         // First, create a temporary client without genesis metadata to discover the genesis block
         // header and its commitment.
         let mut rpc: RpcClient = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("Failed to configure TLS for RPC client")?
             .with_timeout(timeout)
@@ -347,6 +352,7 @@ pub async fn create_genesis_aware_rpc_client(
         // Rebuild the client, this time including the required genesis metadata so that write RPCs
         // like SubmitProvenTx are accepted by the node.
         let rpc_client = Builder::new(rpc_url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()
             .context("Failed to configure TLS for RPC client")?
             .with_timeout(timeout)
@@ -365,7 +371,7 @@ pub async fn create_genesis_aware_rpc_client(
             err,
             target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
-            retry.delay_ms = sleep.as_millis() as u64
+            retry.delay_ms = sleep
         );
     })
     .await
@@ -432,8 +438,8 @@ pub async fn create_and_deploy_accounts(
     let anchor_fee_faucet_id = creation_anchor.protocol_config.fee_asset_id().faucet_id();
     let creation_fee_faucet = match funder.as_ref() {
         Some(_) => Some(
-            fetch_foreign_account_inputs(
-                &mut rpc_client,
+            UsdcxFaucet::load_at(
+                &mut rpc_client.clone(),
                 anchor_fee_faucet_id,
                 creation_anchor.block_header.block_num(),
             )
@@ -449,7 +455,7 @@ pub async fn create_and_deploy_accounts(
         creation_anchor.protocol_config,
         creation_anchor.blockchain,
         counter_funding_note,
-        creation_fee_faucet,
+        creation_fee_faucet.clone(),
         submission_client,
         prover,
     ))
@@ -458,6 +464,7 @@ pub async fn create_and_deploy_accounts(
         &mut rpc_client,
         &committed_counter,
         submission_client.genesis_commitment,
+        creation_fee_faucet.as_ref(),
     )
     .await?;
 
@@ -519,9 +526,9 @@ pub fn active_fee_funder(
 /// Fetches a public account in full (code, vault, storage with maps) plus its account-tree
 /// witness at the given block.
 ///
-/// Used to provision the fee faucet as a foreign account: the fee asset is callback-enabled, so
-/// the kernel loads the issuing faucet whenever the asset enters or leaves a vault.
-pub(crate) async fn fetch_foreign_account_inputs(
+/// Used for the monitor's wallet and counter accounts, whose complete state is needed to apply
+/// transaction patches locally.
+pub(crate) async fn fetch_public_account(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
     block_num: BlockNumber,
@@ -536,7 +543,7 @@ pub(crate) async fn fetch_foreign_account_inputs(
         block_num: Some(block_num.into()),
         details: Some(AccountDetailRequest {
             code_commitment: Some(dummy.clone()),
-            asset_vault_commitment: Some(dummy),
+            vault_request: Some(VaultRequest::AssetVaultCommitment(dummy)),
             storage_request: Some(StorageRequest::AllStorageMaps(true)),
         }),
     };
@@ -565,6 +572,9 @@ pub(crate) async fn fetch_foreign_account_inputs(
     let vault = match details.vault_details {
         AccountVaultDetails::Assets(assets) => {
             miden_protocol::asset::AssetVault::new(&assets).context("failed to build the vault")?
+        },
+        AccountVaultDetails::Partial { .. } => {
+            anyhow::bail!("server returned a partial vault when full contents were requested")
         },
         AccountVaultDetails::LimitExceeded => {
             anyhow::bail!("account {account_id} holds too many assets to fetch in full")
@@ -641,7 +651,7 @@ pub struct CounterAnchor {
     /// The fee faucet as committed in `block_header`, with its witness. Every transaction moving
     /// the callback-enabled fee asset loads the faucet, so increments need it. `None` on zero-fee
     /// chains.
-    pub fee_faucet: Option<(Account, AccountWitness)>,
+    pub fee_faucet: Option<UsdcxFaucet>,
 }
 
 /// Number of attempts to resolve the counter anchor before giving up.
@@ -658,6 +668,7 @@ async fn resolve_counter_anchor(
     rpc_client: &mut RpcClient,
     committed_counter: &Account,
     genesis_commitment: Word,
+    fee_faucet: Option<&UsdcxFaucet>,
 ) -> Result<CounterAnchor> {
     let expected_state = committed_counter.to_commitment();
     let mut last_error = None;
@@ -672,6 +683,7 @@ async fn resolve_counter_anchor(
             committed_counter,
             expected_state,
             genesis_commitment,
+            fee_faucet,
         )
         .await
         {
@@ -722,7 +734,7 @@ pub async fn fetch_account_at_tip(
 ) -> Result<Account> {
     let tip = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
     let (account, _witness) =
-        fetch_foreign_account_inputs(rpc_client, account_id, tip.block_header.block_num()).await?;
+        fetch_public_account(rpc_client, account_id, tip.block_header.block_num()).await?;
 
     Ok(account)
 }
@@ -730,23 +742,24 @@ pub async fn fetch_account_at_tip(
 /// Rebuilds the [`CounterAnchor`] from the state committed at the current chain tip.
 pub async fn refresh_counter_anchor(
     rpc_client: &mut RpcClient,
-    counter_id: AccountId,
+    previous: &CounterAnchor,
     genesis_commitment: Word,
 ) -> Result<CounterAnchor> {
     let tip = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
     let block_num = tip.block_header.block_num();
 
     let (counter_account, witness) =
-        fetch_foreign_account_inputs(rpc_client, counter_id, block_num).await?;
+        fetch_public_account(rpc_client, previous.counter_account.id(), block_num).await?;
 
     // The kernel authenticates the faucet against the anchor block's account root, so fetch it
     // exactly as committed there.
-    let fee_faucet = if tip.block_header.fee_parameters().verification_base_fee() == 0 {
-        None
-    } else {
-        let faucet_id = tip.protocol_config.fee_asset_id().faucet_id();
-        Some(fetch_foreign_account_inputs(rpc_client, faucet_id, block_num).await?)
-    };
+    let fee_faucet = sync_fee_faucet(
+        rpc_client,
+        previous.fee_faucet.as_ref(),
+        &tip.block_header,
+        &tip.protocol_config,
+    )
+    .await?;
 
     Ok(CounterAnchor {
         block_header: tip.block_header,
@@ -758,6 +771,27 @@ pub async fn refresh_counter_anchor(
     })
 }
 
+/// Loads the fee faucet when needed, or syncs a copy of the previous snapshot to the new anchor.
+async fn sync_fee_faucet(
+    rpc_client: &mut RpcClient,
+    previous: Option<&UsdcxFaucet>,
+    block_header: &BlockHeader,
+    protocol_config: &ProtocolConfig,
+) -> Result<Option<UsdcxFaucet>> {
+    if block_header.fee_parameters().verification_base_fee() == 0 {
+        return Ok(None);
+    }
+    let faucet_id = protocol_config.fee_asset_id().faucet_id();
+    let block_num = block_header.block_num();
+    if let Some(previous) = previous.filter(|faucet| faucet.account_id() == faucet_id) {
+        let mut faucet = previous.clone();
+        faucet.sync_to(rpc_client, block_num).await?;
+        Ok(Some(faucet))
+    } else {
+        UsdcxFaucet::load_at(rpc_client, faucet_id, block_num).await.map(Some)
+    }
+}
+
 /// One [`resolve_counter_anchor`] attempt.
 ///
 /// Returns `Ok(None)` when the chain is reachable but does not yet hold the counter account in the
@@ -767,6 +801,7 @@ async fn try_resolve_counter_anchor(
     committed_counter: &Account,
     expected_state: Word,
     genesis_commitment: Word,
+    fee_faucet: Option<&UsdcxFaucet>,
 ) -> Result<Option<CounterAnchor>> {
     let anchor = fetch_tip_chain_state(rpc_client, genesis_commitment).await?;
     let block_header = anchor.block_header;
@@ -792,12 +827,8 @@ async fn try_resolve_counter_anchor(
 
     // The kernel authenticates the faucet against the anchor block's account root, so fetch it
     // exactly as committed there.
-    let fee_faucet = if block_header.fee_parameters().verification_base_fee() == 0 {
-        None
-    } else {
-        let faucet_id = anchor.protocol_config.fee_asset_id().faucet_id();
-        Some(fetch_foreign_account_inputs(rpc_client, faucet_id, block_num).await?)
-    };
+    let fee_faucet =
+        sync_fee_faucet(rpc_client, fee_faucet, &block_header, &anchor.protocol_config).await?;
 
     Ok(Some(CounterAnchor {
         block_header,
@@ -937,15 +968,17 @@ pub(crate) async fn execute_counter_genesis_tx(
     reference_header: BlockHeader,
     protocol_config: ProtocolConfig,
     blockchain: PartialBlockchain,
-    funding_note: Option<Note>,
-    fee_faucet: Option<(Account, AccountWitness)>,
+    funding_note: Option<UsdcxP2Id>,
+    fee_faucet: Option<UsdcxFaucet>,
+    rpc_client: RpcClient,
 ) -> Result<ExecutedTransaction> {
     let reference_block = reference_header.block_num();
-    let mut data_store = MonitorDataStore::new(reference_header, protocol_config, blockchain);
+    let mut data_store =
+        MonitorDataStore::new(reference_header, protocol_config, blockchain, rpc_client);
     data_store.add_account(counter_account.clone());
     // Paying the fee moves the callback-enabled asset, which loads the issuing faucet.
-    if let Some((faucet_account, faucet_witness)) = fee_faucet {
-        data_store.add_foreign_account(faucet_account, faucet_witness);
+    if let Some(faucet) = fee_faucet {
+        data_store.add_foreign_account(faucet.into_foreign_account());
     }
 
     let executor: TransactionExecutor<'_, '_, _, BasicAuthenticator> =
@@ -960,7 +993,7 @@ pub(crate) async fn execute_counter_genesis_tx(
     };
 
     let input_notes = match funding_note {
-        Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note)])
+        Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note.into_note())])
             .context("failed to build the creation transaction's input notes")?,
         None => InputNotes::default(),
     };
@@ -1005,12 +1038,17 @@ fn counter_creation_tx_args(counter_account: &Account) -> Result<TransactionArgs
 /// is never submitted, so the note is never spent on-chain: one claim serves every probe run.
 pub async fn build_probe_transaction_inputs(
     rpc_url: &Url,
+    max_decoding_message_size: usize,
     funding: Option<&FundingClient>,
 ) -> Result<TransactionInputs> {
     let (wallet_account, _secret_key) = create_wallet_account()?;
 
-    let (mut rpc_client, genesis_commitment) =
-        create_genesis_aware_rpc_client(rpc_url, Duration::from_secs(10)).await?;
+    let (mut rpc_client, genesis_commitment) = create_genesis_aware_rpc_client(
+        rpc_url,
+        Duration::from_secs(10),
+        max_decoding_message_size,
+    )
+    .await?;
     let anchor = fetch_tip_chain_state(&mut rpc_client, genesis_commitment).await?;
     let fee_faucet_id = anchor.protocol_config.fee_asset_id().faucet_id();
     let mut funder = active_fee_funder(&anchor.block_header, funding, fee_faucet_id)?;
@@ -1033,8 +1071,8 @@ pub async fn build_probe_transaction_inputs(
     let anchor_fee_faucet_id = execution_anchor.protocol_config.fee_asset_id().faucet_id();
     let fee_faucet = if funder.is_some() {
         Some(
-            fetch_foreign_account_inputs(
-                &mut rpc_client,
+            UsdcxFaucet::load_at(
+                &mut rpc_client.clone(),
                 anchor_fee_faucet_id,
                 execution_anchor.block_header.block_num(),
             )
@@ -1045,14 +1083,15 @@ pub async fn build_probe_transaction_inputs(
         None
     };
 
-    let executed_tx = execute_counter_genesis_tx(
+    let executed_tx = Box::pin(execute_counter_genesis_tx(
         &counter_account,
         execution_anchor.block_header,
         execution_anchor.protocol_config,
         execution_anchor.blockchain,
         funding_note,
         fee_faucet,
-    )
+        rpc_client,
+    ))
     .await?;
 
     Ok(executed_tx.tx_inputs().clone())
@@ -1072,19 +1111,20 @@ pub async fn deploy_counter_account(
     reference_header: BlockHeader,
     protocol_config: ProtocolConfig,
     blockchain: PartialBlockchain,
-    funding_note: Option<Note>,
-    fee_faucet: Option<(Account, AccountWitness)>,
+    funding_note: Option<UsdcxP2Id>,
+    fee_faucet: Option<UsdcxFaucet>,
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
 ) -> Result<Account> {
-    let executed_tx = execute_counter_genesis_tx(
+    let executed_tx = Box::pin(execute_counter_genesis_tx(
         counter_account,
         reference_header,
         protocol_config,
         blockchain,
         funding_note,
         fee_faucet,
-    )
+        submission_client.rpc_client(),
+    ))
     .await?;
 
     let transaction_inputs = executed_tx.tx_inputs().to_bytes();
@@ -1111,7 +1151,8 @@ pub async fn deploy_counter_account(
 /// A [`DataStore`] implementation for the network monitor.
 pub struct MonitorDataStore {
     accounts: HashMap<AccountId, Account>,
-    account_witnesses: HashMap<AccountId, AccountWitness>,
+    foreign_accounts: HashMap<AccountId, ForeignAccount>,
+    rpc_client: RpcClient,
     block_header: BlockHeader,
     protocol_config: ProtocolConfig,
     partial_block_chain: PartialBlockchain,
@@ -1123,10 +1164,12 @@ impl MonitorDataStore {
         block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_block_chain: PartialBlockchain,
+        rpc_client: RpcClient,
     ) -> Self {
         Self {
             accounts: HashMap::new(),
-            account_witnesses: HashMap::new(),
+            foreign_accounts: HashMap::new(),
+            rpc_client,
             block_header,
             protocol_config,
             partial_block_chain,
@@ -1142,9 +1185,9 @@ impl MonitorDataStore {
 
     /// Register an account the transaction reaches through a foreign procedure invocation, together
     /// with the account-tree witness proving its state in the store's reference block.
-    pub fn add_foreign_account(&mut self, account: Account, witness: AccountWitness) {
-        self.add_account(account);
-        self.account_witnesses.insert(witness.id(), witness);
+    pub fn add_foreign_account(&mut self, account: ForeignAccount) {
+        self.mast_store.load_account_code(account.inputs().account().code());
+        self.foreign_accounts.insert(account.inputs().account().id(), account);
     }
 
     /// Returns a reference to the account or a standardized "unknown account" error.
@@ -1189,6 +1232,22 @@ impl DataStore for MonitorDataStore {
         map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
+            if let Some(account) = self.foreign_accounts.get(&account_id) {
+                if let Some(map) =
+                    account.inputs().account().storage().maps().find(|map| map.root() == map_root)
+                    && let Ok(witness) = map.open(&map_key)
+                {
+                    return Ok(witness);
+                }
+                let mut rpc = self.rpc_client.clone();
+                return account
+                    .storage_map_witness(&mut rpc, self.block_header.block_num(), map_root, map_key)
+                    .await
+                    .map_err(|err| DataStoreError::Other {
+                        error_msg: "failed to load foreign account storage proof".into(),
+                        source: Some(err.into()),
+                    });
+            }
             let account = self.get_account(account_id)?;
 
             account
@@ -1217,19 +1276,16 @@ impl DataStore for MonitorDataStore {
         _ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
         async move {
-            let account = self.get_account(foreign_account_id)?;
-            let witness =
-                self.account_witnesses.get(&foreign_account_id).cloned().ok_or_else(|| {
-                    DataStoreError::Other {
-                        error_msg: format!(
-                            "no account witness for foreign account {foreign_account_id}"
-                        )
-                        .into(),
-                        source: None,
-                    }
-                })?;
-
-            Ok(AccountInputs::new(PartialAccount::from(account), witness))
+            self.foreign_accounts
+                .get(&foreign_account_id)
+                .map(|account| account.inputs().clone())
+                .ok_or_else(|| DataStoreError::Other {
+                    error_msg: format!(
+                        "no account witness for foreign account {foreign_account_id}"
+                    )
+                    .into(),
+                    source: None,
+                })
         }
     }
 
@@ -1285,6 +1341,7 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::Duration;
 
+    use miden_node_proto::clients::Builder;
     use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
     use miden_protocol::Word;
     use miden_protocol::asset::{AssetId, FungibleAsset};
@@ -1434,8 +1491,20 @@ mod tests {
             PartialBlockchain::new(PartialMmr::from_peaks(MmrPeaks::default()), Vec::new())
                 .expect("empty genesis blockchain should build");
         let (account, _) = create_wallet_account().expect("wallet should build");
-        let mut data_store =
-            MonitorDataStore::new(anchor_header, mismatched_protocol_config, blockchain);
+        let rpc_client = Builder::new("http://127.0.0.1:0".parse().unwrap())
+            .without_tls()
+            .with_timeout(std::time::Duration::from_millis(100))
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_auth_header()
+            .without_otel_context_injection()
+            .connect_lazy();
+        let mut data_store = MonitorDataStore::new(
+            anchor_header,
+            mismatched_protocol_config,
+            blockchain,
+            rpc_client,
+        );
         data_store.add_account(account.clone());
 
         let error = data_store

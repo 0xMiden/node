@@ -7,7 +7,7 @@ mod issue_private_record_share;
 mod privacy;
 mod start;
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -40,6 +40,7 @@ const ENV_ENCRYPTION_KEY_KMS_CIPHERTEXT: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY_
 const ENV_GENESIS_VALIDATOR_KEYS: &str = "MIDEN_VALIDATOR_GENESIS_VALIDATOR_KEYS";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 const ENV_STORAGE_KEY_FILE: &str = "MIDEN_VALIDATOR_STORAGE_KEY_FILE";
+const ENV_PROVING_INPUT_RETENTION_BLOCKS: &str = "MIDEN_VALIDATOR_PROVING_INPUT_RETENTION_BLOCKS";
 
 // VALIDATOR COMMAND
 // ================================================================================================
@@ -186,6 +187,16 @@ pub enum ValidatorCommand {
         )]
         sqlite_connection_pool_size: NonZeroUsize,
 
+        /// Number of recent blocks whose proving inputs are retained. Older inputs are pruned even
+        /// if their blocks remain unproven.
+        #[arg(
+            long,
+            env = ENV_PROVING_INPUT_RETENTION_BLOCKS,
+            default_value_t = miden_validator::db::DEFAULT_PROVING_INPUT_RETENTION_BLOCKS,
+            value_name = "BLOCKS"
+        )]
+        proving_input_retention_blocks: NonZeroU32,
+
         /// Directory in which to store the validator's data.
         #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
         data_directory: PathBuf,
@@ -248,6 +259,7 @@ impl ValidatorCommand {
                 signing_key,
                 data_directory,
                 sqlite_connection_pool_size,
+                proving_input_retention_blocks,
                 encryption_key,
                 storage_key,
             } => {
@@ -266,7 +278,8 @@ impl ValidatorCommand {
                     data.directory = data_directory.as_path(),
                     validator.signer =
                         if signing_key.signing_key_kms_id.is_some() { "kms" } else { "local" },
-                    db.sqlite.connection_pool_size = sqlite_connection_pool_size.get()
+                    db.sqlite.connection_pool_size = sqlite_connection_pool_size.get(),
+                    validator.proving_input_retention_blocks = proving_input_retention_blocks.get()
                 );
 
                 let data_directory = DataDirectory::load(data_directory)
@@ -281,8 +294,11 @@ impl ValidatorCommand {
                     admin_listen,
                     grpc_options,
                     start::ValidatorKeys { signer, decrypter, operator_key },
-                    data_directory,
-                    sqlite_connection_pool_size,
+                    start::ValidatorDatabaseOptions {
+                        data_directory,
+                        connection_pool_size: sqlite_connection_pool_size,
+                        proving_input_retention_blocks,
+                    },
                     shutdown,
                 )
                 .await
@@ -488,6 +504,22 @@ mod tests {
         ValidatorCommand::try_parse_from(
             BASE_START_ARGS.iter().copied().chain(extra.iter().copied()),
         )
+    }
+
+    #[test]
+    fn cli_decoding_limit_defaults_and_overrides() {
+        for (extra, expected) in [
+            (vec![], 4_194_304),
+            (vec!["--grpc.max-decoding-message-size", "16777216"], 16_777_216),
+        ] {
+            let command =
+                parse_start(&ENCRYPTION_KEY_ARGS.into_iter().chain(extra).collect::<Vec<_>>())
+                    .unwrap();
+            let ValidatorCommand::Start { grpc_options, .. } = command else {
+                panic!("expected start")
+            };
+            assert_eq!(grpc_options.message_size.max_decoding_message_size.get(), expected);
+        }
     }
 
     fn test_operator_keys(epoch: u8, setup_marker: u8) -> Vec<GoldenOperatorKey> {
