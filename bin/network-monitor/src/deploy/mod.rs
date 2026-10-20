@@ -17,6 +17,7 @@ use miden_node_proto::domain::encryption::{
     TrustedTransactionEncryptionState,
 };
 use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_proto::generated::miden::node::v1::{
     FinalityLevel,
     GetAccountRequest as ProtoAccountRequest,
@@ -542,7 +543,7 @@ pub(crate) async fn fetch_public_account(
         block_num: Some(block_num.into()),
         details: Some(AccountDetailRequest {
             code_commitment: Some(dummy.clone()),
-            asset_vault_commitment: Some(dummy),
+            vault_request: Some(VaultRequest::AssetVaultCommitment(dummy)),
             storage_request: Some(StorageRequest::AllStorageMaps(true)),
         }),
     };
@@ -571,6 +572,9 @@ pub(crate) async fn fetch_public_account(
     let vault = match details.vault_details {
         AccountVaultDetails::Assets(assets) => {
             miden_protocol::asset::AssetVault::new(&assets).context("failed to build the vault")?
+        },
+        AccountVaultDetails::Partial { .. } => {
+            anyhow::bail!("server returned a partial vault when full contents were requested")
         },
         AccountVaultDetails::LimitExceeded => {
             anyhow::bail!("account {account_id} holds too many assets to fetch in full")

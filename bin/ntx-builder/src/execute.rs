@@ -903,10 +903,15 @@ impl DataStore for NtxDataStore {
         }
     }
 
+    /// Fetches proofs for the requested vault assets at the transaction's reference block.
+    ///
+    /// The requested set is expected to be relatively small: the executor asks for one asset during
+    /// execution or the assets in its bounded set of input notes during preparation. Selective
+    /// queries avoid loading the account's potentially much larger vault.
     fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
-        _vault_root: Word,
+        vault_root: Word,
         vault_keys: BTreeSet<AssetId>,
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
@@ -917,7 +922,7 @@ impl DataStore for NtxDataStore {
                 let vault_keys = vault_keys.clone();
                 async move {
                     self.rpc
-                        .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
+                        .get_vault_asset_witnesses(account_id, vault_root, vault_keys, ref_block)
                         .await
                 }
             })

@@ -232,6 +232,93 @@ fn vault_details_limit_exceeded_for_large_vault() {
 }
 
 #[test]
+fn selective_vault_proofs_cover_empty_vaults() {
+    let mut forest = AccountStateForest::new();
+    let account_id = dummy_account();
+    let block = BlockNumber::GENESIS.child();
+    forest.create_account(block, &dummy_account_creation_patch(account_id, &[]));
+    let absent = AssetId::new_fungible(dummy_faucet());
+    let AccountVaultDetails::Partial { vault, .. } = forest
+        .get_vault_details_for_assets(account_id, block.child(), vec![absent])
+        .unwrap()
+    else {
+        panic!("expected partial vault")
+    };
+    assert_eq!(vault.open(absent).unwrap(), AssetVault::default().open(absent));
+}
+
+#[test]
+fn selective_vault_proofs_cover_large_vaults_and_historical_absence() {
+    let mut forest = AccountStateForest::new();
+    let account_id = dummy_account();
+    let block = BlockNumber::GENESIS.child();
+    let faucet = AccountIdBuilder::new()
+        .account_type(AccountType::Public)
+        .build_with_seed([7; 32]);
+    let mut assets = (0..=AccountVaultDetails::MAX_RETURN_ENTRIES)
+        .map(|i| {
+            let details = NonFungibleAssetDetails::new(faucet, (i as u64).to_le_bytes().to_vec());
+            Asset::from(NonFungibleAsset::new(&details))
+        })
+        .collect::<Vec<_>>();
+    let balance = dummy_fungible_asset(dummy_faucet(), 100);
+    assets.push(balance);
+    forest.create_account(block, &dummy_account_creation_patch(account_id, &assets));
+    let old_vault = AssetVault::new(&assets).unwrap();
+    let absent =
+        Asset::from(NonFungibleAsset::new(&NonFungibleAssetDetails::new(faucet, vec![255])));
+    let keys = vec![assets[0].id(), balance.id(), absent.id()];
+
+    let changed_balance = dummy_fungible_asset(dummy_faucet(), 150);
+    let mut patch = AccountVaultPatch::default();
+    patch.insert_asset(changed_balance);
+    patch.insert_asset(absent);
+    forest.update_account(
+        block.child(),
+        &dummy_partial_patch(account_id, patch, AccountStoragePatch::default()),
+    );
+    assets.pop();
+    assets.extend([changed_balance, absent]);
+    let new_vault = AssetVault::new(&assets).unwrap();
+
+    for (height, expected) in [(block, &old_vault), (block.child(), &new_vault)] {
+        let AccountVaultDetails::Partial { asset_ids, vault } =
+            forest.get_vault_details_for_assets(account_id, height, keys.clone()).unwrap()
+        else {
+            panic!("expected a partial vault")
+        };
+        assert_eq!(asset_ids, keys);
+        assert_eq!(vault.root(), expected.root());
+        assert!(vault.assets().count() <= keys.len());
+        for key in &keys {
+            assert_eq!(vault.open(*key).unwrap(), expected.open(*key));
+        }
+        let AccountVaultDetails::Partial { vault, .. } =
+            forest.get_vault_details_for_assets(account_id, height, vec![]).unwrap()
+        else {
+            panic!("expected an empty partial vault")
+        };
+        assert_eq!(vault.root(), expected.root());
+        assert_eq!(vault.assets().count(), 0);
+    }
+
+    let over_limit = assets
+        .iter()
+        .take(AccountVaultDetails::MAX_PROOF_ENTRIES + 1)
+        .map(Asset::id)
+        .collect();
+    assert_matches!(
+        forest.get_vault_details_for_assets(account_id, block, over_limit),
+        Err(WitnessError::TooManyVaultAssets)
+    );
+    assert!(
+        forest
+            .get_vault_details_for_assets(account_id, block, vec![balance.id(), balance.id()])
+            .is_err()
+    );
+}
+
+#[test]
 fn forest_versions_are_continuous_for_sequential_updates() {
     use std::collections::BTreeMap;
 

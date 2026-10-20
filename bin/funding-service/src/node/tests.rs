@@ -121,7 +121,10 @@ impl TestChain {
                     .code_commitment
                     .filter(|commitment| *commitment != account.code().commitment())
                     .map(|_| account.code().clone()),
-                vault_details: if requested.asset_vault_commitment.is_some() {
+                vault_details: if matches!(
+                    requested.vault_request,
+                    miden_node_proto::domain::account::AccountVaultRequest::All(_)
+                ) {
                     AccountVaultDetails::from_assets(account.vault().assets().collect())
                 } else {
                     AccountVaultDetails::empty()
