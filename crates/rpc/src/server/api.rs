@@ -227,10 +227,12 @@ impl RpcService {
             return Ok(());
         }
 
-        let network_accounts =
-            self.state.view().filter_network_accounts(&account_ids).await.map_err(|err| {
-                Status::internal(format!("network-account classification failed: {err}"))
-            })?;
+        let network_accounts = self
+            .state
+            .view()
+            .filter_network_accounts(&account_ids)
+            .await
+            .map_err(|err| log_internal_error(&err))?;
 
         if !network_accounts.is_empty() {
             return Err(Status::invalid_argument(
