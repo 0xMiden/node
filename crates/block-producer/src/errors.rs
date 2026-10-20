@@ -224,6 +224,14 @@ impl BuildBlockError {
 
 /// Errors returned by the store state.
 #[derive(Debug, Error)]
+// Clippy skips this lint for the exported enum the `testing` feature makes public.
+#[cfg_attr(
+    not(feature = "testing"),
+    expect(
+        clippy::enum_variant_names,
+        reason = "each variant names the store operation that failed"
+    )
+)]
 pub enum StoreError {
     #[error("failed to get transaction inputs from store")]
     GetTransactionInputsFailed(#[source] DatabaseError),
