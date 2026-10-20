@@ -1159,6 +1159,7 @@ mod vault_witness_tests {
             Duration::from_secs(10),
             Duration::from_millis(10),
             Duration::from_millis(100),
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
         )
         .unwrap();
         let vault_key =
