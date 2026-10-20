@@ -43,7 +43,7 @@ use crate::test_utils::{mock_account, mock_network_account_id};
 enum ResponseFault {
     #[default]
     None,
-    FullVault,
+    LimitExceeded,
     MissingAsset,
     WrongBlock,
     WrongAccount,
@@ -54,6 +54,7 @@ enum ResponseFault {
 struct VaultRpc {
     account: Account,
     requests: Arc<Mutex<Vec<Vec<AssetId>>>>,
+    full_vault: bool,
     fault: ResponseFault,
 }
 
@@ -109,8 +110,14 @@ impl UnaryService<rpc::GetAccountRequest> for VaultRpc {
                 header.code_commitment(),
             );
         }
-        let vault_details = if matches!(self.fault, ResponseFault::FullVault) {
+        let vault_details = if matches!(self.fault, ResponseFault::LimitExceeded) {
             AccountVaultDetails::LimitExceeded
+        } else if self.full_vault {
+            let mut assets = vault.assets().collect::<Vec<_>>();
+            if matches!(self.fault, ResponseFault::MissingAsset) {
+                assets.pop();
+            }
+            AccountVaultDetails::from_assets(assets)
         } else {
             let partial = if asset_ids.is_empty() {
                 PartialVault::new(vault.root())
@@ -197,11 +204,11 @@ impl Drop for TestServer {
     }
 }
 
-fn large_vault() -> (Account, Vec<AssetId>) {
+fn account_with_vault(num_assets: usize) -> (Account, Vec<AssetId>) {
     let faucet = AccountIdBuilder::new()
         .account_type(AccountType::Public)
         .build_with_seed([7; 32]);
-    let assets = (0..=AccountVaultDetails::MAX_RETURN_ENTRIES)
+    let assets = (0..num_assets)
         .map(|i| {
             Asset::from(NonFungibleAsset::new(&NonFungibleAssetDetails::new(
                 faucet,
@@ -231,12 +238,13 @@ fn large_vault() -> (Account, Vec<AssetId>) {
 
 #[tokio::test]
 async fn witnesses_for_large_vault_are_fetched_in_bounded_batches() {
-    let (account, ids) = large_vault();
+    let (account, ids) = account_with_vault(AccountVaultDetails::MAX_RETURN_ENTRIES + 1);
     let requested = ids.into_iter().collect::<BTreeSet<_>>();
     let requests = Arc::default();
     let server = TestServer::start(VaultRpc {
         account: account.clone(),
         requests: Arc::clone(&requests),
+        full_vault: false,
         fault: ResponseFault::None,
     })
     .await;
@@ -270,18 +278,52 @@ async fn witnesses_for_large_vault_are_fetched_in_bounded_batches() {
 }
 
 #[tokio::test]
-async fn witnesses_reject_incomplete_or_mismatched_responses() {
-    let (account, ids) = large_vault();
-    for fault in [
-        ResponseFault::FullVault,
-        ResponseFault::MissingAsset,
-        ResponseFault::WrongBlock,
-        ResponseFault::WrongAccount,
-        ResponseFault::WrongRoot,
-    ] {
+async fn witnesses_can_be_derived_from_full_vault_responses() {
+    for num_assets in [0, 10] {
+        let (account, ids) = account_with_vault(num_assets);
+        let requested = BTreeSet::from([ids[0], *ids.last().unwrap()]);
         let server = TestServer::start(VaultRpc {
             account: account.clone(),
             requests: Arc::default(),
+            full_vault: true,
+            fault: ResponseFault::None,
+        })
+        .await;
+        let witnesses = server
+            .client
+            .get_vault_asset_witnesses(
+                account.id(),
+                account.vault().root(),
+                requested.clone(),
+                7.into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            witnesses,
+            requested.into_iter().map(|id| account.vault().open(id)).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[tokio::test]
+async fn witnesses_reject_incomplete_or_mismatched_responses() {
+    let (account, ids) = account_with_vault(10);
+    for (full_vault, fault) in [false, true].into_iter().flat_map(|full| {
+        [
+            ResponseFault::LimitExceeded,
+            ResponseFault::MissingAsset,
+            ResponseFault::WrongBlock,
+            ResponseFault::WrongAccount,
+            ResponseFault::WrongRoot,
+        ]
+        .into_iter()
+        .map(move |fault| (full, fault))
+    }) {
+        let server = TestServer::start(VaultRpc {
+            account: account.clone(),
+            requests: Arc::default(),
+            full_vault,
             fault,
         })
         .await;

@@ -153,6 +153,10 @@ The limits are returned in `json` format as follows:
 inclusion or absence is proved, regardless of the total number of assets in the account. When splitting vault queries,
 set the same `block_num` for each batch so all proofs refer to the same account state.
 
+A selective vault query may return proofs for the requested assets or the complete vault within the full-vault entry
+limit. Clients must verify a complete vault's root against the account header before deriving the requested witnesses,
+including proofs for assets absent from the vault.
+
 ## Content Negotiation
 
 The RPC server checks the `Accept` header for Miden-specific media parameters:

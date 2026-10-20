@@ -29,7 +29,7 @@ use miden_protocol::account::{
     StorageSlotName,
     StorageSlotType,
 };
-use miden_protocol::asset::{Asset, AssetId, PartialVault};
+use miden_protocol::asset::{Asset, AssetId, AssetVault, PartialVault};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::MerkleError;
@@ -828,10 +828,11 @@ impl VerifyWith<&GetAccountRequest> for proto::miden::node::v1::DecodedGetAccoun
     type Error = ConversionError;
 
     /// Checks response consistency, the requested account and block, and requested asset proofs.
+    /// Full vault responses to selective requests are verified and converted to partial vaults.
     ///
     /// The caller must authenticate the witness root against trusted chain state.
     fn verify_with(self, request: &GetAccountRequest) -> Result<Self::Verified, Self::Error> {
-        let response = self.verify()?;
+        let mut response = self.verify()?;
         if response.witness.id() != request.account_id {
             return Err(ConversionError::message("account ID does not match request")
                 .context("witness.account_id"));
@@ -843,23 +844,46 @@ impl VerifyWith<&GetAccountRequest> for proto::miden::node::v1::DecodedGetAccoun
                 .context("block_num"));
         }
         if let Some(requested) = &request.details {
-            let details = response.details.as_ref().ok_or_else(|| {
+            let details = response.details.as_mut().ok_or_else(|| {
                 ConversionError::message("requested account details are missing").context("details")
             })?;
             if let AccountVaultRequest::Assets(requested_ids) = &requested.vault_request {
-                let AccountVaultDetails::Partial { asset_ids, .. } = &details.vault_details else {
-                    return Err(ConversionError::message(
-                        "response did not include a partial vault",
-                    )
-                    .context("details.vault_details"));
-                };
-                if asset_ids.iter().collect::<BTreeSet<_>>()
-                    != requested_ids.iter().collect::<BTreeSet<_>>()
-                {
-                    return Err(ConversionError::message(
-                        "partial vault does not cover the requested assets",
-                    )
-                    .context("details.vault_details"));
+                match &details.vault_details {
+                    AccountVaultDetails::Partial { asset_ids, .. } => {
+                        if asset_ids.iter().collect::<BTreeSet<_>>()
+                            != requested_ids.iter().collect::<BTreeSet<_>>()
+                        {
+                            return Err(ConversionError::message(
+                                "partial vault does not cover the requested assets",
+                            )
+                            .context("details.vault_details"));
+                        }
+                    },
+                    AccountVaultDetails::Assets(assets) => {
+                        if assets.len() > AccountVaultDetails::MAX_RETURN_ENTRIES {
+                            return Err(ConversionError::message(
+                                "full vault exceeds the asset entry limit",
+                            )
+                            .context("details.vault_details"));
+                        }
+                        let vault = AssetVault::new(assets).context("details.vault_details")?;
+                        if vault.root() != details.account_header.vault_root() {
+                            return Err(ConversionError::message(
+                                "full vault root does not match account header",
+                            )
+                            .context("details.vault_details"));
+                        }
+                        details.vault_details = AccountVaultDetails::Partial {
+                            asset_ids: requested_ids.clone(),
+                            vault: PartialVault::new_full(vault),
+                        };
+                    },
+                    AccountVaultDetails::LimitExceeded => {
+                        return Err(ConversionError::message(
+                            "response did not include the requested vault data",
+                        )
+                        .context("details.vault_details"));
+                    },
                 }
             }
         }

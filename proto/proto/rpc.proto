@@ -406,7 +406,9 @@ message GetAccountRequest {
             // the entry limit must be retrieved with SyncAccountVault instead.
             primitives.Word asset_vault_commitment = 2;
 
-            // Return proofs for these assets, independently of the total vault size.
+            // Return proofs for these assets, independently of the total vault size. The server
+            // may return the complete vault instead when it fits the full-vault entry limit;
+            // clients must reconstruct the vault and verify its root before using those assets.
             VaultAssetIds asset_ids = 5;
         }
 
@@ -477,6 +479,7 @@ message AccountVaultDetails {
     bool too_many_assets = 1;
 
     // Full vault contents, empty when partial_vault is present or too_many_assets is true.
+    // May also satisfy a selective asset request without individual Merkle proofs.
     repeated asset.Asset assets = 2;
 
     message PartialVault {

@@ -493,20 +493,30 @@ fn account_response_with_vault(
     } else {
         PartialVault::with_witnesses(asset_ids.iter().map(|id| vault.open(*id))).unwrap()
     };
+    account_response_with_vault_details(
+        vault.root(),
+        AccountVaultDetails::Partial {
+            asset_ids: asset_ids.to_vec(),
+            vault: partial,
+        },
+    )
+}
+
+fn account_response_with_vault_details(
+    root: Word,
+    vault_details: AccountVaultDetails,
+) -> proto::miden::node::v1::GetAccountResponse {
     let mut response = account_response().decode_fields().and_then(Verify::verify).unwrap();
     let details = response.details.as_mut().unwrap();
     let header = &details.account_header;
     details.account_header = AccountHeader::new(
         header.id(),
         header.nonce(),
-        vault.root(),
+        root,
         header.storage_commitment(),
         header.code_commitment(),
     );
-    details.vault_details = AccountVaultDetails::Partial {
-        asset_ids: asset_ids.to_vec(),
-        vault: partial,
-    };
+    details.vault_details = vault_details;
     response.witness = AccountTree::with_entries([(
         details.account_header.id(),
         details.account_header.to_commitment(),
@@ -549,7 +559,87 @@ fn account_response_verifies_requested_vault_proofs_in_any_order() {
 }
 
 #[test]
-fn account_response_rejects_missing_requested_details_and_partial_vault() {
+fn account_response_accepts_full_vault_for_selective_requests() {
+    let (expected, ids) = vault_fixture();
+    for requested in [ids.clone(), vec![ids[1]], vec![]] {
+        let message = account_response_with_vault_details(
+            expected.root(),
+            AccountVaultDetails::Assets(expected.assets().collect()),
+        );
+        let response = message
+            .decode_fields()
+            .unwrap()
+            .verify_with(&vault_request(requested.clone()))
+            .unwrap();
+        let AccountVaultDetails::Partial { asset_ids, vault } =
+            response.details.unwrap().vault_details
+        else {
+            panic!("expected a normalized partial vault")
+        };
+        assert_eq!(asset_ids, requested);
+        for id in requested {
+            assert_eq!(vault.open(id).unwrap(), expected.open(id));
+        }
+    }
+}
+
+#[test]
+fn account_response_accepts_empty_full_vault_for_absence_proofs() {
+    let expected = AssetVault::default();
+    let request = vault_request(vault_fixture().1);
+    let message =
+        account_response_with_vault_details(expected.root(), AccountVaultDetails::empty());
+    let response = message.decode_fields().unwrap().verify_with(&request).unwrap();
+    let AccountVaultDetails::Partial { vault, asset_ids } = response.details.unwrap().vault_details
+    else {
+        panic!("expected a normalized partial vault")
+    };
+    for id in asset_ids {
+        assert_eq!(vault.open(id).unwrap(), expected.open(id));
+    }
+}
+
+#[test]
+fn account_response_rejects_incomplete_full_vault_for_selective_requests() {
+    use miden_protocol::asset::FungibleAsset;
+
+    let (vault, ids) = vault_fixture();
+    let assets = vault.assets().collect::<Vec<_>>();
+    let unrelated: Asset = FungibleAsset::new(ids[1].faucet_id(), 10).unwrap().into();
+    let complete = AssetVault::new(&[assets[0], unrelated]).unwrap();
+    let message =
+        account_response_with_vault_details(complete.root(), AccountVaultDetails::Assets(assets));
+    let error = message
+        .decode_fields()
+        .unwrap()
+        .verify_with(&vault_request(vec![ids[0]]))
+        .err()
+        .unwrap();
+    assert!(
+        error.to_string().contains("full vault root does not match account header"),
+        "{error}"
+    );
+}
+
+#[test]
+fn account_response_rejects_invalid_or_oversized_full_vaults() {
+    let (vault, ids) = vault_fixture();
+    let asset = vault.assets().next().unwrap();
+    for assets in [vec![asset, asset], vec![asset; AccountVaultDetails::MAX_RETURN_ENTRIES + 1]] {
+        let message =
+            account_response_with_vault_details(vault.root(), AccountVaultDetails::Assets(assets));
+        assert!(
+            message
+                .decode_fields()
+                .unwrap()
+                .verify_with(&vault_request(ids.clone()))
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn account_response_rejects_missing_requested_details_and_vault_data() {
     let request = vault_request(vault_fixture().1);
     let message = account_response_with_vault(&vault_fixture().1);
     for vault_details in [
