@@ -37,16 +37,11 @@ async fn measure_disk_space_usage(data_dir: PathBuf) -> Result<(), tokio::task::
     miden_span_record!(
         db.sqlite.size = usage.sqlite_db,
         db.sqlite.wal.size = usage.sqlite_wal,
-        db.block_store.size = usage.block_store
+        db.block_store.size = usage.block_store,
+        db.account_tree.size = usage.account_tree,
+        db.nullifier_tree.size = usage.nullifier_tree,
+        db.account_state_forest.size = usage.account_state_forest
     );
-    #[cfg(feature = "rocksdb")]
-    {
-        miden_span_record!(
-            db.account_tree.size = usage.account_tree,
-            db.nullifier_tree.size = usage.nullifier_tree,
-            db.account_state_forest.size = usage.account_state_forest
-        );
-    }
 
     Ok(())
 }
@@ -56,11 +51,8 @@ struct DiskUsage {
     sqlite_db: u64,
     sqlite_wal: u64,
     block_store: u64,
-    #[cfg(feature = "rocksdb")]
     account_tree: u64,
-    #[cfg(feature = "rocksdb")]
     nullifier_tree: u64,
-    #[cfg(feature = "rocksdb")]
     account_state_forest: u64,
 }
 
@@ -70,11 +62,8 @@ fn measure_disk_usage_bytes(data_dir: &Path) -> DiskUsage {
         sqlite_db: path_size_bytes(&data_dir.join("miden-store.sqlite3")),
         sqlite_wal: path_size_bytes(&data_dir.join("miden-store.sqlite3-wal")),
         block_store: dir_size_bytes(&data_dir.join("blocks")),
-        #[cfg(feature = "rocksdb")]
         account_tree: dir_size_bytes(&data_dir.join("accounttree")),
-        #[cfg(feature = "rocksdb")]
         nullifier_tree: dir_size_bytes(&data_dir.join("nullifiertree")),
-        #[cfg(feature = "rocksdb")]
         account_state_forest: dir_size_bytes(&data_dir.join("accountstateforest")),
     }
 }

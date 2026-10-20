@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-#[cfg(feature = "rocksdb")]
 use miden_crypto::merkle::smt::RocksDbStorage;
 use miden_node_tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountIdPrefix};
@@ -36,7 +35,6 @@ mod tests;
 /// Convenience for an in-memory-only account tree.
 pub type InMemoryAccountTree = AccountTree<LargeSmt<MemoryStorage>>;
 
-#[cfg(feature = "rocksdb")]
 /// Convenience for a persistent account tree.
 pub type PersistentAccountTree = AccountTree<LargeSmt<RocksDbStorage>>;
 

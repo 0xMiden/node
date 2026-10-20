@@ -18,7 +18,6 @@ workspace = true
 doctest = false
 
 [features]
-rocksdb = ["dep:miden-crypto", "miden-crypto/rocksdb"]
 # Enables test-only utilities.
 testing        = ["miden-protocol/testing"]
 testing-prover = ["dep:miden-processor", "dep:miden-testing", "dep:miden-tx", "testing"]
@@ -50,7 +49,7 @@ tower_governor         = { workspace = true }
 url                    = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
-miden-crypto = { optional = true, workspace = true }
+miden-crypto = { features = ["rocksdb"], workspace = true }
 
 [dev-dependencies]
 miden-protocol = { features = ["testing"], workspace = true }
