@@ -25,7 +25,7 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
     }
 
     // The invitation code is a secret. Do not record it on the span.
-    #[miden_instrument(target = COMPONENT, name = "is_invitation_code_valid", err)]
+    #[miden_instrument(target = COMPONENT, name = "is_invitation_code_valid")]
     async fn handle(
         &self,
         invitation_code: Self::Input,

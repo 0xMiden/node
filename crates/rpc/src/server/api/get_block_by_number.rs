@@ -31,7 +31,6 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
             block.number = request.block_num,
             request.include_proof = request.include_proof.unwrap_or_default(),
         ),
-        err,
     )]
     async fn handle(
         &self,

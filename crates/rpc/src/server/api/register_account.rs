@@ -23,7 +23,7 @@ impl proto::server::miden_node_v1_node_service::RegisterAccount for RpcService {
         Ok(proto::miden::node::v1::RegisterAccountResponse {})
     }
 
-    #[miden_instrument(target = COMPONENT, name = "register_account", err)]
+    #[miden_instrument(target = COMPONENT, name = "register_account")]
     async fn handle(
         &self,
         request: Self::Input,

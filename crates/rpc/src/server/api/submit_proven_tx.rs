@@ -51,7 +51,6 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx",
-        err,
     )]
     async fn handle(
         &self,

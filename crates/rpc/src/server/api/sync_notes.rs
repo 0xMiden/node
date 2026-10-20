@@ -1,6 +1,6 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
-use miden_node_tracing::{debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use tonic::Status;
 
@@ -26,7 +26,6 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "sync_notes",
-        err,
     )]
     async fn handle(
         &self,
@@ -139,8 +138,8 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
         NoteSyncError::DeserializationFailed(err) => {
             SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
         },
-        NoteSyncError::UnderlyingDatabaseError(_) | NoteSyncError::MmrError(_) => {
-            internal_error(message)
+        err @ (NoteSyncError::UnderlyingDatabaseError(_) | NoteSyncError::MmrError(_)) => {
+            internal_error(err.as_report())
         },
     }
 }

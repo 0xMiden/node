@@ -24,7 +24,7 @@ impl proto::server::miden_node_v1_node_service::IsAccountAllowed for RpcService 
         Ok(proto::miden::node::v1::IsAccountAllowedResponse { allowed })
     }
 
-    #[miden_instrument(target = COMPONENT, name = "is_account_allowed", err)]
+    #[miden_instrument(target = COMPONENT, name = "is_account_allowed")]
     async fn handle(
         &self,
         account_id: Self::Input,

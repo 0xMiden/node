@@ -33,7 +33,6 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcServi
     #[miden_instrument(
         target = COMPONENT,
         name = "submit_proven_tx_batch",
-        err,
     )]
     async fn handle(
         &self,
