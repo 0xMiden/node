@@ -1,27 +1,16 @@
-use core::error::Error as CoreError;
-
 use miden_node_persistence::PersistenceError;
 use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
-use miden_node_store::{
-    ApplyBlockWithProvingInputsError,
-    DatabaseError,
-    GetBlockHeaderError,
-    GetBlockInclusionProofsError,
-    GetNoteInclusionProofsError,
-};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
 use thiserror::Error;
 
 use crate::mempool::MempoolPoisonError;
-use crate::validator::ValidatorError;
 
 // Proof scheduler errors
 // =================================================================================================
@@ -41,7 +30,7 @@ pub enum ProofSchedulerError {
 pub enum MempoolSubmissionError {
     #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreStateReadFailed(#[source] StoreError),
+    StoreStateReadFailed(#[source] anyhow::Error),
 
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
@@ -139,43 +128,21 @@ impl From<TransactionAuthenticationError> for StateConflict {
 // Batch building errors
 // =================================================================================================
 
-/// Error encountered while building a batch.
+/// Batch failures that either stop the worker or roll back its selected transactions.
 #[derive(Debug, Error)]
 pub enum BuildBatchError {
-    #[error("batch proving task panic'd")]
-    JoinError(#[from] tokio::task::JoinError),
-
-    #[error("failed to fetch batch inputs from store")]
-    FetchBatchInputsFailed(#[source] StoreError),
-
-    #[error("failed to build proposed transaction batch")]
-    ProposeBatchError(#[source] ProposedBatchError),
-
-    #[error("failed to build the batch fee transaction")]
-    BuildBatchFeeTransaction(#[source] anyhow::Error),
-
-    #[error("failed to validate the batch fee transaction")]
-    ValidateBatchFeeTransaction(#[source] anyhow::Error),
-
-    #[error("failed to prove proposed transaction batch")]
-    ProveBatchError(#[source] ProvenBatchError),
-
-    #[error("batch proof security level is too low: {0} < {1}")]
-    SecurityLevelTooLow(u32, u32),
-
     #[error("mempool lock is poisoned")]
-    MempoolPoisoned(#[source] MempoolPoisonError),
+    MempoolPoisoned(#[from] MempoolPoisonError),
+    #[error(transparent)]
+    Failed(#[from] anyhow::Error),
 }
 
 // Block building errors
 // =================================================================================================
 
+/// Block failures that either stop production or roll back the selected batches.
 #[derive(Debug, Error)]
 pub enum BuildBlockError {
-    #[error("failed to apply block to store")]
-    StoreApplyBlockFailed(#[source] StoreError),
-    #[error("failed to fetch block inputs from store")]
-    FetchBlockInputsFailed(#[source] StoreError),
     #[error(
         "Desync detected between block-producer's chain tip {local_chain_tip} and the store's {store_chain_tip}"
     )]
@@ -183,60 +150,10 @@ pub enum BuildBlockError {
         local_chain_tip: BlockNumber,
         store_chain_tip: BlockNumber,
     },
-    #[error("failed to propose block")]
-    ProposeBlockFailed(#[source] ProposedBlockError),
-    #[error("failed to validate block")]
-    ValidateBlockFailed(#[source] Box<ValidatorError>),
-    #[error("block signatures are invalid")]
-    InvalidSignature,
-    #[error(
-        "no signature received for the validator key at position {position} of the parent's validator set"
-    )]
-    MissingValidatorSignature { position: usize },
-    #[error(
-        "block commitment signed by a validator {validator} does not match the block proposed by the sequencer {sequencer}"
-    )]
-    BlockCommitmentMismatch { validator: Word, sequencer: Word },
-
     #[error("mempool lock is poisoned")]
-    MempoolPoisoned(#[source] MempoolPoisonError),
-
-    /// Custom error variant for errors not covered by the other variants.
-    #[error("{error_msg}")]
-    Other {
-        error_msg: Box<str>,
-        source: Option<Box<dyn CoreError + Send + Sync + 'static>>,
-    },
-}
-
-impl BuildBlockError {
-    /// Creates a custom error using the [`BuildBlockError::Other`] variant from an error message.
-    pub fn other(message: impl Into<String>) -> Self {
-        let message: String = message.into();
-        Self::Other { error_msg: message.into(), source: None }
-    }
-}
-
-// Store errors
-// =================================================================================================
-
-/// Errors returned by the store state.
-#[derive(Debug, Error)]
-pub enum StoreError {
-    #[error("account Id prefix already exists: {0}")]
-    DuplicateAccountIdPrefix(AccountId),
-    #[error("failed to get transaction inputs from store")]
-    GetTransactionInputsFailed(#[source] DatabaseError),
-    #[error("failed to get block inclusion proofs from store")]
-    GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
-    #[error("failed to get block header from store")]
-    GetBlockHeaderFailed(#[source] GetBlockHeaderError),
-    #[error("failed to get protocol configuration from store")]
-    GetProtocolConfigFailed(#[source] DatabaseError),
-    #[error("failed to get note inclusion proofs from store")]
-    GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
-    #[error("failed to apply block to store")]
-    ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
+    MempoolPoisoned(#[from] MempoolPoisonError),
+    #[error(transparent)]
+    Failed(#[from] anyhow::Error),
 }
 
 #[cfg(test)]
@@ -279,9 +196,8 @@ mod tests {
     #[test]
     fn internal_submission_failure_hides_cause() {
         let status = Status::from(MempoolSubmissionError::StoreStateReadFailed(
-            StoreError::GetTransactionInputsFailed(DatabaseError::DataCorrupted(
-                "private database data".into(),
-            )),
+            anyhow::anyhow!("private database data")
+                .context("failed to get transaction inputs from store"),
         ));
 
         assert_eq!(status.code(), Code::Internal);

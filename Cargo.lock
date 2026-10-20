@@ -2439,6 +2439,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fn-error-context"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cd66269887534af4b0c3e3337404591daa8dc8b9b2b3db71f9523beb4bafb41"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4723,6 +4734,7 @@ version = "0.17.6"
 dependencies = [
  "anyhow",
  "assert_matches",
+ "fn-error-context",
  "futures",
  "itertools 0.14.0",
  "miden-block-prover",
@@ -4890,6 +4902,7 @@ dependencies = [
  "assert_matches",
  "build-rs",
  "criterion",
+ "fn-error-context",
  "fs-err",
  "futures",
  "hex",
@@ -4952,6 +4965,7 @@ version = "0.17.6"
 dependencies = [
  "anyhow",
  "bytes",
+ "fn-error-context",
  "http",
  "http-body-util",
  "miden-node-tracing-macro",

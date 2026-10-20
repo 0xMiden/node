@@ -41,6 +41,7 @@ tracing-opentelemetry    = { workspace = true }
 tracing-subscriber       = { workspace = true }
 
 [dev-dependencies]
+fn-error-context  = { workspace = true }
 opentelemetry_sdk = { features = ["testing"], version = "0.31" }
 thiserror         = { workspace = true }
 trybuild          = { workspace = true }

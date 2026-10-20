@@ -88,6 +88,7 @@ clap               = { features = ["derive"], version = "4.5" }
 codegen            = { version = "0.3" }
 deadpool           = { default-features = false, version = "0.12" }
 deadpool-sync      = { default-features = false, version = "0.1" }
+fn-error-context   = { version = "0.2.1" }
 fs-err             = { version = "3" }
 futures            = { version = "0.3" }
 golden-core        = { version = "0.4.0" }

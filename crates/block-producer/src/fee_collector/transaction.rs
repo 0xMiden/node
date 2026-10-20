@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 
+use anyhow::Context;
+use fn_error_context::context;
 use miden_node_store::state::StateView;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::Word;
@@ -128,7 +130,7 @@ impl FeeCollectorTransactionBuilder {
             view,
         );
 
-        Ok(TransactionExecutor::new(&data_store)
+        TransactionExecutor::new(&data_store)
             .with_authenticator(&self.authenticator)
             .execute_transaction(
                 self.account.id(),
@@ -136,9 +138,11 @@ impl FeeCollectorTransactionBuilder {
                 notes,
                 tx_args,
             )
-            .await?)
+            .await
+            .context("failed to execute fee collector transaction")
     }
 
+    #[context("failed to prove fee collector transaction")]
     pub(crate) fn prove(transaction: ExecutedTransaction) -> anyhow::Result<ProvenTransaction> {
         Ok(LocalTransactionProver::default().prove(transaction)?)
     }

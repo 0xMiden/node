@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use fn_error_context::context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{ProofWriter, State};
 use miden_node_tracing::{Instrument, debug, info, miden_instrument};
@@ -197,6 +198,7 @@ pub async fn prove_pending_blocks(
 // ================================================================================================
 
 /// Proves a single block and returns the proof bytes on success.
+#[context("failed to prove block {}", block_num)]
 #[miden_instrument(
     target = COMPONENT,
     name = "prove_block",

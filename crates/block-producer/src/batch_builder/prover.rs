@@ -1,3 +1,5 @@
+use anyhow::Context;
+use fn_error_context::context;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
@@ -5,7 +7,6 @@ use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
 use crate::COMPONENT;
-use crate::errors::BuildBatchError;
 
 /// Proves batches locally without generating precompile proofs.
 #[derive(Clone)]
@@ -16,29 +17,24 @@ impl BatchProver {
         Self(LocalBatchProver::default().skip_precompile_proof_generation(true))
     }
 
+    #[context("failed to prove proposed transaction batch")]
     #[miden_instrument(target = COMPONENT, name = "batch_builder.prove_batch", err)]
-    pub(crate) async fn prove(
-        &self,
-        proposed_batch: ProposedBatch,
-    ) -> Result<ProvenBatch, BuildBatchError> {
+    pub(crate) async fn prove(&self, proposed_batch: ProposedBatch) -> anyhow::Result<ProvenBatch> {
         miden_span_record!(prover.kind = "local");
         let prover = self.0.clone();
         let proven_batch = spawn_blocking_in_current_span(move || {
-            let executed_batch = BatchExecutor::new()
-                .execute(proposed_batch)
-                .map_err(BuildBatchError::ProveBatchError)?;
-            prover.prove(executed_batch).map_err(BuildBatchError::ProveBatchError)
+            let executed_batch = BatchExecutor::new().execute(proposed_batch)?;
+            prover.prove(executed_batch)
         })
         .await
-        .map_err(BuildBatchError::JoinError)??;
-        if proven_batch.proof_security_level() < MIN_PROOF_SECURITY_LEVEL {
-            Err(BuildBatchError::SecurityLevelTooLow(
-                proven_batch.proof_security_level(),
-                MIN_PROOF_SECURITY_LEVEL,
-            ))
-        } else {
-            Ok(proven_batch)
-        }
+        .context("batch proving task failed")??;
+        anyhow::ensure!(
+            proven_batch.proof_security_level() >= MIN_PROOF_SECURITY_LEVEL,
+            "batch proof security level is too low: {} < {}",
+            proven_batch.proof_security_level(),
+            MIN_PROOF_SECURITY_LEVEL,
+        );
+        Ok(proven_batch)
     }
 }
 

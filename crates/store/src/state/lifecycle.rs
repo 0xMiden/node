@@ -4,9 +4,11 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
+use anyhow::Context;
 use arc_swap::ArcSwap;
+use fn_error_context::context;
+use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, miden_instrument};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::sync::{mpsc, watch};
@@ -17,7 +19,6 @@ use crate::account_state_forest::AccountStateForestBackend;
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::Db;
-use crate::errors::StateInitializationError;
 use crate::proven_tip::ProvenTipWriter;
 use crate::state::loader::{
     ACCOUNT_STATE_FOREST_STORAGE_DIR,
@@ -38,9 +39,7 @@ use crate::{COMPONENT, DataDirectory, DatabaseOptions};
 ///
 /// The load tasks are never aborted, so a join error is a panic from the task; it is resumed on
 /// the caller so panics keep propagating as panics.
-async fn join_load_task<T>(
-    handle: JoinHandle<Result<T, StateInitializationError>>,
-) -> Result<T, StateInitializationError> {
+async fn join_load_task<T>(handle: JoinHandle<anyhow::Result<T>>) -> anyhow::Result<T> {
     match handle.await {
         Ok(result) => result,
         Err(err) => std::panic::resume_unwind(err.into_panic()),
@@ -116,7 +115,7 @@ impl State {
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
-    ) -> Result<LoadedState, StateInitializationError> {
+    ) -> anyhow::Result<LoadedState> {
         Self::load_with_database_options(data_path, storage_options, DatabaseOptions::default())
             .await
     }
@@ -126,6 +125,7 @@ impl State {
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks. Call [`LoadedState::start`] on the result to spawn the block
     /// writer and obtain the usable [`State`].
+    #[context("failed to load store state from {}", data_path.display())]
     #[miden_instrument(
         target = COMPONENT,
     )]
@@ -133,13 +133,13 @@ impl State {
         data_path: &Path,
         storage_options: StorageOptions,
         database_options: DatabaseOptions,
-    ) -> Result<LoadedState, StateInitializationError> {
+    ) -> anyhow::Result<LoadedState> {
         let data_directory = DataDirectory::load(data_path.to_path_buf())
-            .map_err(StateInitializationError::DataDirectoryLoadError)?;
+            .context("failed to load data directory")?;
 
         let block_store = Arc::new(
             BlockStore::load(data_directory.block_store_dir())
-                .map_err(StateInitializationError::BlockStoreLoadError)?,
+                .context("failed to load block store")?,
         );
 
         let database_filepath = data_directory.database_path();
@@ -149,22 +149,23 @@ impl State {
                 database_options.connection_pool_size,
             )
             .await
-            .map_err(StateInitializationError::DatabaseLoadError)?,
+            .context("failed to load database")?,
         );
 
         let genesis_header = db
             .select_genesis_block_header()
             .await?
-            .ok_or(StateInitializationError::GenesisBlockMissing)?;
+            .context("genesis block missing. The database should be bootstrapped first.")?;
         let genesis_protocol_config_commitment = genesis_header.protocol_config_commitment();
         if db
             .select_protocol_config_by_commitment(genesis_protocol_config_commitment)
             .await?
             .is_none()
         {
-            return Err(StateInitializationError::GenesisProtocolConfigMissing {
-                commitment: genesis_protocol_config_commitment,
-            });
+            anyhow::bail!(
+                "genesis protocol config {genesis_protocol_config_commitment} is missing. \
+                 Rebootstrap the database from genesis."
+            );
         }
 
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
@@ -172,7 +173,7 @@ impl State {
         let latest_block_num = db
             .select_block_header_by_block_num(None)
             .await?
-            .ok_or(StateInitializationError::GenesisBlockMissing)?
+            .context("genesis block missing. The database should be bootstrapped first.")?
             .block_num();
 
         let apply_block_thread_priority = storage_options.apply_block_thread_priority;
@@ -270,9 +271,7 @@ impl State {
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
         // Initialize the proven tip from the block store.
-        let proven_tip_init = block_store
-            .load_proven_tip()
-            .map_err(StateInitializationError::ProvenTipLoadError)?;
+        let proven_tip_init = block_store.load_proven_tip().context("failed to load proven tip")?;
         let (proven_tip, _rx) = ProvenTipWriter::new(proven_tip_init);
 
         // Committed-tip watch: fires after each successful apply_block.
@@ -284,14 +283,10 @@ impl State {
 
         // Create the initial snapshot from reader views of the just-loaded trees.
         let initial_snapshot = Arc::new(StateSnapshot::new(
-            nullifier_tree
-                .reader()
-                .map_err(|e| StateInitializationError::NullifierTreeIoError(e.as_report()))?,
+            nullifier_tree.reader().context("failed to create nullifier tree reader")?,
             blockchain.clone(),
             account_tree.reader(),
-            forest
-                .reader()
-                .map_err(|e| StateInitializationError::AccountStateForestIoError(e.as_report()))?,
+            forest.reader().context("failed to create account state forest reader")?,
         ));
         let latest_snapshot = Arc::new(ArcSwap::from(initial_snapshot));
 
@@ -358,7 +353,7 @@ mod tests {
 
     use super::State;
     use crate::DataDirectory;
-    use crate::errors::{DatabaseError, StateInitializationError};
+    use crate::errors::DatabaseError;
     use crate::genesis::GenesisState;
 
     async fn bootstrap_store(path: &std::path::Path) -> miden_protocol::Word {
@@ -387,6 +382,11 @@ mod tests {
     async fn load_rejects_missing_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path()).await;
+        drop(
+            State::load(temp_dir.path(), StorageOptions::default())
+                .await
+                .expect("the bootstrapped store should load before its configuration is removed"),
+        );
         database_writer(temp_dir.path())
             .write::<_, DatabaseError, _>("delete genesis protocol config", move |tx| {
                 tx.execute("DELETE FROM protocol_configs WHERE commitment = ?1", &[&commitment])?;
@@ -395,15 +395,10 @@ mod tests {
             .await
             .unwrap();
 
-        let error = State::load(temp_dir.path(), StorageOptions::default())
+        State::load(temp_dir.path(), StorageOptions::default())
             .await
             .err()
-            .expect("state load should fail");
-        assert!(matches!(
-            error,
-            StateInitializationError::GenesisProtocolConfigMissing { commitment: actual }
-                if actual == commitment
-        ));
+            .expect("state load should reject a missing genesis protocol configuration");
     }
 
     #[tokio::test]
@@ -427,10 +422,11 @@ mod tests {
             .await
             .err()
             .expect("state load should fail");
-        assert!(matches!(
-            error,
-            StateInitializationError::DatabaseError(DatabaseError::Persistence(_))
-        ));
+        assert!(
+            error
+                .chain()
+                .any(<dyn std::error::Error>::is::<miden_node_persistence::PersistenceError>)
+        );
     }
 
     #[tokio::test]

@@ -23,6 +23,7 @@ tracing-forest = ["miden-node-tracing/tracing-forest"]
 
 [dependencies]
 anyhow                 = { workspace = true }
+fn-error-context       = { workspace = true }
 futures                = { workspace = true }
 itertools              = { workspace = true }
 miden-block-prover     = { workspace = true }
