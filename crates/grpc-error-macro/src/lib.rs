@@ -163,7 +163,7 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
                     "Internal error".to_owned()
                 } else {
                     // Use ErrorReport trait to get detailed error message
-                    use miden_node_utils::ErrorReport as _;
+                    use miden_node_tracing::ErrorReport as _;
                     value.as_report()
                 };
 

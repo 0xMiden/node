@@ -1,0 +1,27 @@
+error[E0080]: evaluation panicked: tracing field `tx_id` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_field_name.rs:7:5
+  |
+7 | /     miden_span_record!(
+8 | |         tx_id = tx_id
+9 | |     );
+  | |_____^ evaluation of `records_invalid_field_name::__miden_assert_field_name::<&str>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_field_name.rs:7:5
+  |
+7 | /     miden_span_record!(
+8 | |         tx_id = tx_id
+9 | |     );
+  | |_____^
+  |
+  = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn __miden_assert_field_name::<&str>`
+ --> tests/ui/tracing_macros/invalid_field_name.rs:7:5
+  |
+7 | /     miden_span_record!(
+8 | |         tx_id = tx_id
+9 | |     );
+  | |_____^
+  |
+  = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

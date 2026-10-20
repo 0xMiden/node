@@ -1,21 +1,24 @@
 use miden_node_proto::generated as proto;
-use miden_node_utils::tracing::miden_instrument;
-use tracing::debug;
+use miden_node_tracing::{debug, miden_instrument};
 
 use super::{Request, RpcBackend, RpcService};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
-impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
+impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for RpcService {
     type Input = ();
-    type Output = proto::transaction::TransactionEncryptionKey;
+    type Output = proto::submission::TransactionEncryptionKey;
 
-    fn decode(request: ()) -> tonic::Result<Self::Input> {
-        Ok(request)
+    fn decode(
+        _request: proto::miden::node::v1::GetTransactionEncryptionKeyRequest,
+    ) -> tonic::Result<Self::Input> {
+        Ok(())
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<proto::transaction::TransactionEncryptionKey> {
-        Ok(output)
+    fn encode(
+        output: Self::Output,
+    ) -> tonic::Result<proto::miden::node::v1::GetTransactionEncryptionKeyResponse> {
+        Ok(proto::miden::node::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
     #[miden_instrument(
@@ -47,15 +50,31 @@ impl proto::server::rpc_api::GetTransactionEncryptionKey for RpcService {
                 return source_rpc
                     .as_ref()
                     .clone()
-                    .get_transaction_encryption_key(forwarded_request)
+                    .get_transaction_encryption_key(
+                        forwarded_request.map(|()| {
+                            proto::miden::node::v1::GetTransactionEncryptionKeyRequest {}
+                        }),
+                    )
                     .await
-                    .map(tonic::Response::into_inner);
+                    .and_then(|response| {
+                        response.into_inner().key.ok_or_else(|| {
+                            tonic::Status::internal("missing transaction encryption key")
+                        })
+                    });
             },
         };
         validator
             .clone()
-            .get_transaction_encryption_key(forwarded_request)
+            .get_transaction_encryption_key(
+                forwarded_request
+                    .map(|()| proto::miden::validator::v1::GetTransactionEncryptionKeyRequest {}),
+            )
             .await
-            .map(tonic::Response::into_inner)
+            .and_then(|response| {
+                response
+                    .into_inner()
+                    .key
+                    .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))
+            })
     }
 }

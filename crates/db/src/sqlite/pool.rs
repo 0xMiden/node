@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 use deadpool::Runtime;
 use deadpool::managed::{Manager, Metrics, Object, Pool, RecycleError, RecycleResult};
 use deadpool_sync::SyncWrapper;
+use miden_node_tracing::Instrument;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
-use tracing::Instrument;
 
 use crate::sqlite::tx::{ReadTx, WriteTx};
 use crate::{DatabaseError, default_connection_pool_size};
@@ -183,7 +183,7 @@ impl DbReader {
     {
         let conn = self.checkout_reader().await.map_err(E::from)?;
         let msg = msg.to_string();
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         conn.interact(move |conn| {
             let _guard = span.enter();
             let tx = conn
@@ -235,7 +235,7 @@ impl DbWriter {
     {
         let conn = self.checkout_writer().await.map_err(E::from)?;
         let msg = msg.to_string();
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         conn.interact(move |conn| {
             let _guard = span.enter();
             let tx = conn
@@ -292,7 +292,7 @@ impl ReadTransaction {
         E: From<DatabaseError> + Send + 'static,
     {
         let msg = msg.to_string();
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         self.conn
             .interact(move |conn| {
                 let _guard = span.enter();
@@ -331,7 +331,7 @@ impl WriteTransaction {
         E: From<DatabaseError> + Send + 'static,
     {
         let msg = msg.to_string();
-        let span = tracing::Span::current();
+        let span = miden_node_tracing::Span::current();
         self.conn
             .interact(move |conn| {
                 let _guard = span.enter();

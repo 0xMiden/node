@@ -11,7 +11,9 @@
 use std::future::Future;
 use std::num::NonZeroUsize;
 use std::path::Path;
+use std::pin::pin;
 
+use futures::TryStreamExt;
 use miden_crypto::merkle::mmr::Mmr;
 use miden_crypto::merkle::smt::{Backend, ForestInMemoryBackend};
 #[cfg(feature = "rocksdb")]
@@ -22,8 +24,10 @@ use miden_crypto::merkle::smt::{
     SmtStorageReader,
 };
 #[cfg(feature = "rocksdb")]
+use miden_node_tracing::info;
+use miden_node_tracing::miden_instrument;
+#[cfg(feature = "rocksdb")]
 use miden_node_utils::clap::RocksDbOptions;
-use miden_node_utils::tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -32,15 +36,18 @@ use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::MemoryStorage;
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
-#[cfg(feature = "rocksdb")]
-use tracing::info;
 
 use crate::COMPONENT;
 #[cfg(feature = "rocksdb")]
 use crate::LOG_TARGET;
 use crate::account_state_forest::AccountStateForest;
-use crate::db::Db;
-use crate::db::models::queries::BlockHeaderCommitment;
+use crate::db::queries::{
+    AccountCommitmentsPaged,
+    NullifiersPaged,
+    PublicAccountIdsPaged,
+    PublicAccountStateRootsPaged,
+};
+use crate::db::{BlockHeaderCommitment, Db};
 use crate::errors::{DatabaseError, StateInitializationError};
 
 // CONSTANTS
@@ -84,7 +91,7 @@ pub type TreeStorageReader = <TreeStorage as SmtStorage>::Reader;
 
 /// Converts a `LargeSmtError` into a `StateInitializationError`.
 pub fn account_tree_large_smt_error_to_init_error(e: LargeSmtError) -> StateInitializationError {
-    use miden_node_utils::ErrorReport;
+    use miden_node_tracing::ErrorReport;
     match e {
         LargeSmtError::Merkle(merkle_error) => {
             StateInitializationError::DatabaseError(DatabaseError::MerkleError(merkle_error))
@@ -130,13 +137,13 @@ pub trait TreeStorageLoader: SmtStorage + Sized {
     /// Loads an account tree, either from persistent storage or by rebuilding from DB.
     fn load_account_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> impl Future<Output = Result<AccountTree<LargeSmt<Self>>, StateInitializationError>> + Send;
 
     /// Loads a nullifier tree, either from persistent storage or by rebuilding from DB.
     fn load_nullifier_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> impl Future<Output = Result<NullifierTree<LargeSmt<Self>>, StateInitializationError>> + Send;
 }
 
@@ -162,7 +169,7 @@ pub(crate) trait AccountForestLoader: Backend + Sized {
     /// Loads the account state forest, either from persistent storage or by rebuilding from DB.
     fn load_account_state_forest(
         self,
-        db: &mut Db,
+        db: &Db,
         block_num: BlockNumber,
     ) -> impl Future<Output = Result<AccountStateForest<Self>, StateInitializationError>> + Send;
 }
@@ -186,25 +193,17 @@ impl TreeStorageLoader for MemoryStorage {
     )]
     async fn load_account_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> Result<AccountTree<LargeSmt<Self>>, StateInitializationError> {
         let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load account commitments in pages to avoid loading millions of entries at once
-        let mut cursor = None;
-        loop {
-            let page = db
-                .select_account_commitments_paged(ACCOUNT_COMMITMENTS_PAGE_SIZE, cursor)
-                .await?;
-
-            cursor = page.next_cursor;
-            if page.commitments.is_empty() {
-                break;
-            }
-
-            let entries = page
-                .commitments
+        let mut pages = pin!(
+            db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }, None)
+        );
+        while let Some(commitments) = pages.try_next().await? {
+            let entries = commitments
                 .into_iter()
                 .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
@@ -213,10 +212,6 @@ impl TreeStorageLoader for MemoryStorage {
                 .map_err(account_tree_large_smt_error_to_init_error)?;
             smt.apply_mutations(mutations)
                 .map_err(account_tree_large_smt_error_to_init_error)?;
-
-            if cursor.is_none() {
-                break;
-            }
         }
 
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
@@ -230,22 +225,15 @@ impl TreeStorageLoader for MemoryStorage {
     )]
     async fn load_nullifier_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> Result<NullifierTree<LargeSmt<Self>>, StateInitializationError> {
         let mut smt = LargeSmt::with_entries(self, std::iter::empty())
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load nullifiers in pages to avoid loading millions of entries at once
-        let mut cursor = None;
-        loop {
-            let page = db.select_nullifiers_paged(NULLIFIERS_PAGE_SIZE, cursor).await?;
-
-            cursor = page.next_cursor;
-            if page.nullifiers.is_empty() {
-                break;
-            }
-
-            let entries = page.nullifiers.into_iter().map(|info| {
+        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }, None));
+        while let Some(nullifiers) = pages.try_next().await? {
+            let entries = nullifiers.into_iter().map(|info| {
                 (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
             });
 
@@ -254,10 +242,6 @@ impl TreeStorageLoader for MemoryStorage {
                 .map_err(account_tree_large_smt_error_to_init_error)?;
             smt.apply_mutations(mutations)
                 .map_err(account_tree_large_smt_error_to_init_error)?;
-
-            if cursor.is_none() {
-                break;
-            }
         }
 
         Ok(NullifierTree::new_unchecked(smt))
@@ -295,7 +279,7 @@ impl TreeStorageLoader for RocksDbStorage {
     )]
     async fn load_account_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> Result<AccountTree<LargeSmt<Self>>, StateInitializationError> {
         // If RocksDB storage has data, load from it directly
 
@@ -314,19 +298,11 @@ impl TreeStorageLoader for RocksDbStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load account commitments in pages to avoid loading millions of entries at once
-        let mut cursor = None;
-        loop {
-            let page = db
-                .select_account_commitments_paged(ACCOUNT_COMMITMENTS_PAGE_SIZE, cursor)
-                .await?;
-
-            cursor = page.next_cursor;
-            if page.commitments.is_empty() {
-                break;
-            }
-
-            let entries = page
-                .commitments
+        let mut pages = pin!(
+            db.pages(AccountCommitmentsPaged { page_size: ACCOUNT_COMMITMENTS_PAGE_SIZE }, None)
+        );
+        while let Some(commitments) = pages.try_next().await? {
+            let entries = commitments
                 .into_iter()
                 .map(|(id, commitment)| (AccountIdKey::from(id).as_word(), commitment));
 
@@ -335,10 +311,6 @@ impl TreeStorageLoader for RocksDbStorage {
                 .map_err(account_tree_large_smt_error_to_init_error)?;
             smt.apply_mutations(mutations)
                 .map_err(account_tree_large_smt_error_to_init_error)?;
-
-            if cursor.is_none() {
-                break;
-            }
         }
 
         AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
@@ -349,7 +321,7 @@ impl TreeStorageLoader for RocksDbStorage {
     )]
     async fn load_nullifier_tree(
         self,
-        db: &mut Db,
+        db: &Db,
     ) -> Result<NullifierTree<LargeSmt<Self>>, StateInitializationError> {
         // If RocksDB storage has data, load from it directly
 
@@ -367,16 +339,9 @@ impl TreeStorageLoader for RocksDbStorage {
             .map_err(account_tree_large_smt_error_to_init_error)?;
 
         // Load nullifiers in pages to avoid loading millions of entries at once
-        let mut cursor = None;
-        loop {
-            let page = db.select_nullifiers_paged(NULLIFIERS_PAGE_SIZE, cursor).await?;
-
-            cursor = page.next_cursor;
-            if page.nullifiers.is_empty() {
-                break;
-            }
-
-            let entries = page.nullifiers.into_iter().map(|info| {
+        let mut pages = pin!(db.pages(NullifiersPaged { page_size: NULLIFIERS_PAGE_SIZE }, None));
+        while let Some(nullifiers) = pages.try_next().await? {
+            let entries = nullifiers.into_iter().map(|info| {
                 (info.nullifier.as_word(), block_num_to_nullifier_leaf(info.block_num))
             });
 
@@ -385,10 +350,6 @@ impl TreeStorageLoader for RocksDbStorage {
                 .map_err(account_tree_large_smt_error_to_init_error)?;
             smt.apply_mutations(mutations)
                 .map_err(account_tree_large_smt_error_to_init_error)?;
-
-            if cursor.is_none() {
-                break;
-            }
         }
 
         Ok(NullifierTree::new_unchecked(smt))
@@ -412,12 +373,12 @@ impl AccountForestLoader for ForestInMemoryBackend {
     #[miden_instrument(
         target = COMPONENT,
         fields(
-            block.number = %block_num,
+            block.number = block_num,
         ),
     )]
     async fn load_account_state_forest(
         self,
-        db: &mut Db,
+        db: &Db,
         block_num: BlockNumber,
     ) -> Result<AccountStateForest<Self>, StateInitializationError> {
         let mut forest = AccountStateForest::from_backend(self)
@@ -465,12 +426,12 @@ impl AccountForestLoader for ForestPersistentBackend {
     #[miden_instrument(
         target = COMPONENT,
         fields(
-            block.number = %block_num,
+            block.number = block_num,
         ),
     )]
     async fn load_account_state_forest(
         self,
-        db: &mut Db,
+        db: &Db,
         block_num: BlockNumber,
     ) -> Result<AccountStateForest<Self>, StateInitializationError> {
         let mut forest = AccountStateForest::from_backend(self)
@@ -505,7 +466,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 #[miden_instrument(
     target = COMPONENT,
 )]
-pub async fn load_mmr(db: &mut Db) -> Result<Blockchain, StateInitializationError> {
+pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
     let latest_header = db.select_block_header_by_block_num(None).await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
 
@@ -549,27 +510,21 @@ fn verify_chain_mmr_consistency(
 #[miden_instrument(
     target = COMPONENT,
     fields(
-        block.number = %block_num,
+        block.number = block_num,
     ),
 )]
 pub async fn rebuild_account_state_forest(
     forest: &mut AccountStateForest<impl Backend>,
-    db: &mut Db,
+    db: &Db,
     block_num: BlockNumber,
 ) -> Result<(), StateInitializationError> {
     use miden_protocol::account::AccountPatch;
 
-    let mut cursor = None;
-
-    loop {
-        let page = db.select_public_account_ids_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor).await?;
-
-        if page.account_ids.is_empty() {
-            break;
-        }
-
-        let mut patches = Vec::with_capacity(page.account_ids.len());
-        for account_id in page.account_ids {
+    let mut pages =
+        pin!(db.pages(PublicAccountIdsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }, None));
+    while let Some(account_ids) = pages.try_next().await? {
+        let mut patches = Vec::with_capacity(account_ids.len());
+        for account_id in account_ids {
             // TODO: Loading the full account from the database is inefficient and will need to go
             // away. <https://github.com/0xMiden/node/issues/1556>
             let account_info = db.select_account(account_id).await?;
@@ -588,11 +543,6 @@ pub async fn rebuild_account_state_forest(
         forest
             .apply_rebuild_updates(block_num, patches)
             .map_err(StateInitializationError::AccountStateForestRebuild)?;
-
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
     }
 
     Ok(())
@@ -620,7 +570,7 @@ pub async fn rebuild_account_state_forest(
 pub async fn verify_tree_consistency(
     account_tree_root: Word,
     nullifier_tree_root: Word,
-    db: &mut Db,
+    db: &Db,
 ) -> Result<(), StateInitializationError> {
     // Fetch the latest block header to get the expected roots
     let latest_header = db.select_block_header_by_block_num(None).await?;
@@ -661,33 +611,24 @@ pub async fn verify_tree_consistency(
     target = COMPONENT,
 )]
 pub async fn verify_account_state_forest_consistency(
-    forest: &AccountStateForest<impl Backend>,
-    db: &mut Db,
+    forest: &AccountStateForest<impl Backend + Sync>,
+    db: &Db,
 ) -> Result<(), StateInitializationError> {
-    let mut cursor = None;
+    use rayon::iter::{IntoParallelIterator, ParallelIterator};
 
-    loop {
-        let page = db
-            .select_public_account_state_roots_paged(PUBLIC_ACCOUNT_IDS_PAGE_SIZE, cursor)
-            .await?;
-
-        if page.accounts.is_empty() {
-            break;
-        }
-
-        for account in page.accounts {
+    let mut pages = pin!(
+        db.pages(PublicAccountStateRootsPaged { page_size: PUBLIC_ACCOUNT_IDS_PAGE_SIZE }, None)
+    );
+    while let Some(accounts) = pages.try_next().await? {
+        // Per-account checks are independent, so verify each page in parallel.
+        accounts.into_par_iter().try_for_each(|account| {
             verify_account_state_forest_record(
                 forest,
                 account.account_id,
                 account.vault_root,
                 &account.storage_header,
-            )?;
-        }
-
-        cursor = page.next_cursor;
-        if cursor.is_none() {
-            break;
-        }
+            )
+        })?;
     }
 
     Ok(())
@@ -731,7 +672,6 @@ fn verify_account_state_forest_record(
 
 #[cfg(test)]
 mod tests {
-    use diesel::{ExpressionMethods, RunQueryDsl};
     use miden_protocol::account::{
         AccountId,
         AccountStorageHeader,
@@ -743,7 +683,6 @@ mod tests {
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
-    use miden_protocol::utils::serde::Serializable;
 
     use super::*;
 
@@ -753,8 +692,7 @@ mod tests {
 
         for block_num in 0..count {
             let chain_commitment = mmr.peaks().hash_peaks();
-            let header =
-                BlockHeader::mock(block_num, Some(chain_commitment), None, &[], Word::default());
+            let header = BlockHeader::mock(block_num, Some(chain_commitment), None, &[]);
             mmr.add(header.commitment()).expect("test MMR should accept block commitment");
             headers.push(header);
         }
@@ -806,31 +744,31 @@ mod tests {
 
         let headers = build_headers(5);
         let signing_key = SigningKey::new();
-        let mut db = crate::db::Db::load(db_path).await.expect("test database should load");
+        let db = crate::db::Db::load(db_path).await.expect("test database should load");
 
-        db.query("insert corrupted block headers", move |conn| {
-            for header in &headers {
-                let signatures = miden_protocol::block::BlockSignatures::new(vec![
-                    signing_key.sign(header.commitment()),
-                ])
-                .expect("one signature is within bounds");
-                crate::db::models::queries::insert_block_header(conn, header, &signatures)?;
-            }
+        db.writer()
+            .write::<_, DatabaseError, _>("insert corrupted block headers", move |tx| {
+                for header in &headers {
+                    let signatures = miden_protocol::block::BlockSignatures::new(vec![
+                        signing_key.sign(header.commitment()),
+                    ])
+                    .expect("one signature is within bounds");
+                    crate::db::queries::insert_block_header(tx, header, &signatures)?;
+                }
 
-            diesel::update(crate::db::schema::block_headers::table)
-                .filter(crate::db::schema::block_headers::block_num.eq(2_i64))
-                .set(
-                    crate::db::schema::block_headers::commitment
-                        .eq(Word::from([42, 0, 0, 0u32]).to_bytes()),
-                )
-                .execute(conn)?;
+                // Corrupt the stored commitment of one header so it disagrees with the header it
+                // was stored alongside.
+                tx.execute(
+                    "UPDATE block_headers SET commitment = ?1 WHERE block_num = ?2",
+                    &[&Word::from([42, 0, 0, 0u32]), &BlockNumber::from(2)],
+                )?;
 
-            Ok::<_, DatabaseError>(())
-        })
-        .await
-        .expect("test block headers should be inserted");
+                Ok(())
+            })
+            .await
+            .expect("test block headers should be inserted");
 
-        let error = load_mmr(&mut db)
+        let error = load_mmr(&db)
             .await
             .expect_err("startup MMR load should reject inconsistent block headers");
 

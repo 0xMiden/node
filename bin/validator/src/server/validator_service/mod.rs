@@ -3,9 +3,8 @@ use std::sync::atomic::AtomicU64;
 
 use miden_node_db::DatabaseError;
 use miden_node_proto::domain::encryption::TransactionEncryptionKeyInfo;
-use miden_node_store::BlockStore;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::block::{
     BlockHeader,
@@ -67,12 +66,30 @@ pub enum ValidatorError {
     ValidatorKeyNotInSet { actual: PublicKey },
     #[error("no chain tip exists")]
     NoChainTip,
-    #[error("failed to backup block")]
-    BlockBackupFailed(#[source] std::io::Error),
     #[error("no genesis block header exists")]
     NoGenesisHeader,
     #[error("failed to attest the transaction encryption key: {0}")]
     EncryptionKeyAttestationFailed(String),
+}
+
+/// Maps a `Result`'s error into a `tonic::Status` carrying `context` and the error's full source
+/// chain, collapsing the `map_err(|err| Status::<code>(err.as_report_context(...)))` boilerplate
+/// every handler repeats.
+trait StatusResultExt<T> {
+    /// Maps the error to [`tonic::Status::internal`].
+    fn or_internal(self, context: &'static str) -> tonic::Result<T>;
+    /// Maps the error to [`tonic::Status::invalid_argument`].
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T>;
+}
+
+impl<T, E: miden_node_tracing::ErrorReport> StatusResultExt<T> for Result<T, E> {
+    fn or_internal(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::internal(err.as_report_context(context)))
+    }
+
+    fn or_invalid_argument(self, context: &'static str) -> tonic::Result<T> {
+        self.map_err(|err| tonic::Status::invalid_argument(err.as_report_context(context)))
+    }
 }
 
 // VALIDATOR SERVICE
@@ -99,7 +116,6 @@ pub(crate) struct ValidatorService {
     /// Signature by this validator's own signing key over the encryption key attestation
     /// commitment, computed once at construction.
     encryption_key_attestation: Signature,
-    block_store: BlockStore,
     /// Enforces mutual exclusion between backup block subscriptions and all other RPCs. Regular
     /// RPCs take the read side (any number may run concurrently); a backup subscription takes the
     /// exclusive write side for its entire lifetime. Acquired with `try_*` on both sides so that a
@@ -121,7 +137,8 @@ pub(crate) struct ValidatorService {
     committed_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
-    /// In-memory count of signed blocks, incremented after each signed block.
+    /// In-memory count of signed blocks, incremented after each signed block that extends the
+    /// chain. A replacement of the tip block does not change it.
     signed_blocks_count: AtomicU64,
 }
 
@@ -131,7 +148,6 @@ impl ValidatorService {
         db: ValidatorDbWriter,
         decrypter: Arc<dyn TransactionInputDecrypter>,
         private_record_sealer: PrivateRecordSealer,
-        block_store: BlockStore,
         initial_metrics: InitialMetrics,
     ) -> Result<Self, ValidatorError> {
         // The chain tip's header commits to the validator set authorized to sign the next block, so
@@ -143,7 +159,7 @@ impl ValidatorService {
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
         let signing_key = signer.public_key();
-        if !chain_tip.validator_keys().as_keys().contains(&signing_key) {
+        if !chain_tip.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
@@ -179,7 +195,6 @@ impl ValidatorService {
             encryption_key_attestation,
             serve_lock: Arc::new(tokio::sync::RwLock::new(())),
             db,
-            block_store,
             sign_block_semaphore: Semaphore::new(1),
             tx_validation_semaphore: Semaphore::new(max_tx_concurrency()),
             committed_tip: watch::Sender::new(BlockNumber::from(initial_metrics.chain_tip)),
@@ -195,7 +210,7 @@ impl ValidatorService {
     ///    previous block commitment), or b. A replacement block at the same height as the current chain
     ///    tip, validated against the previous block header.
     ///
-    /// On success, returns the signature and the validated block header.
+    /// On success, returns the signature and validated signed block for persistence.
     #[miden_instrument(
         target = COMPONENT,
         err,
@@ -204,8 +219,8 @@ impl ValidatorService {
         &self,
         proposed_block: ProposedBlock,
         chain_tip: BlockHeader,
-    ) -> Result<(Signature, BlockHeader), ValidatorError> {
-        miden_span_record!(tip.number = chain_tip.block_num().as_u32(),);
+    ) -> Result<(Signature, SignedBlock), ValidatorError> {
+        miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids =
@@ -230,8 +245,8 @@ impl ValidatorService {
                 .map_err(ValidatorError::BlockBuildingFailed)?;
 
         miden_span_record!(
-            block.number = proposed_header.block_num().as_u32(),
-            block.commitment = %proposed_header.commitment(),
+            block.number = proposed_header.block_num(),
+            block.commitment = proposed_header.commitment()
         );
 
         // If the proposed block has the same block number as the current chain tip, this is a
@@ -270,13 +285,13 @@ impl ValidatorService {
         // Otherwise we would be producing a signature that cannot be placed in the block's
         // signature set.
         let signing_key = self.signer.public_key();
-        if !prev.validator_keys().as_keys().contains(&signing_key) {
+        if !prev.validator_config().keys().contains(&signing_key) {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
         let signature = self.sign_header(&proposed_header).await?;
 
-        // Back up the signed block to disk.
+        // Prepare the signed block for persistence.
         //
         // Note that the backup only carries this validator's own signature: the complete,
         // positionally ordered signature set exists only at the block producer once it has
@@ -286,20 +301,7 @@ impl ValidatorService {
             .expect("a single signature is within the signature set bounds");
         let signed_block =
             SignedBlock::new_unchecked(proposed_header, proposed_body, own_signature);
-        // Serializing the full block also scales with its contents; run it on a blocking thread.
-        let (signed_block, signed_block_bytes) = spawn_blocking_in_current_span(move || {
-            let bytes = signed_block.to_bytes();
-            (signed_block, bytes)
-        })
-        .await
-        .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()));
-        self.block_store
-            .save_block(signed_block.header().block_num(), &signed_block_bytes)
-            .await
-            .map_err(ValidatorError::BlockBackupFailed)?;
-
-        let (header, ..) = signed_block.into_parts();
-        Ok((signature, header))
+        Ok((signature, signed_block))
     }
 
     /// Signs a block header using the validator's signer.
@@ -308,7 +310,7 @@ impl ValidatorService {
         name = "sign_block",
         err,
         fields(
-            block.number = header.block_num().as_u32(),
+            block.number = header.block_num(),
         ),
     )]
     async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {

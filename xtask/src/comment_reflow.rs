@@ -146,7 +146,7 @@ fn collect_rust_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
 fn should_skip_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(OsStr::to_str)
-        .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules"))
+        .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules" | "vendor"))
 }
 
 fn line_starts(source: &str) -> Vec<usize> {

@@ -8,20 +8,41 @@
 
 mod private_record_row;
 
+mod protocol_config;
+pub use protocol_config::{
+    insert as insert_protocol_config,
+    load as load_protocol_config,
+    load_before as load_protocol_config_commitment_before,
+};
+
 mod count_signed_blocks;
 pub use count_signed_blocks::count_signed_blocks;
 
 mod count_validated_transactions;
 pub use count_validated_transactions::count_validated_transactions;
 
+mod delete_block;
+pub use delete_block::delete_block;
+
 mod find_unvalidated_transactions;
 pub use find_unvalidated_transactions::find_unvalidated_transactions;
+
+mod insert_block;
+pub use insert_block::insert_block;
 
 mod insert_validated_private_transaction;
 pub use insert_validated_private_transaction::insert_validated_private_transaction;
 
-mod load_all_transactions;
-pub use load_all_transactions::load_all_transactions;
+mod link_block_transactions;
+pub use link_block_transactions::link_block_transactions;
+
+mod list_validated_transactions;
+pub use list_validated_transactions::{
+    ListTransactionsParams,
+    ListedTransaction,
+    ListedTransactionsPage,
+    list_validated_transactions,
+};
 
 mod load_block_header;
 pub use load_block_header::load_block_header;
@@ -41,5 +62,11 @@ pub use load_private_records_by_setup_context::load_private_records_by_setup_con
 mod transaction_exists;
 pub use transaction_exists::transaction_exists;
 
-mod upsert_block_header;
-pub use upsert_block_header::upsert_block_header;
+mod load_block;
+pub use load_block::load_block;
+
+mod load_block_backup;
+pub use load_block_backup::load_block_backup;
+
+mod prune_proving_inputs;
+pub use prune_proving_inputs::prune_proving_inputs;

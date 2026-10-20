@@ -1,15 +1,19 @@
 // Specification of the user facing gRPC API.
 syntax = "proto3";
-package remote_prover;
+package miden.remote_prover.v1;
 
-import "google/protobuf/empty.proto";
+import "batch.proto";
+import "primitives.proto";
+import "transaction.proto";
+import "transaction_inputs.proto";
+import "types/block_proving.proto";
 
 // PROVER SERVICE
 // ================================================================================================
 
-service Api {
+service ProverService {
     // Generates a proof for the requested payload.
-    rpc Prove(ProofRequest) returns (Proof) {}
+    rpc Prove(ProveRequest) returns (ProveResponse) {}
 }
 
 // Enumeration of supported proof types.
@@ -24,34 +28,30 @@ enum ProofType {
     BLOCK = 2;
 }
 
-// Request message for proof generation containing payload and proof type metadata.
-message ProofRequest {
-    // Type of proof being requested, determines payload interpretation
-    ProofType proof_type = 1;
-
-    // Serialized payload requiring proof generation. The encoding format is
-    // type-specific:
-    // - TRANSACTION: TransactionInputs encoded.
-    // - BATCH: ProposedBatch encoded.
-    // - BLOCK: BlockProofRequest encoded.
-    bytes payload = 2;
+// Request message for proof generation.
+message ProveRequest {
+    oneof request {
+        transaction.TransactionInputs transaction = 1;
+        transaction.ProposedBatch batch = 2;
+        block_proving.BlockProofRequest block = 3;
+    }
 }
 
 // Response message containing the generated proof.
-message Proof {
-    // Serialized proof bytes.
-    // - TRANSACTION: Returns an encoded ProvenTransaction.
-    // - BATCH: Returns an encoded ProvenBatch.
-    // - BLOCK: Returns an encoded BlockProof.
-    bytes payload = 1;
+message ProveResponse {
+    oneof proof {
+        transaction.ProvenTransaction transaction = 1;
+        transaction.ProvenBatch batch = 2;
+        primitives.ExecutionProof block = 3;
+    }
 }
 
 // PROXY STATUS SERVICE
 // ================================================================================================
 
-service ProxyStatusApi {
+service ProxyStatusService {
     // Returns the status of the proxy.
-    rpc Status(google.protobuf.Empty) returns (ProxyStatus) {}
+    rpc Status(ProxyStatusRequest) returns (ProxyStatusResponse) {}
 }
 
 // Status of an individual worker in the proxy.
@@ -78,8 +78,10 @@ enum WorkerHealthStatus {
     UNHEALTHY = 2;
 }
 
+message ProxyStatusRequest {}
+
 // Response message containing the status of the proxy.
-message ProxyStatus {
+message ProxyStatusResponse {
     // The version of the proxy.
     string version = 1;
     // The proof type supported by this proxy.
@@ -91,13 +93,15 @@ message ProxyStatus {
 // WORKER STATUS SERVICE
 // ================================================================================================
 
-service WorkerStatusApi {
+service WorkerStatusService {
     // Returns the status of the worker.
-    rpc Status(google.protobuf.Empty) returns (WorkerStatus) {}
+    rpc Status(WorkerStatusRequest) returns (WorkerStatusResponse) {}
 }
 
+message WorkerStatusRequest {}
+
 // Response message containing the status of the worker.
-message WorkerStatus {
+message WorkerStatusResponse {
     // The version of the worker.
     string version = 1;
     // The proof type supported by this worker.

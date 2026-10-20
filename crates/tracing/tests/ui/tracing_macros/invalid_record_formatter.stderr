@@ -1,0 +1,5 @@
+error: tracing format specifiers are not supported; implement `RecordAttribute` to define the type's canonical encoding
+ --> tests/ui/tracing_macros/invalid_record_formatter.rs:5:41
+  |
+5 |     miden_span_record!(transaction.id = %"0x1234");
+  |                                         ^

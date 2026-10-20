@@ -25,18 +25,16 @@ use miden_protocol::transaction::OutputNote;
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 
-use crate::db::models::conv::DatabaseTypeConversionError;
-
 /// Errors produced while preparing or rebuilding account-state forest updates.
 ///
 /// The underlying [`LargeSmtForestError`] is preserved so callers can distinguish fatal backend
 /// failures from invalid update preparation.
 #[derive(Debug, Error)]
 pub enum AccountStateForestUpdateError {
-    /// A full-state patch attempted to create a vault lineage that is already present.
+    /// The patch of a new account attempted to create an existing vault lineage.
     #[error("account {account_id} vault lineage already exists")]
     VaultLineageAlreadyExists { account_id: AccountId },
-    /// A full-state patch attempted to create a storage-map lineage that is already present.
+    /// The patch of a new account attempted to create an existing storage-map lineage.
     #[error("account {account_id} storage map lineage for slot {slot_name} already exists")]
     StorageLineageAlreadyExists {
         account_id: AccountId,
@@ -55,6 +53,8 @@ pub enum AccountStateForestUpdateError {
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("invalid persisted protobuf value")]
+    Persistence(#[from] miden_node_persistence::PersistenceError),
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
     // ---------------------------------------------------------------------------------------------
     #[error("account error")]
@@ -78,8 +78,6 @@ pub enum DatabaseError {
     #[error("storage map error")]
     StorageMapError(#[from] StorageMapError),
     #[error(transparent)]
-    Diesel(#[from] diesel::result::Error),
-    #[error(transparent)]
     QueryParamLimit(#[from] QueryLimitError),
     #[error(transparent)]
     RangeBeyondTip(#[from] RangeBeyondTip),
@@ -88,8 +86,16 @@ pub enum DatabaseError {
     // ---------------------------------------------------------------------------------------------
     #[error("account commitment mismatch (expected {expected}, but calculated is {calculated})")]
     AccountCommitmentsMismatch { expected: Word, calculated: Word },
+    #[error(
+        "protocol config commitment mismatch (expected {expected}, but calculated is {calculated})"
+    )]
+    ProtocolConfigCommitmentMismatch { expected: Word, calculated: Word },
+    #[error("protocol config {0} is missing")]
+    ProtocolConfigNotFound(Word),
     #[error("account {0} not found")]
     AccountNotFoundInDb(AccountId),
+    #[error("account {0} already exists")]
+    AccountAlreadyExistsInDb(AccountId),
     #[error("accounts {0:?} not found")]
     AccountsNotFoundInDb(Vec<AccountId>),
     #[error("account {0} is not on the chain")]
@@ -101,10 +107,10 @@ pub enum DatabaseError {
          use a stricter filter to reduce the number of transactions returned"
     )]
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
+    #[error("block {block_num} holds more rows than one page can return")]
+    BlockExceedsPageLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
-    #[error(transparent)]
-    SqlValueConversion(#[from] DatabaseTypeConversionError),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
     StorageRootNotFound {
         account_id: AccountId,
@@ -183,6 +189,10 @@ pub enum StateInitializationError {
     AccountToDeltaConversionFailed(String),
     #[error("genesis block missing. The database should be bootstrapped first.")]
     GenesisBlockMissing,
+    #[error(
+        "genesis protocol config {commitment} is missing. Rebootstrap the database from genesis."
+    )]
+    GenesisProtocolConfigMissing { commitment: Word },
 }
 
 // ENDPOINT ERRORS
@@ -270,21 +280,6 @@ pub enum GetBlockHeaderError {
 }
 
 #[derive(Error, Debug)]
-pub enum GetBlockInputsError {
-    #[error("failed to select note inclusion proofs")]
-    SelectNoteInclusionProofError(#[source] DatabaseError),
-    #[error("failed to select block headers")]
-    SelectBlockHeaderError(#[source] DatabaseError),
-    #[error(
-        "highest block number {highest_block_number} referenced by a batch is newer than the latest block {latest_block_number}"
-    )]
-    UnknownBatchBlockReference {
-        highest_block_number: BlockNumber,
-        latest_block_number: BlockNumber,
-    },
-}
-
-#[derive(Error, Debug)]
 pub enum StateSyncError {
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
@@ -296,20 +291,12 @@ pub enum StateSyncError {
     RangeBeyondTip(#[from] RangeBeyondTip),
 }
 
-impl From<diesel::result::Error> for StateSyncError {
-    fn from(value: diesel::result::Error) -> Self {
-        Self::DatabaseError(DatabaseError::from(value))
-    }
-}
-
 #[derive(Error, Debug)]
 pub enum NoteSyncError {
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
     #[error("database error")]
     UnderlyingDatabaseError(#[from] miden_node_db::DatabaseError),
-    #[error("block headers table is empty")]
-    EmptyBlockHeadersTable,
     #[error("error retrieving the merkle proof for the block")]
     MmrError(#[from] MmrError),
     #[error("invalid block range")]
@@ -320,26 +307,30 @@ pub enum NoteSyncError {
     DeserializationFailed(#[from] ConversionError),
 }
 
-impl From<diesel::result::Error> for NoteSyncError {
-    fn from(value: diesel::result::Error) -> Self {
-        Self::DatabaseError(DatabaseError::from(value))
-    }
+#[derive(Error, Debug)]
+pub enum GetNoteInclusionProofsError {
+    #[error("failed to select note inclusion proofs")]
+    SelectNoteInclusionProofError(#[source] DatabaseError),
+    #[error("reference block {reference_block} is newer than the latest block {latest_block_num}")]
+    ReferenceBlockAfterTip {
+        reference_block: BlockNumber,
+        latest_block_num: BlockNumber,
+    },
 }
 
 #[derive(Error, Debug)]
-pub enum GetBatchInputsError {
-    #[error("failed to select note inclusion proofs")]
-    SelectNoteInclusionProofError(#[source] DatabaseError),
+pub enum GetBlockInclusionProofsError {
     #[error("failed to select block headers")]
     SelectBlockHeaderError(#[source] DatabaseError),
-    #[error("set of blocks referenced by transactions is empty")]
-    TransactionBlockReferencesEmpty,
-    #[error(
-        "highest block number {highest_block_num} referenced by a transaction is newer than the latest block {latest_block_num}"
-    )]
-    UnknownTransactionBlockReference {
-        highest_block_num: BlockNumber,
+    #[error("reference block {reference_block} is newer than the latest block {latest_block_num}")]
+    ReferenceBlockAfterTip {
+        reference_block: BlockNumber,
         latest_block_num: BlockNumber,
+    },
+    #[error("block {block_num} is newer than the reference block {reference_block}")]
+    BlockAfterReferenceBlock {
+        block_num: BlockNumber,
+        reference_block: BlockNumber,
     },
 }
 
@@ -394,14 +385,8 @@ mod compile_tests {
         ensure_is_error::<DeserializationError>(PhantomData);
         ensure_is_error::<NoteError>(PhantomData);
         ensure_is_error::<hex::FromHexError>(PhantomData);
-        ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
-        ensure_is_error::<diesel::result::Error>(PhantomData);
-        ensure_is_error::<deadpool_diesel::Error>(PhantomData);
-        ensure_is_error::<deadpool::managed::RecycleError<deadpool_diesel::Error>>(PhantomData);
 
         ensure_is_error::<DatabaseError>(PhantomData);
-        ensure_is_error::<diesel::result::Error>(PhantomData);
         ensure_is_error::<StateInitializationError>(PhantomData);
-        ensure_is_error::<deadpool::managed::PoolError<deadpool_diesel::Error>>(PhantomData);
     }
 }

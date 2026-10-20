@@ -1,7 +1,0 @@
-#!/bin/bash
-#
-###############
-# Remove miden-prover installs
-##############
-sudo deluser miden-prover
-sudo systemctl daemon-reload

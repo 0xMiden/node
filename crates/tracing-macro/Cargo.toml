@@ -22,4 +22,4 @@ test       = false
 [dependencies]
 proc-macro2 = { workspace = true }
 quote       = { workspace = true }
-syn         = { features = ["full", "visit"], workspace = true }
+syn         = { features = ["full", "visit", "visit-mut"], workspace = true }

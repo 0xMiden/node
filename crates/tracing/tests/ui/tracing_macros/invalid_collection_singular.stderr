@@ -1,0 +1,21 @@
+error[E0080]: evaluation panicked: tracing field `account.id` is not allowed for this attribute type
+  --> tests/ui/tracing_macros/invalid_collection_singular.rs:23:5
+   |
+23 |     miden_span_record!(account.id = vec![AccountId]);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `records_collection_with_singular_field::__miden_assert_field_name::<std::vec::Vec<AccountId>>::{constant#0}` failed here
+
+note: erroneous constant encountered
+  --> tests/ui/tracing_macros/invalid_collection_singular.rs:23:5
+   |
+23 |     miden_span_record!(account.id = vec![AccountId]);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn __miden_assert_field_name::<Vec<AccountId>>`
+  --> tests/ui/tracing_macros/invalid_collection_singular.rs:23:5
+   |
+23 |     miden_span_record!(account.id = vec![AccountId]);
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this note originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

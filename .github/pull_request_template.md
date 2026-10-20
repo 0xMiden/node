@@ -1,16 +1,12 @@
-## Summary
-
 <!--
-Explain the change for reviewers.
+Briefly describe what this PR changes, then explain why the change is needed.
+Help reviewers understand the intent rather than walking through the diff.
 
-Why:
-- What problem does this solve?
-- What user/operator/developer behavior changes?
-- Which issues does this close? Use "Closes #123" where applicable.
+Call out anything that needs extra attention, such as a design tradeoff,
+compatibility concern, or important constraint. Link related issues and use
+"Closes #123" when this PR resolves one.
 
-How:
-- What is the main implementation approach?
-- Mention important tradeoffs, migrations, compatibility notes, or follow-up work.
+You do not need a separate validation or verification section.
 -->
 
 ## Changelog
@@ -24,8 +20,11 @@ changelog = "none"
 reason    = "Internal change only."
 ```
 
-Allowed scopes: rpc, protocol, docs, node, network-monitor, ntx-builder, prover, validator, internal, general
-Allowed impacts: breaking, migration, added, changed, fixed, removed, deprecated
+Do not add an entry for a protocol, Rust MSRV, or database migration version update. Release notes
+derive these updates from repository files.
+
+Allowed scopes: rpc, docs, node, note-transport, network-monitor, funding-service, ntx-builder, prover, validator, internal, general
+Allowed impacts: breaking, added, changed, fixed, removed, deprecated
 -->
 
 ```toml

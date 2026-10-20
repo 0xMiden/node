@@ -1,9 +1,9 @@
 //! Benchmark: building a network transaction against a very large account.
 //!
-//! The `ntx-builder` keeps the native network `Account` fully resident in memory for the lifetime of
-//! an actor. For an account with a large storage map (e.g. a million entries) that could become
-//! untenable. This benchmark measures the costs so we can decide whether lazy/partial native-account
-//! loading is worth implementing.
+//! Every `ntx-builder` transaction attempt loads the native network `Account` from the database. For
+//! an account with a large storage map (e.g. a million entries) that could become untenable. This
+//! benchmark measures the costs so we can decide whether lazy/partial native-account loading is
+//! worth implementing.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::collections::BTreeSet;
@@ -106,7 +106,7 @@ fn network_auth_component() -> AuthNetworkAccount {
     // Nothing here executes a transaction, so the mock manager's empty fee schedule is enough: it
     // only has to make the component constructible and install the three fee-policy slots.
     AuthNetworkAccount::new(
-        BTreeSet::from_iter([root]),
+        [root].into_iter().collect::<BTreeSet<_>>(),
         FeePolicyManager::mock(FungibleAsset::mock_issuer()),
     )
     .expect("non-empty allowlist should construct")

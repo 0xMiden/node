@@ -6,20 +6,28 @@ use std::time::Duration;
 use anyhow::Result;
 use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::RemoteProverClient;
+use miden_node_tracing::{debug, error, warn};
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use miden_tx::LocalTransactionProver;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{Mutex, watch};
-use tracing::{debug, warn};
 
 use crate::LOG_TARGET;
+use crate::agglayer::AgglayerService;
 use crate::config::MonitorConfig;
 use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
-use crate::deploy::{TransactionSubmissionClient, create_and_deploy_accounts};
+use crate::deploy::{
+    TransactionSubmissionClient,
+    UnsupportedChainError,
+    create_and_deploy_accounts,
+};
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
+use crate::funding::funding_client_from_config;
+use crate::funding_service::FundingService;
 use crate::note_transport::NoteTransportService;
+use crate::registration::RegistrationPool;
 use crate::remote_prover::ProverStatusService;
 use crate::service::{Service, build_tls_client};
 use crate::status::{
@@ -50,6 +58,7 @@ impl Tasks {
             config.status_check_interval,
             config.request_timeout,
             config.stale_chain_tip_threshold,
+            config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
     }
@@ -76,15 +85,50 @@ impl Tasks {
             note_transport_url,
             config.status_check_interval,
             config.request_timeout,
+            config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
     }
 
-    /// Spawn the validator status checker task.
-    pub fn spawn_validator_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
-        let validator_url = config.validator_url.clone().expect("Validator URL exists");
-        let svc = ValidatorService::new(
-            validator_url,
+    /// Spawns an independent status checker for each configured validator.
+    pub fn spawn_validator_checkers(
+        &mut self,
+        config: &MonitorConfig,
+    ) -> Vec<Receiver<ServiceStatus>> {
+        let validators = config
+            .validators
+            .iter()
+            .map(|validator| (format!("Validator ({})", validator.name), &validator.url))
+            .chain(config.validator_url.iter().map(|url| ("Validator".to_string(), url)));
+        validators
+            .map(|(name, url)| {
+                self.spawn_service(ValidatorService::new(
+                    name,
+                    url.clone(),
+                    config.status_check_interval,
+                    config.request_timeout,
+                    config.grpc.max_decoding_message_size.get(),
+                ))
+            })
+            .collect()
+    }
+
+    /// Spawns the funding service status checker independently of transaction checks.
+    pub fn spawn_funding_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let svc = FundingService::new(
+            config.funding_service_url.clone().expect("Funding service URL exists"),
+            config.status_check_interval,
+            config.request_timeout,
+        );
+        self.spawn_service(svc)
+    }
+
+    /// Spawn the Agglayer bridge status checker task.
+    pub fn spawn_agglayer_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
+        let agglayer_monitor_url =
+            config.agglayer_monitor_url.clone().expect("Agglayer monitor URL exists");
+        let svc = AgglayerService::new(
+            agglayer_monitor_url,
             config.status_check_interval,
             config.request_timeout,
         );
@@ -98,20 +142,27 @@ impl Tasks {
     /// (and keeps alive) a probe task that acquires its test payload from the RPC and runs
     /// proof-test probes on the test cadence.
     pub fn spawn_prover_tasks(&mut self, config: &MonitorConfig) -> Vec<Receiver<ServiceStatus>> {
+        // The probe payload's creation transaction pays its fee from the funding service.
+        let funding = funding_client_from_config(config);
         let mut prover_rxs = Vec::new();
         for (i, prover_url) in config.remote_prover_urls.iter().enumerate() {
             let name = format!("Remote Prover ({})", i + 1);
-            let test_client =
-                build_tls_client::<RemoteProverClient>(prover_url.clone(), config.request_timeout);
+            let test_client = build_tls_client::<RemoteProverClient>(
+                prover_url.clone(),
+                config.request_timeout,
+                config.grpc.max_decoding_message_size.get(),
+            );
 
             let status_svc = ProverStatusService::new(
                 name,
                 prover_url.clone(),
                 config.rpc_url.clone(),
+                funding.clone(),
                 config.status_check_interval,
                 config.request_timeout,
                 config.remote_prover_test_interval,
                 test_client,
+                config.grpc.max_decoding_message_size.get(),
             );
             prover_rxs.push(self.spawn_service(status_svc));
         }
@@ -121,8 +172,12 @@ impl Tasks {
     /// Spawn the faucet testing task.
     pub fn spawn_faucet(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
         let faucet_url = config.faucet_url.clone().expect("faucet URL exists");
-        let svc =
-            FaucetService::new(faucet_url, config.faucet_test_interval, config.request_timeout);
+        let svc = FaucetService::new(
+            faucet_url,
+            config.faucet_test_interval,
+            config.request_timeout,
+            config.faucet_mint_amount,
+        );
         self.spawn_service(svc)
     }
 
@@ -147,7 +202,7 @@ impl Tasks {
 
         let config = config.clone();
         self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
-        debug!(target: LOG_TARGET, service = "ntx", "Spawned service");
+        debug!(target: LOG_TARGET, "Spawned service", service.name = "ntx");
 
         (increment_rx, tracking_rx)
     }
@@ -161,7 +216,7 @@ impl Tasks {
         let service_name = svc.name().to_string();
         self.handles
             .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
-        debug!(target: LOG_TARGET, service = %service_name, "Spawned service");
+        debug!(target: LOG_TARGET, "Spawned service", service.name = service_name);
         rx
     }
 
@@ -195,9 +250,10 @@ fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
 ///
 /// Deployment is retried forever with exponential backoff, publishing an unhealthy status on both
 /// channels after each failed attempt, so a network that is down at startup degrades the cards
-/// instead of aborting the monitor. Once bootstrapped, both services run on separate tasks; if
-/// either exits or panics, this supervised task ends and [`Tasks::handle_failure`] treats it as
-/// fatal, the same semantics they had when spawned directly.
+/// instead of aborting the monitor. The exception is an [`UnsupportedChainError`], which cannot
+/// resolve by retrying and ends this supervised task; [`Tasks::handle_failure`] treats that as
+/// fatal. An unreadable or invalid registration file leaves both channels unhealthy without
+/// ending this task. Once bootstrapped, both services run on separate tasks with the same semantics.
 async fn run_ntx(
     config: MonitorConfig,
     increment_tx: watch::Sender<ServiceStatus>,
@@ -210,57 +266,104 @@ async fn run_ntx(
         .with_jitter()
         .without_max_times();
 
-    let (increment_svc, tracking_svc) = (|| async { bootstrap_ntx(&config).await })
-        .retry(backoff)
-        .notify(|err: &anyhow::Error, sleep: Duration| {
-            warn!(
+    let publish_unhealthy = |err: &anyhow::Error| {
+        let msg = format!("deploying monitor accounts failed: {err:#}");
+        increment_tx.send_replace(ServiceStatus::unhealthy(
+            IncrementService::NAME,
+            &msg,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        tracking_tx.send_replace(ServiceStatus::unhealthy(
+            CounterTrackingService::NAME,
+            &msg,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
+    };
+
+    let registration = match config
+        .registration_codes_file
+        .as_deref()
+        .map(RegistrationPool::load)
+        .transpose()
+    {
+        Ok(pool) => pool,
+        Err(err) => {
+            publish_unhealthy(&err);
+            std::future::pending::<()>().await;
+            return;
+        },
+    };
+
+    let registration = Mutex::new(registration);
+    let result = (|| async {
+        let mut pool = registration.lock().await;
+        Box::pin(bootstrap_ntx(&config, &mut pool)).await
+    })
+    .retry(backoff)
+    .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
+    .notify(|err: &anyhow::Error, sleep: Duration| {
+        warn!(
+            err,
+            target: LOG_TARGET,
+            "NTX bootstrap failed; retrying after backoff",
+            retry.delay_ms = sleep
+        );
+        publish_unhealthy(err);
+    })
+    .await;
+
+    let (mut increment_svc, tracking_svc) = match result {
+        Ok(services) => services,
+        Err(err) => {
+            error!(
+                &err,
                 target: LOG_TARGET,
-                err = ?err,
-                sleep_ms = sleep.as_millis() as u64,
-                "NTX bootstrap failed; retrying after backoff",
+                "NTX bootstrap hit a permanent configuration error; aborting the monitor"
             );
-            let msg = format!("deploying monitor accounts failed: {err:#}");
-            increment_tx.send_replace(ServiceStatus::unhealthy(
-                IncrementService::NAME,
-                &msg,
-                ServiceDetails::NtxIncrement(IncrementDetails::default()),
-            ));
-            tracking_tx.send_replace(ServiceStatus::unhealthy(
-                CounterTrackingService::NAME,
-                &msg,
-                ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
-            ));
-        })
-        .await
-        .expect("unbounded retry only resolves on success");
+            publish_unhealthy(&err);
+            return;
+        },
+    };
 
     // Run the services on their own tasks (a shared task would serialize the increment service's
     // local proving with the tracking polls). The first one to finish ends this supervised task;
     // the JoinSet aborts the other on drop.
+    increment_svc.registration = registration.into_inner();
     let mut services = tokio::task::JoinSet::new();
     services.spawn(increment_svc.run(increment_tx));
     services.spawn(tracking_svc.run(tracking_tx));
     services.join_next().await;
 }
 
-/// One bootstrap attempt: create and deploy fresh accounts, then build both services.
+/// One bootstrap attempt: prepare and deploy accounts, then build both services.
 ///
-/// Creates a fresh wallet/counter pair in memory, deploys the counter to the network, and hands
+/// Prepares an in-memory wallet/counter pair, deploys the counter to the network, and hands
 /// the same counter account to both services via a [`watch::channel`]. The increment service
 /// publishes new counters on the channel when it regenerates accounts after persistent failures;
 /// the tracking service observes the channel to switch over.
 async fn bootstrap_ntx(
     config: &MonitorConfig,
+    registration: &mut Option<RegistrationPool>,
 ) -> Result<(IncrementService, CounterTrackingService)> {
     let prover = LocalTransactionProver::default();
-    let trusted_validator_signing_key = config.trusted_validator_signing_key()?;
+    let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
     let submission_client = TransactionSubmissionClient::connect(
         &config.rpc_url,
         config.request_timeout,
-        trusted_validator_signing_key,
+        trusted_validator_signing_keys,
+        config.grpc.max_decoding_message_size.get(),
     )
     .await?;
-    let accounts = create_and_deploy_accounts(&submission_client, &prover).await?;
+    // The funding service pays fees; whether it is needed is decided during deployment.
+    let funding = funding_client_from_config(config);
+    let accounts = Box::pin(create_and_deploy_accounts(
+        &submission_client,
+        &prover,
+        funding.as_ref(),
+        config.wallet_funding_amount,
+        registration.as_mut(),
+    ))
+    .await?;
 
     let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
         wallet: accounts.wallet.clone(),
@@ -276,9 +379,90 @@ async fn bootstrap_ntx(
         submission_client,
         accounts_tx,
         latency_state.clone(),
+        funding,
     )?;
     let tracking_svc =
         CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;
 
     Ok((increment_svc, tracking_svc))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+    use crate::status::Status;
+
+    /// A missing code file degrades transaction checks while their supervised task remains alive.
+    #[tokio::test]
+    async fn unreadable_registration_pool_keeps_transaction_checks_unhealthy() {
+        let config = MonitorConfig::parse_from([
+            "monitor",
+            "--registration-codes-file",
+            "/nonexistent/monitor-registration-codes.json",
+        ]);
+        let (increment_tx, increment_rx) = watch::channel(ntx_seed_status(
+            IncrementService::NAME,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        let (tracking_tx, tracking_rx) = watch::channel(ntx_seed_status(
+            CounterTrackingService::NAME,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
+        let task = tokio::spawn(run_ntx(config, increment_tx, tracking_tx));
+        for mut receiver in [increment_rx, tracking_rx] {
+            tokio::time::timeout(Duration::from_secs(5), receiver.changed())
+                .await
+                .unwrap()
+                .unwrap();
+            let status = receiver.borrow();
+            assert_eq!(status.status, Status::Unhealthy);
+            assert!(status.error.as_ref().unwrap().contains("registration codes file"));
+        }
+        assert!(!task.is_finished());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn named_validators_are_polled_independently() {
+        let slow = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let validators = format!(
+            "Miden=http://{},Gateway=http://{}",
+            slow.local_addr().unwrap(),
+            unavailable.local_addr().unwrap(),
+        );
+        drop(unavailable);
+        let config = MonitorConfig::parse_from([
+            "monitor",
+            "--validators",
+            &validators,
+            "--request-timeout",
+            "30s",
+        ]);
+        let mut tasks = Tasks::new();
+        let mut receivers = tasks.spawn_validator_checkers(&config);
+        assert_eq!(receivers.len(), 2);
+        assert_eq!(receivers[0].borrow().name, "Validator (Miden)");
+        assert_eq!(receivers[1].borrow().name, "Validator (Gateway)");
+
+        tokio::time::timeout(Duration::from_secs(5), receivers[1].changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(receivers[0].borrow().status, Status::Unknown);
+        let failed = receivers[1].borrow();
+        assert_eq!(failed.name, "Validator (Gateway)");
+        assert_eq!(failed.status, Status::Unhealthy);
+        assert!(failed.error.is_some());
+        assert!(matches!(failed.details, ServiceDetails::ValidatorStatus(_)));
+    }
+
+    #[tokio::test]
+    async fn validators_are_optional() {
+        let config = MonitorConfig::parse_from(["monitor"]);
+        assert!(Tasks::new().spawn_validator_checkers(&config).is_empty());
+    }
 }

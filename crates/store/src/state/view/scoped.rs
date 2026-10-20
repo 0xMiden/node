@@ -28,17 +28,6 @@ impl ScopedBlockNum {
     pub(crate) fn new_unchecked(block_num: BlockNumber) -> Self {
         Self(block_num)
     }
-
-    /// Derives a scoped range ending at this validated block number.
-    ///
-    /// Sound for any `start` because only a range's upper bound carries the proof obligation.
-    /// A `start` beyond this block number would however produce an empty range, which the range
-    /// queries reject as an invalid block range. Used for paginating over a validated bound in
-    /// sub-ranges.
-    pub(crate) fn range_from(self, start: BlockNumber) -> ScopedBlockRange {
-        debug_assert!(start <= self.0, "derived range start {start} exceeds its end {}", self.0);
-        ScopedBlockRange(start..=self.0)
-    }
 }
 
 /// The validated block number is read by dereferencing (`*scoped`); [`DerefMut`] is deliberately
@@ -78,10 +67,5 @@ impl ScopedBlockRange {
     /// Sound because the range's upper bound is exactly what its proof covers.
     pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
-    }
-
-    /// Returns the validated range.
-    pub(crate) fn into_inner(self) -> RangeInclusive<BlockNumber> {
-        self.0
     }
 }

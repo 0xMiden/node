@@ -25,7 +25,7 @@ jobs:
           fi
 
       - name: Configure WarpBuild Docker builders
-        uses: WarpBuilds/docker-configure@ecbf49a7b0e21c97813fa9e00a689e740206dd57 # v1
+        uses: WarpBuilds/docker-configure@v1.1.7
         with:
           profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
 

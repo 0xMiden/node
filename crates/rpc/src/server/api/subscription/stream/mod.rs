@@ -6,7 +6,7 @@ use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use miden_node_store::DatabaseError;
-use miden_node_utils::ErrorReport;
+use miden_node_tracing::error;
 use miden_protocol::block::BlockNumber;
 use tokio::sync::mpsc::error::SendTimeoutError;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
@@ -256,16 +256,16 @@ where
         let data = (self.get_data)(block)
             .await
             .inspect_err(|err| {
-                tracing::error!(
-                    block.number = %block,
-                    message = %err.as_report(),
-                    "failed to load data for stream"
-                );
+                error!(err, "failed to load data for stream", block.number = block);
             })
             .map_err(|_| StreamError::Internal)?;
 
         data.ok_or_else(|| {
-            tracing::error!(block.number = %block, "stream data not found");
+            error!(
+                anyhow::anyhow!("stream data not found for block {block}"),
+                "stream data not found",
+                block.number = block
+            );
             StreamError::Internal
         })
     }

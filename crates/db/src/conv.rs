@@ -131,8 +131,8 @@ impl SqlTypeConvert for StorageSlotName {
     }
 }
 
-// Raw type conversions - eventually introduce wrapper types
-// ===========================================================
+// Raw type conversions
+// ================================================================================================
 
 #[inline(always)]
 pub(crate) fn raw_sql_to_nullifier_prefix(raw: i32) -> u16 {

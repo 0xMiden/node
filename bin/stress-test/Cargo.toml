@@ -17,23 +17,24 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
-clap             = { features = ["derive"], workspace = true }
-fs-err           = { workspace = true }
-futures          = { workspace = true }
-miden-node-proto = { workspace = true }
-miden-node-store = { workspace = true }
-miden-node-utils = { workspace = true }
-miden-protocol   = { workspace = true }
-miden-standards  = { workspace = true }
-rand             = { workspace = true }
-rayon            = { workspace = true }
-tokio            = { workspace = true }
+clap               = { features = ["derive"], workspace = true }
+fs-err             = { workspace = true }
+futures            = { workspace = true }
+miden-node-proto   = { workspace = true }
+miden-node-store   = { workspace = true }
+miden-node-tracing = { workspace = true }
+miden-node-utils   = { workspace = true }
+miden-protocol     = { workspace = true }
+miden-standards    = { workspace = true }
+rand               = { workspace = true }
+rayon              = { workspace = true }
+tokio              = { workspace = true }
 
 [features]
 # Renders spans as a timing tree on stdout, showing the per-phase breakdown of e.g. the
 # `load-state` benchmark. Opt-in because feature unification would otherwise switch the log
 # format of every binary in a workspace-wide build.
-tracing-forest = ["miden-node-utils/tracing-forest"]
+tracing-forest = ["miden-node-tracing/tracing-forest"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

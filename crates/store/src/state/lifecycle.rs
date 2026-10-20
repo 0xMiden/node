@@ -3,15 +3,15 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
-use miden_node_utils::ErrorReport;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{ErrorReport, miden_instrument};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::miden_instrument;
-use miden_protocol::block::BlockNumber;
 use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 use crate::account_state_forest::AccountStateForestBackend;
 use crate::accounts::AccountTreeWithHistory;
@@ -31,16 +31,21 @@ use crate::state::loader::{
     verify_tree_consistency,
 };
 use crate::state::writer::{WriteRequest, WriteWorker, WriterTask};
-use crate::state::{
-    BlockCache,
-    BlockWriter,
-    ProofCache,
-    ProofWriter,
-    SnapshotGuard,
-    State,
-    StateSnapshot,
-};
+use crate::state::{BlockCache, BlockWriter, ProofCache, ProofWriter, State, StateSnapshot};
 use crate::{COMPONENT, DataDirectory, DatabaseOptions};
+
+/// Awaits a spawned load task, forwarding its result.
+///
+/// The load tasks are never aborted, so a join error is a panic from the task; it is resumed on
+/// the caller so panics keep propagating as panics.
+async fn join_load_task<T>(
+    handle: JoinHandle<Result<T, StateInitializationError>>,
+) -> Result<T, StateInitializationError> {
+    match handle.await {
+        Ok(result) => result,
+        Err(err) => std::panic::resume_unwind(err.into_panic()),
+    }
+}
 
 /// Number of recent committed blocks held in the in-memory cache for replica subscriptions.
 const BLOCK_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(512).unwrap();
@@ -138,15 +143,37 @@ impl State {
         );
 
         let database_filepath = data_directory.database_path();
-        let mut db = Db::load_with_pool_size(
-            database_filepath.clone(),
-            database_options.connection_pool_size,
-        )
-        .await
-        .map_err(StateInitializationError::DatabaseLoadError)?;
+        let db = Arc::new(
+            Db::load_with_pool_size(
+                database_filepath.clone(),
+                database_options.connection_pool_size,
+            )
+            .await
+            .map_err(StateInitializationError::DatabaseLoadError)?,
+        );
 
-        let blockchain = load_mmr(&mut db).await?;
-        let latest_block_num = blockchain.chain_tip().unwrap_or(BlockNumber::GENESIS);
+        let genesis_header = db
+            .select_genesis_block_header()
+            .await?
+            .ok_or(StateInitializationError::GenesisBlockMissing)?;
+        let genesis_protocol_config_commitment = genesis_header.protocol_config_commitment();
+        if db
+            .select_protocol_config_by_commitment(genesis_protocol_config_commitment)
+            .await?
+            .is_none()
+        {
+            return Err(StateInitializationError::GenesisProtocolConfigMissing {
+                commitment: genesis_protocol_config_commitment,
+            });
+        }
+
+        // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
+        // consistency check also pins the chain MMR to this header.
+        let latest_block_num = db
+            .select_block_header_by_block_num(None)
+            .await?
+            .ok_or(StateInitializationError::GenesisBlockMissing)?
+            .block_num();
 
         let apply_block_thread_priority = storage_options.apply_block_thread_priority;
 
@@ -159,30 +186,88 @@ impl State {
         #[cfg(not(feature = "rocksdb"))]
         let (account_storage_config, nullifier_storage_config, forest_storage_config) =
             ((), (), ());
-        let account_storage =
-            TreeStorage::create(data_path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)?;
-        let account_tree = account_storage.load_account_tree(&mut db).await?;
 
-        let nullifier_storage =
-            TreeStorage::create(data_path, &nullifier_storage_config, NULLIFIER_TREE_STORAGE_DIR)?;
-        let nullifier_tree = nullifier_storage.load_nullifier_tree(&mut db).await?;
+        // The four structures live in independent storages and the database pool supports
+        // concurrent readers, so open and load them concurrently. Each branch is a spawned task
+        // because loading has long synchronous sections (RocksDB opens, MMR hashing, SMT top
+        // reconstruction) that would serialize if polled from a single task. Spawning is eager, so
+        // all four run from this point; the join below only collects their results.
+        let mmr_task = tokio::spawn(
+            {
+                let db = Arc::clone(&db);
+                async move { load_mmr(&db).await }
+            }
+            .in_current_span(),
+        );
+        let account_tree_task = tokio::spawn(
+            {
+                let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
+                async move {
+                    join_load_task(spawn_blocking_in_current_span(move || {
+                        TreeStorage::create(
+                            &path,
+                            &account_storage_config,
+                            ACCOUNT_TREE_STORAGE_DIR,
+                        )
+                    }))
+                    .await?
+                    .load_account_tree(&db)
+                    .await
+                }
+            }
+            .in_current_span(),
+        );
+        let nullifier_tree_task = tokio::spawn(
+            {
+                let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
+                async move {
+                    join_load_task(spawn_blocking_in_current_span(move || {
+                        TreeStorage::create(
+                            &path,
+                            &nullifier_storage_config,
+                            NULLIFIER_TREE_STORAGE_DIR,
+                        )
+                    }))
+                    .await?
+                    .load_nullifier_tree(&db)
+                    .await
+                }
+            }
+            .in_current_span(),
+        );
+        let forest_task = tokio::spawn(
+            {
+                let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
+                async move {
+                    let forest = join_load_task(spawn_blocking_in_current_span(move || {
+                        AccountStateForestBackend::create(
+                            &path,
+                            &forest_storage_config,
+                            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+                        )
+                    }))
+                    .await?
+                    .load_account_state_forest(&db, latest_block_num)
+                    .await?;
+                    verify_account_state_forest_consistency(&forest, &db).await?;
+                    Ok(forest)
+                }
+            }
+            .in_current_span(),
+        );
+        let (blockchain, account_tree, nullifier_tree, forest) = tokio::try_join!(
+            join_load_task(mmr_task),
+            join_load_task(account_tree_task),
+            join_load_task(nullifier_tree_task),
+            join_load_task(forest_task),
+        )?;
 
         // Verify that tree roots match the expected roots from the database. This catches any
         // divergence between persistent storage and the database caused by corruption or incomplete
         // shutdown.
-        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &mut db).await?;
+        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &db).await?;
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
-
-        let forest_backend = AccountStateForestBackend::create(
-            data_path,
-            &forest_storage_config,
-            ACCOUNT_STATE_FOREST_STORAGE_DIR,
-        )?;
-        let forest = forest_backend.load_account_state_forest(&mut db, latest_block_num).await?;
-        verify_account_state_forest_consistency(&forest, &mut db).await?;
-
-        let db = Arc::new(db);
 
         // Initialize the proven tip from the block store.
         let proven_tip_init = block_store
@@ -197,9 +282,6 @@ impl State {
         let block_cache = BlockCache::new(BLOCK_CACHE_CAPACITY);
         let proof_cache = ProofCache::new(PROOF_CACHE_CAPACITY);
 
-        // Shared counter of live snapshot generations, for observability.
-        let snapshots_live = Arc::new(AtomicUsize::new(0));
-
         // Create the initial snapshot from reader views of the just-loaded trees.
         let initial_snapshot = Arc::new(StateSnapshot::new(
             nullifier_tree
@@ -210,7 +292,6 @@ impl State {
             forest
                 .reader()
                 .map_err(|e| StateInitializationError::AccountStateForestIoError(e.as_report()))?,
-            SnapshotGuard::new(Arc::clone(&snapshots_live), latest_block_num),
         ));
         let latest_snapshot = Arc::new(ArcSwap::from(initial_snapshot));
 
@@ -230,7 +311,6 @@ impl State {
             account_tree,
             blockchain,
             forest,
-            snapshots_live,
             apply_block_thread_priority,
         );
         let state = Self {
@@ -265,5 +345,102 @@ impl State {
                 .expect("state should load")
                 .start(CancellationToken::new());
         (state, block_writer, proof_writer)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use miden_node_db::sqlite::DbWriter;
+    use miden_node_utils::clap::StorageOptions;
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::ValidatorConfig;
+    use miden_protocol::testing::random_secret_key::random_secret_key;
+
+    use super::State;
+    use crate::DataDirectory;
+    use crate::errors::{DatabaseError, StateInitializationError};
+    use crate::genesis::GenesisState;
+
+    async fn bootstrap_store(path: &std::path::Path) -> miden_protocol::Word {
+        let signer = random_secret_key();
+        let genesis = GenesisState::new(
+            Vec::new(),
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let commitment = genesis.protocol_config().to_commitment();
+        State::bootstrap(genesis, path).await.unwrap();
+        commitment
+    }
+
+    fn database_writer(path: &std::path::Path) -> DbWriter {
+        let database_path = DataDirectory::load(path.to_path_buf()).unwrap().database_path();
+        let (writer, _reader) = miden_node_db::sqlite::open(&database_path).unwrap();
+        writer
+    }
+
+    #[tokio::test]
+    async fn load_rejects_missing_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path()).await;
+        database_writer(temp_dir.path())
+            .write::<_, DatabaseError, _>("delete genesis protocol config", move |tx| {
+                tx.execute("DELETE FROM protocol_configs WHERE commitment = ?1", &[&commitment])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let error = State::load(temp_dir.path(), StorageOptions::default())
+            .await
+            .err()
+            .expect("state load should fail");
+        assert!(matches!(
+            error,
+            StateInitializationError::GenesisProtocolConfigMissing { commitment: actual }
+                if actual == commitment
+        ));
+    }
+
+    #[tokio::test]
+    async fn load_rejects_corrupt_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path()).await;
+        let mut bytes = miden_node_persistence::encode(&test_protocol_config());
+        bytes.push(0xff);
+        database_writer(temp_dir.path())
+            .write::<_, DatabaseError, _>("corrupt genesis protocol config", move |tx| {
+                tx.execute(
+                    "UPDATE protocol_configs SET protocol_config = ?1 WHERE commitment = ?2",
+                    &[&bytes, &commitment],
+                )?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
+        let error = State::load(temp_dir.path(), StorageOptions::default())
+            .await
+            .err()
+            .expect("state load should fail");
+        assert!(matches!(
+            error,
+            StateInitializationError::DatabaseError(DatabaseError::Persistence(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn state_view_returns_genesis_protocol_config() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let commitment = bootstrap_store(temp_dir.path()).await;
+
+        let loaded = State::load(temp_dir.path(), StorageOptions::default()).await.unwrap();
+        let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();
+
+        assert_eq!(protocol_config, Some(test_protocol_config()));
     }
 }

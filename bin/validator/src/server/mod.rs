@@ -1,21 +1,20 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use miden_node_proto::server::validator_api;
+use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto_build::validator_api_descriptor;
-use miden_node_store::BlockStore;
+use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::info;
+use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_utils::clap::GrpcOptions;
-use miden_node_utils::panic::catch_panic_layer_fn;
+use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::tracing::grpc::grpc_trace_fn;
 use tokio::net::TcpListener;
-use tokio_stream::wrappers::TcpListenerStream;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::db::{ValidatorDbReader, ValidatorDbWriter};
 use crate::{
-    DataDirectory,
     GoldenOperatorKey,
     LOG_TARGET,
     PrivateRecordSealer,
@@ -52,9 +51,6 @@ pub struct ValidatorServer {
     /// The public Golden key used to seal private records.
     pub private_record_sealer: PrivateRecordSealer,
 
-    /// The data directory for the validator component's database files.
-    pub data_directory: DataDirectory,
-
     /// Handle to the shared validator database. Carrying the write handle makes the public API the
     /// database's single writer; reads reach the shared read handle through its `Deref`.
     pub db: ValidatorDbWriter,
@@ -86,13 +82,11 @@ impl ValidatorAdminServer {
     ) -> anyhow::Result<()> {
         let endpoint =
             listener.local_addr().context("failed to read validator admin listen address")?;
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
-            {
-                service.name = "miden-validator-admin",
-                validator.admin_listen = %endpoint,
-            },
             "Validator admin server ready",
+            service.name = "miden-validator-admin",
+            validator.admin_listen = endpoint.to_string()
         );
 
         axum::serve(listener, admin_service::router(self.operator_key, self.reader))
@@ -108,20 +102,24 @@ impl ValidatorServer {
     /// Executes in place (i.e. not spawned) and will run indefinitely until a fatal error is
     /// encountered.
     pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(self.address)
+            .await
+            .context("failed to bind to block producer address")?;
+        self.serve_on(listener, shutdown).await
+    }
+
+    /// Serves the validator RPC API on an already-bound listener.
+    pub async fn serve_on(
+        self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         // The database pool is opened once by the caller and shared with the admin server, so this
         // takes the handle rather than opening its own connection.
         let db = self.db;
 
-        // Initialize block store.
-        let block_store = BlockStore::load(self.data_directory.block_store_dir())
-            .context("failed to load block store")?;
-
         // Load initial metrics from the database for the in-memory counters.
         let metrics = db.load_initial_metrics().await.context("failed to load initial metrics")?;
-
-        let listener = TcpListener::bind(self.address)
-            .await
-            .context("failed to bind to block producer address")?;
 
         let reflection_service = tonic_reflection::server::Builder::configure()
             .register_file_descriptor_set(validator_api_descriptor())
@@ -133,34 +131,34 @@ impl ValidatorServer {
             db,
             self.decrypter,
             self.private_record_sealer,
-            block_store,
             metrics,
         )
         .await
         .context("failed to initialize validator server")?;
         let endpoint = listener.local_addr().context("failed to read validator listen address")?;
-        tracing::info!(
+        info!(
             target: LOG_TARGET,
-            {
-                service.name = "miden-validator",
-                service.version = env!("CARGO_PKG_VERSION"),
-                validator.listen = %endpoint,
-                block.number = metrics.chain_tip,
-            },
             "Validator ready",
+            service.name = "miden-validator",
+            service.version = env!("CARGO_PKG_VERSION"),
+            validator.listen = endpoint.to_string(),
+            block.number = metrics.chain_tip
         );
 
         // Build the gRPC server with the API service and trace layer.
-        tonic::transport::Server::builder()
+        grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(validator_api::service(service))
-            .add_service(reflection_service)
-            .serve_with_incoming_shutdown(
-                TcpListenerStream::new(listener),
-                shutdown.cancelled_owned(),
+            .add_service(
+                miden_validator_v1_validator_service::service(service).max_decoding_message_size(
+                    self.grpc_options.message_size.max_decoding_message_size.get(),
+                ),
             )
+            .add_service(reflection_service.max_decoding_message_size(
+                self.grpc_options.message_size.max_decoding_message_size.get(),
+            ))
+            .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
             .context("failed to serve validator API")
     }

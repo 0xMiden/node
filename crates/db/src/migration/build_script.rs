@@ -8,17 +8,18 @@ use fs_err as fs;
 
 use super::Migrator;
 
-pub const GENERATED_MIGRATOR_FILE: &str = "db_migrator.rs";
-
 impl Migrator {
     /// Generates Rust source for a migrator from a migration directory.
+    ///
+    /// Writes to `output_file` relative to Cargo's `OUT_DIR`.
+    /// Use a different output filename for each database in the crate.
     ///
     /// Call this from a `build.rs`, then include the generated file in the crate:
     ///
     /// ```ignore
     /// // build.rs
     /// fn main() -> Result<(), Box<dyn std::error::Error>> {
-    ///     miden_node_db::migration::Migrator::generate("migrations")?;
+    ///     miden_node_db::migration::Migrator::generate("migrations", "db_migrator.rs")?;
     ///     Ok(())
     /// }
     ///
@@ -73,11 +74,14 @@ impl Migrator {
     /// The `retired` directory contains SQL retained for fresh database initialization after the
     /// corresponding active migrations no longer need to be supported. Relative migration paths are
     /// resolved from the package manifest directory, i.e. the crate root.
-    pub fn generate(migration_dir: impl AsRef<Path>) -> Result<PathBuf> {
+    pub fn generate(
+        migration_dir: impl AsRef<Path>,
+        output_file: impl AsRef<Path>,
+    ) -> Result<PathBuf> {
         let migration_dir = migration_dir_path(migration_dir.as_ref());
         build_rs::output::rerun_if_changed(&migration_dir);
 
-        let out_path = build_rs::input::out_dir().join(GENERATED_MIGRATOR_FILE);
+        let out_path = build_rs::input::out_dir().join(output_file);
         let migrations = discover_migrations(&migration_dir)?;
         fs::write(
             &out_path,
@@ -361,8 +365,55 @@ fn rust_path(path: &Path) -> Result<&str> {
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::process::Command;
 
     use super::*;
+
+    #[test]
+    fn generates_multiple_migrators_without_overwriting() -> Result<()> {
+        const CHILD_PROCESS: &str = "MIDEN_DB_TEST_GENERATE_MULTIPLE";
+        if env::var_os(CHILD_PROCESS).is_some() {
+            let first = Migrator::generate("first", "first_migrator.rs")?;
+            let original = fs::read(&first)?;
+            let second = Migrator::generate("second", "second_migrator.rs")?;
+
+            let out_dir = build_rs::input::out_dir();
+            assert_eq!(first, out_dir.join("first_migrator.rs"));
+            assert_eq!(second, out_dir.join("second_migrator.rs"));
+            assert_eq!(fs::read(first)?, original);
+            assert_ne!(fs::read(second)?, original);
+            return Ok(());
+        }
+
+        let root = tempfile::tempdir()?;
+        for name in ["first", "second"] {
+            let dir = root.path().join(name);
+            fs::create_dir(&dir)?;
+            fs::write(dir.join("001_initial.sql"), format!("CREATE TABLE {name} (id INTEGER);"))?;
+        }
+        let out_dir = root.path().join("out");
+        fs::create_dir(&out_dir)?;
+
+        // A child process isolates Cargo's environment variables from the other tests.
+        let output = Command::new(env::current_exe()?)
+            .args(["generates_multiple_migrators_without_overwriting", "--nocapture"])
+            .env(CHILD_PROCESS, "1")
+            .env("CARGO_MANIFEST_DIR", root.path())
+            .env("OUT_DIR", &out_dir)
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "generator test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        ensure!(out_dir.join("first_migrator.rs").is_file(), "first migrator was not generated");
+        ensure!(
+            out_dir.join("second_migrator.rs").is_file(),
+            "second migrator was not generated"
+        );
+        Ok(())
+    }
 
     #[test]
     fn renders_migrations_in_lexicographic_order() -> Result<()> {

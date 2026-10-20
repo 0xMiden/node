@@ -1,22 +1,23 @@
 use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
-use miden_node_proto::generated as grpc;
-use miden_node_utils::ErrorReport;
-use miden_node_utils::spawn::spawn_blocking_in_current_span;
-use miden_node_utils::tracing::{miden_instrument, miden_span_record};
+use miden_node_proto::prost::Message;
+use miden_node_proto::{DecodeMessageExt, generated as grpc};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_tracing::{Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_tx::utils::serde::{Deserializable, Serializable};
+use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
 use tonic::Status;
-use tracing::{Instrument, info_span};
 
-use super::ValidatorService;
+use super::{StatusResultExt, ValidatorService};
 use crate::tx_validation::validate_transaction;
 use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
 
 #[tonic::async_trait]
-impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
+impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
+    for ValidatorService
+{
     type Input = Input;
     type Output = ();
 
@@ -33,9 +34,7 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
     ) -> tonic::Result<Self::Output> {
         let Input { tx, sealed } = input;
         let tx_id = tx.id();
-        miden_span_record!(
-            transaction.id = %tx_id,
-        );
+        miden_span_record!(transaction.id = tx_id);
 
         let inputs = self.unseal_transaction_inputs(&sealed, tx_id).await?;
 
@@ -46,14 +45,14 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .map_err(|_| Status::resource_exhausted("validator is busy streaming a backup"))?;
 
         // Short-circuit transactions that have already been validated.
-        let already_validated = self.db.transaction_exists(tx_id).await.map_err(|err| {
-            Status::internal(err.as_report_context("Failed to query transaction"))
-        })?;
+        let already_validated = self
+            .db
+            .transaction_exists(tx_id)
+            .await
+            .or_internal("Failed to query transaction")?;
         if already_validated {
             return Ok(());
         }
-
-        let private_inputs = inputs.to_bytes();
 
         // Bound concurrent validations; see `tx_validation_semaphore`. Acquired after the
         // already-validated short-circuit so duplicate submissions never wait.
@@ -62,15 +61,21 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
             .acquire()
             .instrument(info_span!("acquire_validation_permit"))
             .await
-            .map_err(|err| Status::internal(format!("validation semaphore closed: {err}")))?;
+            .or_internal("validation semaphore closed")?;
 
         // Validate the transaction.
-        validate_transaction(tx, inputs).await.map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction"))
-        })?;
+        let effects = validate_transaction(tx, inputs)
+            .await
+            .or_invalid_argument("Invalid transaction")?;
 
-        // Re-encrypt the private inputs under a fresh content key. Sealing runs secp256k1 group
-        // operations, so it goes to a blocking thread rather than stalling an async worker.
+        // Encode the transaction effects in their canonical Protobuf form. The effects are the
+        // forensic record of what the transaction did. They exclude the account, blockchain and
+        // witness data that execution requires, which keeps the record small.
+        let private_record_payload =
+            grpc::transaction::TransactionEffects::from(&effects).encode_to_vec();
+
+        // Encrypt the effects under a fresh content key. Sealing runs secp256k1 group operations,
+        // so it goes to a blocking thread rather than stalling an async worker.
         let record_id = PrivateRecordId::new(tx_id, &self.signer.public_key());
         let context = PrivateRecordContext::new(
             self.private_record_chain_id,
@@ -79,37 +84,39 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         );
         let sealer = self.private_record_sealer.clone();
         let private_record = spawn_blocking_in_current_span(move || {
-            sealer.seal(&mut OsRng, record_id, context, &private_inputs)
+            sealer.seal(&mut OsRng, record_id, context, &private_record_payload)
         })
         .await
         .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
-        .map_err(|err| {
-            Status::internal(err.as_report_context("Failed to protect transaction inputs"))
-        })?;
+        .or_internal("Failed to protect transaction effects")?;
 
         // Store the validated transaction and private record atomically.
-        let count =
-            self.db
-                .insert_validated_private_transaction(private_record)
-                .await
-                .map_err(|err| {
-                    Status::internal(err.as_report_context("Failed to insert transaction"))
-                })?;
+        let count = self
+            .db
+            .insert_validated_private_transaction(private_record)
+            .await
+            .or_internal("Failed to insert transaction")?;
 
         self.validated_transactions_count.fetch_add(count as u64, Ordering::Relaxed);
         Ok(())
     }
 
-    fn decode(request: grpc::transaction::ProvenTransaction) -> tonic::Result<Self::Input> {
-        let tx = ProvenTransaction::read_from_bytes(&request.transaction).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid proven transaction"))
-        })?;
-        let sealed = request.sealed_transaction_inputs.ok_or_else(|| {
-            Status::invalid_argument(
-                "Missing sealed transaction inputs: fetch the encryption key with \
-                 GetTransactionEncryptionKey and seal the transaction inputs against it",
-            )
-        })?;
+    fn decode(
+        request: grpc::miden::validator::v1::SubmitProvenTransactionRequest,
+    ) -> tonic::Result<Self::Input> {
+        let request = request
+            .submission
+            .ok_or_else(|| Status::invalid_argument("missing submission"))?;
+        let submission = request
+            // SAFETY: New transaction IDs pass proof verification and re-execution before storage.
+            // Previously validated IDs use the handler's duplicate-submission shortcut.
+            //
+            // FIXME: Authenticate the reference block against the validator's chain state.
+            // Re-execution currently uses the headers supplied in the sealed inputs.
+            .decode_and_build_unchecked()
+            .map_err(miden_node_proto::errors::ConversionError::into_status)?;
+        let tx = submission.transaction;
+        let sealed = submission.sealed_transaction_inputs;
         if sealed.ciphertext.is_empty() {
             return Err(Status::invalid_argument("Empty sealed transaction inputs ciphertext"));
         }
@@ -117,21 +124,23 @@ impl grpc::server::validator_api::SubmitProvenTransaction for ValidatorService {
         Ok(Self::Input { tx, sealed })
     }
 
-    fn encode(output: Self::Output) -> tonic::Result<()> {
-        Ok(output)
+    fn encode(
+        (): Self::Output,
+    ) -> tonic::Result<grpc::miden::validator::v1::SubmitProvenTransactionResponse> {
+        Ok(grpc::miden::validator::v1::SubmitProvenTransactionResponse {})
     }
 }
 
 pub struct Input {
     tx: ProvenTransaction,
-    sealed: grpc::transaction::SealedTransactionInputs,
+    sealed: grpc::submission::SealedTransactionInputs,
 }
 
 impl ValidatorService {
     /// Unseals transaction inputs submitted for `tx_id`.
     async fn unseal_transaction_inputs(
         &self,
-        sealed: &grpc::transaction::SealedTransactionInputs,
+        sealed: &grpc::submission::SealedTransactionInputs,
         tx_id: TransactionId,
     ) -> tonic::Result<TransactionInputs> {
         // Checked ahead of the unseal purely to turn what would otherwise be an indistinguishable
@@ -165,8 +174,7 @@ impl ValidatorService {
                 ))
             })?;
 
-        TransactionInputs::read_from_bytes(&plaintext).map_err(|err| {
-            Status::invalid_argument(err.as_report_context("Invalid transaction inputs"))
-        })
+        TransactionInputs::read_from_bytes(&plaintext)
+            .or_invalid_argument("Invalid transaction inputs")
     }
 }

@@ -1,7 +1,7 @@
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 
 // GRAPH NODE
 // ================================================================================================
@@ -22,13 +22,13 @@ pub trait GraphNode {
     /// necessary but it removes having to worry about reverting batches and blocks with erased
     /// notes -- since these would otherwise have different state impact than the transactions
     /// within them.
-    fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_>;
+    fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_>;
 
     /// Input notes which were not authenticated against any committed block thus far.
     ///
     /// Such notes are not yet known to exist by us (in the store) and must therefore be the output
     /// of another node currently in flight in the graph in order to be considered valid.
-    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_>;
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_>;
 
     /// The account state updates caused by this node.
     ///
@@ -58,8 +58,8 @@ pub(crate) mod test_node {
     pub struct TestNode {
         pub id: u32,
         pub nullifiers: Vec<Nullifier>,
-        pub output_notes: Vec<Word>,
-        pub unauthenticated_notes: Vec<Word>,
+        pub output_notes: Vec<NoteId>,
+        pub unauthenticated_notes: Vec<NoteId>,
         pub account_updates: Vec<(AccountId, Word, Word, Option<Word>)>,
         pub expires_at: BlockNumber,
     }
@@ -82,12 +82,12 @@ pub(crate) mod test_node {
         }
 
         pub fn with_output_notes(mut self, notes: impl IntoIterator<Item = u32>) -> Self {
-            self.output_notes = notes.into_iter().map(Self::to_word).collect();
+            self.output_notes = notes.into_iter().map(Self::to_note_id).collect();
             self
         }
 
         pub fn with_unauthenticated_notes(mut self, notes: impl IntoIterator<Item = u32>) -> Self {
-            self.unauthenticated_notes = notes.into_iter().map(Self::to_word).collect();
+            self.unauthenticated_notes = notes.into_iter().map(Self::to_note_id).collect();
             self
         }
 
@@ -114,6 +114,10 @@ pub(crate) mod test_node {
         fn to_nullifier(value: u32) -> Nullifier {
             Nullifier::from_raw(Self::to_word(value))
         }
+
+        fn to_note_id(value: u32) -> NoteId {
+            NoteId::from_raw(Self::to_word(value))
+        }
     }
 
     impl Default for TestNode {
@@ -133,11 +137,11 @@ pub(crate) mod test_node {
             Box::new(self.nullifiers.iter().copied())
         }
 
-        fn output_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+        fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
             Box::new(self.output_notes.iter().copied())
         }
 
-        fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = Word> + '_> {
+        fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
             Box::new(self.unauthenticated_notes.iter().copied())
         }
 

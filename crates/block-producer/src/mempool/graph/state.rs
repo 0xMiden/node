@@ -5,7 +5,7 @@ use std::hash::Hash;
 
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::note::Nullifier;
+use miden_protocol::note::{NoteId, Nullifier};
 
 use crate::errors::StateConflict;
 use crate::mempool::graph::node::GraphNode;
@@ -17,7 +17,7 @@ where
     K: Eq + Hash + Copy,
 {
     nullifiers: HashSet<Nullifier>,
-    notes_created: HashMap<Word, K>,
+    notes_created: HashMap<NoteId, K>,
     accounts: HashMap<AccountId, AccountStates<K>>,
 }
 
@@ -170,6 +170,11 @@ where
 
     pub fn output_note_count(&self) -> usize {
         self.notes_created.len()
+    }
+
+    /// Returns the node that created the specified note.
+    pub(super) fn note_creator(&self, note: &NoteId) -> Option<K> {
+        self.notes_created.get(note).copied()
     }
 }
 
@@ -397,7 +402,7 @@ mod tests {
 
         match state.validate_append(&node_b) {
             Err(StateConflict::OutputNotesAlreadyExist(duplicates)) => {
-                assert_eq!(duplicates, vec![word(200)]);
+                assert_eq!(duplicates, vec![NoteId::from_raw(word(200))]);
             },
             other => panic!("expected duplicate output note error, found {other:?}"),
         }
@@ -414,7 +419,7 @@ mod tests {
 
         match state.validate_append(&node) {
             Err(StateConflict::UnauthenticatedNotesMissing(missing)) => {
-                assert_eq!(missing, vec![word(300)]);
+                assert_eq!(missing, vec![NoteId::from_raw(word(300))]);
             },
             other => panic!("expected missing unauthenticated note error, found {other:?}"),
         }

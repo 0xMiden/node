@@ -1,0 +1,5 @@
+error: trailing commas are not supported
+ --> tests/ui/tracing_macros/invalid_event_trailing_comma.rs:4:41
+  |
+4 |     info!("test.event", block.number = 1,);
+  |                                         ^

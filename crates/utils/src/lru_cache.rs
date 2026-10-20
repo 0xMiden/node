@@ -51,7 +51,7 @@ where
         self.lock().clear();
     }
 
-    #[crate::tracing::miden_instrument(name = "lru.lock")]
+    #[miden_node_tracing::miden_instrument(name = "lru.lock")]
     fn lock(&self) -> MutexGuard<'_, InnerCache<K, V>> {
         // SAFETY: The mutex is only held for the duration of the get/put operation where panics are
         // possible only if we're running out of memory, in which case the entire process is likely

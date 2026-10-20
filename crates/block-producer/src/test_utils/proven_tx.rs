@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use itertools::Itertools;
+use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};
@@ -13,12 +14,10 @@ use miden_protocol::transaction::{
     ProvenTransaction,
     TxAccountUpdate,
 };
-use miden_protocol::vm::ExecutionProof;
 use miden_protocol::{Felt, ONE, Word};
 use rand::RngExt;
 
-use super::MockPrivateAccount;
-use crate::domain::transaction::AuthenticatedTransaction;
+use super::{MockAuthenticatedTxBuilder, MockPrivateAccount};
 
 #[derive(Clone)]
 pub struct MockProvenTxBuilder {
@@ -51,7 +50,7 @@ impl MockProvenTxBuilder {
                     mock_account.states[i + 1],
                 )
             })
-            .map(|tx| Arc::new(AuthenticatedTransaction::from_inner(tx.build())))
+            .map(|tx| Arc::new(MockAuthenticatedTxBuilder::new(tx.build()).build()))
             .collect_vec()
             .try_into()
             .expect("Sizes should match")
@@ -161,7 +160,7 @@ impl MockProvenTxBuilder {
             BlockNumber::GENESIS,
             Word::empty(),
             self.expiration_block_num,
-            ExecutionProof::new_dummy(),
+            miden_protocol::testing::dummy_execution_proof(),
         )
         .unwrap()
     }

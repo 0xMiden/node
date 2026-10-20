@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::ValidatorClient;
-use miden_node_utils::tracing::miden_instrument;
+use miden_node_tracing::miden_instrument;
 use url::Url;
 
 use crate::COMPONENT;
@@ -12,21 +12,29 @@ use crate::service::{Service, build_tls_client};
 use crate::status::{ServiceDetails, ServiceStatus, ValidatorStatusDetails};
 
 pub struct ValidatorService {
+    name: String,
     url: Url,
     client: ValidatorClient,
     interval: Duration,
 }
 
 impl ValidatorService {
-    pub fn new(url: Url, interval: Duration, timeout: Duration) -> Self {
-        let client = build_tls_client::<ValidatorClient>(url.clone(), timeout);
-        Self { url, client, interval }
+    pub fn new(
+        name: String,
+        url: Url,
+        interval: Duration,
+        timeout: Duration,
+        max_decoding_message_size: usize,
+    ) -> Self {
+        let client =
+            build_tls_client::<ValidatorClient>(url.clone(), timeout, max_decoding_message_size);
+        Self { name, url, client, interval }
     }
 }
 
 impl Service for ValidatorService {
-    fn name(&self) -> &'static str {
-        "Validator"
+    fn name(&self) -> &str {
+        &self.name
     }
 
     fn interval(&self) -> Duration {
@@ -36,17 +44,23 @@ impl Service for ValidatorService {
     fn initial_status(&self) -> ServiceStatus {
         ServiceStatus::unknown(
             self.name(),
-            ServiceDetails::ValidatorStatus(ValidatorStatusDetails::default()),
+            ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                url: self.url.to_string(),
+                ..Default::default()
+            }),
         )
     }
 
     #[miden_instrument(
         target = COMPONENT,
         name = "check-status.validator",
-        ret(level = "info"),
     )]
     async fn check(&mut self) -> ServiceStatus {
-        match self.client.status(()).await {
+        match self
+            .client
+            .status(miden_node_proto::generated::miden::validator::v1::StatusRequest {})
+            .await
+        {
             Ok(response) => {
                 let status = response.into_inner();
                 ServiceStatus::healthy(
@@ -60,7 +74,14 @@ impl Service for ValidatorService {
                     }),
                 )
             },
-            Err(e) => ServiceStatus::error(self.name(), e),
+            Err(e) => ServiceStatus::unhealthy(
+                self.name(),
+                e,
+                ServiceDetails::ValidatorStatus(ValidatorStatusDetails {
+                    url: self.url.to_string(),
+                    ..Default::default()
+                }),
+            ),
         }
     }
 }

@@ -12,8 +12,8 @@ import Tabs from "@theme/Tabs"; import TabItem from "@theme/TabItem";
 The genesis block is the trust anchor for every service that joins a network. It is not signed: it simply commits to the
 full validator set in its header, and that set must sign every block after genesis. Because nothing signs the genesis
 block, it must always be obtained from a trusted source. One of the network's operators is responsible for building it
-from the genesis configuration. On official networks, the validators are operated by separate entities from the network
-operator.
+from the required account files and network parameters. On official networks, the validators are operated by separate
+entities from the network operator.
 
 The genesis block is subsequently made available for official networks at
 
@@ -22,8 +22,10 @@ https://genesis.<network>.miden.io
 ```
 
 which provides an easy method to obtain this data. This is directly supported by service bootstrap commands by passing
-`--network testnet` or `--network devnet`. Bootstrap commands also support passing a file directly to cover custom
-networks, or if the official URLs are not trusted.
+`--network mainnet`, `--network testnet`, or `--network devnet`. Bootstrap commands also support passing a file directly
+to cover custom networks, or if the official URLs are not trusted.
+
+Before starting the sequencer, create and deploy its [fee collector account](./sequencer.md#fee-collection).
 
 ## Bootstrap Flow
 
@@ -40,26 +42,29 @@ miden-validator pubkey --signing-key.kms-id <validator-N-kms-key-id>
 The full validator set is passed on the command line, as one `--validator.key` flag per validator. There is no default
 set: the flag is required.
 
-**One** operator then runs `genesis` with the genesis configuration and the collected keys. Building the genesis block
-requires no signing key:
+**One** operator then runs `genesis` with the required accounts and collected keys. Building the genesis block requires
+no signing key:
 
 ```bash
 miden-validator genesis \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
-  --config genesis.toml \
+  --native-faucet usdcx-faucet.mac \
+  --funding-account distributor.genesis.mac \
+  --verification-base-fee 7 \
+  --timestamp <unix-seconds> \
   --validator.key <validator-1-public-key-hex> \
   --validator.key <validator-2-public-key-hex> \
   --validator.key <validator-3-public-key-hex>
 ```
 
-Unless the configuration sets `native_faucet` to a pre-built account file, the native faucet is generated as a network
-account and holds no key of its own; minting from it is restricted to the faucet operator account generated alongside
-it. Both are written to the accounts directory as `native_faucet.mac` and `faucet_operator.mac`, and the faucet account
-id is printed. The operator file carries the only signing key permitted to mint, so treat it as a secret.
+The native faucet and public funding account must be prepared before genesis. Both account files must have nonzero
+nonces. Genesis does not require their signing keys. The funding service uses the funding account file with its signing
+key. The verification base fee must match the fee configured in the native faucet.
 
-To run a faucet against the network, pass `faucet_operator.mac` to the faucet's `init --import`, and the faucet account
-id to `--faucet-account-id`.
+Use `--accounts-config accounts.toml` to add faucets, generated wallets, or imported accounts. Each `[[wallet]]` entry
+requires a unique `name`; genesis writes its account file as `<name>.mac` in the accounts directory. Account file paths
+in this TOML are relative to the TOML file. Paths passed on the CLI are relative to the working directory.
 
 Upload `genesis-data/genesis.dat` so it is served at:
 
@@ -92,8 +97,8 @@ miden-ntx-builder bootstrap \
   --network testnet
 ```
 
-For `devnet`, use `--network devnet` instead. The `--network` flag is shorthand for downloading the genesis block from
-`https://genesis.<network>.miden.io`.
+For other official networks, use `--network mainnet` or `--network devnet` instead. The `--network` flag is shorthand
+for downloading the genesis block from `https://genesis.<network>.miden.io`.
 
 Each validator operator's own KMS key ID must be used when that operator starts their validator for this network.
 
@@ -110,7 +115,10 @@ operator.
 miden-validator genesis \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
-  --config genesis.toml \
+  --native-faucet usdcx-faucet.mac \
+  --funding-account distributor.genesis.mac \
+  --verification-base-fee 7 \
+  --timestamp <unix-seconds> \
   --validator.key <validator-1-public-key-hex> \
   --validator.key <validator-2-public-key-hex> \
   --validator.key <validator-3-public-key-hex>
@@ -148,17 +156,13 @@ The key each validator operator starts their validator with must match the publi
 
 ## Storage Key Ceremony
 
-After genesis is built, every listed validator must join one offline DKG ceremony. The ceremony creates the shared
-public storage key and one distinct secret share per validator. No coordinator can derive those shares.
+All validators must take part in a distributed key generation (DKG) ceremony to protect stored private inputs. The
+ceremony produces a private bundle for each validator, required to start its validator service. All validators must
+participate, even when fewer are needed to decrypt stored data.
 
-Each operator first registers a fresh DKG identity with the validator signing key committed in genesis. One coordinator
-uses every signed registration to prepare the common ceremony. Every operator then creates two public dealings, checks
-and signs the same full transcript, and completes both rounds locally. The DKG and database bootstrap may run in either
-order, but both must finish before the validator starts.
-
-All listed validators must contribute to the ceremony even when the recovery threshold is lower. If any participant
-drops out or any transcript differs, discard the incomplete ceremony and start a new one with fresh identities and
-sessions. See [storage key setup](./validator.md#storage-key-setup) for the commands and file rules.
+The ceremony uses the validators' public keys directly and can run before genesis is built. The ceremony and database
+bootstrap must both finish before the validator starts. Follow [storage key setup](./validator.md#storage-key-setup) to
+coordinate with the other operators, run the ceremony, and handle its results.
 
 Bootstrap takes no transaction encryption key: that key is configured separately when the validator is started, and
 nothing cross-checks it against the genesis block. Every validator must be started with the same encryption key; the

@@ -10,6 +10,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_TXS_PER_BATCH,
 };
 use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_protocol::account::AccountId;
 use url::Url;
 
 // BLOCK PRODUCTION
@@ -17,6 +18,9 @@ use url::Url;
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BlockProducerOptions {
+    #[command(flatten)]
+    pub builder: BuilderOptions,
+
     #[command(flatten)]
     pub batch: BatchOptions,
 
@@ -32,6 +36,10 @@ pub struct BlockProducerOptions {
 
 impl BlockProducerOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.block.interval.is_zero() {
+            anyhow::bail!("block.interval must be greater than zero");
+        }
+
         if self.block.max_batches.get() > miden_protocol::MAX_BATCHES_PER_BLOCK {
             anyhow::bail!(
                 "block.max-batches cannot exceed protocol limit of {}",
@@ -46,6 +54,10 @@ impl BlockProducerOptions {
             );
         }
 
+        if self.batch.max_txs.get() < 2 {
+            anyhow::bail!("batch.max-txs must be at least 2 to include the batch fee transaction");
+        }
+
         Ok(())
     }
 }
@@ -53,12 +65,14 @@ impl BlockProducerOptions {
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroUsize;
+    use std::time::Duration;
 
     use super::{
         BatchOptions,
         BlockOptions,
         BlockProducerOptions,
         BlockProverOptions,
+        BuilderOptions,
         MempoolOptions,
     };
     use crate::commands::block_producer::{
@@ -69,10 +83,15 @@ mod tests {
 
     fn options(max_batches: usize, max_txs: usize) -> BlockProducerOptions {
         BlockProducerOptions {
+            builder: BuilderOptions {
+                wallet_account_id: miden_protocol::account::AccountId::from_hex(
+                    "0xcc0000000000dd010000ee000000ff",
+                )
+                .unwrap(),
+            },
             batch: BatchOptions {
                 interval: DEFAULT_BATCH_INTERVAL,
                 max_txs: NonZeroUsize::new(max_txs).unwrap(),
-                prover_url: None,
                 workers: miden_node_block_producer::DEFAULT_BATCH_WORKERS,
             },
             block: BlockOptions {
@@ -85,6 +104,19 @@ mod tests {
                 tx_capacity: miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
             },
         }
+    }
+
+    #[test]
+    fn rejects_zero_block_interval() {
+        let mut options =
+            options(miden_protocol::MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH.get());
+        options.block.interval = Duration::ZERO;
+
+        let err = options
+            .validate()
+            .expect_err("a zero block interval would panic in tokio::time::interval");
+
+        assert!(err.to_string().contains("block.interval"));
     }
 
     #[test]
@@ -106,6 +138,28 @@ mod tests {
 
         assert!(err.to_string().contains("batch.max-txs"));
     }
+
+    #[test]
+    fn rejects_max_txs_without_room_for_a_user_transaction() {
+        let err = options(miden_protocol::MAX_BATCHES_PER_BLOCK, 1)
+            .validate()
+            .expect_err("the batch must include a user transaction");
+
+        assert!(err.to_string().contains("batch.max-txs"));
+    }
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct BuilderOptions {
+    /// Wallet account ID that receives the batch builder's fees.
+    #[arg(
+        long = "batch.builder.wallet-account-id",
+        env = "MIDEN_NODE_BATCH_BUILDER_WALLET_ACCOUNT_ID",
+        value_name = "ACCOUNT_ID",
+        value_parser = AccountId::from_hex,
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub wallet_account_id: AccountId,
 }
 
 #[derive(clap::Args, Clone, Debug)]
@@ -132,16 +186,6 @@ pub struct BatchOptions {
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
     pub max_txs: NonZeroUsize,
-
-    /// The remote batch prover gRPC URL. If unset, a local prover will be used.
-    #[arg(
-        id = "batch-prover.url",
-        long = "batch-prover.url",
-        env = "MIDEN_NODE_BATCH_PROVER_URL",
-        value_name = "URL",
-        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
-    )]
-    pub prover_url: Option<Url>,
 
     /// Number of concurrent batch-builder workers.
     ///

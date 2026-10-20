@@ -4,8 +4,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
-use miden_node_proto::generated::validator::{BlockSubscriptionRequest, BlockSubscriptionResponse};
-use miden_node_store::{BlockWriter, State, WriterTask};
+use miden_node_proto::domain::protocol_config::ensure_protocol_config_is_present_and_matches_header;
+use miden_node_proto::generated::miden::validator::v1::{
+    BlockSubscriptionRequest,
+    BlockSubscriptionResponse,
+};
+use miden_node_proto::{BlockProofRequest, DecodeMessageExt};
+use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
+use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::block::{
@@ -14,14 +20,14 @@ use miden_protocol::block::{
     BlockNumber,
     BlockSignatures,
     SignedBlock,
-    ValidatorKeys,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::utils::serde::Deserializable;
+use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_stream::StreamExt;
 use tonic::codec::Streaming;
-use tracing::info;
 use url::Url;
 
 use super::ENV_DATA_DIRECTORY;
@@ -35,8 +41,39 @@ use crate::LOG_TARGET;
 /// blocks buffered in memory while keeping every stage busy.
 const BLOCK_CHANNEL_CAPACITY: usize = 16;
 
+/// A recovered block with any protocol configuration and proving request supplied by validators.
+#[derive(Debug)]
+struct RecoveredBlock {
+    block: SignedBlock,
+    protocol_config: Option<ProtocolConfig>,
+    proving_inputs: Option<BlockProofRequest>,
+}
+
+/// Tracks the active protocol configuration commitment for one validator stream.
+#[derive(Default)]
+struct ProtocolConfigStreamState {
+    commitment: Option<Word>,
+}
+
+impl ProtocolConfigStreamState {
+    /// Accepts a stream event only if it supplies every required configuration payload.
+    fn accept(&mut self, commitment: Word, supplied: bool) -> anyhow::Result<()> {
+        match self.commitment {
+            None if !supplied => anyhow::bail!("stream is missing its baseline protocol config"),
+            Some(previous) if previous != commitment && !supplied => {
+                anyhow::bail!("stream is missing its changed protocol config")
+            },
+            _ => {},
+        }
+        self.commitment = Some(commitment);
+        Ok(())
+    }
+}
+
 #[derive(clap::Args, Clone, Debug)]
 pub struct RecoverCommand {
+    #[command(flatten)]
+    grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// Directory containing the node's local data storage.
     #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
     data_directory: PathBuf,
@@ -56,27 +93,61 @@ pub struct RecoverCommand {
     )]
     validator_urls: Vec<Url>,
 
+    /// Prove all committed blocks after restoring their inputs, without starting block production.
+    #[arg(long)]
+    prove: bool,
+
+    #[command(flatten)]
+    block_prover: super::block_producer::BlockProverOptions,
+
     #[command(flatten)]
     store: StoreOptions,
 }
 
 impl RecoverCommand {
-    pub async fn handle(self) -> anyhow::Result<()> {
-        let (state, mut block_writer, writer_task) = self.load_state().await?;
-        let validators = self
-            .validator_urls
-            .iter()
-            .map(|url| Ok((url.clone(), Self::validator_client(url)?)))
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let result = recover_from_validators(&state, &mut block_writer, validators).await;
-        // Wait for the writer to drain and release the backing storage before the process exits.
+    pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let (state, mut block_writer, mut proof_writer, writer_task) = self.load_state().await?;
+        let result = async {
+            let validators = self
+                .validator_urls
+                .iter()
+                .map(|url| {
+                    Ok((
+                        url.clone(),
+                        Self::validator_client(url, self.grpc.max_decoding_message_size.get())?,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            recover_from_validators(&state, &mut block_writer, validators, shutdown.clone())
+                .await?;
+            if self.prove {
+                miden_node_block_producer::prove_pending_blocks(
+                    &state,
+                    &mut proof_writer,
+                    self.block_prover.url,
+                    self.grpc.max_decoding_message_size.get(),
+                    shutdown,
+                )
+                .await?;
+                info!(target: LOG_TARGET, "Recovery proving complete",
+                    block.number = state.proven_tip(), tip.number = state.committed_tip());
+            } else {
+                info!(target: LOG_TARGET, "Recovered inputs are ready for proving",
+                    block.number = state.proven_tip(), tip.number = state.committed_tip(),
+                    sync.block_gap = state.committed_tip().as_u32() - state.proven_tip().as_u32());
+            }
+            Ok(())
+        }
+        .await;
+        // Accepted writes finish before recovery returns, including on failure or shutdown.
+        drop(proof_writer);
         block_writer.stop(writer_task).await;
         result
     }
 
-    async fn load_state(&self) -> anyhow::Result<(Arc<State>, BlockWriter, WriterTask)> {
-        // Recovery is not wired into the node's shutdown token; the writer exits once the
-        // `BlockWriter` (holding the only write handle) is dropped after recovery completes.
+    async fn load_state(
+        &self,
+    ) -> anyhow::Result<(Arc<State>, BlockWriter, ProofWriter, WriterTask)> {
         let loaded = State::load_with_database_options(
             &self.data_directory,
             self.store.storage.clone().into(),
@@ -85,13 +156,19 @@ impl RecoverCommand {
         .await
         .context("failed to load state")?;
 
-        let (state, block_writer, _proof_writer, writer_task) =
+        // The writer uses a separate cancellation token so recovery cancellation cannot interrupt
+        // accepted writes.
+        let (state, block_writer, proof_writer, writer_task) =
             loaded.start(CancellationToken::new());
-        Ok((state, block_writer, writer_task))
+        Ok((state, block_writer, proof_writer, writer_task))
     }
 
-    fn validator_client(url: &Url) -> anyhow::Result<ValidatorClient> {
+    fn validator_client(
+        url: &Url,
+        max_decoding_message_size: usize,
+    ) -> anyhow::Result<ValidatorClient> {
         Ok(Builder::new(url.clone())
+            .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
             .with_timeout(Duration::from_secs(5))
             .without_metadata_version()
@@ -110,17 +187,20 @@ async fn recover_from_validators(
     state: &State,
     block_writer: &mut BlockWriter,
     mut validators: Vec<(Url, ValidatorClient)>,
+    shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    // Capture the smallest of the validators' chain tips as the recovery target: it is the highest
-    // block for which every validator can supply its signature. The validators' block streams
-    // follow live blocks indefinitely, so without a fixed target we could never tell when to stop.
-    // The sequencer must be shut down during recovery, so these tips do not advance.
+    // The recovery target is the highest block for which every validator can supply a signature.
+    //
+    // Each backup stream captures a finite tip. The sequencer must remain stopped so the target
+    // stays fixed while validator statuses are queried and backup streams are opened.
     let mut recovery_tip: Option<BlockNumber> = None;
     for (url, validator) in &mut validators {
+        let response = tokio::select! {
+            _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
+            response = validator.status(miden_node_proto::generated::miden::validator::v1::StatusRequest {}) => response,
+        };
         let tip = BlockNumber::from(
-            validator
-                .status(())
-                .await
+            response
                 .with_context(|| format!("failed to query status of validator {url}"))?
                 .into_inner()
                 .chain_tip,
@@ -129,70 +209,101 @@ async fn recover_from_validators(
     }
     let recovery_tip = recovery_tip.context("at least one validator URL is required")?;
 
-    let local_tip = state.committed_tip();
-    if local_tip >= recovery_tip {
-        info!(
-            target: LOG_TARGET,
-            local_tip = local_tip.as_u32(),
-            recovery_tip = recovery_tip.as_u32(),
-            "Local chain is already at the validators' chain tip; nothing to recover",
-        );
+    let start = tokio::select! {
+        _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
+        start = inputs::recovery_start(state, recovery_tip) => start?,
+    };
+    let Some(start) = start else {
+        info!(target: LOG_TARGET, "Local chain and proving inputs already cover recovery target",
+            block.number = state.committed_tip(), sync.upstream_block = recovery_tip);
         return Ok(());
-    }
+    };
 
-    // The parent of the first recovered block is the local chain tip; each parent's header commits
-    // to the validator keys whose signatures the child block must carry.
+    let mut tasks = JoinSet::new();
+    let result: anyhow::Result<()> = async {
+        Box::pin(run_recovery_pipeline(
+            state,
+            block_writer,
+            validators,
+            start,
+            recovery_tip,
+            &mut tasks,
+            shutdown,
+        ))
+        .await
+    }
+    .await;
+    tasks.abort_all();
+    while tasks.join_next().await.is_some() {}
+    result
+}
+
+/// Restores blocks and proving inputs through the target height with bounded buffering.
+///
+/// Recovery succeeds only after all producer tasks finish successfully and the target block has
+/// been applied, so a closed channel cannot hide a producer failure.
+async fn run_recovery_pipeline(
+    state: &State,
+    writer: &mut BlockWriter,
+    validators: Vec<(Url, ValidatorClient)>,
+    start: BlockNumber,
+    target: BlockNumber,
+    tasks: &mut JoinSet<anyhow::Result<()>>,
+    shutdown: CancellationToken,
+) -> anyhow::Result<()> {
     let (parent, _) = state
         .view()
-        .get_block_header(Some(local_tip), false)
+        .get_block_header(Some((start.as_u32() - 1).into()), false)
         .await
-        .context("failed to load the local chain tip header")?;
-    let parent = parent.context("local chain tip header not found")?;
+        .context("failed to load recovery parent")?;
+    let parent = parent.context("recovery parent header not found")?;
+    let block_from = start.as_u32();
+    let block_count = u64::from(target.as_u32()) - u64::from(block_from) + 1;
+    info!(target: LOG_TARGET, "Recovering blocks and proving inputs from validators",
+        block.from = block_from, sync.upstream_block = target, validators.count = validators.len());
 
-    let block_from = local_tip.child().as_u32();
-    let block_count = u64::from(recovery_tip.as_u32() - block_from) + 1;
-    info!(
-        target: LOG_TARGET,
-        block_from,
-        recovery_tip = recovery_tip.as_u32(),
-        validators = validators.len(),
-        "Recovering blocks from validators",
-    );
-
-    // Run recovery as a three-stage pipeline so that receiving blocks from the validators,
-    // signature coalescing and verification, and local block application all overlap: one reader
-    // task per validator stream, a coalescer task zipping the readers, and this task applying the
-    // coalesced blocks in order.
     let mut block_streams = Vec::with_capacity(validators.len());
     for (url, mut validator) in validators {
-        let stream = validator
-            .block_subscription(BlockSubscriptionRequest { block_from })
-            .await
+        let response = tokio::select! {
+            _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
+            response = validator.block_subscription(BlockSubscriptionRequest { block_from }) => response,
+        };
+        let stream = response
             .with_context(|| format!("failed to open block subscription on validator {url}"))?
             .into_inner();
         let (block_tx, block_rx) = mpsc::channel(BLOCK_CHANNEL_CAPACITY);
-        tokio::spawn(read_blocks(url.clone(), stream, block_count, block_tx));
+        tasks.spawn(read_blocks(url.clone(), stream, block_count, block_tx));
         block_streams.push((url, block_rx));
     }
-
     let (coalesced_tx, mut coalesced_rx) = mpsc::channel(BLOCK_CHANNEL_CAPACITY);
-    let coalescer =
-        tokio::spawn(coalesce_blocks(block_streams, parent, recovery_tip, coalesced_tx));
-
-    while let Some(block) = coalesced_rx.recv().await {
-        let block_num = block.header().block_num();
-        block_writer
-            .apply_block(block)
-            .await
-            .context("failed to apply recovered block")?;
-        info!(target: LOG_TARGET, block_number = block_num.as_u32(), "Applied recovered block");
+    tasks.spawn(coalesce_blocks(block_streams, parent, target, coalesced_tx));
+    let mut last_delivered = None;
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
+            joined = tasks.join_next(), if !tasks.is_empty() => {
+                joined.context("recovery producer missing")?.context("recovery producer panicked")??;
+            },
+            recovered = coalesced_rx.recv() => {
+                let Some(recovered) = recovered else { break };
+                let height = recovered.block.header().block_num();
+                inputs::apply_recovered(state, writer, recovered).await
+                    .with_context(|| format!("failed to recover block {height}"))?;
+                last_delivered = Some(height);
+                info!(target: LOG_TARGET, "Recovered block and proving inputs", block.number = height);
+            },
+        }
     }
-
-    // The channel closes either because every block up to the recovery target was coalesced or
-    // because the coalescer failed.
-    coalescer.await.context("coalescer task panicked")??;
-
-    info!(target: LOG_TARGET, chain_tip = recovery_tip.as_u32(), "Block recovery complete");
+    while !tasks.is_empty() {
+        tokio::select! {
+            _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
+            joined = tasks.join_next() => {
+                joined.context("recovery producer missing")?.context("recovery producer panicked")??;
+            },
+        }
+    }
+    anyhow::ensure!(last_delivered == Some(target), "recovery stream ended before target {target}");
+    info!(target: LOG_TARGET, "Block and proving input recovery complete", tip.number = target);
     Ok(())
 }
 
@@ -205,8 +316,9 @@ async fn read_blocks(
     url: Url,
     mut stream: Streaming<BlockSubscriptionResponse>,
     block_count: u64,
-    blocks: mpsc::Sender<anyhow::Result<SignedBlock>>,
-) {
+    blocks: mpsc::Sender<anyhow::Result<RecoveredBlock>>,
+) -> anyhow::Result<()> {
+    let mut config_state = ProtocolConfigStreamState::default();
     for _ in 0..block_count {
         let block = stream
             .next()
@@ -218,30 +330,65 @@ async fn read_blocks(
                 result.with_context(|| format!("block stream of validator {url} returned an error"))
             })
             .and_then(|event| {
-                SignedBlock::read_from_bytes(&event.block)
-                    .with_context(|| format!("failed to deserialize block from validator {url}"))
+                let block: SignedBlock = event
+                    .block
+                    .context("validator block stream response is missing block")?
+                    // SAFETY: Each backup contains only one validator's signature. The coalescer
+                    // assembles and verifies the full signature set against the trusted parent
+                    // before the writer receives the block.
+                    .decode_and_build_unchecked()
+                    .with_context(|| format!("failed to build block from validator {url}"))?;
+                let protocol_config = event
+                    .protocol_config
+                    .map(|config| {
+                        ensure_protocol_config_is_present_and_matches_header(
+                            Some(config),
+                            block.header(),
+                        )
+                    })
+                    .transpose()
+                    .with_context(|| {
+                        format!("failed to decode protocol config from validator {url}")
+                    })?;
+                config_state
+                    .accept(block.header().protocol_config_commitment(), protocol_config.is_some())
+                    .with_context(|| {
+                        format!("invalid protocol config stream from validator {url}")
+                    })?;
+                let proving_inputs = event
+                    .proving_inputs
+                    .map(miden_node_proto::DecodeMessageExt::decode_and_build_unchecked)
+                    .transpose()
+                    .with_context(|| {
+                        format!(
+                            "invalid proving inputs from validator {url} for block {}",
+                            block.header().block_num()
+                        )
+                    })?;
+                Ok(RecoveredBlock { block, protocol_config, proving_inputs })
             });
 
         let is_err = block.is_err();
         if blocks.send(block).await.is_err() || is_err {
-            return;
+            return Ok(());
         }
     }
+    Ok(())
 }
 
 /// Coalesces the per-validator block streams into fully signed, verified blocks and forwards them
 /// in block-number order for application.
 async fn coalesce_blocks(
-    mut block_streams: Vec<(Url, mpsc::Receiver<anyhow::Result<SignedBlock>>)>,
+    mut block_streams: Vec<(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)>,
     mut parent: BlockHeader,
     recovery_tip: BlockNumber,
-    coalesced: mpsc::Sender<SignedBlock>,
+    coalesced: mpsc::Sender<RecoveredBlock>,
 ) -> anyhow::Result<()> {
     for block_num in parent.block_num().child().as_u32()..=recovery_tip.as_u32() {
         let block = next_coalesced_block(&mut block_streams, &parent)
             .await
             .with_context(|| format!("failed to reconstruct block {block_num}"))?;
-        parent = block.header().clone();
+        parent = block.block.header().clone();
 
         // A send failure means the applier has shut down; its error is reported by the caller.
         if coalesced.send(block).await.is_err() {
@@ -259,18 +406,23 @@ async fn coalesce_blocks(
 /// validator set that signature occupies. The signatures are therefore matched to their positions
 /// by verifying them against the validator keys committed to by the parent header.
 async fn next_coalesced_block(
-    block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<SignedBlock>>)],
+    block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)],
     parent: &BlockHeader,
-) -> anyhow::Result<SignedBlock> {
+) -> anyhow::Result<RecoveredBlock> {
     let expected_block_num = parent.block_num().child();
 
     let mut signatures = Vec::with_capacity(block_streams.len());
-    let mut first_parts: Option<(BlockHeader, BlockBody)> = None;
+    let mut supplied_inputs = Vec::new();
+    let mut first_parts: Option<(BlockHeader, BlockBody, Option<ProtocolConfig>)> = None;
     for (url, blocks) in block_streams.iter_mut() {
-        let block = blocks
+        let recovered = blocks
             .recv()
             .await
             .with_context(|| format!("block channel of validator {url} closed unexpectedly"))??;
+        let RecoveredBlock { block, protocol_config, proving_inputs } = recovered;
+        if let Some(request) = proving_inputs {
+            supplied_inputs.push((url.clone(), request));
+        }
 
         anyhow::ensure!(
             block.header().block_num() == expected_block_num,
@@ -288,19 +440,31 @@ async fn next_coalesced_block(
         };
 
         match &first_parts {
-            None => first_parts = Some((header, body)),
-            Some((first_header, _)) => anyhow::ensure!(
-                header.commitment() == first_header.commitment(),
-                "validator {url} served a block with commitment {} which diverges from commitment {} served by the first validator",
-                header.commitment(),
-                first_header.commitment(),
-            ),
+            None => first_parts = Some((header, body, protocol_config)),
+            Some((first_header, first_body, first_protocol_config)) => {
+                anyhow::ensure!(
+                    body == *first_body,
+                    "validator {url} served a divergent body for block {expected_block_num}"
+                );
+                anyhow::ensure!(
+                    header.commitment() == first_header.commitment(),
+                    "validator {url} served a block with commitment {} which diverges from commitment {} served by the first validator",
+                    header.commitment(),
+                    first_header.commitment(),
+                );
+                anyhow::ensure!(
+                    protocol_config == *first_protocol_config,
+                    "validator {url} served a protocol config which diverges from the first validator",
+                );
+            },
         }
         signatures.push(signature);
     }
-    let (header, body) = first_parts.context("at least one validator stream is required")?;
+    let (header, body, protocol_config) =
+        first_parts.context("at least one validator stream is required")?;
 
-    let signatures = coalesce_signatures(signatures, header.commitment(), parent.validator_keys())?;
+    let signatures =
+        coalesce_signatures(signatures, header.commitment(), parent.validator_config())?;
     let block = SignedBlock::new_unchecked(header, body, signatures);
 
     // Fully validate the reconstructed block before it is persisted, including verifying the
@@ -308,7 +472,16 @@ async fn next_coalesced_block(
     // signatures.
     block.validate(Some(parent)).context("coalesced block failed validation")?;
 
-    Ok(block)
+    let mut proving_inputs = None;
+    for (url, request) in supplied_inputs {
+        request.validate_against(&block).with_context(|| {
+            format!("invalid proving inputs from validator {url} for block {expected_block_num}")
+        })?;
+        if proving_inputs.is_none() {
+            proving_inputs = Some(request);
+        }
+    }
+    Ok(RecoveredBlock { block, protocol_config, proving_inputs })
 }
 
 /// Orders the collected per-validator signatures positionally against the validator set: the
@@ -319,18 +492,18 @@ async fn next_coalesced_block(
 fn coalesce_signatures(
     mut signatures: Vec<Signature>,
     block_commitment: Word,
-    validator_keys: &ValidatorKeys,
+    validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {
     anyhow::ensure!(
-        signatures.len() == validator_keys.len(),
+        signatures.len() == validator_config.len(),
         "collected {} signatures but the validator set has {} keys; the provided validator URLs \
          must cover the full validator set",
         signatures.len(),
-        validator_keys.len(),
+        validator_config.len(),
     );
 
-    let mut ordered = Vec::with_capacity(validator_keys.len());
-    for (position, key) in validator_keys.as_keys().iter().enumerate() {
+    let mut ordered = Vec::with_capacity(validator_config.len());
+    for (position, key) in validator_config.keys().iter().enumerate() {
         let matched = signatures
             .iter()
             .position(|signature| signature.verify(block_commitment, key))
@@ -346,79 +519,7 @@ fn coalesce_signatures(
     BlockSignatures::new(ordered).context("failed to construct the coalesced signature set")
 }
 
+mod inputs;
+
 #[cfg(test)]
-mod tests {
-    use miden_protocol::Word;
-    use miden_protocol::block::ValidatorKeys;
-    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-
-    use super::coalesce_signatures;
-
-    fn signers(count: usize) -> Vec<SigningKey> {
-        (0..count).map(|_| SigningKey::new()).collect()
-    }
-
-    fn validator_keys(signers: &[SigningKey]) -> ValidatorKeys {
-        ValidatorKeys::new(signers.iter().map(SigningKey::public_key).collect()).unwrap()
-    }
-
-    #[test]
-    fn signatures_are_ordered_against_the_validator_set() {
-        let commitment = Word::from([1u32, 2, 3, 4]);
-        let signers = signers(3);
-        let keys = validator_keys(&signers);
-
-        // Collect the signatures in reverse order to prove they get reordered.
-        let shuffled = signers.iter().rev().map(|signer| signer.sign(commitment)).collect();
-
-        let coalesced = coalesce_signatures(shuffled, commitment, &keys).unwrap();
-        coalesced.verify_against(commitment, &keys).unwrap();
-    }
-
-    #[test]
-    fn signature_count_mismatch_is_rejected() {
-        let commitment = Word::from([1u32, 2, 3, 4]);
-        let signers = signers(3);
-        let keys = validator_keys(&signers);
-
-        let missing_one = signers.iter().take(2).map(|signer| signer.sign(commitment)).collect();
-
-        let err = coalesce_signatures(missing_one, commitment, &keys).unwrap_err();
-        assert!(err.to_string().contains("collected 2 signatures"), "{err}");
-    }
-
-    #[test]
-    fn duplicate_validator_signature_is_rejected() {
-        let commitment = Word::from([1u32, 2, 3, 4]);
-        let signers = signers(3);
-        let keys = validator_keys(&signers);
-
-        // Two streams served by the same validator: its signature appears twice and the third
-        // validator's signature is missing.
-        let duplicated = vec![
-            signers[0].sign(commitment),
-            signers[0].sign(commitment),
-            signers[1].sign(commitment),
-        ];
-
-        let err = coalesce_signatures(duplicated, commitment, &keys).unwrap_err();
-        assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
-    }
-
-    #[test]
-    fn foreign_signature_is_rejected() {
-        let commitment = Word::from([1u32, 2, 3, 4]);
-        let signers = signers(3);
-        let keys = validator_keys(&signers);
-
-        // One signature comes from a key outside the validator set.
-        let with_foreign = vec![
-            signers[0].sign(commitment),
-            signers[1].sign(commitment),
-            SigningKey::new().sign(commitment),
-        ];
-
-        let err = coalesce_signatures(with_foreign, commitment, &keys).unwrap_err();
-        assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
-    }
-}
+mod tests;

@@ -10,9 +10,9 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder as ClientBuilder, GrpcClient};
+use miden_node_tracing::debug;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
-use tracing::debug;
 use url::Url;
 
 use crate::LOG_TARGET;
@@ -20,8 +20,13 @@ use crate::service_status::ServiceStatus;
 
 /// Build a lazily-connected gRPC client using the network monitor's standard settings (TLS enabled,
 /// no metadata, no OTEL propagation).
-pub fn build_tls_client<C: GrpcClient>(url: Url, timeout: Duration) -> C {
+pub fn build_tls_client<C: GrpcClient>(
+    url: Url,
+    timeout: Duration,
+    max_decoding_message_size: usize,
+) -> C {
     ClientBuilder::new(url)
+        .max_decoding_message_size(max_decoding_message_size)
         .with_tls()
         .expect("TLS is enabled")
         .with_timeout(timeout)
@@ -62,7 +67,11 @@ pub trait Service: Send + 'static {
                 interval.tick().await;
                 let status = self.check().await;
                 if tx.send(status).is_err() {
-                    debug!(target: LOG_TARGET, "No receivers for {}, shutting down", self.name());
+                    debug!(
+                        target: LOG_TARGET,
+                        "No receivers; shutting down service",
+                        service.name = self.name()
+                    );
                     return;
                 }
             }

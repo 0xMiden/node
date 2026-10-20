@@ -1,0 +1,5 @@
+error: tracing format specifiers are not supported; implement `RecordAttribute` to define the type's canonical encoding
+ --> tests/ui/tracing_macros/invalid_instrument_formatter.rs:3:44
+  |
+3 | #[miden_instrument(fields(transaction.id = ?"0x1234"))]
+  |                                            ^

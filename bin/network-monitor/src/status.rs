@@ -8,8 +8,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_utils::tracing::miden_instrument;
-use tracing::debug;
+use miden_node_tracing::{debug, miden_instrument};
 use url::Url;
 
 use crate::COMPONENT;
@@ -84,9 +83,11 @@ impl RpcService {
         interval: Duration,
         request_timeout: Duration,
         stale_threshold: Duration,
+        max_decoding_message_size: usize,
     ) -> Self {
         let url = rpc_url.to_string();
-        let rpc = build_tls_client::<RpcClient>(rpc_url, request_timeout);
+        let rpc =
+            build_tls_client::<RpcClient>(rpc_url, request_timeout, max_decoding_message_size);
         Self {
             url,
             rpc,
@@ -123,10 +124,13 @@ impl Service for RpcService {
         target = COMPONENT,
         name = "network_monitor.status.check_rpc",
         level = "info",
-        ret(level = "debug"),
     )]
     async fn check(&mut self) -> ServiceStatus {
-        match self.rpc.status(()).await {
+        match self
+            .rpc
+            .status(miden_node_proto::generated::miden::node::v1::StatusRequest {})
+            .await
+        {
             Ok(response) => {
                 let rpc_details =
                     RpcStatusDetails::from_rpc_status(response.into_inner(), self.url.clone());
@@ -136,9 +140,9 @@ impl Service for RpcService {
                 {
                     debug!(
                         target: COMPONENT,
-                        chain_tip = rpc_details.chain_tip,
-                        stale_duration_secs = stale_duration,
-                        "Chain tip is stale"
+                        "Chain tip is stale",
+                        tip.number = rpc_details.chain_tip,
+                        tip.stale_duration_secs = stale_duration
                     );
                     return ServiceStatus::unhealthy(
                         self.name(),
@@ -153,7 +157,7 @@ impl Service for RpcService {
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
             },
             Err(e) => {
-                debug!(target: COMPONENT, error = %e, "RPC status check failed");
+                debug!(&e, target: COMPONENT, "RPC status check failed");
                 ServiceStatus::error(self.name(), e)
             },
         }

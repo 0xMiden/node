@@ -21,8 +21,8 @@ pub use lifecycle::LoadedState;
 use miden_protocol::block::BlockNumber;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 use tokio::sync::watch;
-pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, TransactionInputs};
-use view::{SnapshotGuard, StateSnapshot};
+use view::StateSnapshot;
+pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
 pub use writer::{BlockWriter, ProofWriter, WriterTask};
 
 use crate::blocks::BlockStore;
