@@ -26,6 +26,7 @@ pub use logging::{
     setup_tracing_with_config,
 };
 pub use miden_node_tracing_macro::{
+    Classified,
     debug,
     error,
     info,
@@ -46,7 +47,12 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 pub mod __private {
     pub use tracing::{debug, error, info, instrument, trace, warn};
 
-    pub use crate::failure::{ClassifiedFailure, UnclassifiedFailure};
+    pub use crate::failure::{
+        ClassifiedFailure,
+        UnclassifiedFailure,
+        record_logged_failure,
+        record_returned_failure,
+    };
     pub use crate::instrument::AsDynError;
 }
 

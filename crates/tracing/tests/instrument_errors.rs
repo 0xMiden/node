@@ -2,7 +2,13 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use miden_node_tracing::{Classified, FailureClass, miden_instrument, miden_span_record};
+use miden_node_tracing::{
+    Classified,
+    ErrorSpanExt,
+    FailureClass,
+    miden_instrument,
+    miden_span_record,
+};
 use opentelemetry::trace::{Status, TracerProvider as _};
 use opentelemetry::{Array, KeyValue, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
@@ -153,6 +159,13 @@ fn verbose_classified_result(error: SubmitError) -> Result<(), SubmitError> {
 #[miden_instrument(err)]
 fn status_result(status: tonic::Status) -> Result<(), tonic::Status> {
     Err(status)
+}
+
+/// Logs a database failure, then returns a rejection.
+#[miden_instrument(err)]
+fn logged_then_rejected() -> Result<(), SubmitError> {
+    miden_node_tracing::error!(SubmitError::Database(Root), "database.failed");
+    Err(SubmitError::Expired)
 }
 
 fn export(run: impl FnOnce()) -> Vec<SpanData> {
@@ -323,17 +336,81 @@ fn configured_levels_apply_to_failures_and_never_raise_rejections() {
     for span in &spans {
         assert_eq!(span.status, Status::Unset, "{span:?}");
     }
-    assert_eq!(failure_attributes(&spans[0]).0, Some(&Value::from("fault")));
+    // A failure below `ERROR` does not fail its span, so it records no failure.
+    assert_eq!(failure_attributes(&spans[0]), (None, None));
 }
 
 #[test]
-fn unclassified_errors_fail_the_span_without_failure_attributes() {
+fn unclassified_errors_fail_the_span_as_unclassified_faults() {
     let spans = export(|| assert!(sync_result(1).is_err()));
     let [span] = spans.as_slice() else {
         panic!("expected one span, got {spans:?}");
     };
     assert_error_chain(span);
-    assert_eq!(failure_attributes(span), (None, None));
+    assert_eq!(failure_attributes(span), (Some(&"fault".into()), Some(&"unclassified".into())));
+}
+
+#[test]
+fn error_events_record_a_fault_on_their_span() {
+    let spans = export(|| {
+        tracing::info_span!("unclassified").in_scope(|| {
+            miden_node_tracing::error!(failure(), "failed");
+        });
+        tracing::info_span!("classified").in_scope(|| {
+            miden_node_tracing::error!(SubmitError::StoreUnavailable, "failed");
+        });
+        tracing::info_span!("rejected").in_scope(|| {
+            miden_node_tracing::error!(SubmitError::Expired, "failed");
+        });
+    });
+    let expected = [
+        ("fault", "unclassified"),
+        ("transient", "store_unavailable"),
+        ("fault", "expired"),
+    ];
+    assert_eq!(spans.len(), expected.len());
+    for (span, (class, kind)) in spans.iter().zip(expected) {
+        assert_eq!(span.status, Status::error(""), "{span:?}");
+        assert_eq!(failure_attributes(span), (Some(&class.into()), Some(&kind.into())));
+    }
+}
+
+#[test]
+fn the_first_failure_recorded_on_a_span_wins() {
+    let spans = export(|| assert!(logged_then_rejected().is_err()));
+    let [span] = spans.as_slice() else {
+        panic!("expected one span, got {spans:?}");
+    };
+    assert_eq!(span.status, Status::error(""));
+    assert_eq!(failure_attributes(span), (Some(&"fault".into()), Some(&"database".into())));
+    let classes = span.attributes.iter().filter(|kv| kv.key.as_str() == "failure.class").count();
+    assert_eq!(classes, 1);
+}
+
+#[test]
+fn span_failures_follow_their_class() {
+    let spans = export(|| {
+        tracing::info_span!("set_error").in_scope(|| {
+            tracing::Span::current().set_error(&failure());
+        });
+        tracing::info_span!("rejected").in_scope(|| {
+            tracing::Span::current().set_failure(FailureClass::Rejected("expired"), &failure());
+        });
+    });
+    assert_eq!(spans.len(), 2);
+    assert_eq!(
+        spans[0].status,
+        Status::error("outer error\ncaused by: middle error\ncaused by: root cause")
+    );
+    assert_eq!(
+        failure_attributes(&spans[0]),
+        (Some(&"fault".into()), Some(&"unclassified".into()))
+    );
+    assert_eq!(spans[1].status, Status::Unset);
+    assert_eq!(
+        failure_attributes(&spans[1]),
+        (Some(&"rejected".into()), Some(&"expired".into()))
+    );
 }
 
 #[test]

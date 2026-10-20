@@ -123,8 +123,7 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
             GrpcFailureClass::Error(_) => (tonic::Code::Unknown, FailureClass::Fault("stream")),
         };
         span.record("rpc.grpc.status_code", code as i32);
-        span.record("failure.class", failure.name());
-        span.record("failure.kind", failure.kind());
+        failure.record(span);
         if failure.is_rejection() {
             tracing::info!(
                 parent: span,
@@ -169,8 +168,6 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         rpc.request.size = field::Empty,
         rpc.response.size = field::Empty,
         rpc.grpc.status_code = field::Empty,
-        failure.class = field::Empty,
-        failure.kind = field::Empty,
         server.address = field::Empty,
         server.port = field::Empty,
         client.address = field::Empty,

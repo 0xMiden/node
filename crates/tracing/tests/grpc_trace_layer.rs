@@ -97,3 +97,17 @@ fn public_servers_reject_unknown_and_unimplemented_requests() {
     let span = request_span(&public_grpc_trace_layer(), tonic::Code::Internal);
     assert_eq!(span.status, Status::error(""));
 }
+
+#[test]
+fn dependency_rejections_are_node_faults() {
+    use miden_node_tracing::FailureClass;
+
+    assert_eq!(
+        FailureClass::from_dependency(FailureClass::from_grpc_code(tonic::Code::InvalidArgument)),
+        FailureClass::Fault("invalid_argument")
+    );
+    assert_eq!(
+        FailureClass::from_dependency(FailureClass::from_grpc_code(tonic::Code::Unavailable)),
+        FailureClass::Transient("unavailable")
+    );
+}

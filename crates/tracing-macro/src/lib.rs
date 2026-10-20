@@ -22,7 +22,28 @@ use syn::{
     parse_quote,
 };
 
+mod classified;
 mod instrument;
+
+/// Derives `Classified` for an error enum, with each variant's name in snake case as its failure
+/// kind.
+///
+/// Every variant is a fault unless the enum or the variant says otherwise with a `failure`
+/// attribute. On the enum, `#[failure(fault)]`, `#[failure(transient)]` or `#[failure(rejected)]`
+/// sets the class of every variant. On a variant, it sets that variant's class, and these classify
+/// a variant with exactly one field by that field:
+///
+/// - `#[failure(transparent)]` uses the field's own class.
+/// - `#[failure(dependency)]` uses the field's class with `FailureClass::from_dependency`, for an
+///   error returned by a component the node calls.
+/// - `#[failure(with = path)]` calls `path(&field)`, which returns the `FailureClass`.
+#[proc_macro_derive(Classified, attributes(failure))]
+pub fn derive_classified(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+    classified::derive_classified(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
 
 /// Instruments a function using canonical tracing attributes.
 ///
@@ -347,18 +368,26 @@ impl Event {
         let target = self.target.as_ref().map(|target| quote! { target: #target, });
         let parent = self.parent.as_ref().map(|parent| quote! { parent: #parent, });
         let name = &self.name;
-        let error_import = self.error.as_ref().map(|_| {
-            quote! { use ::miden_node_tracing::__private::AsDynError as _; }
-        });
-        let error = self.error.as_ref().map(|error| {
+        let error = self.error.as_ref().map(|_| {
             quote! {
-                , error = (#error).as_dyn_error()
+                , error = (*__miden_error).as_dyn_error()
+            }
+        });
+        // An `ERROR` event marks its span as failed, so it also records the failure on the span. An
+        // event with an explicit parent is not recorded, because the parent may be no span.
+        let record_failure = (level == "error" && self.parent.is_none()).then(|| {
+            quote! {
+                use ::miden_node_tracing::__private::{
+                    ClassifiedFailure as _,
+                    UnclassifiedFailure as _,
+                };
+                ::miden_node_tracing::__private::record_logged_failure(
+                    __miden_error.miden_failure_class(),
+                );
             }
         });
         let fields = self.fields.iter().map(RecordField::instrument_tokens);
-
-        quote! {{
-            #error_import
+        let event = quote! {
             ::miden_node_tracing::__private::#level!(
                 #target
                 #parent
@@ -366,7 +395,21 @@ impl Event {
                 #error
                 #(, #fields)*
             )
-        }}
+        };
+
+        let Some(error) = &self.error else {
+            return quote! {{ #event }};
+        };
+        // Matching on a reference evaluates the error once and keeps its temporaries alive.
+        quote! {
+            match &(#error) {
+                __miden_error => {
+                    use ::miden_node_tracing::__private::AsDynError as _;
+                    #record_failure
+                    #event
+                },
+            }
+        }
     }
 }
 

@@ -4,7 +4,7 @@ use http::{Response, StatusCode, header};
 use http_body_util::Full;
 pub use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::{ErrorSpanExt, error};
+use crate::{ErrorSpanExt, FailureClass, error};
 
 /// Custom callback that is used by Tower to fulfill the
 /// [`tower_http::catch_panic::ResponseForPanic`] trait.
@@ -15,10 +15,10 @@ pub fn catch_panic_layer_fn(err: Box<dyn Any + Send + 'static>) -> Response<Full
     // Log the panic error details.
     let err = stringify_panic_error(err);
     let wrapped = anyhow::Error::msg(err);
-    error!(&wrapped, "panic", panic = true);
 
-    // Mark the current span as failed for OpenTelemetry.
-    tracing::Span::current().set_error(wrapped.as_ref());
+    // Mark the current span as failed before logging, so the span records the panic as its failure.
+    tracing::Span::current().set_failure(FailureClass::Fault("panic"), wrapped.as_ref());
+    error!(&wrapped, "panic", panic = true);
 
     // Return generic error response.
     Response::builder()

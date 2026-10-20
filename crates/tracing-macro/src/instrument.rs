@@ -51,19 +51,17 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
                 ClassifiedFailure as _,
                 UnclassifiedFailure as _,
             };
-            let __miden_failure = __miden_error.miden_failure_class();
-            if let ::core::option::Option::Some(__miden_failure) = __miden_failure {
-                __miden_failure.record(&::miden_node_tracing::Span::current());
-            }
-            match __miden_failure {
-                ::core::option::Option::Some(__miden_failure) if __miden_failure.is_rejection() => {
-                    if #error_level >= #info_level {
-                        #error_event;
-                    } else {
-                        #rejection_event;
-                    }
-                },
-                _ => #error_event,
+            if ::miden_node_tracing::__private::record_returned_failure(
+                __miden_error.miden_failure_class(),
+                #error_level,
+            ) {
+                if #error_level >= #info_level {
+                    #error_event;
+                } else {
+                    #rejection_event;
+                }
+            } else {
+                #error_event;
             }
         }
         __miden_result

@@ -1,10 +1,13 @@
 use tracing_opentelemetry::OpenTelemetrySpanExt as _;
+use tracing_subscriber::Registry;
+use tracing_subscriber::registry::LookupSpan as _;
 
 /// How a failed operation is reported in telemetry, with a short name for what happened.
 ///
 /// The class is exported on the failed span as `failure.class` and the kind as `failure.kind`.
 /// Only a rejection leaves the span status unset: rejecting a bad request is the node behaving
-/// correctly, so alerts on failed spans see node failures only.
+/// correctly, so alerts on failed spans see node failures only. Every span that is marked failed
+/// records a transient or fault class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
     /// The node rejected a request because of the request itself or the state it refers to, such as
@@ -80,19 +83,102 @@ impl FailureClass {
         }
     }
 
-    /// Records the class and kind as attributes of `span`.
+    /// The class of a failure that is logged at `ERROR`, and so marks its span as failed.
     ///
-    /// This does not change the span status; the status follows the level of the error event.
-    pub fn record(self, span: &tracing::Span) {
-        span.set_attribute("failure.class", self.name());
-        span.set_attribute("failure.kind", self.kind());
+    /// An unclassified error is a fault of kind `unclassified`. A rejection logged at `ERROR` is
+    /// a fault of the same kind, because the span is marked failed regardless.
+    pub fn of_failed_span(class: Option<Self>) -> Self {
+        match class {
+            Some(Self::Rejected(kind)) => Self::Fault(kind),
+            Some(class) => class,
+            None => Self::Fault(UNCLASSIFIED),
+        }
     }
+
+    /// The class of a failure reported by a component the node calls.
+    ///
+    /// A rejection becomes a fault: when the node's own request is rejected, such as a block the
+    /// validator refuses to sign, the node sent a bad request. Other classes are unchanged.
+    pub fn from_dependency(class: Self) -> Self {
+        match class {
+            Self::Rejected(kind) => Self::Fault(kind),
+            class => class,
+        }
+    }
+
+    /// Records the class and kind as attributes of `span`, unless the span already records a
+    /// failure.
+    ///
+    /// The first failure recorded on a span wins. Several mechanisms can report the same failure,
+    /// such as an error event inside a function that then returns the error, and the first one is
+    /// also the one that set the span status.
+    ///
+    /// This does not change the span status.
+    pub fn record(self, span: &tracing::Span) {
+        if mark_failure_recorded(span) {
+            span.set_attribute("failure.class", self.name());
+            span.set_attribute("failure.kind", self.kind());
+        }
+    }
+}
+
+/// The failure kind of an error that does not implement [`Classified`].
+const UNCLASSIFIED: &str = "unclassified";
+
+/// Marks `span` as recording a failure. Returns false if it already did.
+///
+/// The mark is kept in the span's registry extensions. Without a registry, every call returns
+/// true.
+fn mark_failure_recorded(span: &tracing::Span) -> bool {
+    struct FailureRecorded;
+
+    let mut first = true;
+    span.with_subscriber(|(id, dispatch)| {
+        if let Some(span) = dispatch.downcast_ref::<Registry>().and_then(|r| r.span(id)) {
+            let mut extensions = span.extensions_mut();
+            first = extensions.get_mut::<FailureRecorded>().is_none();
+            if first {
+                extensions.insert(FailureRecorded);
+            }
+        }
+    });
+    first
+}
+
+/// Records the failure of an error returned from a function instrumented with
+/// `#[miden_instrument(err)]`, whose error event is logged at `level`. Returns true if the error
+/// is a rejection.
+///
+/// A rejection is always recorded. Other failures are recorded only when logged at `ERROR`,
+/// since only then is the span marked failed.
+#[doc(hidden)]
+pub fn record_returned_failure(class: Option<FailureClass>, level: tracing::Level) -> bool {
+    let span = tracing::Span::current();
+    match class {
+        Some(class) if class.is_rejection() => {
+            class.record(&span);
+            true
+        },
+        class => {
+            if level == tracing::Level::ERROR {
+                FailureClass::of_failed_span(class).record(&span);
+            }
+            false
+        },
+    }
+}
+
+/// Records the failure of an error logged with the `error!` macro on the current span, which the
+/// `ERROR` event marks as failed.
+#[doc(hidden)]
+pub fn record_logged_failure(class: Option<FailureClass>) {
+    FailureClass::of_failed_span(class).record(&tracing::Span::current());
 }
 
 /// An error that knows how its failure is reported in telemetry.
 ///
 /// `#[miden_instrument(err)]` uses this to choose the error event's level and the span's failure
-/// attributes. Errors without an implementation are reported as faults without failure attributes.
+/// attributes. Errors without an implementation are reported as faults of kind `unclassified`.
 pub trait Classified {
     /// The error's failure class and kind.
     fn failure_class(&self) -> FailureClass;
