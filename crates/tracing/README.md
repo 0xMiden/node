@@ -39,15 +39,13 @@ argument so the subscriber can record both fields.
 ## gRPC servers
 
 `grpc::grpc_trace_layer()` creates a root span for each request and records the response's gRPC status code as
-`rpc.grpc.status_code`. It logs each failed request once, with its status code and message. Alert on the status code of
-these root spans rather than on failed spans, since a client can cause errors deeper in the request.
+`rpc.grpc.status_code`. It logs each failed request once, with its status code and message. `INTERNAL`, `DATA_LOSS` and
+`UNAVAILABLE` are logged at `ERROR`, which sets the span status to error. Other codes describe the request, so they are
+logged at `INFO`.
 
-`grpc::grpc_trace_layer()` logs every failed request at `ERROR`. `grpc::public_grpc_trace_layer()` is for servers
-exposed to the public: it logs `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` at `ERROR` and other failures at `INFO`, so a
-client's mistake does not set the request span's status to error.
-
-A function that handles requests on a public server should not use `#[miden_instrument(err)]`. The trace layer already
-logs the failure at the level its status code calls for.
+A function that handles requests does not need `#[miden_instrument(err)]`, because the trace layer already logs the
+failure at the level its status code calls for. Log an internal error with its causes where it is converted to a status
+instead, since the status message should not expose node internals to clients.
 
 ## License
 

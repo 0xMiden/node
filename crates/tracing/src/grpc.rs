@@ -17,7 +17,7 @@ use tower_http::trace::{
 };
 use tracing::{Level, field};
 
-/// The [`TraceLayer`] returned by [`grpc_trace_layer`] and [`public_grpc_trace_layer`].
+/// The [`TraceLayer`] returned by [`grpc_trace_layer`].
 pub type GrpcTraceLayer = TraceLayer<
     GrpcMakeClassifier,
     GrpcMakeSpan,
@@ -28,35 +28,22 @@ pub type GrpcTraceLayer = TraceLayer<
     GrpcOnFailure,
 >;
 
-/// Returns the trace layer for a gRPC server that only trusted components call.
+/// Returns the trace layer for a gRPC server.
 ///
 /// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
-/// code as `rpc.grpc.status_code`. A failed request is logged once on that span at `ERROR`, with
-/// its status code and message.
+/// code as `rpc.grpc.status_code`. A failed request is logged once on that span, with its status
+/// code and message. `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR`, which marks
+/// the span as failed. Other codes are logged at `INFO`.
+///
+/// The other codes describe the request, such as an unknown account or a method that does not
+/// exist, and clients cause them. Requests from other node components can carry client content
+/// too, such as a transaction forwarded to the validator, so internal servers use the same levels.
+/// A trusted caller that sent a bad request logs its own failure.
 pub fn grpc_trace_layer() -> GrpcTraceLayer {
-    trace_layer(GrpcFailureLevels { public: false })
-}
-
-/// Returns the trace layer for a gRPC server exposed to the public, such as the RPC.
-///
-/// This is [`grpc_trace_layer`], except that only `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE`
-/// responses are logged at `ERROR`. Other failed requests are logged at `INFO`.
-///
-/// Clients cause the other codes, for example by requesting an unknown account or, for scanners,
-/// a method that does not exist. Logging them at `INFO` keeps them out of the error logs and
-/// leaves the request span's status unset.
-pub fn public_grpc_trace_layer() -> GrpcTraceLayer {
-    trace_layer(GrpcFailureLevels { public: true })
-}
-
-fn trace_layer(levels: GrpcFailureLevels) -> GrpcTraceLayer {
     TraceLayer::new_for_grpc()
         .make_span_with(GrpcMakeSpan)
-        .on_response(GrpcOnResponse {
-            levels,
-            inner: DefaultOnResponse::default(),
-        })
-        .on_eos(GrpcOnEos { levels })
+        .on_response(GrpcOnResponse::default())
+        .on_eos(GrpcOnEos)
         .on_failure(GrpcOnFailure)
 }
 
@@ -74,31 +61,26 @@ impl<B> MakeSpan<B> for GrpcMakeSpan {
 ///
 /// A handler's error is returned in the headers. Other responses carry their status in the
 /// trailers, which [`GrpcOnEos`] records.
-#[derive(Clone, Debug)]
-pub struct GrpcOnResponse {
-    levels: GrpcFailureLevels,
-    inner: DefaultOnResponse,
-}
+#[derive(Clone, Debug, Default)]
+pub struct GrpcOnResponse(DefaultOnResponse);
 
 impl<B> OnResponse<B> for GrpcOnResponse {
     fn on_response(self, response: &http::Response<B>, latency: Duration, span: &tracing::Span) {
         if let Some(status) = tonic::Status::from_header_map(response.headers()) {
-            self.levels.record(&status, latency, span);
+            record_status(&status, latency, span);
         }
-        self.inner.on_response(response, latency, span);
+        self.0.on_response(response, latency, span);
     }
 }
 
 /// Records the gRPC status of a response that carries it in its trailers.
 #[derive(Clone, Copy, Debug)]
-pub struct GrpcOnEos {
-    levels: GrpcFailureLevels,
-}
+pub struct GrpcOnEos;
 
 impl OnEos for GrpcOnEos {
     fn on_eos(self, trailers: Option<&HeaderMap>, stream_duration: Duration, span: &tracing::Span) {
         if let Some(status) = trailers.and_then(tonic::Status::from_header_map) {
-            self.levels.record(&status, stream_duration, span);
+            record_status(&status, stream_duration, span);
         }
     }
 }
@@ -123,25 +105,16 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
     }
 }
 
-/// Chooses the level at which a failed request is logged.
-#[derive(Clone, Copy, Debug)]
-struct GrpcFailureLevels {
-    public: bool,
-}
-
-impl GrpcFailureLevels {
-    /// Records `status` as the request's status code, and logs it if it is a failure.
-    fn record(self, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
-        let code = status.code();
-        span.record("rpc.grpc.status_code", code as i32);
-        match code {
-            tonic::Code::Ok => {},
-            tonic::Code::Internal | tonic::Code::DataLoss | tonic::Code::Unavailable => {
-                log_failure(Level::ERROR, status, latency, span);
-            },
-            _ if self.public => log_failure(Level::INFO, status, latency, span),
-            _ => log_failure(Level::ERROR, status, latency, span),
-        }
+/// Records `status` as the request's status code, and logs it if it is a failure.
+fn record_status(status: &tonic::Status, latency: Duration, span: &tracing::Span) {
+    let code = status.code();
+    span.record("rpc.grpc.status_code", code as i32);
+    match code {
+        tonic::Code::Ok => {},
+        tonic::Code::Internal | tonic::Code::DataLoss | tonic::Code::Unavailable => {
+            log_failure(Level::ERROR, status, latency, span);
+        },
+        _ => log_failure(Level::INFO, status, latency, span),
     }
 }
 

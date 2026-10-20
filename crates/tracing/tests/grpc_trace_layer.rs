@@ -2,7 +2,7 @@ use std::convert::Infallible;
 
 use http::HeaderMap;
 use http_body_util::{BodyExt as _, Empty};
-use miden_node_tracing::grpc::{GrpcTraceLayer, grpc_trace_layer, public_grpc_trace_layer};
+use miden_node_tracing::grpc::{GrpcTraceLayer, grpc_trace_layer};
 use opentelemetry::trace::{Event, Status, TracerProvider as _};
 use opentelemetry::{KeyValue, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
@@ -87,7 +87,7 @@ fn event_attribute(event: &Event, name: &str) -> Option<String> {
 #[test]
 fn successful_requests_record_the_ok_status_code() {
     for status_in in [StatusIn::Headers, StatusIn::Trailers] {
-        let span = request_span(&public_grpc_trace_layer(), &tonic::Status::ok(""), status_in);
+        let span = request_span(&grpc_trace_layer(), &tonic::Status::ok(""), status_in);
         assert_eq!(status_code(&span), Some(&Value::I64(0)), "{status_in:?}");
         assert!(failure_event(&span).is_none(), "{status_in:?}");
         assert_eq!(span.status, Status::Unset, "{status_in:?}");
@@ -116,16 +116,7 @@ fn failed_requests_record_and_log_their_status() {
 }
 
 #[test]
-fn internal_servers_log_every_failure_as_an_error() {
-    let status = tonic::Status::invalid_argument("account not found");
-    let span = request_span(&grpc_trace_layer(), &status, StatusIn::Headers);
-    let event = failure_event(&span).expect("failure is logged");
-    assert_eq!(event_attribute(event, "level").as_deref(), Some("ERROR"));
-    assert_eq!(span.status, Status::error(""));
-}
-
-#[test]
-fn public_servers_log_client_errors_at_info() {
+fn client_errors_are_logged_at_info() {
     for code in [
         tonic::Code::InvalidArgument,
         tonic::Code::NotFound,
@@ -134,11 +125,8 @@ fn public_servers_log_client_errors_at_info() {
         tonic::Code::Unknown,
         tonic::Code::Unimplemented,
     ] {
-        let span = request_span(
-            &public_grpc_trace_layer(),
-            &tonic::Status::new(code, ""),
-            StatusIn::Headers,
-        );
+        let span =
+            request_span(&grpc_trace_layer(), &tonic::Status::new(code, ""), StatusIn::Headers);
         assert_eq!(status_code(&span), Some(&Value::I64(code as i64)), "{code:?}");
         let event = failure_event(&span).expect("failure is logged");
         assert_eq!(event_attribute(event, "level").as_deref(), Some("INFO"), "{code:?}");
@@ -147,13 +135,10 @@ fn public_servers_log_client_errors_at_info() {
 }
 
 #[test]
-fn public_servers_log_server_errors_as_errors() {
+fn server_errors_are_logged_as_errors() {
     for code in [tonic::Code::Internal, tonic::Code::DataLoss, tonic::Code::Unavailable] {
-        let span = request_span(
-            &public_grpc_trace_layer(),
-            &tonic::Status::new(code, ""),
-            StatusIn::Headers,
-        );
+        let span =
+            request_span(&grpc_trace_layer(), &tonic::Status::new(code, ""), StatusIn::Headers);
         let event = failure_event(&span).expect("failure is logged");
         assert_eq!(event_attribute(event, "level").as_deref(), Some("ERROR"), "{code:?}");
         assert_eq!(span.status, Status::error(""), "{code:?}");

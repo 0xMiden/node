@@ -5,7 +5,7 @@ use miden_node_proto::Verify;
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::miden::note_transport::v1::DecodedTransportNote;
-use miden_node_tracing::grpc::public_grpc_trace_layer;
+use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{debug, error, info};
 use miden_node_utils::clap::GrpcOptions;
@@ -119,7 +119,7 @@ impl Server {
         grpc::server_builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(public_grpc_trace_layer())
+            .layer(grpc_trace_layer())
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)

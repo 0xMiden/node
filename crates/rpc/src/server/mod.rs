@@ -14,7 +14,7 @@ use miden_node_proto::clients::{
 use miden_node_proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
-use miden_node_tracing::grpc::{grpc_trace_layer, public_grpc_trace_layer};
+use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::info;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::clap::GrpcOptions;
@@ -344,7 +344,7 @@ impl Rpc {
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(public_grpc_trace_layer())
+            .layer(grpc_trace_layer())
             .layer(HealthCheckLayer)
             .layer(cors_for_grpc_web_layer())
             // Note: must wrap the accept layer so grpc-web callers receive grpc-web-compatible
