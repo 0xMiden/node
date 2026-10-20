@@ -81,6 +81,8 @@ Failures are recorded by:
   level when that is more verbose, so it never sets the span status to error. Other failures are recorded when their
   event is logged at `ERROR`, which marks the span as failed; `err(level = ...)` below `ERROR` records nothing.
 - The `error!` macro, which marks its span as failed and records the error's class, or a fault for a rejection.
+- The `failure!` macro, which takes the same arguments as `error!` but logs a rejection at `INFO` without failing the
+  span, and any other failure at `ERROR`. Use it to log an error whose class is not known at the call site.
 - `ErrorSpanExt::set_error`, which records an unclassified fault, and `ErrorSpanExt::set_failure`, which records a given
   class and marks the span as failed unless it is a rejection.
 - The panic hooks, which record a fault of kind `panic`.

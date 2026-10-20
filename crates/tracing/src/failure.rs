@@ -145,14 +145,15 @@ fn mark_failure_recorded(span: &tracing::Span) -> bool {
     first
 }
 
-/// Records the failure of an error returned from a function instrumented with
-/// `#[miden_instrument(err)]`, whose error event is logged at `level`. Returns true if the error
-/// is a rejection.
+/// Records the failure of an error on the current span, whose error event is logged at `level`
+/// unless it is a rejection. Returns true if the error is a rejection.
+///
+/// `#[miden_instrument(err)]` and `failure!` use this to choose the level of the error event.
 ///
 /// A rejection is always recorded. Other failures are recorded only when logged at `ERROR`,
 /// since only then is the span marked failed.
 #[doc(hidden)]
-pub fn record_returned_failure(class: Option<FailureClass>, level: tracing::Level) -> bool {
+pub fn record_failure(class: Option<FailureClass>, level: tracing::Level) -> bool {
     let span = tracing::Span::current();
     match class {
         Some(class) if class.is_rejection() => {

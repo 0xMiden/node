@@ -29,6 +29,7 @@ pub use miden_node_tracing_macro::{
     Classified,
     debug,
     error,
+    failure,
     info,
     miden_instrument,
     miden_span_record,
@@ -50,8 +51,8 @@ pub mod __private {
     pub use crate::failure::{
         ClassifiedFailure,
         UnclassifiedFailure,
+        record_failure,
         record_logged_failure,
-        record_returned_failure,
     };
     pub use crate::instrument::AsDynError;
 }

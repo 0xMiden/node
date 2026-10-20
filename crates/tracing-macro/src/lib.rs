@@ -235,6 +235,25 @@ pub fn error(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true)
 }
 
+/// Emits an event for a typed error at a level chosen by its failure class.
+///
+/// A rejection is logged at `INFO`, since rejecting a bad request is the node behaving correctly.
+/// Any other failure is logged at `ERROR` and marks the span as failed. Either way the failure is
+/// recorded on the current span. The arguments are the same as for `error!`.
+///
+/// ```rust,ignore
+/// use miden_node_tracing::failure;
+///
+/// failure!(err, target: "node", "transaction.failed", account.id = account_id);
+/// ```
+#[proc_macro]
+pub fn failure(input: TokenStream) -> TokenStream {
+    match syn::parse::<ErrorEvent>(input) {
+        Ok(event) => event.0.failure_tokens().into(),
+        Err(error) => error.into_compile_error().into(),
+    }
+}
+
 fn expand_event(input: TokenStream, level: &str, error_required: bool) -> TokenStream {
     let event = if error_required {
         syn::parse::<ErrorEvent>(input).map(|event| event.0)
@@ -366,14 +385,10 @@ impl Event {
     }
 
     fn tokens(&self, level: &Ident) -> TokenStream2 {
-        let target = self.target.as_ref().map(|target| quote! { target: #target, });
-        let parent = self.parent.as_ref().map(|parent| quote! { parent: #parent, });
-        let name = &self.name;
-        let error = self.error.as_ref().map(|_| {
-            quote! {
-                , error = (*__miden_error).as_dyn_error()
-            }
-        });
+        let event = self.event_tokens(level);
+        if self.error.is_none() {
+            return quote! {{ #event }};
+        }
         // An `ERROR` event marks its span as failed, so it also records the failure on the span. An
         // event with an explicit parent is not recorded, because the parent may be no span.
         let record_failure = (level == "error" && self.parent.is_none()).then(|| {
@@ -387,8 +402,57 @@ impl Event {
                 );
             }
         });
+        self.with_error(&quote! {
+            #record_failure
+            #event
+        })
+    }
+
+    /// Returns the tokens of a `failure!` event, which is logged at `INFO` for a rejection and at
+    /// `ERROR` otherwise.
+    fn failure_tokens(&self) -> TokenStream2 {
+        let rejection = self.event_tokens(&Ident::new("info", proc_macro2::Span::call_site()));
+        let failure = self.event_tokens(&Ident::new("error", proc_macro2::Span::call_site()));
+        // An event with an explicit parent is not recorded, because the parent may be no span.
+        let is_rejection = if self.parent.is_none() {
+            quote! {
+                ::miden_node_tracing::__private::record_failure(
+                    __miden_error.miden_failure_class(),
+                    ::miden_node_tracing::Level::ERROR,
+                )
+            }
+        } else {
+            quote! {
+                __miden_error
+                    .miden_failure_class()
+                    .is_some_and(::miden_node_tracing::FailureClass::is_rejection)
+            }
+        };
+        self.with_error(&quote! {
+            use ::miden_node_tracing::__private::{
+                ClassifiedFailure as _,
+                UnclassifiedFailure as _,
+            };
+            if #is_rejection {
+                #rejection
+            } else {
+                #failure
+            }
+        })
+    }
+
+    /// Returns the event macro invocation at `level`, referring to the error as `__miden_error`.
+    fn event_tokens(&self, level: &Ident) -> TokenStream2 {
+        let target = self.target.as_ref().map(|target| quote! { target: #target, });
+        let parent = self.parent.as_ref().map(|parent| quote! { parent: #parent, });
+        let name = &self.name;
+        let error = self.error.as_ref().map(|_| {
+            quote! {
+                , error = (*__miden_error).as_dyn_error()
+            }
+        });
         let fields = self.fields.iter().map(RecordField::instrument_tokens);
-        let event = quote! {
+        quote! {
             ::miden_node_tracing::__private::#level!(
                 #target
                 #parent
@@ -396,18 +460,18 @@ impl Event {
                 #error
                 #(, #fields)*
             )
-        };
+        }
+    }
 
-        let Some(error) = &self.error else {
-            return quote! {{ #event }};
-        };
+    /// Wraps `body` so that it can refer to the event's error as `__miden_error`.
+    fn with_error(&self, body: &TokenStream2) -> TokenStream2 {
+        let error = self.error.as_ref().expect("the event has an error");
         // Matching on a reference evaluates the error once and keeps its temporaries alive.
         quote! {
             match &(#error) {
                 __miden_error => {
                     use ::miden_node_tracing::__private::AsDynError as _;
-                    #record_failure
-                    #event
+                    #body
                 },
             }
         }

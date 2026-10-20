@@ -51,7 +51,7 @@ pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<Tok
                 ClassifiedFailure as _,
                 UnclassifiedFailure as _,
             };
-            if ::miden_node_tracing::__private::record_returned_failure(
+            if ::miden_node_tracing::__private::record_failure(
                 __miden_error.miden_failure_class(),
                 #error_level,
             ) {

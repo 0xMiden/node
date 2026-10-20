@@ -376,6 +376,32 @@ fn error_events_record_a_fault_on_their_span() {
 }
 
 #[test]
+fn failure_events_choose_their_level_by_class() {
+    let spans = export(|| {
+        tracing::info_span!("rejected").in_scope(|| {
+            miden_node_tracing::failure!(SubmitError::Expired, "submit.failed");
+        });
+        tracing::info_span!("transient").in_scope(|| {
+            miden_node_tracing::failure!(SubmitError::StoreUnavailable, "submit.failed");
+        });
+        tracing::info_span!("unclassified").in_scope(|| {
+            miden_node_tracing::failure!(failure(), "submit.failed");
+        });
+    });
+    let expected = [
+        ("INFO", Status::Unset, "rejected", "expired"),
+        ("ERROR", Status::error(""), "transient", "store_unavailable"),
+        ("ERROR", Status::error(""), "fault", "unclassified"),
+    ];
+    assert_eq!(spans.len(), expected.len());
+    for (span, (level, status, class, kind)) in spans.iter().zip(expected) {
+        assert_eq!(event_level(span), Some(&Value::from(level)), "{span:?}");
+        assert_eq!(span.status, status);
+        assert_eq!(failure_attributes(span), (Some(&class.into()), Some(&kind.into())));
+    }
+}
+
+#[test]
 fn the_first_failure_recorded_on_a_span_wins() {
     let spans = export(|| assert!(logged_then_rejected().is_err()));
     let [span] = spans.as_slice() else {
