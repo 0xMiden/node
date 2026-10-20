@@ -2,9 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
 use miden_crypto::hash::rpo::Rpo256;
-#[cfg(feature = "rocksdb")]
-use miden_crypto::merkle::smt::ForestPersistentBackend;
-use miden_crypto::merkle::smt::{Backend, BackendReader, ForestInMemoryBackend};
+use miden_crypto::merkle::smt::{
+    Backend,
+    BackendReader,
+    ForestInMemoryBackend,
+    ForestPersistentBackend,
+};
 use miden_node_proto::domain::account::{
     AccountStorageMapDetails,
     AccountVaultDetails,
@@ -73,10 +76,7 @@ pub enum WitnessError {
     TooManyVaultAssets,
 }
 
-#[cfg(feature = "rocksdb")]
 pub(crate) type AccountStateForestBackend = ForestPersistentBackend;
-#[cfg(not(feature = "rocksdb"))]
-pub(crate) type AccountStateForestBackend = ForestInMemoryBackend;
 
 /// The read-only snapshot backend for the forest, used by in-memory state snapshots.
 pub(crate) type AccountStateForestBackendReader = <AccountStateForestBackend as Backend>::Reader;
@@ -166,7 +166,6 @@ impl<B: BackendReader> AccountStateForest<B> {
         })
     }
 
-    #[cfg(feature = "rocksdb")]
     pub(crate) fn lineage_count(&self) -> usize {
         self.forest.lineage_count()
     }
