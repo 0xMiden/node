@@ -43,8 +43,15 @@ async fn main() -> anyhow::Result<()> {
     // Configure tracing with optional OpenTelemetry exporting support.
     let _otel_guard = miden_node_tracing::setup_tracing(cli.command.open_telemetry())?;
 
-    miden_node_utils::shutdown::run_with_shutdown("miden-node", |shutdown| {
+    let result = miden_node_utils::shutdown::run_with_shutdown("miden-node", |shutdown| {
         cli.command.execute(shutdown)
     })
-    .await
+    .await;
+
+    // Failures that end the process, such as a store that cannot be loaded at startup, are
+    // otherwise only printed to stderr when `main` returns, and never reach the tracing layers.
+    if let Err(err) = &result {
+        miden_node_tracing::error!(err, target: LOG_TARGET, "Node exited with an error");
+    }
+    result
 }
