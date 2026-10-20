@@ -1,8 +1,8 @@
 //! Tree loading logic for the store state.
 //!
 //! This module handles loading and initializing the Merkle trees (account tree, nullifier tree,
-//! and SMT forest) from RocksDB. Existing trees are loaded from disk; empty storage is rebuilt from
-//! SQLite and persisted. Consistency checks detect divergence between RocksDB and SQLite after
+//! and SMT forest) from `RocksDB`. Existing trees are loaded from disk; empty storage is rebuilt from
+//! SQLite and persisted. Consistency checks detect divergence between `RocksDB` and SQLite after
 //! loading.
 
 use std::num::NonZeroUsize;
@@ -101,7 +101,7 @@ fn block_num_to_nullifier_leaf(block_num: BlockNumber) -> Word {
 // PERSISTENT STORAGE LOADING
 // ================================================================================================
 
-/// Opens RocksDB storage for an account or nullifier tree.
+/// Opens `RocksDB` storage for an account or nullifier tree.
 #[miden_instrument(
     target = COMPONENT,
     name = "open_tree_storage",
@@ -120,7 +120,7 @@ pub fn open_tree_storage(
         .map_err(|e| StateInitializationError::AccountTreeIoError(e.to_string()))
 }
 
-/// Loads the account tree from RocksDB, populating empty storage from SQLite.
+/// Loads the account tree from `RocksDB`, populating empty storage from SQLite.
 #[miden_instrument(
     target = COMPONENT,
 )]
@@ -159,7 +159,7 @@ pub async fn load_account_tree(
     AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree)
 }
 
-/// Loads the nullifier tree from RocksDB, populating empty storage from SQLite.
+/// Loads the nullifier tree from `RocksDB`, populating empty storage from SQLite.
 #[miden_instrument(
     target = COMPONENT,
 )]
@@ -197,7 +197,7 @@ pub async fn load_nullifier_tree(
     Ok(NullifierTree::new_unchecked(smt))
 }
 
-/// Opens RocksDB storage for the account state forest.
+/// Opens `RocksDB` storage for the account state forest.
 #[miden_instrument(
     target = COMPONENT,
     name = "open_forest_storage",
@@ -227,7 +227,7 @@ pub fn open_account_state_forest_storage(
         .map_err(|e| StateInitializationError::AccountStateForestIoError(e.to_string()))
 }
 
-/// Loads the account state forest from RocksDB, populating empty storage from SQLite.
+/// Loads the account state forest from `RocksDB`, populating empty storage from SQLite.
 #[miden_instrument(
     target = COMPONENT,
     fields(
@@ -356,7 +356,7 @@ pub async fn rebuild_account_state_forest(
 
 /// Verifies that tree roots match the expected roots from the latest block header.
 ///
-/// This detects divergence between RocksDB and SQLite caused by corruption or incomplete shutdown.
+/// This detects divergence between `RocksDB` and SQLite caused by corruption or incomplete shutdown.
 ///
 /// # Arguments
 /// * `account_tree_root` - Root of the loaded account tree
