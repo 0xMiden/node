@@ -28,7 +28,8 @@ use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
-use self::error_codes::{SyncErrorCode, internal_error, log_internal_error};
+pub(crate) use self::error_codes::log_internal_error;
+use self::error_codes::{SyncErrorCode, internal_error};
 use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};

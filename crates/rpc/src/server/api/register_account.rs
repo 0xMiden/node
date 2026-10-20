@@ -5,7 +5,7 @@ use miden_node_store::allowlist::{AllowlistError, InvitationCode, RegistrationOu
 use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
 use tonic::{Code, Request, Status};
 
-use super::{RpcBackend, RpcService};
+use super::{RpcBackend, RpcService, log_internal_error};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
@@ -36,9 +36,11 @@ impl proto::server::miden_node_v1_node_service::RegisterAccount for RpcService {
         match &self.backend {
             RpcBackend::Sequencer { account_admission, .. } => {
                 let registered = if account_admission.is_disabled() {
-                    account_admission.allowlist.add_account(account_id).await.map_err(|error| {
-                        Status::internal(AllowlistError::Database(error).as_report())
-                    })?
+                    account_admission
+                        .allowlist
+                        .add_account(account_id)
+                        .await
+                        .map_err(|error| log_internal_error(&AllowlistError::Database(error)))?
                 } else {
                     let invitation = InvitationCode::new(&request.invitation_code)
                         .map_err(|error| Status::invalid_argument(error.to_string()))?;
@@ -53,7 +55,7 @@ impl proto::server::miden_node_v1_node_service::RegisterAccount for RpcService {
                                 | AllowlistError::AccountAlreadyRegistered(_) => {
                                     Code::AlreadyExists
                                 },
-                                AllowlistError::Database(_) => Code::Internal,
+                                AllowlistError::Database(_) => return log_internal_error(&error),
                             };
                             Status::new(code, error.as_report())
                         })?;

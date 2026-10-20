@@ -2062,7 +2062,7 @@ async fn register_account_and_lookup_preserve_conversion_errors() {
 #[case::enabled(false)]
 #[case::disabled(true)]
 #[tokio::test]
-async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
+async fn allowlist_database_failures_hide_the_cause(#[case] disabled: bool) {
     let (mut rpc, _addr, store, _server) = start_rpc_with_allowlist(disabled).await;
     let path = DataDirectory::load(store.data_directory.clone())
         .unwrap()
@@ -2088,7 +2088,7 @@ async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
 
     let error = rpc.register_account(request).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
-    assert!(error.message().contains("unable to open database file"), "{error}");
+    assert!(!error.message().contains("unable to open database file"), "{error}");
 
     let query =
         proto::miden::node::v1::IsAccountAllowedRequest { account_id: Some(account.into()) };
@@ -2097,7 +2097,7 @@ async fn allowlist_database_failures_include_the_cause(#[case] disabled: bool) {
     } else {
         let error = rpc.is_account_allowed(query).await.unwrap_err();
         assert_eq!(error.code(), tonic::Code::Internal);
-        assert!(error.message().contains("unable to open database file"), "{error}");
+        assert!(!error.message().contains("unable to open database file"), "{error}");
     }
 }
 

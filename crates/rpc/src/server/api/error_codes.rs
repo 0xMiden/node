@@ -80,7 +80,7 @@ pub(super) fn internal_error(message: impl Into<String>) -> Status {
 ///
 /// The causes stay in the node's logs because they can describe node internals, such as database
 /// errors, that a public client should not see.
-pub(super) fn log_internal_error<E: std::error::Error + 'static>(err: &E) -> Status {
+pub(crate) fn log_internal_error<E: std::error::Error + 'static>(err: &E) -> Status {
     error!(err, target: LOG_TARGET, "Internal error");
     internal_error(err.to_string())
 }
