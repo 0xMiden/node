@@ -947,12 +947,12 @@ mod vault_witness_tests {
 
     use miden_node_proto::domain::account::{
         AccountDetails,
-        AccountResponse,
         AccountStorageDetails,
         AccountVaultDetails,
+        GetAccountResponse,
     };
-    use miden_node_proto::generated as proto;
-    use miden_node_proto::generated::server::rpc_api;
+    use miden_node_proto::generated::miden::node::v1 as proto;
+    use miden_node_proto::generated::server::miden_node_v1_node_service as rpc_api;
     use miden_protocol::Word;
     use miden_protocol::account::AccountHeader;
     use miden_protocol::asset::AssetId;
@@ -967,18 +967,18 @@ mod vault_witness_tests {
 
     /// RPC server that answers `GetAccount` with a fixed response and rejects all other calls.
     #[derive(Clone)]
-    struct FixedAccountRpc(proto::rpc::AccountResponse);
+    struct FixedAccountRpc(proto::GetAccountResponse);
 
     #[tonic::async_trait]
     impl rpc_api::GetAccount for FixedAccountRpc {
         type Input = ();
-        type Output = proto::rpc::AccountResponse;
+        type Output = proto::GetAccountResponse;
 
-        fn decode(_request: proto::rpc::AccountRequest) -> tonic::Result<Self::Input> {
+        fn decode(_request: proto::GetAccountRequest) -> tonic::Result<Self::Input> {
             Ok(())
         }
 
-        fn encode(output: Self::Output) -> tonic::Result<proto::rpc::AccountResponse> {
+        fn encode(output: Self::Output) -> tonic::Result<proto::GetAccountResponse> {
             Ok(output)
         }
 
@@ -1047,73 +1047,78 @@ mod vault_witness_tests {
         };
     }
 
-    unused_rpc!(Status, (), proto::rpc::RpcStatus);
-    unused_rpc!(GetLimits, (), proto::rpc::RpcLimits);
-    unused_rpc!(RegisterAccount, proto::rpc::RegisterAccountRequest, ());
+    unused_rpc!(Status, proto::StatusRequest, proto::StatusResponse);
+    unused_rpc!(GetLimits, proto::GetLimitsRequest, proto::GetLimitsResponse);
+    unused_rpc!(RegisterAccount, proto::RegisterAccountRequest, proto::RegisterAccountResponse);
     unused_rpc!(
         IsAccountAllowed,
-        proto::rpc::IsAccountAllowedRequest,
-        proto::rpc::IsAccountAllowedResponse
+        proto::IsAccountAllowedRequest,
+        proto::IsAccountAllowedResponse
     );
-    unused_rpc!(GetBlockByNumber, proto::rpc::BlockRequest, proto::rpc::MaybeBlock);
+    unused_rpc!(
+        IsInvitationCodeValid,
+        proto::IsInvitationCodeValidRequest,
+        proto::IsInvitationCodeValidResponse
+    );
+    unused_rpc!(
+        GetBlockByNumber,
+        proto::GetBlockByNumberRequest,
+        proto::GetBlockByNumberResponse
+    );
     unused_rpc!(
         GetBlockHeaderByNumber,
-        proto::rpc::BlockHeaderByNumberRequest,
-        proto::rpc::BlockHeaderByNumberResponse
+        proto::GetBlockHeaderByNumberRequest,
+        proto::GetBlockHeaderByNumberResponse
     );
-    unused_rpc!(GetNotesById, proto::rpc::NotesByIdRequest, proto::rpc::NotesByIdResponse);
+    unused_rpc!(GetNotesById, proto::GetNotesByIdRequest, proto::GetNotesByIdResponse);
     unused_rpc!(
         GetNoteScriptByRoot,
-        proto::rpc::NoteScriptByRootRequest,
-        proto::rpc::MaybeNoteScript
+        proto::GetNoteScriptByRootRequest,
+        proto::GetNoteScriptByRootResponse
     );
-    unused_rpc!(GetTransactionEncryptionKey, (), proto::submission::TransactionEncryptionKey);
     unused_rpc!(
-        SubmitProvenTx,
-        proto::submission::ProvenTransactionSubmission,
-        proto::blockchain::BlockNumber
+        GetTransactionEncryptionKey,
+        proto::GetTransactionEncryptionKeyRequest,
+        proto::GetTransactionEncryptionKeyResponse
     );
+    unused_rpc!(SubmitProvenTx, proto::SubmitProvenTxRequest, proto::SubmitProvenTxResponse);
     unused_rpc!(
         SubmitProvenTxBatch,
-        proto::submission::TransactionBatch,
-        proto::blockchain::BlockNumber
+        proto::SubmitProvenTxBatchRequest,
+        proto::SubmitProvenTxBatchResponse
     );
     unused_rpc!(
         SyncTransactions,
-        proto::rpc::SyncTransactionsRequest,
-        proto::rpc::SyncTransactionsResponse
+        proto::SyncTransactionsRequest,
+        proto::SyncTransactionsResponse
     );
-    unused_rpc!(SyncNotes, proto::rpc::SyncNotesRequest, proto::rpc::SyncNotesResponse);
-    unused_rpc!(
-        SyncNullifiers,
-        proto::rpc::SyncNullifiersRequest,
-        proto::rpc::SyncNullifiersResponse
-    );
+    unused_rpc!(SyncNotes, proto::SyncNotesRequest, proto::SyncNotesResponse);
+    unused_rpc!(SyncNullifiers, proto::SyncNullifiersRequest, proto::SyncNullifiersResponse);
     unused_rpc!(
         SyncAccountVault,
-        proto::rpc::SyncAccountVaultRequest,
-        proto::rpc::SyncAccountVaultResponse
+        proto::SyncAccountVaultRequest,
+        proto::SyncAccountVaultResponse
     );
     unused_rpc!(
         SyncAccountStorageMaps,
-        proto::rpc::SyncAccountStorageMapsRequest,
-        proto::rpc::SyncAccountStorageMapsResponse
+        proto::SyncAccountStorageMapsRequest,
+        proto::SyncAccountStorageMapsResponse
     );
-    unused_rpc!(SyncChainMmr, proto::rpc::SyncChainMmrRequest, proto::rpc::SyncChainMmrResponse);
-    unused_rpc!(
-        GetNetworkNoteStatus,
-        proto::note::NoteId,
-        proto::rpc::GetNetworkNoteStatusResponse
-    );
+    unused_rpc!(SyncChainMmr, proto::SyncChainMmrRequest, proto::SyncChainMmrResponse);
     unused_stream!(
         BlockSubscription,
-        proto::rpc::BlockSubscriptionRequest,
-        proto::rpc::BlockSubscriptionResponse
+        proto::BlockSubscriptionRequest,
+        proto::BlockSubscriptionResponse
     );
     unused_stream!(
         ProofSubscription,
-        proto::rpc::ProofSubscriptionRequest,
-        proto::rpc::ProofSubscriptionResponse
+        proto::ProofSubscriptionRequest,
+        proto::ProofSubscriptionResponse
+    );
+    unused_rpc!(
+        GetNetworkNoteStatus,
+        proto::GetNetworkNoteStatusRequest,
+        proto::GetNetworkNoteStatusResponse
     );
 
     /// The store does not return the assets of a vault that holds more than
@@ -1125,7 +1130,7 @@ mod vault_witness_tests {
         let witness = AccountTree::with_entries([(account.id(), account.to_commitment())])
             .unwrap()
             .open(account.id());
-        let response = AccountResponse {
+        let response = GetAccountResponse {
             block_num: BlockNumber::GENESIS,
             witness,
             details: Some(AccountDetails {
