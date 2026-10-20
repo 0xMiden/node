@@ -89,8 +89,8 @@ applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNu
 the chain tip. `SyncChainMmr` returns `FutureBlock` when the client height exceeds the requested chain tip.
 `SyncNullifiers` returns `DeserializationFailed` for a prefix that exceeds 16 bits.
 
-`GetAccount` returns `StorageSlotNotFound` when a storage map request names a slot that the account does not have at
-the requested block. It returns `StorageSlotNotMap` when the named slot is a value slot.
+`GetAccount` returns `StorageSlotNotFound` when a storage map request names a slot that the account does not have at the
+requested block. It returns `StorageSlotNotMap` when the named slot is a value slot.
 
 Unused values remain reserved. Clients must accept unknown detail codes and fall back to the gRPC status code.
 
