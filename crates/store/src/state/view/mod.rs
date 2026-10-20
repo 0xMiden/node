@@ -19,8 +19,7 @@ use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
-use crate::db::Db;
-use crate::db::HISTORICAL_BLOCK_RETENTION;
+use crate::db::{Db, HISTORICAL_BLOCK_RETENTION};
 use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
 use crate::state::State;
 
