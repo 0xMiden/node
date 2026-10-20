@@ -9,7 +9,7 @@ use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolSt
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
-use miden_node_tracing::{ErrorReport, miden_instrument};
+use miden_node_tracing::miden_instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -28,7 +28,7 @@ use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
-use self::error_codes::{SyncErrorCode, internal_error};
+use self::error_codes::{SyncErrorCode, internal_error, log_internal_error};
 use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
@@ -265,7 +265,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => internal_error(err.as_report()),
+        GetBlockHeaderError::MmrError(err) => log_internal_error(&err),
     }
 }
 
@@ -280,7 +280,7 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::RangeBelowRetention(_) | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
-        _ => internal_error(err.as_report()),
+        _ => log_internal_error(err),
     }
 }
 
@@ -296,7 +296,7 @@ async fn load_protocol_config(
     let commitment = header.protocol_config_commitment();
     view.get_protocol_config(commitment)
         .await
-        .map_err(|err| internal_error(err.as_report()))?
+        .map_err(|err| log_internal_error(&err))?
         .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 

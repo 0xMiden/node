@@ -1,10 +1,10 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
-use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{debug, miden_instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteTagLimit;
 use tonic::Status;
 
-use super::error_codes::{SyncErrorCode, SyncNotesErrorCode, internal_error};
+use super::error_codes::{SyncErrorCode, SyncNotesErrorCode, log_internal_error};
 use super::{RpcService, check, invalid_block_range_to_status};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -139,7 +139,7 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
             SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
         },
         err @ (NoteSyncError::UnderlyingDatabaseError(_) | NoteSyncError::MmrError(_)) => {
-            internal_error(err.as_report())
+            log_internal_error(&err)
         },
     }
 }

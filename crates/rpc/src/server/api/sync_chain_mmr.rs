@@ -1,10 +1,10 @@
 use miden_node_proto::generated as proto;
 use miden_node_store::StateSyncError;
-use miden_node_tracing::{ErrorReport, debug, miden_instrument};
+use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::block::BlockNumber;
 
 use super::RpcService;
-use super::error_codes::{SyncChainMmrErrorCode, internal_error};
+use super::error_codes::{SyncChainMmrErrorCode, internal_error, log_internal_error};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -60,7 +60,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
                 StateSyncError::RangeBeyondTip(_) => {
                     SyncChainMmrErrorCode::FutureBlock.invalid_argument(err)
                 },
-                _ => internal_error(err.as_report()),
+                _ => log_internal_error(&err),
             })?;
 
         let protocol_config_required = if current_client_block_height == BlockNumber::GENESIS {
@@ -71,7 +71,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
             let commitment_at_start = view
                 .get_protocol_config_commitment_at(current_client_block_height)
                 .await
-                .map_err(|err| internal_error(err.as_report()))?;
+                .map_err(|err| log_internal_error(&err))?;
             let commitment_at_start = commitment_at_start.ok_or_else(|| {
                 internal_error("starting protocol configuration activation is missing")
             })?;
