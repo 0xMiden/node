@@ -133,3 +133,13 @@ impl QueryParamLimiter for QueryParamStorageMapSlotLimit {
     const PARAM_NAME: &str = "storage_maps";
     const LIMIT: usize = miden_protocol::account::AccountStorage::MAX_NUM_STORAGE_SLOTS;
 }
+
+/// Bounds the number of asset proofs returned by `GetAccount`.
+///
+/// Uses the same cap of 64 proofs as storage map queries to bound proof generation and response
+/// size. The cap applies to requested asset IDs, including absent assets, regardless of vault size.
+pub struct QueryParamVaultAssetLimit;
+impl QueryParamLimiter for QueryParamVaultAssetLimit {
+    const PARAM_NAME: &str = "vault_asset";
+    const LIMIT: usize = 64;
+}

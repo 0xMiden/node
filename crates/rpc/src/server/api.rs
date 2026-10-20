@@ -18,6 +18,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -328,6 +329,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
+    use QueryParamVaultAssetLimit as VaultAsset;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
@@ -346,6 +348,7 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
                 endpoint_limits(&[
                     (StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT),
                     (StorageMapSlot::PARAM_NAME, StorageMapSlot::LIMIT),
+                    (VaultAsset::PARAM_NAME, VaultAsset::LIMIT),
                 ]),
             ),
         ]),

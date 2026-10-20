@@ -12,9 +12,12 @@ pub mod genesis;
 mod proven_tip;
 pub mod state;
 
-#[cfg(feature = "rocksdb")]
-pub use accounts::PersistentAccountTree;
-pub use accounts::{AccountTreeWithHistory, HistoricalError, InMemoryAccountTree};
+pub use accounts::{
+    AccountTreeWithHistory,
+    HistoricalError,
+    InMemoryAccountTree,
+    PersistentAccountTree,
+};
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
 pub use db::queries::StorageMapValuesPage;
