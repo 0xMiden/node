@@ -68,7 +68,7 @@ enum BuildBlockError {
 
 Variants are faults unless a `#[failure(...)]` attribute on the enum or the variant says `transient` or `rejected`. A
 variant with one field can instead be classified by it: `transparent` uses the field's class, `dependency` applies
-`FailureClass::from_dependency` to it, and `with = path` calls a function on it.
+`FailureClass::from_dependency` to it, and `with = path` calls a function on it, named `classify_*` by convention.
 
 `tonic::Status` is classified by its code with `FailureClass::from_grpc_code`. Error enums that derive `GrpcError` are
 classified by the gRPC status code of each variant, with the variant's name as the kind. An error from a component the

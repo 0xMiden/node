@@ -10,7 +10,7 @@ enum Fetch {
     Refused { reason: String },
 }
 
-fn by_status(status: &tonic::Status) -> FailureClass {
+fn classify_check(status: &tonic::Status) -> FailureClass {
     FailureClass::from_grpc_code(status.code()).with_kind("checked")
 }
 
@@ -25,7 +25,7 @@ enum Submit {
     #[failure(dependency)]
     Validator { status: tonic::Status },
     #[error("check failed")]
-    #[failure(with = by_status)]
+    #[failure(with = classify_check)]
     Check(tonic::Status),
 }
 

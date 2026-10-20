@@ -36,7 +36,8 @@ mod instrument;
 /// - `#[failure(transparent)]` uses the field's own class.
 /// - `#[failure(dependency)]` uses the field's class with `FailureClass::from_dependency`, for an
 ///   error returned by a component the node calls.
-/// - `#[failure(with = path)]` calls `path(&field)`, which returns the `FailureClass`.
+/// - `#[failure(with = path)]` calls `path(&field)`, which returns the `FailureClass`. Such
+///   functions are named `classify_*`, such as `classify_execution_failure`.
 #[proc_macro_derive(Classified, attributes(failure))]
 pub fn derive_classified(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as syn::DeriveInput);

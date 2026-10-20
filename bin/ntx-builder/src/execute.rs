@@ -79,7 +79,7 @@ pub enum NtxError {
     #[failure(rejected)]
     AllNotesFailed(Vec<FailedNote>),
     #[error("failed to execute transaction")]
-    #[failure(with = execution_failure)]
+    #[failure(with = classify_execution_failure)]
     Execution(#[source] TransactionExecutorError),
     #[error("failed to prove transaction")]
     Proving(#[source] TransactionProverError),
@@ -102,7 +102,7 @@ pub enum NtxError {
 
 /// Classifies a transaction execution failure: a note script that fails is a rejection, and a
 /// failure to fetch data is transient.
-fn execution_failure(error: &TransactionExecutorError) -> FailureClass {
+fn classify_execution_failure(error: &TransactionExecutorError) -> FailureClass {
     match error {
         TransactionExecutorError::TransactionProgramExecutionFailed(_) => {
             FailureClass::Rejected("execution")
