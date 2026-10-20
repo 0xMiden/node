@@ -52,7 +52,8 @@ that is more verbose, and never sets the span status to error. For other classes
 level as described above. Errors that do not implement `Classified` keep the configured level and record no failure
 attributes.
 
-`tonic::Status` is classified by its code with `FailureClass::from_grpc_code`.
+`tonic::Status` is classified by its code with `FailureClass::from_grpc_code`. Error enums that derive `GrpcError` are
+classified by the gRPC status code of each variant, with the variant's name as the kind.
 
 The gRPC servers trace requests with `grpc_trace_layer`, or `public_grpc_trace_layer` for servers exposed to the public.
 Each request's root span records the response's status code as `rpc.grpc.status_code`, `0` on success, and a failed
