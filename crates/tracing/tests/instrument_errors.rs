@@ -2,7 +2,7 @@ use std::error::Error;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{Classified, FailureClass, miden_instrument, miden_span_record};
 use opentelemetry::trace::{Status, TracerProvider as _};
 use opentelemetry::{Array, KeyValue, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
@@ -115,6 +115,46 @@ fn configured_result(success: bool) -> Result<usize, Outer> {
     if success { Ok(7) } else { Err(failure()) }
 }
 
+#[derive(Debug, thiserror::Error)]
+enum SubmitError {
+    #[error("transaction expired")]
+    Expired,
+    #[error("store unavailable")]
+    StoreUnavailable,
+    #[error("database failed")]
+    Database(#[source] Root),
+}
+
+impl Classified for SubmitError {
+    fn failure_class(&self) -> FailureClass {
+        match self {
+            Self::Expired => FailureClass::Rejected("expired"),
+            Self::StoreUnavailable => FailureClass::Transient("store_unavailable"),
+            Self::Database(_) => FailureClass::Fault("database"),
+        }
+    }
+}
+
+#[miden_instrument(err)]
+fn classified_result(error: SubmitError) -> Result<(), SubmitError> {
+    Err(error)
+}
+
+#[miden_instrument(err(level = "warn"))]
+fn quiet_classified_result(error: SubmitError) -> Result<(), SubmitError> {
+    Err(error)
+}
+
+#[miden_instrument(err(level = "trace"))]
+fn verbose_classified_result(error: SubmitError) -> Result<(), SubmitError> {
+    Err(error)
+}
+
+#[miden_instrument(err)]
+fn status_result(status: tonic::Status) -> Result<(), tonic::Status> {
+    Err(status)
+}
+
 fn export(run: impl FnOnce()) -> Vec<SpanData> {
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
@@ -223,6 +263,77 @@ fn configured_errors_keep_levels_targets_and_parents() {
     assert_eq!(attribute(&spans[1].events[0].attributes, "level"), Some(&Value::from("WARN")));
     assert_eq!(spans[1].status, Status::Unset);
     assert_exception_attributes(&spans[1].events[0].attributes);
+}
+
+fn event_level(span: &SpanData) -> Option<&Value> {
+    let [event] = span.events.events.as_slice() else {
+        panic!("expected one event, got {span:?}");
+    };
+    attribute(&event.attributes, "level")
+}
+
+fn failure_attributes(span: &SpanData) -> (Option<&Value>, Option<&Value>) {
+    (
+        attribute(&span.attributes, "failure.class"),
+        attribute(&span.attributes, "failure.kind"),
+    )
+}
+
+#[test]
+fn rejections_are_recorded_without_failing_the_span() {
+    let spans = export(|| {
+        assert!(classified_result(SubmitError::Expired).is_err());
+        assert!(status_result(tonic::Status::failed_precondition("stale")).is_err());
+    });
+    assert_eq!(spans.len(), 2);
+    for (span, kind) in spans.iter().zip(["expired", "failed_precondition"]) {
+        assert_eq!(span.status, Status::Unset, "{span:?}");
+        assert_eq!(failure_attributes(span), (Some(&"rejected".into()), Some(&kind.into())));
+        assert_eq!(event_level(span), Some(&Value::from("DEBUG")));
+    }
+}
+
+#[test]
+fn node_failures_fail_the_span_with_their_class() {
+    let spans = export(|| {
+        assert!(classified_result(SubmitError::StoreUnavailable).is_err());
+        assert!(classified_result(SubmitError::Database(Root)).is_err());
+        assert!(status_result(tonic::Status::internal("bug")).is_err());
+    });
+    let expected =
+        [("transient", "store_unavailable"), ("fault", "database"), ("fault", "internal")];
+    assert_eq!(spans.len(), expected.len());
+    for (span, (class, kind)) in spans.iter().zip(expected) {
+        assert_eq!(span.status, Status::error(""), "{span:?}");
+        assert_eq!(failure_attributes(span), (Some(&class.into()), Some(&kind.into())));
+        assert_eq!(event_level(span), Some(&Value::from("ERROR")));
+    }
+}
+
+#[test]
+fn configured_levels_apply_to_failures_and_never_raise_rejections() {
+    let spans = export(|| {
+        assert!(quiet_classified_result(SubmitError::Database(Root)).is_err());
+        assert!(quiet_classified_result(SubmitError::Expired).is_err());
+        assert!(verbose_classified_result(SubmitError::Expired).is_err());
+    });
+    assert_eq!(spans.len(), 3);
+    let levels: Vec<_> = spans.iter().map(event_level).collect();
+    assert_eq!(levels, [Some(&"WARN".into()), Some(&"DEBUG".into()), Some(&"TRACE".into())]);
+    for span in &spans {
+        assert_eq!(span.status, Status::Unset, "{span:?}");
+    }
+    assert_eq!(failure_attributes(&spans[0]).0, Some(&Value::from("fault")));
+}
+
+#[test]
+fn unclassified_errors_fail_the_span_without_failure_attributes() {
+    let spans = export(|| assert!(sync_result(1).is_err()));
+    let [span] = spans.as_slice() else {
+        panic!("expected one span, got {spans:?}");
+    };
+    assert_error_chain(span);
+    assert_eq!(failure_attributes(span), (None, None));
 }
 
 #[test]

@@ -36,6 +36,24 @@ custom opaque future trait can require an explicit result type in the async bloc
 Callers cannot set `exception.message` or `exception.stacktrace` through the event macros. Pass the error as the first
 argument so the subscriber can record both fields.
 
+## Failure classes
+
+An error that implements `Classified` reports a `FailureClass` with a short kind, such as `Rejected("expired")`.
+`#[miden_instrument(err)]` records them on the span as `failure.class` and `failure.kind`:
+
+| `failure.class` | Meaning                                                            | Span status      |
+| --------------- | ------------------------------------------------------------------ | ---------------- |
+| `rejected`      | The request was invalid, or conflicts with the state it refers to. | Unset            |
+| `transient`     | A node failure that is expected to resolve itself.                 | Error at `ERROR` |
+| `fault`         | A node failure that needs an operator.                             | Error at `ERROR` |
+
+A rejection is the node behaving correctly, so its error event is recorded at `DEBUG`, or at the configured level when
+that is more verbose, and never sets the span status to error. For other classes, `err(level = ...)` sets the event
+level as described above. Errors that do not implement `Classified` keep the configured level and record no failure
+attributes.
+
+`tonic::Status` is classified by its code with `FailureClass::from_grpc_code`.
+
 ## License
 
 This project is [MIT licensed](../../LICENSE).

@@ -3,6 +3,7 @@
 extern crate self as miden_node_tracing;
 
 mod attribute;
+mod failure;
 pub mod grpc;
 mod instrument;
 mod logging;
@@ -13,6 +14,7 @@ pub mod spawn;
 #[doc(hidden)]
 pub use attribute::field_name_allowed;
 pub use attribute::{RecordAttribute, record_attribute};
+pub use failure::{Classified, FailureClass};
 #[cfg(feature = "testing")]
 pub use logging::setup_test_tracing;
 pub use logging::{
@@ -44,6 +46,7 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 pub mod __private {
     pub use tracing::{debug, error, info, instrument, trace, warn};
 
+    pub use crate::failure::{ClassifiedFailure, UnclassifiedFailure};
     pub use crate::instrument::AsDynError;
 }
 
