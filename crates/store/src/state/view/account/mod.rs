@@ -519,7 +519,7 @@ mod tests {
             .unwrap()
     }
 
-    fn bootstrap_store(path: &std::path::Path, account: Account) {
+    async fn bootstrap_store(path: &std::path::Path, account: Account) {
         let signer = random_secret_key();
         let genesis_block = GenesisState::new(
             vec![account],
@@ -532,16 +532,16 @@ mod tests {
         .into_block()
         .expect("genesis block should be created");
 
-        State::bootstrap(genesis_block, path).expect("store should bootstrap");
+        State::bootstrap(genesis_block, path).await.expect("store should bootstrap");
     }
 
-    fn storage_request(account_id: AccountId, request: StorageMapRequest) -> AccountRequest {
-        AccountRequest {
+    fn storage_request(account_id: AccountId, request: StorageMapRequest) -> GetAccountRequest {
+        GetAccountRequest {
             account_id,
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
-                asset_vault_commitment: None,
+                vault_request: AccountVaultRequest::None,
                 storage_request: AccountStorageRequest::Explicit(vec![request]),
             }),
         }
@@ -554,7 +554,7 @@ mod tests {
         let account = account_with_value_and_map_slots();
         let account_id = account.id();
         let data_directory = tempfile::tempdir().expect("tempdir should be created");
-        bootstrap_store(data_directory.path(), account);
+        bootstrap_store(data_directory.path(), account).await;
         let (state, _block_writer, _proof_writer) = State::for_tests(data_directory.path()).await;
 
         let missing_slot = StorageSlotName::new("test::missing").unwrap();
