@@ -4,6 +4,8 @@ use std::ops::Deref;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
+use fn_error_context::context;
 use futures::TryFutureExt;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::{State, StateView};
@@ -33,7 +35,7 @@ use tokio::task::{JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
-use crate::errors::{BuildBatchError, StoreError};
+use crate::errors::BuildBatchError;
 use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
@@ -215,7 +217,7 @@ impl BatchBuilder {
     fn select_full_batch(
         mempool: &SharedMempool,
     ) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_full_batch())
+        Ok(mempool.lock()?.select_full_batch())
     }
 
     #[miden_instrument(
@@ -223,7 +225,7 @@ impl BatchBuilder {
         name = "batch_builder.select_any_batch",
     )]
     fn select_any_batch(mempool: &SharedMempool) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_any_batch())
+        Ok(mempool.lock()?.select_any_batch())
     }
 
     fn has_available_worker(&self) -> bool {
@@ -311,6 +313,7 @@ impl BatchJob {
                 );
             })
             .and_then(|proposed| self.batch_prover.prove(proposed))
+            .map_err(BuildBatchError::from)
             .and_then(|proven_batch| async { self.commit_batch(Arc::new(proven_batch)) })
             // Handle errors by propagating the error to the root span and rolling back the batch.
             .inspect_err(|err| Span::current().set_error(err))
@@ -332,10 +335,7 @@ impl BatchJob {
         name = "batch_builder.get_batch_inputs",
         err,
     )]
-    async fn get_batch_inputs(
-        &self,
-        selected: SelectedBatch,
-    ) -> Result<ProposedBatch, BuildBatchError> {
+    async fn get_batch_inputs(&self, selected: SelectedBatch) -> anyhow::Result<ProposedBatch> {
         let fee_notes = selected.collectible_fee_notes().to_vec();
         let block_numbers: BTreeSet<_> = selected
             .transactions()
@@ -365,7 +365,7 @@ impl BatchJob {
                 } else {
                     Some(self.execute_fee_collection(view, fee_notes, &inputs).await?)
                 };
-                Ok::<_, BuildBatchError>((inputs, executed_fee_collection))
+                Ok::<_, anyhow::Error>((inputs, executed_fee_collection))
             })
             .await?;
         let BatchInputs {
@@ -393,33 +393,31 @@ impl BatchJob {
             note_inclusion_proofs,
             MIN_PROOF_SECURITY_LEVEL,
         )
-        .map_err(BuildBatchError::ProposeBatchError)
+        .context("failed to build proposed transaction batch")
     }
 
     /// Reads the store data that a [`ProposedBatch`] requires.
+    #[context("failed to fetch batch inputs from store")]
     async fn read_batch_inputs(
         view: &StateView,
         reference_block: BlockNumber,
         mut block_numbers: BTreeSet<BlockNumber>,
         note_ids: BTreeSet<NoteId>,
-    ) -> Result<BatchInputs, BuildBatchError> {
+    ) -> anyhow::Result<BatchInputs> {
         let note_inclusion_proofs = view
             .get_note_inclusion_proofs(reference_block, note_ids)
             .await
-            .map_err(StoreError::GetNoteInclusionProofsFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?;
+            .context("failed to get note inclusion proofs from store")?;
         block_numbers
             .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
         let partial_blockchain = view
             .get_block_inclusion_proofs(reference_block, block_numbers)
             .await
-            .map_err(StoreError::GetBlockInclusionProofsFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?;
+            .context("failed to get block inclusion proofs from store")?;
         let reference_block_header = view
             .get_block_header(Some(reference_block), false)
             .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .context("failed to get block header from store")?
             .0
             .expect("reference block header should exist");
 
@@ -433,23 +431,22 @@ impl BatchJob {
     /// Executes the transaction that collects the fee notes.
     ///
     /// Returns the executed transaction and the genesis block commitment.
+    #[context("failed to build the batch fee transaction")]
     async fn execute_fee_collection(
         &self,
         view: &StateView,
         fee_notes: Vec<Note>,
         inputs: &BatchInputs,
-    ) -> Result<(ExecutedTransaction, Word), BuildBatchError> {
+    ) -> anyhow::Result<(ExecutedTransaction, Word)> {
         let protocol_config = view
             .get_protocol_config(inputs.reference_block_header.protocol_config_commitment())
             .await
-            .map_err(StoreError::GetProtocolConfigFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .context("failed to get protocol configuration from store")?
             .expect("the reference block's protocol configuration should exist");
         let genesis = view
             .get_block_header(Some(BlockNumber::GENESIS), false)
             .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
+            .context("failed to get block header from store")?
             .0
             .expect("the genesis block header should exist")
             .commitment();
@@ -463,8 +460,7 @@ impl BatchJob {
                 inputs.partial_blockchain.clone(),
                 view,
             )
-            .await
-            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+            .await?;
 
         Ok((executed, genesis))
     }
@@ -475,13 +471,12 @@ impl BatchJob {
         executed: ExecutedTransaction,
         genesis: Word,
         reference_block_header: &BlockHeader,
-    ) -> Result<ProvenTransaction, BuildBatchError> {
+    ) -> anyhow::Result<ProvenTransaction> {
         let inputs = executed.tx_inputs().clone();
         let fee_collection_tx =
             spawn_blocking_in_current_span(move || FeeCollectorTransactionBuilder::prove(executed))
                 .await
-                .map_err(BuildBatchError::JoinError)?
-                .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+                .context("batch fee proving task failed")??;
         self.validator
             .validate_transaction(
                 &fee_collection_tx,
@@ -489,8 +484,7 @@ impl BatchJob {
                 genesis,
                 reference_block_header.validator_config(),
             )
-            .await
-            .map_err(BuildBatchError::ValidateBatchFeeTransaction)?;
+            .await?;
 
         Ok(fee_collection_tx)
     }
@@ -500,10 +494,7 @@ impl BatchJob {
         name = "batch_builder.commit_batch",
     )]
     fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
-        self.mempool
-            .lock()
-            .map_err(BuildBatchError::MempoolPoisoned)?
-            .commit_batch(batch);
+        self.mempool.lock()?.commit_batch(batch);
         Ok(())
     }
 
@@ -512,10 +503,7 @@ impl BatchJob {
         name = "batch_builder.rollback_batch",
     )]
     fn rollback_batch(&self, batch_id: SelectedBatchId) -> Result<(), BuildBatchError> {
-        self.mempool
-            .lock()
-            .map_err(BuildBatchError::MempoolPoisoned)?
-            .rollback_batch(batch_id);
+        self.mempool.lock()?.rollback_batch(batch_id);
         Ok(())
     }
 }
@@ -595,8 +583,9 @@ mod tests {
     use crate::store::get_tx_inputs;
     use crate::test_utils::{mock_collection_account, mock_native_faucet};
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
+    async fn batch_job(
+        chain_tip: BlockNumber,
+    ) -> anyhow::Result<(tempfile::TempDir, BatchJob, SelectedBatch)> {
         let (mut account, auth_secret_keys) = mock_collection_account().into_parts();
         account.set_nonce(ONE)?;
         let collector = AccountFile::new(account, auth_secret_keys);
@@ -625,10 +614,9 @@ mod tests {
         let inputs = get_tx_inputs(&state, &transaction).await?;
         let transaction =
             Arc::new(AuthenticatedTransaction::new_unchecked(Arc::new(transaction), inputs)?);
-        let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
+        let mempool = Mempool::shared(chain_tip, MempoolConfig::default());
         mempool.lock().unwrap().add_transaction(transaction)?;
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();
-        let selected_id = selected.id().as_batch_id();
         let fee_collector =
             FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
         let job = BatchJob {
@@ -643,10 +631,33 @@ mod tests {
             mempool,
         };
 
+        Ok((directory, job, selected))
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn builds_batches_without_fee_notes() -> anyhow::Result<()> {
+        let (_directory, job, selected) = Box::pin(batch_job(BlockNumber::GENESIS)).await?;
+        let selected_id = selected.id().as_batch_id();
         let proposed = Box::pin(job.get_batch_inputs(selected)).await?;
         assert_eq!(proposed.id(), selected_id);
         assert_eq!(proposed.transactions().len(), 1);
         assert!(proposed.output_notes().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_store_read_returns_batch_transactions_to_mempool() -> anyhow::Result<()> {
+        let (_directory, job, selected) = Box::pin(batch_job(BlockNumber::from(1))).await?;
+        let transaction_ids = selected.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>();
+
+        job.build_batch(selected).await?;
+
+        let retry = job.mempool.lock()?.select_any_batch().expect("failed batch should be retried");
+        assert_eq!(
+            retry.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+            transaction_ids
+        );
+        assert_eq!(job.state.committed_tip(), BlockNumber::GENESIS);
         Ok(())
     }
 

@@ -58,19 +58,19 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
     account.set_nonce(ONE).unwrap();
     assert!(!collector_is_deployed(&state, &account).await.unwrap());
 
-    assert!(
-        Box::pin(deploy_fee_collector(
-            &state,
-            &mut writer,
-            &mut proof_writer,
-            account_file.clone(),
-            validator_urls.clone(),
-            Duration::from_secs(30),
-            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE
-        ))
-        .await
-        .is_err()
-    );
+    let error = Box::pin(deploy_fee_collector(
+        &state,
+        &mut writer,
+        &mut proof_writer,
+        account_file.clone(),
+        validator_urls.clone(),
+        Duration::from_secs(30),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+    ))
+    .await
+    .expect_err("the validator should reject the deployment transaction");
+    let status = error.downcast_ref::<tonic::Status>().expect("retain the validator's status");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(state.committed_tip(), BlockNumber::GENESIS);
     assert_eq!(state.proven_tip(), BlockNumber::GENESIS);
 

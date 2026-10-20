@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
+use fn_error_context::context;
 use miden_node_tracing::{debug, miden_instrument};
 
 use crate::blocks::BlockStore;
@@ -12,6 +13,7 @@ use crate::{COMPONENT, DataDirectory, LOG_TARGET};
 impl State {
     /// Bootstraps the store state, creating the database state and inserting the genesis block
     /// data.
+    #[context("failed to bootstrap store in {}", data_directory.display())]
     #[miden_instrument(
         target = COMPONENT,
         name = "store.bootstrap",

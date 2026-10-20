@@ -20,6 +20,7 @@ doctest = false
 [dependencies]
 anyhow                 = { workspace = true }
 arc-swap               = { workspace = true }
+fn-error-context       = { workspace = true }
 fs-err                 = { workspace = true }
 futures                = { workspace = true }
 hex                    = { workspace = true }

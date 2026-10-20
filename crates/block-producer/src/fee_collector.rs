@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use fn_error_context::context;
 use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -32,6 +33,7 @@ mod faucet;
 ///
 /// The deployment requires no funds and pays no fee. The sequencer must be stopped.
 /// Returns without creating a block if the matching collector is already deployed.
+#[context("failed to deploy fee collector")]
 #[miden_instrument(target = COMPONENT, name = "deploy_fee_collector", err)]
 pub async fn deploy_fee_collector(
     state: &State,
@@ -94,7 +96,8 @@ pub async fn deploy_fee_collector(
     let inputs = executed.tx_inputs().clone();
     let transaction =
         spawn_blocking_in_current_span(move || FeeCollectorTransactionBuilder::prove(executed))
-            .await??;
+            .await
+            .context("fee collector proving task failed")??;
     miden_span_record!(transaction.id = transaction.id());
     validator
         .validate_transaction(&transaction, &inputs, genesis, header.validator_config())

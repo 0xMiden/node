@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use fn_error_context::context;
 use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
 use miden_node_tracing::{debug, miden_instrument};
@@ -9,7 +10,6 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
-use crate::errors::StoreError;
 use crate::{COMPONENT, LOG_TARGET};
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
@@ -24,6 +24,7 @@ use crate::{COMPONENT, LOG_TARGET};
 ///
 /// Returns an error if the store query fails, or if the transaction creates a new account whose ID
 /// prefix already exists in the store.
+#[context("failed to get transaction inputs from store")]
 #[miden_instrument(
     target = COMPONENT,
     name = "store.state.get_tx_inputs",
@@ -35,7 +36,7 @@ use crate::{COMPONENT, LOG_TARGET};
 pub async fn get_tx_inputs(
     state: &State,
     proven_tx: &ProvenTransaction,
-) -> Result<TransactionInputs, StoreError> {
+) -> anyhow::Result<TransactionInputs> {
     let nullifiers = proven_tx.nullifiers().collect::<Vec<_>>();
     let unauthenticated_note_ids = proven_tx.unauthenticated_notes().map(NoteHeader::id).collect();
 
@@ -48,7 +49,6 @@ pub async fn get_tx_inputs(
             )
             .await
             .map(|inputs| (view.tip(), inputs))
-            .map_err(StoreError::GetTransactionInputsFailed)
         })
         .await?;
 
@@ -57,7 +57,7 @@ pub async fn get_tx_inputs(
             proven_tx.account_update().initial_state_commitment().is_empty(),
             "account id prefix uniqueness should not be validated unless transaction creates a new account"
         );
-        return Err(StoreError::DuplicateAccountIdPrefix(proven_tx.account_id()));
+        anyhow::bail!("account Id prefix already exists: {}", proven_tx.account_id());
     }
 
     let tx_inputs = from_store_inputs(proven_tx.account_id(), store_inputs, *current_block_height);

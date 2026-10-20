@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
+use fn_error_context::context;
 use miden_node_store::state::{BlockWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Span, debug, miden_instrument, miden_span_record};
@@ -18,10 +19,13 @@ use miden_protocol::block::{
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
 
-use crate::errors::{BuildBlockError, StoreError};
+use crate::errors::BuildBlockError;
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
 use crate::{COMPONENT, LOG_TARGET};
+
+#[cfg(test)]
+mod tests;
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -132,8 +136,6 @@ impl BlockBuilder {
         validator: &BlockProducerValidatorClient,
         selected: SelectedBlock,
     ) -> Result<BlockCommit, BuildBlockError> {
-        use futures::TryFutureExt;
-
         let telemetry = selected.telemetry();
         miden_span_record!(
             block.number = telemetry.block_number,
@@ -142,28 +144,21 @@ impl BlockBuilder {
             block.transaction.ids = telemetry.transaction_ids,
             block.transaction.count = telemetry.transactions_count
         );
-        Self::get_block_inputs(state, selected)
-            .inspect_ok(|inputs| {
-                let telemetry = inputs.telemetry();
-                miden_span_record!(
-                    block.updated_account.count = telemetry.updated_accounts_count,
-                    block.erased_note_proof.count = telemetry.erased_note_proofs_count
-                );
-            })
-            .and_then(Self::propose_block)
-            .inspect_ok(|proposed_block| {
-                let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
-                miden_span_record!(
-                    block.nullifier.count = telemetry.nullifiers_count,
-                    block.output_note.count = telemetry.output_notes_count,
-                    block.batch.output_note.count = telemetry.batch_output_notes_count,
-                    block.erased_note.count = telemetry.erased_notes_count
-                );
-            })
-            .and_then(|proposed_block| {
-                Self::build_and_validate_block(state, validator, proposed_block)
-            })
-            .await
+        let inputs = Self::get_block_inputs(state, selected).await?;
+        let telemetry = inputs.telemetry();
+        miden_span_record!(
+            block.updated_account.count = telemetry.updated_accounts_count,
+            block.erased_note_proof.count = telemetry.erased_note_proofs_count
+        );
+        let proposed_block = Self::propose_block(inputs).await?;
+        let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
+        miden_span_record!(
+            block.nullifier.count = telemetry.nullifiers_count,
+            block.output_note.count = telemetry.output_notes_count,
+            block.batch.output_note.count = telemetry.batch_output_notes_count,
+            block.erased_note.count = telemetry.erased_notes_count
+        );
+        Ok(Self::build_and_validate_block(state, validator, proposed_block).await?)
     }
 
     #[miden_instrument(
@@ -171,7 +166,7 @@ impl BlockBuilder {
         name = "block_builder.select_block",
     )]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
-        Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
+        Ok(mempool.lock()?.select_block())
     }
 
     /// Fetches block inputs from the store for the [`SelectedBlock`].
@@ -235,20 +230,17 @@ impl BlockBuilder {
         let note_inclusion_proofs = view
             .get_note_inclusion_proofs(reference_block, note_ids)
             .await
-            .map_err(StoreError::GetNoteInclusionProofsFailed)
-            .map_err(BuildBlockError::FetchBlockInputsFailed)?;
+            .context("failed to fetch note inclusion proofs for block")?;
         block_numbers
             .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
         let partial_blockchain = view
             .get_block_inclusion_proofs(reference_block, block_numbers)
             .await
-            .map_err(StoreError::GetBlockInclusionProofsFailed)
-            .map_err(BuildBlockError::FetchBlockInputsFailed)?;
+            .context("failed to fetch block inclusion proofs for block")?;
         let reference_block_header = view
             .get_block_header(Some(reference_block), false)
             .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBlockError::FetchBlockInputsFailed)?
+            .context("failed to fetch block header for block")?
             .0
             .expect("reference block header should exist");
         let state_witnesses = view.get_state_witnesses(&account_ids, &created_nullifiers);
@@ -279,6 +271,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
+    #[context("failed to propose block")]
     #[miden_instrument(
         target = COMPONENT,
         name = "block_builder.propose_block",
@@ -286,17 +279,17 @@ impl BlockBuilder {
     )]
     async fn propose_block(
         batches_inputs: BlockBatchesAndInputs,
-    ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
+    ) -> anyhow::Result<ProposedBlockAndInputs> {
         let BlockBatchesAndInputs { batches, inputs } = batches_inputs;
         let block_inputs = inputs.clone();
         let batches = batches.into_iter().map(Arc::unwrap_or_clone).collect();
 
-        let proposed_block =
-            ProposedBlock::new(inputs, batches).map_err(BuildBlockError::ProposeBlockFailed)?;
+        let proposed_block = ProposedBlock::new(inputs, batches)?;
 
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
+    #[context("failed to validate block")]
     #[miden_instrument(
         target = COMPONENT,
         name = "block_builder.validate_block",
@@ -306,7 +299,7 @@ impl BlockBuilder {
         state: &State,
         validator: &BlockProducerValidatorClient,
         proposal: ProposedBlockAndInputs,
-    ) -> Result<BlockCommit, BuildBlockError> {
+    ) -> anyhow::Result<BlockCommit> {
         let ProposedBlockAndInputs { proposed_block, block_inputs } = proposal;
 
         // Resolve the active configuration against the constructed header before requesting
@@ -317,31 +310,31 @@ impl BlockBuilder {
         });
         let (header, body) = build_result
             .await
-            .map_err(|err| BuildBlockError::other(format!("task join error: {err}")))?
-            .map_err(BuildBlockError::ProposeBlockFailed)?;
+            .context("block building task failed")?
+            .context("failed to build proposed block")?;
         let commitment = header.protocol_config_commitment();
         let protocol_config = state
             .view()
             .get_protocol_config(commitment)
             .await
-            .map_err(|err| BuildBlockError::other(err.to_string()))?
-            .ok_or_else(|| {
-                BuildBlockError::other(format!("protocol config {commitment} is missing"))
-            })?;
+            .context("failed to get protocol configuration from store")?
+            .with_context(|| format!("protocol config {commitment} is missing"))?;
         let responses = validator
             .sign_block(&proposed_block, &block_inputs, &protocol_config)
             .await
-            .map_err(|err| BuildBlockError::ValidateBlockFailed(err.into()))?;
+            .context("failed to obtain validator signatures")?;
 
         // Every validator and the block producer must derive the same block from the same proposed
         // block. Comparing the commitment each validator signed against the locally built one
         // isolates a block-hash mismatch from a key/algorithm problem in the signature check below.
         for response in &responses {
             if response.block_commitment != header.commitment() {
-                return Err(BuildBlockError::BlockCommitmentMismatch {
-                    validator: response.block_commitment,
-                    sequencer: header.commitment(),
-                });
+                anyhow::bail!(
+                    "block commitment signed by a validator {} does not match the block \
+                     proposed by the sequencer {}",
+                    response.block_commitment,
+                    header.commitment(),
+                );
             }
         }
 
@@ -359,17 +352,21 @@ impl BlockBuilder {
                     .iter()
                     .find(|response| &response.public_key == key)
                     .map(|response| response.signature.clone())
-                    .ok_or(BuildBlockError::MissingValidatorSignature { position })
+                    .with_context(|| {
+                        format!(
+                            "no signature received for the validator key at position {position} \
+                             of the parent's validator set"
+                        )
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let signatures = BlockSignatures::new(signatures)
-            .map_err(|err| BuildBlockError::other(format!("invalid signature set: {err}")))?;
+        let signatures = BlockSignatures::new(signatures).context("invalid signature set")?;
 
         // Verify the signatures against the built block to ensure that every validator has provided
         // a valid signature for the relevant block.
         signatures
             .verify_against(header.commitment(), parent_header.validator_config())
-            .map_err(|_| BuildBlockError::InvalidSignature)?;
+            .context("block signatures are invalid")?;
 
         let (ordered_batches, ..) = proposed_block.into_parts();
 
@@ -419,10 +416,9 @@ impl BlockBuilder {
         self.block_writer
             .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
             .await
-            .map_err(StoreError::ApplyBlockFailed)
-            .map_err(BuildBlockError::StoreApplyBlockFailed)?;
+            .context("failed to apply block to store")?;
 
-        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
+        mempool.lock()?.commit_block(&header);
 
         Ok(())
     }
@@ -432,7 +428,7 @@ impl BlockBuilder {
         name = "block_builder.rollback_block",
     )]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
-        mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
+        mempool.lock()?.rollback_block(block);
         Ok(())
     }
 }

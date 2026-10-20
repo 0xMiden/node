@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Context;
+use fn_error_context::context;
 use miden_node_proto::clients::{Builder, ValidatorClient};
 use miden_node_proto::domain::encryption::{
     TransactionInputsSealer,
@@ -85,6 +86,7 @@ impl BlockProducerValidatorClient {
     }
 
     /// Validates a transaction with every validator before it can appear in a signed block.
+    #[context("failed to validate transaction {}", transaction.id())]
     #[miden_instrument(target = COMPONENT, name = "validator.client.validate_transaction", err)]
     pub(crate) async fn validate_transaction(
         &self,

@@ -119,82 +119,6 @@ pub enum DatabaseError {
     },
 }
 
-// INITIALIZATION ERRORS
-// =================================================================================================
-
-#[derive(Error, Debug)]
-pub enum StateInitializationError {
-    #[error("account tree IO error: {0}")]
-    AccountTreeIoError(String),
-    #[error("nullifier tree IO error: {0}")]
-    NullifierTreeIoError(String),
-    #[error("account state forest IO error: {0}")]
-    AccountStateForestIoError(String),
-    #[error("failed to rebuild account state forest")]
-    AccountStateForestRebuild(#[source] AccountStateForestUpdateError),
-    #[error("database error")]
-    DatabaseError(#[from] DatabaseError),
-    #[error("failed to create nullifier tree")]
-    FailedToCreateNullifierTree(#[from] NullifierTreeError),
-    #[error("failed to create accounts tree")]
-    FailedToCreateAccountsTree(#[source] AccountTreeError),
-    #[error("failed to load data directory")]
-    DataDirectoryLoadError(#[source] std::io::Error),
-    #[error("failed to load block store")]
-    BlockStoreLoadError(#[source] std::io::Error),
-    #[error("failed to load proven tip")]
-    ProvenTipLoadError(#[source] std::io::Error),
-    #[error("failed to load database")]
-    DatabaseLoadError(#[source] DatabaseError),
-    #[error(
-        "{tree_name} SMT root ({tree_root:?}) does not match expected root from block {block_num} \
-         ({block_root:?}). Delete the tree storage directories and restart the node to rebuild \
-         from the database."
-    )]
-    TreeStorageDiverged {
-        tree_name: &'static str,
-        block_num: BlockNumber,
-        tree_root: Word,
-        block_root: Word,
-    },
-    #[error("loaded chain MMR cannot produce peaks for block {block_num}")]
-    ChainMmrLoadError {
-        block_num: BlockNumber,
-        #[source]
-        source: MmrError,
-    },
-    #[error(
-        "chain MMR commitment ({chain_mmr_commitment:?}) does not match expected chain commitment \
-         from block {block_num} ({block_header_commitment:?})"
-    )]
-    ChainMmrStorageDiverged {
-        block_num: BlockNumber,
-        chain_mmr_commitment: Word,
-        block_header_commitment: Word,
-    },
-    #[error(
-        "account state forest root ({forest_root}) does not match SQLite root \
-         ({database_root}) for account {account_id}, slot {slot_name:?}. Delete the account \
-         state forest storage directory and restart the node to rebuild from the database."
-    )]
-    AccountStateForestStorageDiverged {
-        account_id: AccountId,
-        slot_name: Option<String>,
-        forest_root: Word,
-        database_root: Word,
-    },
-    #[error("public account {0} is missing details in database")]
-    PublicAccountMissingDetails(AccountId),
-    #[error("failed to convert account to delta: {0}")]
-    AccountToDeltaConversionFailed(String),
-    #[error("genesis block missing. The database should be bootstrapped first.")]
-    GenesisBlockMissing,
-    #[error(
-        "genesis protocol config {commitment} is missing. Rebootstrap the database from genesis."
-    )]
-    GenesisProtocolConfigMissing { commitment: Word },
-}
-
 // ENDPOINT ERRORS
 // =================================================================================================
 #[derive(Error, Debug)]
@@ -366,7 +290,6 @@ mod compile_tests {
         DeserializationError,
         NoteError,
         RecvError,
-        StateInitializationError,
     };
 
     /// Ensure all enum variants remain compat with the desired trait bounds. Otherwise one gets
@@ -387,6 +310,5 @@ mod compile_tests {
         ensure_is_error::<hex::FromHexError>(PhantomData);
 
         ensure_is_error::<DatabaseError>(PhantomData);
-        ensure_is_error::<StateInitializationError>(PhantomData);
     }
 }

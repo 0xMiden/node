@@ -83,9 +83,18 @@ fn boxed_future_result() -> std::pin::Pin<Box<dyn Future<Output = Result<(), Out
     })
 }
 
+#[fn_error_context::context("outer error")]
 #[miden_instrument(err)]
 fn anyhow_result() -> anyhow::Result<()> {
-    Err(anyhow::Error::new(Root).context("middle error").context("outer error"))
+    Err(anyhow::Error::new(Root).context("middle error"))
+}
+
+#[fn_error_context::context("{}", operation)]
+#[miden_instrument(err)]
+async fn anyhow_async_result(operation: &str) -> anyhow::Result<()> {
+    tokio::task::yield_now().await;
+    Err(anyhow::Error::new(Root).context("middle error"))?;
+    Ok(())
 }
 
 #[miden_instrument(err)]
@@ -190,13 +199,15 @@ fn async_errors_export_source_chains_after_suspension() {
 
 #[test]
 fn error_wrappers_export_complete_source_chains() {
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     let spans = export(|| {
         assert!(anyhow_result().is_err());
+        assert!(runtime.block_on(anyhow_async_result("outer error")).is_err());
         assert!(boxed_error_result().is_err());
         assert!(borrowed_error_result().is_err());
         assert!(opaque_result(true).is_err());
     });
-    assert_eq!(spans.len(), 4);
+    assert_eq!(spans.len(), 5);
     for span in &spans {
         assert_error_chain(span);
     }
