@@ -3,5 +3,6 @@ FROM accounts
 WHERE account_id IN (SELECT value FROM rarray(?1))
   AND block_num >= ?2 AND block_num <= ?3
   AND valid_until > ?3
+  AND account_id >= ?4
 ORDER BY account_id
-LIMIT ?4
+LIMIT ?5

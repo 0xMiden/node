@@ -201,7 +201,7 @@ pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesP
 pub use select_account_storage_map_values_paged::{StorageMapValue, StorageMapValuesPage};
 
 mod select_account_vault_updates_v2;
-pub(crate) use select_account_vault_updates_v2::select_account_vault_updates_v2;
+pub(crate) use select_account_vault_updates_v2::AccountVaultUpdatesV2;
 
 mod select_account_vault_assets;
 pub(crate) use select_account_vault_assets::AccountVaultAssets;
@@ -224,31 +224,31 @@ mod apply_block;
 pub(crate) use apply_block::apply_block;
 
 mod select_account_storage_map_updates_v2;
-pub(crate) use select_account_storage_map_updates_v2::select_account_storage_map_updates_v2;
+pub(crate) use select_account_storage_map_updates_v2::AccountStorageMapUpdatesV2;
 pub use select_account_storage_map_updates_v2::{StorageMapCursor, StorageMapUpdatesPage};
 
 mod check_account_history_target;
 pub(crate) use check_account_history_target::check_account_history_target;
 
 mod select_note_sync_page;
-pub(crate) use select_note_sync_page::select_note_sync_page;
+pub(crate) use select_note_sync_page::NoteSyncPaged;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
 
 mod select_account_commitment_changes;
+pub(crate) use select_account_commitment_changes::AccountCommitmentChanges;
 pub use select_account_commitment_changes::AccountCommitmentChangesPage;
-pub(crate) use select_account_commitment_changes::select_account_commitment_changes;
 
 mod select_transactions_by_id;
+pub(crate) use select_transactions_by_id::TransactionsById;
 pub use select_transactions_by_id::TransactionsByIdPage;
-pub(crate) use select_transactions_by_id::select_transactions_by_id;
 
 mod transaction_page;
 mod transaction_record;
 
 mod select_transactions_records_page;
-pub(crate) use select_transactions_records_page::select_transactions_records_page;
+pub(crate) use select_transactions_records_page::TransactionRecordsPaged;
 pub use select_transactions_records_page::{TransactionCursor, TransactionRecordsPage};
 
 mod select_nullifier_updates_page;
-pub(crate) use select_nullifier_updates_page::select_nullifier_updates_page;
+pub(crate) use select_nullifier_updates_page::NullifierUpdatesPaged;
 pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};

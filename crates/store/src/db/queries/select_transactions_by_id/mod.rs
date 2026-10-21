@@ -7,40 +7,59 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
 
 use super::transaction_page::{MAX_PAGE_ROWS, load_page, summary_from_row};
+use crate::db::pagination::{Page, Paginated, key_cursor};
+use crate::state::ScopedBlockNum;
 use crate::{DatabaseError, TransactionRecord};
 
+/// A bounded page of requested transactions committed by the target.
 pub struct TransactionsByIdPage {
     pub records: Vec<TransactionRecord>,
+    /// First omitted transaction, or `None` when the query is complete.
     pub next_cursor: Option<TransactionId>,
 }
 
-/// Selects requested transactions committed by the target in database ID order.
+/// Byte-budgeted transaction records in database cursor order.
 ///
-/// Selects records by estimated byte size before loading their note contents. Reads
-/// one extra metadata row to detect continuation, with at least one record per nonempty page.
-pub(crate) fn select_transactions_by_id(
-    tx: &ReadTx<'_>,
-    ids: &[TransactionId],
+/// Metadata bounds the selected prefix before note contents and proofs are loaded. An oversized
+/// first record is included so a nonempty query always makes progress.
+pub(crate) struct TransactionsById {
+    ids: Vec<TransactionId>,
     target: BlockNumber,
-    cursor: Option<TransactionId>,
     byte_limit: NonZeroUsize,
-) -> Result<TransactionsByIdPage, DatabaseError> {
-    QueryParamTransactionIdLimit::check(ids.len())?;
-    let ids = InList::from_values(ids);
-    let query_limit = i64::try_from(MAX_PAGE_ROWS + 1).expect("page size fits i64");
-    let summaries = match cursor {
-        None => tx.query(
+}
+
+impl TransactionsById {
+    pub(crate) fn new(
+        ids: Vec<TransactionId>,
+        target: ScopedBlockNum,
+        byte_limit: NonZeroUsize,
+    ) -> Self {
+        Self { ids, target: *target, byte_limit }
+    }
+}
+
+impl Paginated for TransactionsById {
+    type Item = TransactionRecord;
+    type Cursor = Option<TransactionId>;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &Self::Cursor,
+    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        QueryParamTransactionIdLimit::check(self.ids.len())?;
+        let ids = InList::from_values(&self.ids);
+        let key = key_cursor(next.as_ref());
+        let limit = i64::try_from(MAX_PAGE_ROWS + 1).expect("page size fits i64");
+        let summaries = tx.query(
             include_str!("select_page.sql"),
-            &[&ids, &target, &query_limit],
+            &[&ids, &self.target, &key, &limit],
             summary_from_row,
-        )?,
-        Some(cursor) => tx.query(
-            include_str!("select_page_after.sql"),
-            &[&ids, &target, &cursor, &query_limit],
-            summary_from_row,
-        )?,
-    };
-    let (records, next) = load_page(tx, summaries, byte_limit)?;
-    let next_cursor = next.map(|last| last.transaction_id);
-    Ok(TransactionsByIdPage { records, next_cursor })
+        )?;
+        let (items, next) = load_page(tx, summaries, self.byte_limit)?;
+        Ok(Page {
+            items,
+            next: next.map(|row| Some(row.transaction_id)),
+        })
+    }
 }

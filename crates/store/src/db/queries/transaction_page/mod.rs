@@ -34,7 +34,7 @@ pub(super) fn summary_from_row(
 ///
 /// Always includes the first record so an oversized estimate cannot stall continuation. Only
 /// selected records load their note blobs. Records are returned in transaction-ID database order;
-/// the continuation position follows the input metadata order.
+/// the continuation position is the first omitted summary in input metadata order.
 pub(super) fn load_page(
     tx: &ReadTx<'_>,
     mut summaries: Vec<TransactionSummary>,
@@ -50,7 +50,7 @@ pub(super) fn load_page(
         bytes = bytes.saturating_add(size);
         count += 1;
     }
-    let next = (count < summaries.len()).then(|| summaries[count - 1]);
+    let next = summaries.get(count).copied();
     summaries.truncate(count);
     if summaries.is_empty() {
         return Ok((Vec::new(), None));

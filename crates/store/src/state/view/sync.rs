@@ -128,9 +128,10 @@ impl StateView {
         let range = self.scope_range(range)?;
         let checkpoint =
             range.end().as_u32().checked_add(1).ok_or(NoteSyncError::TargetOverflow)?;
-        let page = self.db.select_note_sync_page(tags, range, cursor, page_size).await?;
+        let query = crate::db::queries::NoteSyncPaged::new(tags, range, page_size);
+        let page = self.db.page(query, cursor).await?;
         let mut updates: Vec<(NoteSyncUpdate, MmrProof)> = Vec::new();
-        for note in page.notes {
+        for note in page.items {
             if updates
                 .last()
                 .is_some_and(|(update, _)| update.block_header.block_num() == note.block_num)
@@ -152,7 +153,10 @@ impl StateView {
                 updates.push((NoteSyncUpdate { block_header: header, notes: vec![note] }, proof));
             }
         }
-        Ok(NoteSyncStreamPage { updates, next_cursor: page.next_cursor })
+        Ok(NoteSyncStreamPage {
+            updates,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads data to synchronize a client's notes.
@@ -254,9 +258,13 @@ impl StateView {
         page_size: NonZeroUsize,
     ) -> Result<AccountVaultValuesPage, DatabaseError> {
         let block_range = self.scope_range(block_range)?;
-        self.db
-            .select_account_vault_updates_v2(account_id, block_range, cursor, page_size)
-            .await
+        let query =
+            crate::db::queries::AccountVaultUpdatesV2::new(account_id, block_range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(AccountVaultValuesPage {
+            values: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads a bounded page of squashed storage-map updates at the requested target.
@@ -268,9 +276,13 @@ impl StateView {
         page_size: NonZeroUsize,
     ) -> Result<StorageMapUpdatesPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        self.db
-            .select_account_storage_map_updates_v2(account_id, range, cursor, page_size)
-            .await
+        let query =
+            crate::db::queries::AccountStorageMapUpdatesV2::new(account_id, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(StorageMapUpdatesPage {
+            values: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads changed-account identities at the requested target; witnesses must use the same view.
@@ -282,7 +294,12 @@ impl StateView {
         page_size: NonZeroUsize,
     ) -> Result<crate::db::AccountCommitmentChangesPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        self.db.select_account_commitment_changes(ids, range, cursor, page_size).await
+        let query = crate::db::queries::AccountCommitmentChanges::new(ids, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::AccountCommitmentChangesPage {
+            changes: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Looks up only transactions committed at or before the explicit target.
@@ -296,7 +313,12 @@ impl StateView {
         let target = self
             .scope_block(target)
             .ok_or(crate::RangeBeyondTip { chain_tip: *self.tip(), block_to: target })?;
-        self.db.select_transactions_by_id(ids, target, cursor, byte_limit).await
+        let query = crate::db::queries::TransactionsById::new(ids, target, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionsByIdPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads prefix-matching nullifiers through an explicit target.
@@ -308,7 +330,12 @@ impl StateView {
         page_size: NonZeroUsize,
     ) -> Result<crate::NullifierUpdatesPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        self.db.select_nullifier_updates_page(prefixes, range, cursor, page_size).await
+        let query = crate::db::queries::NullifierUpdatesPaged::new(prefixes, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::NullifierUpdatesPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads a bounded page of complete transaction events, including partial blocks.
@@ -320,7 +347,12 @@ impl StateView {
         byte_limit: NonZeroUsize,
     ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        self.db.select_transactions_records_page(ids, range, cursor, byte_limit).await
+        let query = crate::db::queries::TransactionRecordsPaged::new(ids, range, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionRecordsPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Returns storage map values for syncing within a block range.

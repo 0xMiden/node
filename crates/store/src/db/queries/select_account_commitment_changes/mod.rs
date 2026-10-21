@@ -9,49 +9,64 @@ use miden_protocol::block::BlockNumber;
 
 use super::check_account_history_target;
 use crate::DatabaseError;
+use crate::db::pagination::{Page, Paginated, key_cursor};
+use crate::state::ScopedBlockRange;
 
+/// A bounded page of changed account identities at a pinned target.
 #[derive(Debug)]
 pub struct AccountCommitmentChangesPage {
     pub changes: Vec<(AccountId, BlockNumber)>,
+    /// First omitted item, or `None` when the range is complete.
     pub next_cursor: Option<AccountId>,
 }
 
-/// Selects one changed version per requested account that remains valid at the target.
-///
-/// Checks retention in the page snapshot. Uses database account-ID order and one extra
-/// row to determine whether another page is needed.
-pub(crate) fn select_account_commitment_changes(
-    tx: &ReadTx<'_>,
-    ids: &[AccountId],
+/// Target-valid changed accounts in account-ID order.
+pub(crate) struct AccountCommitmentChanges {
+    ids: Vec<AccountId>,
     range: RangeInclusive<BlockNumber>,
-    cursor: Option<AccountId>,
     page_size: NonZeroUsize,
-) -> Result<AccountCommitmentChangesPage, DatabaseError> {
-    QueryParamAccountIdLimit::check(ids.len())?;
-    if range.is_empty() {
-        return Err(DatabaseError::InvalidBlockRange { from: *range.start(), to: *range.end() });
+}
+
+impl AccountCommitmentChanges {
+    pub(crate) fn new(
+        ids: Vec<AccountId>,
+        range: ScopedBlockRange,
+        page_size: NonZeroUsize,
+    ) -> Self {
+        Self {
+            ids,
+            range: range.into_inner(),
+            page_size,
+        }
     }
-    check_account_history_target(tx, *range.end())?;
-    let ids = InList::from_values(ids);
-    let limit = page_size.get();
-    let query_limit = i64::try_from(limit.saturating_add(1)).expect("page size fits i64");
-    let map_row = |row: &miden_node_db::sqlite::Row<'_>| {
-        Ok((row.get::<AccountId>(0)?, row.get::<BlockNumber>(1)?))
-    };
-    let mut changes = match cursor {
-        None => tx.query(
+}
+
+impl Paginated for AccountCommitmentChanges {
+    type Item = (AccountId, BlockNumber);
+    type Cursor = Option<AccountId>;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &Self::Cursor,
+    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        QueryParamAccountIdLimit::check(self.ids.len())?;
+        if self.range.is_empty() {
+            return Err(DatabaseError::InvalidBlockRange {
+                from: *self.range.start(),
+                to: *self.range.end(),
+            });
+        }
+        check_account_history_target(tx, *self.range.end())?;
+        let ids = InList::from_values(&self.ids);
+        let key = key_cursor(next.as_ref());
+        let limit = i64::try_from(self.page_size.get().saturating_add(1))
+            .expect("page size fits within i64");
+        let rows = tx.query(
             include_str!("select_page.sql"),
-            &[&ids, range.start(), range.end(), &query_limit],
-            map_row,
-        )?,
-        Some(cursor) => tx.query(
-            include_str!("select_page_after.sql"),
-            &[&ids, range.start(), range.end(), &cursor, &query_limit],
-            map_row,
-        )?,
-    };
-    let has_more = changes.len() > limit;
-    changes.truncate(limit);
-    let next_cursor = has_more.then(|| changes.last().expect("continued page is nonempty").0);
-    Ok(AccountCommitmentChangesPage { changes, next_cursor })
+            &[&ids, self.range.start(), self.range.end(), &key, &limit],
+            |row| Ok((row.get::<AccountId>(0)?, row.get::<BlockNumber>(1)?)),
+        )?;
+        Ok(Page::from_overflow(rows, self.page_size, |row| Some(row.0)))
+    }
 }
