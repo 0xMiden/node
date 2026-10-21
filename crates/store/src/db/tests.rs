@@ -7,6 +7,7 @@ use assert_matches::assert_matches;
 use futures::TryStreamExt;
 use miden_node_db::sqlite::WriteTx;
 use miden_node_proto::domain::account::{AccountSummary, StorageMapEntries};
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
 use miden_protocol::account::auth::{AuthScheme, PublicKeyCommitment};
 use miden_protocol::account::component::AccountComponentMetadata;
@@ -4923,7 +4924,7 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
         let mut cursor: Option<queries::NoteSyncCursor> = None;
         let mut actual = vec![];
         loop {
-            let start = cursor.clone();
+            let start = cursor;
             let page = db
                 .read(move |tx| {
                     queries::NoteSyncPaged::new(
@@ -5001,7 +5002,7 @@ fn account_commitment_stream_selects_changed_accounts_at_target() {
         let mut cursor: Option<AccountId> = None;
         let mut actual = vec![];
         loop {
-            let start = cursor.clone();
+            let start = cursor;
             let requested = ids.clone();
             let page = db
                 .read(move |tx| {
@@ -5106,7 +5107,7 @@ fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
     let mut cursor: Option<miden_protocol::transaction::TransactionId> = None;
     let mut actual = vec![];
     loop {
-        let start = cursor.clone();
+        let start = cursor;
         let requested = ids.clone();
         let page = db
             .read(move |tx| {
@@ -5176,7 +5177,7 @@ fn transaction_history_stream_continues_within_blocks_with_oversized_estimates()
     let mut cursor: Option<queries::TransactionCursor> = None;
     let mut actual = vec![];
     loop {
-        let start = cursor.clone();
+        let start = cursor;
         let page = db
             .read(move |tx| {
                 queries::TransactionRecordsPaged::new(
@@ -5223,7 +5224,7 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
         let mut found = std::collections::HashSet::new();
         let mut ordered = vec![];
         loop {
-            let start = cursor.clone();
+            let start = cursor;
             let page = db
                 .read(move |tx| {
                     queries::NullifierUpdatesPaged::new(
@@ -5509,7 +5510,7 @@ async fn streaming_queries_return_every_page_through_db_pages() {
     crate::db::migrations::bootstrap_database(&path).unwrap();
     let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
     let seed_path = path.clone();
-    let (nullifiers, mut headers) = tokio::task::spawn_blocking(move || {
+    let (nullifiers, mut headers) = spawn_blocking_in_current_span(move || {
         let db = TestDb::open(&seed_path);
         create_block(&db, 1.into());
         upsert_mock_account(&db, account, 0, 1.into()).unwrap();
