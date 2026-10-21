@@ -338,10 +338,6 @@ impl Rpc {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        let rpc_version = env!("CARGO_PKG_VERSION");
-        let rpc_version =
-            semver::Version::parse(rpc_version).context("failed to parse crate version")?;
-
         let rpc = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
@@ -369,7 +365,7 @@ impl Rpc {
             // CORS headers applied, masking the accept error in web-clients (which would experience
             // CORS rejection).
             .layer(
-                AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
+                AcceptHeaderLayer::new(genesis.commitment())
                     .with_genesis_enforced_method("RegisterAccount")
                     .with_genesis_enforced_method("SubmitProvenTx")
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
