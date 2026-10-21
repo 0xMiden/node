@@ -171,12 +171,6 @@ async fn ceremony_succeeds(
         assert_eq!(output.secret_share.participant, participants.local_index);
         assert_eq!(output.setup_context.epoch, *ceremony.epoch.as_bytes());
         let output_file = root.path().join(format!("{}.bundle", participants.local_index.get()));
-        let endpoint = network
-            .endpoints
-            .iter()
-            .find(|endpoint| endpoint.id() == ceremony.endpoint_secret.public())
-            .unwrap()
-            .clone();
         completions.spawn(async move {
             ceremony.persist(&output_file, output.clone())?;
             tokio::time::timeout(
@@ -185,11 +179,6 @@ async fn ceremony_succeeds(
             )
             .await
             .context("DKG test completion exchange timed out")??;
-            // Endpoint shutdown can wait for QUIC close timers after ceremony completion. Keep it
-            // separate from the completion exchange deadline.
-            tokio::time::timeout(Duration::from_secs(60), endpoint.close())
-                .await
-                .context("DKG test endpoint shutdown timed out")?;
             let streams = participants
                 .session
                 .authenticated_peers
@@ -243,8 +232,14 @@ async fn ceremony_succeeds(
     for selected in shares.into_iter().combinations(threshold) {
         assert_eq!(combiner.combine_exact(&ciphertext, decryption_context, &selected)?, plaintext,);
     }
+    // Keep the remaining peer transports running while each endpoint drains.
+    //
+    // Concurrent shutdown can discard a peer's queued close response and force the initiator
+    // to wait for QUIC's RTT-dependent close timer.
     for endpoint in network.endpoints {
-        endpoint.close().await;
+        tokio::time::timeout(Duration::from_secs(60), endpoint.close())
+            .await
+            .context("DKG test endpoint shutdown timed out")?;
     }
     Ok(())
 }
