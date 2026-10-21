@@ -5106,7 +5106,7 @@ fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
 
 /// Same-block event pages must remain complete even when stored aggregate byte estimates are large.
 #[test]
-fn transaction_history_stream_continues_within_blocks_and_ignores_aggregate_estimates() {
+fn transaction_history_stream_continues_within_blocks_with_oversized_estimates() {
     let db = &TestDb::new();
     let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
     let headers: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
@@ -5226,4 +5226,131 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
         assert!(page.records.is_empty());
         assert!(page.next_cursor.is_none());
     }
+}
+
+/// Transaction streams batch small records within a byte budget and keep progressing when an
+/// estimate exceeds the budget. A row cap bounds pages even when estimates are too small.
+#[test]
+fn transaction_stream_pages_respect_byte_budgets_and_make_progress() {
+    for (estimate, count, budget, expected_page_size) in
+        [(100_i64, 5, 250, 2), (i64::MAX, 3, 250, 1), (0, 300, 1024, 256)]
+    {
+        let db = &TestDb::new();
+        let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+        create_block(db, 1.into());
+        upsert_mock_account(db, account, 1, 1.into()).unwrap();
+        let mut headers: Vec<_> =
+            (1..=count).map(|number| mock_block_transaction(account, number)).collect();
+        insert_transactions(
+            db,
+            1.into(),
+            &OrderedTransactionHeaders::new_unchecked(headers.clone()),
+        )
+        .unwrap();
+        db.write(move |tx| -> Result<usize> {
+            Ok(tx.execute("UPDATE transactions SET size_in_bytes = ?1", &[&estimate])?)
+        })
+        .unwrap();
+        headers.sort_by_key(|header| header.id().as_bytes());
+        let ids: Vec<_> = headers.iter().map(TransactionHeader::id).collect();
+        let byte_limit = NonZeroUsize::new(budget).unwrap();
+
+        for lookup in [false, true] {
+            let mut history_cursor = None;
+            let mut lookup_cursor = None;
+            let mut actual = Vec::new();
+            loop {
+                let requested = ids.clone();
+                let (records, next_history, next_lookup) = db
+                    .read(move |tx| -> Result<_> {
+                        if lookup {
+                            let page = queries::select_transactions_by_id(
+                                tx,
+                                &requested,
+                                1.into(),
+                                lookup_cursor,
+                                byte_limit,
+                            )?;
+                            Ok((page.records, None, page.next_cursor))
+                        } else {
+                            let page = queries::select_transactions_records_page(
+                                tx,
+                                &[account],
+                                0.into()..=1.into(),
+                                history_cursor,
+                                byte_limit,
+                            )?;
+                            Ok((page.records, page.next_cursor, None))
+                        }
+                    })
+                    .unwrap();
+                history_cursor = next_history;
+                lookup_cursor = next_lookup;
+                let has_more = history_cursor.is_some() || lookup_cursor.is_some();
+                assert!(!records.is_empty(), "every page must make progress");
+                assert!(records.len() <= expected_page_size);
+                if actual.is_empty() {
+                    assert_eq!(records.len(), expected_page_size);
+                }
+                actual.extend(records.into_iter().map(|record| record.header));
+                if !has_more {
+                    break;
+                }
+                assert!(actual.len() < headers.len(), "the final page must terminate");
+            }
+            assert_eq!(actual, headers);
+        }
+    }
+}
+
+/// Byte-budgeted pages preserve block order even when transaction IDs sort in the opposite order.
+#[test]
+fn transaction_history_byte_pages_preserve_order_across_blocks() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let mut headers: Vec<_> =
+        (1..=6).map(|number| mock_block_transaction(account, number)).collect();
+    headers.sort_by_key(|header| header.id().as_bytes());
+    for (height, entries) in [(1_u32, &headers[3..]), (2, &headers[..3])] {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+        insert_transactions(
+            db,
+            height.into(),
+            &OrderedTransactionHeaders::new_unchecked(entries.to_vec()),
+        )
+        .unwrap();
+    }
+    db.write(|tx| -> Result<usize> {
+        Ok(tx.execute("UPDATE transactions SET size_in_bytes = 100", &[])?)
+    })
+    .unwrap();
+    let mut cursor = None;
+    let mut actual = Vec::new();
+    loop {
+        let page = db
+            .read(move |tx| {
+                queries::select_transactions_records_page(
+                    tx,
+                    &[account],
+                    0.into()..=2.into(),
+                    cursor,
+                    NonZeroUsize::new(250).unwrap(),
+                )
+            })
+            .unwrap();
+        assert_eq!(page.records.len(), 2);
+        actual.extend(page.records.into_iter().map(|record| (record.block_num, record.header)));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+        assert!(actual.len() < headers.len(), "the final page must terminate");
+    }
+    let expected: Vec<_> = headers[3..]
+        .iter()
+        .map(|header| (BlockNumber::from(1), header.clone()))
+        .chain(headers[..3].iter().map(|header| (BlockNumber::from(2), header.clone())))
+        .collect();
+    assert_eq!(actual, expected);
 }

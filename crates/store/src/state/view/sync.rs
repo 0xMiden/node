@@ -291,12 +291,12 @@ impl StateView {
         ids: Vec<miden_protocol::transaction::TransactionId>,
         target: BlockNumber,
         cursor: Option<miden_protocol::transaction::TransactionId>,
-        page_size: NonZeroUsize,
+        byte_limit: NonZeroUsize,
     ) -> Result<crate::db::TransactionsByIdPage, DatabaseError> {
         let target = self
             .scope_block(target)
             .ok_or(crate::RangeBeyondTip { chain_tip: *self.tip(), block_to: target })?;
-        self.db.select_transactions_by_id(ids, target, cursor, page_size).await
+        self.db.select_transactions_by_id(ids, target, cursor, byte_limit).await
     }
 
     /// Loads prefix-matching nullifiers through an explicit target.
@@ -317,10 +317,10 @@ impl StateView {
         ids: Vec<AccountId>,
         range: RangeInclusive<BlockNumber>,
         cursor: Option<crate::TransactionCursor>,
-        page_size: NonZeroUsize,
+        byte_limit: NonZeroUsize,
     ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        self.db.select_transactions_records_page(ids, range, cursor, page_size).await
+        self.db.select_transactions_records_page(ids, range, cursor, byte_limit).await
     }
 
     /// Returns storage map values for syncing within a block range.

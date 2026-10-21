@@ -10,7 +10,7 @@ use tracing::miden_instrument;
 use super::error_codes::GetTransactionsByIdErrorCode as ErrorCode;
 use super::stream_settings::{
     SEND_TIMEOUT,
-    TRANSACTION_DB_PAGE_SIZE,
+    TRANSACTION_DB_PAGE_BYTES,
     TRANSACTION_STREAM_BUFFER_SIZE,
 };
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
@@ -98,7 +98,7 @@ impl Paginator for LookupPaginator {
                 self.ids.clone(),
                 self.target,
                 self.cursor,
-                TRANSACTION_DB_PAGE_SIZE,
+                TRANSACTION_DB_PAGE_BYTES,
             )
             .await
             .map_err(|err| match err {

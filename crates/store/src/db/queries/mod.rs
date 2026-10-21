@@ -242,6 +242,7 @@ mod select_transactions_by_id;
 pub use select_transactions_by_id::TransactionsByIdPage;
 pub(crate) use select_transactions_by_id::select_transactions_by_id;
 
+mod transaction_page;
 mod transaction_record;
 
 mod select_transactions_records_page;

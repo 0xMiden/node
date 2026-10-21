@@ -10,7 +10,7 @@ use tracing::miden_instrument;
 use super::error_codes::SyncTransactionsV2ErrorCode as ErrorCode;
 use super::stream_settings::{
     SEND_TIMEOUT,
-    TRANSACTION_DB_PAGE_SIZE,
+    TRANSACTION_DB_PAGE_BYTES,
     TRANSACTION_STREAM_BUFFER_SIZE,
 };
 use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
@@ -100,7 +100,7 @@ impl Paginator for TransactionPaginator {
                 if range.is_some() { self.ids.clone() } else { vec![] },
                 range.unwrap_or(self.target.target..=self.target.target),
                 self.cursor,
-                TRANSACTION_DB_PAGE_SIZE,
+                TRANSACTION_DB_PAGE_BYTES,
             )
             .await
             .map_err(|err| match err {

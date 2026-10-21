@@ -848,11 +848,11 @@ impl Db {
         ids: Vec<miden_protocol::transaction::TransactionId>,
         target: ScopedBlockNum,
         cursor: Option<miden_protocol::transaction::TransactionId>,
-        page_size: NonZeroUsize,
+        byte_limit: NonZeroUsize,
     ) -> Result<TransactionsByIdPage> {
         self.reader
             .read("transactions by id", move |tx| {
-                queries::select_transactions_by_id(tx, &ids, *target, cursor, page_size)
+                queries::select_transactions_by_id(tx, &ids, *target, cursor, byte_limit)
             })
             .await
     }
@@ -873,18 +873,18 @@ impl Db {
             .await
     }
 
-    /// Loads a bounded transaction event page without aggregate byte truncation.
+    /// Loads a byte-budgeted transaction event page, including partial blocks.
     pub async fn select_transactions_records_page(
         &self,
         ids: Vec<AccountId>,
         range: ScopedBlockRange,
         cursor: Option<TransactionCursor>,
-        page_size: NonZeroUsize,
+        byte_limit: NonZeroUsize,
     ) -> Result<TransactionRecordsPage> {
         let range = range.into_inner();
         self.reader
             .read("transaction history page", move |tx| {
-                queries::select_transactions_records_page(tx, &ids, range, cursor, page_size)
+                queries::select_transactions_records_page(tx, &ids, range, cursor, byte_limit)
             })
             .await
     }
