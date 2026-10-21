@@ -111,6 +111,13 @@ fn failed_requests_record_and_log_their_status() {
             Some("database unavailable"),
             "{status_in:?}"
         );
+        for attributes in [&event.attributes, &span.attributes] {
+            assert_eq!(
+                attribute(attributes, "exception.message"),
+                Some(&Value::from("database unavailable")),
+                "{status_in:?}"
+            );
+        }
         assert_eq!(span.status, Status::error(""), "{status_in:?}");
     }
 }
@@ -130,6 +137,7 @@ fn client_errors_are_logged_at_info() {
         assert_eq!(status_code(&span), Some(&Value::I64(code as i64)), "{code:?}");
         let event = failure_event(&span).expect("failure is logged");
         assert_eq!(event_attribute(event, "level").as_deref(), Some("INFO"), "{code:?}");
+        assert_eq!(attribute(&span.attributes, "exception.message"), None, "{code:?}");
         assert_eq!(span.status, Status::Unset, "{code:?}");
     }
 }

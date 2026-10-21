@@ -1,3 +1,4 @@
+use std::fmt::{self, Display, Formatter};
 use std::time::Duration;
 
 use http::HeaderMap;
@@ -32,8 +33,9 @@ pub type GrpcTraceLayer = TraceLayer<
 ///
 /// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
 /// code as `rpc.grpc.status_code`. A failed request is logged once on that span, with its status
-/// code and message. `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR`, which marks
-/// the span as failed. Other codes are logged at `INFO`.
+/// code and message. `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR` with the
+/// message as a typed error, which records it as `exception.message` and marks the span as failed.
+/// Other codes are logged at `INFO`.
 ///
 /// The other codes describe the request, such as an unknown account or a method that does not
 /// exist, and clients cause them. Requests from other node components can carry client content
@@ -99,8 +101,14 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
         latency: Duration,
         span: &tracing::Span,
     ) {
-        if let GrpcFailureClass::Error(error) = classification {
-            tracing::error!(parent: span, error = %error, latency = ?latency, "response failed");
+        if let GrpcFailureClass::Error(message) = classification {
+            let error = FailureMessage(message);
+            tracing::error!(
+                parent: span,
+                error = &error as &(dyn std::error::Error + 'static),
+                latency = ?latency,
+                "response failed"
+            );
         }
     }
 }
@@ -119,24 +127,42 @@ fn record_status(status: &tonic::Status, latency: Duration, span: &tracing::Span
 }
 
 fn log_failure(level: Level, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
-    macro_rules! log {
-        ($level:expr) => {
-            tracing::event!(
-                parent: span,
-                $level,
-                grpc.code = ?status.code(),
-                grpc.message = status.message(),
-                latency = ?latency,
-                "request failed"
-            )
-        };
-    }
     if level == Level::ERROR {
-        log!(Level::ERROR);
+        let error = FailureMessage(status.message().to_owned());
+        tracing::error!(
+            parent: span,
+            error = &error as &(dyn std::error::Error + 'static),
+            grpc.code = ?status.code(),
+            grpc.message = status.message(),
+            latency = ?latency,
+            "request failed"
+        );
     } else {
-        log!(Level::INFO);
+        tracing::info!(
+            parent: span,
+            grpc.code = ?status.code(),
+            grpc.message = status.message(),
+            latency = ?latency,
+            "request failed"
+        );
     }
 }
+
+/// The message of a failed request, logged as a typed error.
+///
+/// The OpenTelemetry layer records a typed error as `exception.message` on the event and span,
+/// like the errors that other node code logs. The status code is recorded separately, so the
+/// exception holds only the message.
+#[derive(Debug)]
+struct FailureMessage(String);
+
+impl Display for FailureMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FailureMessage {}
 
 /// Returns a [`trace_fn`](tonic::transport::server::Server) implementation for gRPC requests
 /// which adds open-telemetry information to the span.
