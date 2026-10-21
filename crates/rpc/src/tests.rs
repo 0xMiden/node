@@ -546,14 +546,23 @@ async fn rpc_server_accepts_requests_with_accept_header() {
 }
 
 #[tokio::test]
-async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
+async fn rpc_server_accepts_requests_with_legacy_version_parameter() {
     // Start the RPC.
     let (_, rpc_addr, _store, _server) = start_rpc().await;
     // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
     let url = Url::parse(format!("http://{rpc_addr}").as_str()).unwrap();
 
-    for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
-        // Recreate the RPC client with an invalid version.
+    for version in [
+        "0.17.0",
+        "1.9.0",
+        "0.8.1",
+        "0.8.0",
+        "0.999.0",
+        "99.0.0",
+        "0.18.0-alpha.1",
+        "not-a-version",
+    ] {
+        // Recreate the RPC client with a legacy version parameter.
         let mut rpc_client: RpcClient = Builder::new(url.clone())
             .without_tls()
             .with_timeout(Duration::from_secs(10))
@@ -567,10 +576,7 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
         // Send any request to the RPC.
         let response = send_request(&mut rpc_client).await;
 
-        // Assert the server rejects our request on the basis of an unsupported version.
-        assert!(response.is_err());
-        assert_eq!(response.as_ref().err().unwrap().code(), tonic::Code::InvalidArgument);
-        assert!(response.as_ref().err().unwrap().message().contains("server does not support"),);
+        assert!(response.is_ok(), "version={version}: {response:?}");
     }
 }
 

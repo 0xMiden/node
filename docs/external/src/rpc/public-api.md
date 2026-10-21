@@ -92,7 +92,7 @@ Write requests must identify the target network with the `genesis` parameter in 
 application/vnd.miden; genesis=<genesis-commitment>
 ```
 
-Clients may also include a compatible RPC version:
+Legacy clients may also include a `version` parameter. The server ignores its value:
 
 ```text
 application/vnd.miden; version=<semver>; genesis=<genesis-commitment>
