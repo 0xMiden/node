@@ -468,6 +468,13 @@ jobs:
       - name: yamllint
         run: |
           python3 -m venv "${RUNNER_TEMP}/yamllint"
+          "${RUNNER_TEMP}/yamllint/bin/python" - <<'PY'
+          import pip
+          from pip._vendor.packaging.version import Version
+
+          if Version(pip.__version__) < Version("26.2.2"):
+              raise SystemExit(f"pip >= 26.2.2 is required for the updated CA bundle; found {pip.__version__}")
+          PY
           "${RUNNER_TEMP}/yamllint/bin/pip" install --disable-pip-version-check yamllint==1.38.0
           "${RUNNER_TEMP}/yamllint/bin/yamllint" -c .config/yamllint.yml .github/workflows .github/actions
 
