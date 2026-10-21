@@ -136,6 +136,7 @@ fn note_stream_error_to_status(err: NoteSyncError) -> Status {
 #[cfg(test)]
 mod tests {
     use miden_node_store::{DatabaseError, NoteSyncError};
+    use miden_protocol::crypto::merkle::mmr::MmrError;
 
     use super::note_stream_error_to_status;
 
@@ -146,6 +147,15 @@ mod tests {
         let status = note_stream_error_to_status(NoteSyncError::DatabaseError(
             DatabaseError::DataCorrupted("block header 1 is missing for a stored note".into()),
         ));
+
+        assert_eq!(status.code(), tonic::Code::Internal);
+        assert_eq!(status.details(), &[0]);
+    }
+
+    #[test]
+    fn mmr_opening_failure_is_an_internal_error() {
+        let status =
+            note_stream_error_to_status(NoteSyncError::MmrError(MmrError::PositionNotFound(1)));
 
         assert_eq!(status.code(), tonic::Code::Internal);
         assert_eq!(status.details(), &[0]);
