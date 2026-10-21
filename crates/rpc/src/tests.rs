@@ -2804,9 +2804,11 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
 
     let status = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: block_range(),
             account_id: account_id(),
-            range: None,
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(1),
+            }),
         })
         .await
         .expect_err("sync_account_vault_v2 should reject block_to beyond chain tip");
@@ -2837,7 +2839,6 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
 
     let status = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: None,
             range: None,
             account_id: Some(public_account.into()),
         })
@@ -2853,9 +2854,11 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
     );
     let status = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(private_account.into()),
-            range: None,
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
         })
         .await
         .expect_err("sync_account_vault_v2 should reject private accounts");
@@ -2863,9 +2866,11 @@ async fn sync_account_vault_v2_validates_requests_and_completes_empty_stream() {
 
     let mut stream = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(public_account.into()),
-            range: None,
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
         })
         .await
         .expect("sync_account_vault_v2 should accept a public account at the chain tip")
@@ -2891,9 +2896,11 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
 
     let mut stream = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(account_id.into()),
-            range: None,
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
         })
         .await
         .expect("sync_account_vault_v2 should return a stream")
@@ -2901,7 +2908,7 @@ async fn sync_account_vault_v2_streams_squashed_updates() {
 
     let mut assets = Vec::new();
     while let Some(update) = stream.message().await.expect("stream should complete successfully") {
-        assert_eq!(update.block_num, 0);
+        assert_eq!(update.last_updated_at, 0);
         assets.push(
             update
                 .asset
@@ -2934,16 +2941,18 @@ async fn sync_account_vault_v2_streams_every_key_across_database_pages() {
     .await;
     let mut stream = rpc_client
         .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
             account_id: Some(account_id.into()),
-            range: None,
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
         })
         .await
         .unwrap()
         .into_inner();
     let mut actual = Vec::new();
     while let Some(update) = stream.message().await.unwrap() {
-        assert_eq!(update.block_num, 0);
+        assert_eq!(update.last_updated_at, 0);
         actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
     }
     actual.sort_by_key(Asset::id);
@@ -2985,7 +2994,6 @@ async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
     for (from, expected) in [(None, 2), (Some(0), 0)] {
         let mut stream = client
             .sync_account_vault_v2(proto::miden::node::v1::SyncAccountVaultV2Request {
-                block_range: None,
                 account_id: Some(account_id.into()),
                 range: Some(proto::miden::node::v1::StateDeltaRange {
                     from_block_exclusive: from,
@@ -3003,49 +3011,21 @@ async fn sync_account_vault_v2_accepts_bootstrap_and_empty_delta_ranges() {
     }
 }
 
-/// Range aliases must not produce ambiguous requests or let empty deltas bypass target validation.
+/// Invalid ranges and future targets must fail, including when the delta is empty.
 #[tokio::test]
-async fn sync_account_vault_v2_rejects_ambiguous_ranges_and_future_empty_targets() {
+async fn sync_account_vault_v2_rejects_invalid_ranges_and_future_empty_targets() {
     let (mut client, _, _store, _guard) = start_rpc().await;
     let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
-    for (request, expected_detail) in [
-        (
-            proto::miden::node::v1::SyncAccountVaultV2Request {
-                block_range: Some(proto::miden::node::v1::BlockRange {
-                    block_from: 0,
-                    block_to: 0,
-                }),
-                account_id: Some(account_id.into()),
-                range: Some(proto::miden::node::v1::StateDeltaRange {
-                    from_block_exclusive: None,
-                    to_block_inclusive: Some(0),
-                }),
-            },
-            2,
-        ),
-        (
-            proto::miden::node::v1::SyncAccountVaultV2Request {
-                block_range: None,
-                account_id: Some(account_id.into()),
-                range: Some(proto::miden::node::v1::StateDeltaRange {
-                    from_block_exclusive: Some(1),
-                    to_block_inclusive: Some(1),
-                }),
-            },
-            3,
-        ),
-        (
-            proto::miden::node::v1::SyncAccountVaultV2Request {
-                block_range: None,
-                account_id: Some(account_id.into()),
-                range: Some(proto::miden::node::v1::StateDeltaRange {
-                    from_block_exclusive: None,
-                    to_block_inclusive: None,
-                }),
-            },
-            2,
-        ),
-    ] {
+    for (from, target, expected_detail) in
+        [(Some(1), Some(0), 2), (Some(1), Some(1), 3), (None, None, 2)]
+    {
+        let request = proto::miden::node::v1::SyncAccountVaultV2Request {
+            account_id: Some(account_id.into()),
+            range: Some(proto::miden::node::v1::StateDeltaRange {
+                from_block_exclusive: from,
+                to_block_inclusive: target,
+            }),
+        };
         let error = client.sync_account_vault_v2(request).await.unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
         assert_eq!(error.details(), &[expected_detail]);
@@ -3073,9 +3053,11 @@ async fn sync_account_vault_v2_accepts_many_concurrent_streams() {
         None,
     );
     let request = proto::miden::node::v1::SyncAccountVaultV2Request {
-        block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
         account_id: Some(account_id.into()),
-        range: None,
+        range: Some(proto::miden::node::v1::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
     };
     let mut expected: Vec<_> =
         vault_stream_values(300).into_iter().map(|(_, asset)| asset.unwrap()).collect();
@@ -3089,7 +3071,7 @@ async fn sync_account_vault_v2_accepts_many_concurrent_streams() {
         let mut actual = Vec::new();
         while let Some(item) = stream.next().await {
             let update = item.unwrap();
-            assert_eq!(update.block_num, 0);
+            assert_eq!(update.last_updated_at, 0);
             actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
         }
         actual.sort_by_key(Asset::id);
@@ -3910,7 +3892,7 @@ async fn nullifier_stream_reconciles_every_record_and_validates_prefixes() {
     let mut stream = client.sync_nullifiers_v2(request.clone()).await.unwrap().into_inner();
     let mut found = HashSet::new();
     while let Some(item) = stream.message().await.unwrap() {
-        assert_eq!(item.block_num, 0);
+        assert_eq!(item.last_updated_at, 0);
         let word = item.nullifier.unwrap().decode_fields().unwrap();
         assert!(found.insert(Nullifier::from_raw(word)));
     }

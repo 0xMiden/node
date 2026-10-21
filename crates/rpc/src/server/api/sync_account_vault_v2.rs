@@ -32,19 +32,10 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
             .account_id
             .verify()
             .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
-        let block_range = match (request.block_range.into_inner(), request.range.into_inner()) {
-            (Some(range), None) => range
-                .verify()
-                .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?
-                .into(),
-            (None, Some(range)) => {
-                range.verify().map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?
-            },
-            _ => {
-                return Err(ErrorCode::InvalidRange
-                    .invalid_argument("exactly one synchronization range is required"));
-            },
-        };
+        let block_range = request
+            .range
+            .verify()
+            .map_err(|err| ErrorCode::InvalidRange.invalid_argument(err))?;
 
         Ok((account_id, block_range))
     }
@@ -56,7 +47,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVaultV2 for RpcServic
         Ok(proto::miden::node::v1::SyncAccountVaultV2Response {
             vault_key: Some(vault_key.into()),
             asset: item.asset.map(Into::into),
-            block_num: item.block_num.as_u32(),
+            last_updated_at: item.block_num.as_u32(),
         })
     }
 

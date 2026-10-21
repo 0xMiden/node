@@ -52,7 +52,7 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiersV2 for RpcService 
     fn encode(item: Self::Item) -> tonic::Result<proto::miden::node::v1::SyncNullifiersV2Response> {
         Ok(proto::miden::node::v1::SyncNullifiersV2Response {
             nullifier: Some(item.nullifier.as_word().into()),
-            block_num: item.block_num.as_u32(),
+            last_updated_at: item.block_num.as_u32(),
         })
     }
 

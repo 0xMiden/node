@@ -106,8 +106,7 @@ codes returned in gRPC status details.
 Authenticate the `SyncChainMmr` target header and its MMR delta first. Keep its block number `N` fixed for all other
 requests in the attempt. Delta streams take `StateDeltaRange`: `from_block_exclusive = C` and `to_block_inclusive = N`
 request `(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return
-an empty delta after target validation. `SyncAccountVaultV2` also accepts the legacy inclusive `block_range`; send
-exactly one range representation.
+an empty delta after target validation.
 
 | Method                     | Purpose                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -119,6 +118,9 @@ exactly one range representation.
 | `SyncAccountStorageMapsV2` | Streams the final target value of every changed storage-map key.                                 |
 | `GetTransactionsById`      | Streams requested transactions committed at or before `target_block_num`.                        |
 | `SyncTransactionsV2`       | Streams complete account transaction events in the requested range.                              |
+
+Vault, storage-map, account-commitment, and nullifier stream items report the block of their last update in
+`last_updated_at`. This is a block number, not a timestamp or the authenticated target.
 
 Verify account witnesses against the target header's account root. Compare each proven commitment with the local account
 header. Fetch `GetAccount` at `N` only for divergent accounts. Verify fetched details and the recomputed vault/storage

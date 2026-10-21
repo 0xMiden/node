@@ -71,7 +71,7 @@ async fn sync_readers_preserve_targets_and_leave_block_writes_available() {
         let mut found = HashSet::new();
         while let Some(item) = stream.next().await {
             let item = item.unwrap();
-            assert_eq!(item.block_num, 0);
+            assert_eq!(item.last_updated_at, 0);
             assert!(
                 found.insert(Nullifier::from_raw(item.nullifier.unwrap().decode_fields().unwrap()))
             );
@@ -99,7 +99,7 @@ async fn sync_readers_preserve_targets_and_leave_block_writes_available() {
     while let Some(item) = slow.next().await {
         match item {
             Ok(item) => {
-                assert_eq!(item.block_num, 0);
+                assert_eq!(item.last_updated_at, 0);
                 count += 1;
             },
             Err(status) => {

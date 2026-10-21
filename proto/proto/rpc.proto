@@ -659,19 +659,16 @@ message SyncAccountVaultRequest {
 // Pin the target to the block authenticated by SyncChainMmr. Apply updates only after an OK
 // end-of-stream; discard partial updates on error and retry the same target while retained.
 message SyncAccountVaultV2Request {
-    // Inclusive range of vault updates to consider.
-    //
-    // A client whose state includes block C and which is synchronizing to block N should request
-    // [C + 1, N]. The server emits at most one update per vault key: the value of that key at
-    // `block_to`, provided the key changed within this range. `block_to` must be within the
-    // server's retained account-history window; `block_from` may be older.
-    optional BlockRange block_range = 1;
+    reserved 1;
+    reserved "block_range";
 
     // Public account whose asset vault should be synchronized.
     account.AccountId account_id = 2;
 
-    // Explicit synchronization delta. Specify exactly one range representation.
-    optional StateDeltaRange range = 3;
+    // Changes over (C, N], where C is the last synchronized block and N is the target.
+    // Omit the lower bound to include genesis. The target must remain within the retained
+    // account-history window; the lower bound may be older.
+    StateDeltaRange range = 3;
 }
 
 message SyncAccountVaultResponse {
@@ -695,7 +692,7 @@ message SyncAccountVaultV2Response {
     optional asset.Asset asset = 2;
 
     // Block number at which the above asset was updated in the account vault.
-    fixed32 block_num = 3;
+    fixed32 last_updated_at = 3;
 }
 
 message AccountVaultUpdate {
@@ -1139,5 +1136,7 @@ message SyncNullifiersV2Request {
 // Every nullifier is an append-only identity. OK end-of-stream completes the requested range.
 message SyncNullifiersV2Response {
     primitives.Word nullifier = 1;
-    fixed32 block_num = 2;
+
+    // Block number at which the nullifier was recorded.
+    fixed32 last_updated_at = 2;
 }
