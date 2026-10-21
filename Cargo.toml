@@ -103,7 +103,7 @@ itertools          = { version = "0.14" }
 libsqlite3-sys     = { features = ["bundled"], version = "0.35" }
 lru                = { default-features = false, version = "0.18" }
 miette             = { version = "7.6" }
-opentelemetry      = { version = "0.31" }
+opentelemetry      = { version = "0.32" }
 pretty_assertions  = { version = "1.4" }
 proc-macro2        = { version = "1.0" }
 # prost and protox are from different authors and are _not_ released in
@@ -145,7 +145,7 @@ tower                 = { version = "0.5" }
 tower-http            = { features = ["cors", "trace"], version = "0.6" }
 tower_governor        = { version = "0.8" }
 tracing               = { version = "0.1" }
-tracing-opentelemetry = { version = "0.32" }
+tracing-opentelemetry = { version = "0.33" }
 tracing-subscriber    = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 trybuild              = { version = "1.0" }
 url                   = { features = ["serde"], version = "2.5" }

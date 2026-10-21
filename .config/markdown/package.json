@@ -6,7 +6,10 @@
   },
   "devDependencies": {
     "cspell": "10.0.1",
-    "markdownlint-cli2": "0.23.3",
+    "markdownlint-cli2": "0.24.0",
     "prettier": "3.8.3"
+  },
+  "overrides": {
+    "katex": "^0.18.2"
   }
 }
