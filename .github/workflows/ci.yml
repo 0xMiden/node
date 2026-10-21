@@ -460,6 +460,12 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Update CA certificates
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates
+          dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+            ge 20260816ubuntu0.24.04.1
       - name: Checkout repository
         uses: actions/checkout@v6.0.2
         with:
@@ -484,11 +490,28 @@ jobs:
         run: |
           python3 -m venv "${RUNNER_TEMP}/yamllint"
           "${RUNNER_TEMP}/yamllint/bin/python" - <<'PY'
-          import pip
+          import subprocess
+          import sys
+          from importlib.metadata import version
           from pip._vendor.packaging.version import Version
 
-          if Version(pip.__version__) < Version("26.2.2"):
-              raise SystemExit(f"pip >= 26.2.2 is required for the updated CA bundle; found {pip.__version__}")
+          # Bootstrap pip using Ubuntu's patched CA bundle.
+          #
+          # Venvs can start with an older pip. Disable additive truststore loading
+          # where supported so the upgrade cannot use pip's old bundled roots.
+          if Version(version("pip")) < Version("26.2.2"):
+              tls_options = ["--cert", "/etc/ssl/certs/ca-certificates.crt"]
+              if Version(version("pip")) >= Version("24.2"):
+                  tls_options.append("--use-deprecated=legacy-certs")
+              subprocess.run(
+                  [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                   "--upgrade", *tls_options, "pip>=26.2.2"],
+                  check=True,
+              )
+
+          pip_version = version("pip")
+          if Version(pip_version) < Version("26.2.2"):
+              raise SystemExit(f"pip >= 26.2.2 is required for the updated CA bundle; found {pip_version}")
           PY
           "${RUNNER_TEMP}/yamllint/bin/pip" install --disable-pip-version-check yamllint==1.38.0
           "${RUNNER_TEMP}/yamllint/bin/yamllint" -c .config/yamllint.yml .github/workflows .github/actions
