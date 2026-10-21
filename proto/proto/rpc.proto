@@ -659,16 +659,13 @@ message SyncAccountVaultRequest {
 // Pin the target to the block authenticated by SyncChainMmr. Apply updates only after an OK
 // end-of-stream; discard partial updates on error and retry the same target while retained.
 message SyncAccountVaultV2Request {
-    reserved 1;
-    reserved "block_range";
-
-    // Public account whose asset vault should be synchronized.
-    account.AccountId account_id = 2;
-
     // Changes over (C, N], where C is the last synchronized block and N is the target.
     // Omit the lower bound to include genesis. The target must remain within the retained
     // account-history window; the lower bound may be older.
-    StateDeltaRange range = 3;
+    StateDeltaRange range = 1;
+
+    // Public account whose asset vault should be synchronized.
+    account.AccountId account_id = 2;
 }
 
 message SyncAccountVaultResponse {
