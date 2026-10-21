@@ -139,11 +139,15 @@ impl StateView {
             } else {
                 let block_num =
                     self.scope_block(note.block_num).expect("query is scoped to the view");
-                let header = self
-                    .db
-                    .select_block_header_by_block_num(Some(block_num))
-                    .await?
-                    .ok_or(NoteSyncError::EmptyBlockHeadersTable)?;
+                let header =
+                    self.db.select_block_header_by_block_num(Some(block_num)).await?.ok_or_else(
+                        || {
+                            DatabaseError::DataCorrupted(format!(
+                                "block header {} is missing for a stored note",
+                                note.block_num
+                            ))
+                        },
+                    )?;
                 let proof = self.blockchain().open_at(note.block_num, checkpoint.into())?;
                 updates.push((NoteSyncUpdate { block_header: header, notes: vec![note] }, proof));
             }

@@ -198,8 +198,7 @@ pub(crate) use select_account_code_by_commitment::select_account_code_by_commitm
 
 mod select_account_storage_map_values_paged;
 pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesPaged;
-pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
-pub use select_account_storage_map_values_paged::StorageMapValuesPage;
+pub use select_account_storage_map_values_paged::{StorageMapValue, StorageMapValuesPage};
 
 mod select_account_vault_updates_v2;
 pub(crate) use select_account_vault_updates_v2::select_account_vault_updates_v2;

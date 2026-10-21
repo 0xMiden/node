@@ -99,7 +99,6 @@ impl Paginator for NotePaginator {
                 NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.status(err.to_string()),
                 NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.status(err.to_string()),
                 NoteSyncError::MmrError(_)
-                | NoteSyncError::EmptyBlockHeadersTable
                 | NoteSyncError::DatabaseError(DatabaseError::BlockPruned { .. }) => {
                     ErrorCode::HistoryUnavailable.status(err.to_string())
                 },

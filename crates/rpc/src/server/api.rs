@@ -18,8 +18,8 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
-    QueryParamVaultAssetLimit,
     QueryParamTransactionIdLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
@@ -343,8 +343,8 @@ static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLoc
     use QueryParamNullifierPrefixLimit as NullifierPrefix;
     use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
     use QueryParamStorageMapSlotLimit as StorageMapSlot;
-    use QueryParamVaultAssetLimit as VaultAsset;
     use QueryParamTransactionIdLimit as TransactionId;
+    use QueryParamVaultAssetLimit as VaultAsset;
 
     proto::miden::node::v1::GetLimitsResponse {
         endpoints: std::collections::HashMap::from([
@@ -442,8 +442,6 @@ mod tests {
         assert_eq!(status.details(), &[0]);
     }
 
-    /// Unavailable retained history must remain a client target failure instead of an internal
-    /// failure.
     #[test]
     fn range_below_retention_is_an_invalid_block_range() {
         let error = DatabaseError::from(miden_node_store::RangeBelowRetention {
@@ -455,6 +453,8 @@ mod tests {
         assert_eq!(status.details(), &[SyncErrorCode::InvalidBlockRange as u8]);
     }
 
+    /// Unavailable retained history must remain a client target failure instead of an internal
+    /// failure.
     #[test]
     fn block_pruned_database_error_is_invalid_argument() {
         let status = database_error_to_status(&DatabaseError::BlockPruned {
@@ -463,4 +463,5 @@ mod tests {
         });
 
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    }}
+    }
+}

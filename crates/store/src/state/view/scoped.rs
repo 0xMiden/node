@@ -68,4 +68,9 @@ impl ScopedBlockRange {
     pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
     }
+
+    /// Returns the validated range.
+    pub(crate) fn into_inner(self) -> RangeInclusive<BlockNumber> {
+        self.0
+    }
 }
