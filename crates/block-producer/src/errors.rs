@@ -226,15 +226,15 @@ impl BuildBlockError {
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("failed to get block inclusion proofs from store")]
-    GetBlockInclusionProofs(#[source] GetBlockInclusionProofsError),
+    GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
-    GetBlockHeader(#[source] GetBlockHeaderError),
+    GetBlockHeaderFailed(#[source] GetBlockHeaderError),
     #[error("failed to get protocol configuration from store")]
-    GetProtocolConfig(#[source] DatabaseError),
+    GetProtocolConfigFailed(#[source] DatabaseError),
     #[error("failed to get note inclusion proofs from store")]
-    GetNoteInclusionProofs(#[source] GetNoteInclusionProofsError),
+    GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]
-    ApplyBlock(#[source] ApplyBlockWithProvingInputsError),
+    ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
 }
 
 #[cfg(test)]

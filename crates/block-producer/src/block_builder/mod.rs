@@ -235,19 +235,19 @@ impl BlockBuilder {
         let note_inclusion_proofs = view
             .get_note_inclusion_proofs(reference_block, note_ids)
             .await
-            .map_err(StoreError::GetNoteInclusionProofs)
+            .map_err(StoreError::GetNoteInclusionProofsFailed)
             .map_err(BuildBlockError::FetchBlockInputsFailed)?;
         block_numbers
             .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
         let partial_blockchain = view
             .get_block_inclusion_proofs(reference_block, block_numbers)
             .await
-            .map_err(StoreError::GetBlockInclusionProofs)
+            .map_err(StoreError::GetBlockInclusionProofsFailed)
             .map_err(BuildBlockError::FetchBlockInputsFailed)?;
         let reference_block_header = view
             .get_block_header(Some(reference_block), false)
             .await
-            .map_err(StoreError::GetBlockHeader)
+            .map_err(StoreError::GetBlockHeaderFailed)
             .map_err(BuildBlockError::FetchBlockInputsFailed)?
             .0
             .expect("reference block header should exist");
@@ -419,7 +419,7 @@ impl BlockBuilder {
         self.block_writer
             .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
             .await
-            .map_err(StoreError::ApplyBlock)
+            .map_err(StoreError::ApplyBlockFailed)
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;
 
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.commit_block(&header);
