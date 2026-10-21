@@ -12,6 +12,8 @@ ARG TARGETARCH
 # Code generation requires rustfmt.
 RUN rustup component add rustfmt
 # Install build dependencies. RocksDB is compiled from source by librocksdb-sys.
+#
+# Require a CA bundle that distrusts the compromised eMudhra certificate authorities.
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends \
@@ -23,6 +25,8 @@ RUN apt-get update && \
         libssl-dev \
         curl \
         ca-certificates && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+        ge 20250419+deb13u1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Verify the release archive before Kache becomes a compiler wrapper.
@@ -133,11 +137,15 @@ FROM scratch AS build-report
 COPY --from=builder /app/kache-report.md /kache-report.md
 
 # Baseline runtime image with runtime dependencies installed.
+#
+# Require a CA bundle that distrusts the compromised eMudhra certificate authorities.
 FROM debian:${DEBIAN_RELEASE}-slim AS runtime-base
 RUN apt-get update && \
     apt-get -y upgrade && \
     apt-get install -y --no-install-recommends \
         ca-certificates && \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+        ge 20250419+deb13u1 && \
     rm -rf /var/lib/apt/lists/*
 # Unprivileged runtime user. `/data` is created here so a first-use named
 # volume mounted at `/data` inherits this ownership (Docker copies the image
