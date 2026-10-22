@@ -72,3 +72,53 @@ error_codes!(SyncChainMmrErrorCode { FutureBlock = 2 });
 pub(super) fn internal_error(message: impl Into<String>) -> Status {
     Status::with_details(Code::Internal, message, vec![0].into())
 }
+
+// Finite synchronization streams number their codes independently of the unary methods.
+
+error_codes!(SyncAccountVaultV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    AccountNotPublic = 6,
+});
+
+error_codes!(SyncAccountStorageMapsV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    AccountNotPublic = 6,
+});
+
+error_codes!(SyncNotesV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+});
+
+error_codes!(SyncAccountCommitmentsErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+});
+
+error_codes!(GetTransactionsByIdErrorCode {
+    DeserializationFailed = 1,
+    MissingTarget = 2,
+    FutureTarget = 3,
+});
+
+error_codes!(SyncTransactionsV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+});
+
+error_codes!(SyncNullifiersV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    InvalidPrefixLength = 6,
+});

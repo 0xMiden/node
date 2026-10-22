@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use miden_node_tracing::miden_instrument;
@@ -13,11 +14,15 @@ use crate::db::queries::{
     AccountVaultAssets,
     NoteSyncMulti,
     NullifiersByPrefix,
+    StorageMapCursor,
+    StorageMapUpdatesPage,
     StorageMapValuesPage,
     TransactionsRecords,
 };
 use crate::db::{
+    AccountVaultCursor,
     AccountVaultValue,
+    AccountVaultValuesPage,
     NoteSyncUpdate,
     NullifierInfo,
     default_storage_map_entries_limit,
@@ -26,6 +31,12 @@ use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
 
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
+
+/// A bounded page of note groups with proofs anchored at the requested target.
+pub struct NoteSyncStreamPage {
+    pub updates: Vec<(NoteSyncUpdate, MmrProof)>,
+    pub next_cursor: Option<crate::NoteSyncCursor>,
+}
 
 impl StateView {
     /// Returns the complete transaction records for the specified accounts within the specified
@@ -104,6 +115,48 @@ impl StateView {
             .map_err(StateSyncError::FailedToBuildMmrDelta)?;
 
         Ok((mmr_delta, block_header, signatures))
+    }
+
+    /// Loads bounded note records and authenticates each included block at forest target + 1.
+    pub async fn sync_notes_v2_page(
+        &self,
+        tags: Vec<u32>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::NoteSyncCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<NoteSyncStreamPage, NoteSyncError> {
+        let range = self.scope_range(range)?;
+        let checkpoint =
+            range.end().as_u32().checked_add(1).ok_or(NoteSyncError::TargetOverflow)?;
+        let query = crate::db::queries::NoteSyncPaged::new(tags, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        let mut updates: Vec<(NoteSyncUpdate, MmrProof)> = Vec::new();
+        for note in page.items {
+            if updates
+                .last()
+                .is_some_and(|(update, _)| update.block_header.block_num() == note.block_num)
+            {
+                updates.last_mut().expect("matching group exists").0.notes.push(note);
+            } else {
+                let block_num =
+                    self.scope_block(note.block_num).expect("query is scoped to the view");
+                let header =
+                    self.db.select_block_header_by_block_num(Some(block_num)).await?.ok_or_else(
+                        || {
+                            DatabaseError::DataCorrupted(format!(
+                                "block header {} is missing for a stored note",
+                                note.block_num
+                            ))
+                        },
+                    )?;
+                let proof = self.blockchain().open_at(note.block_num, checkpoint.into())?;
+                updates.push((NoteSyncUpdate { block_header: header, notes: vec![note] }, proof));
+            }
+        }
+        Ok(NoteSyncStreamPage {
+            updates,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Loads data to synchronize a client's notes.
@@ -190,6 +243,116 @@ impl StateView {
         let query = AccountVaultAssets::new(account_id, block_range.scoped_end());
         let page = self.db.page(query, block_range.start()).await?;
         Ok((page.last_block_included(block_range.end()), page.items))
+    }
+
+    /// Returns a bounded page with one final update per vault key changed in a block range.
+    ///
+    /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
+    /// view's chain tip. Returns [`DatabaseError::BlockPruned`] if the range targets a block older
+    /// than the retained account history.
+    pub async fn sync_account_vault_v2_page(
+        &self,
+        account_id: AccountId,
+        block_range: RangeInclusive<BlockNumber>,
+        cursor: Option<AccountVaultCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<AccountVaultValuesPage, DatabaseError> {
+        let block_range = self.scope_range(block_range)?;
+        let query =
+            crate::db::queries::AccountVaultUpdatesV2::new(account_id, block_range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(AccountVaultValuesPage {
+            values: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
+    /// Loads a bounded page of squashed storage-map updates at the requested target.
+    pub async fn sync_account_storage_maps_v2_page(
+        &self,
+        account_id: AccountId,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<StorageMapCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<StorageMapUpdatesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query =
+            crate::db::queries::AccountStorageMapUpdatesV2::new(account_id, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(StorageMapUpdatesPage {
+            values: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
+    /// Loads changed-account identities at the requested target; witnesses must use the same view.
+    pub async fn sync_account_commitments_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<AccountId>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::db::AccountCommitmentChangesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::AccountCommitmentChanges::new(ids, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::AccountCommitmentChangesPage {
+            changes: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
+    /// Looks up only transactions committed at or before the explicit target.
+    pub async fn get_transactions_by_id_page(
+        &self,
+        ids: Vec<miden_protocol::transaction::TransactionId>,
+        target: BlockNumber,
+        cursor: Option<miden_protocol::transaction::TransactionId>,
+        byte_limit: NonZeroUsize,
+    ) -> Result<crate::db::TransactionsByIdPage, DatabaseError> {
+        let target = self
+            .scope_block(target)
+            .ok_or(crate::RangeBeyondTip { chain_tip: *self.tip(), block_to: target })?;
+        let query = crate::db::queries::TransactionsById::new(ids, target, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionsByIdPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
+    /// Loads prefix-matching nullifiers through an explicit target.
+    pub async fn sync_nullifiers_v2_page(
+        &self,
+        prefixes: Vec<u16>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::NullifierCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::NullifierUpdatesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::NullifierUpdatesPaged::new(prefixes, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::NullifierUpdatesPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
+    /// Loads a bounded page of complete transaction events, including partial blocks.
+    pub async fn sync_transactions_v2_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::TransactionCursor>,
+        byte_limit: NonZeroUsize,
+    ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::TransactionRecordsPaged::new(ids, range, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionRecordsPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Returns storage map values for syncing within a block range.

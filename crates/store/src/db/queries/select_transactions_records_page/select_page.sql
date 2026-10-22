@@ -1,0 +1,10 @@
+-- Returns the chunk of transactions starting at the `(block_num, transaction_id)` cursor.
+--
+-- The cursor supplies the lower range bound. The caller checks the requested range before selection.
+SELECT transaction_id, block_num, size_in_bytes
+FROM transactions
+WHERE block_num <= ?1
+  AND account_id IN (SELECT value FROM rarray(?2))
+  AND (block_num, transaction_id) >= (?4, ?5)
+ORDER BY block_num ASC, transaction_id ASC
+LIMIT ?3
