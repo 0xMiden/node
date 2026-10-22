@@ -103,10 +103,10 @@ codes returned in gRPC status details.
 
 ## State Synchronization
 
-Authenticate the `SyncChainMmr` target header and its MMR delta first. Keep its block number `N` fixed for all other
-requests in the attempt. Delta streams take `StateDeltaRange`: `from_block_exclusive = C` and `to_block_inclusive = N`
-request `(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return
-an empty delta after target validation.
+Authenticate the `SyncChainMmr` target header and its MMR delta first. Keep its block number `N` fixed within each
+request, and reconcile all results to one common target before committing synchronization. Delta streams take
+`StateDeltaRange`: `from_block_exclusive = C` and `to_block_inclusive = N` request `(C, N]`. Omit the lower bound to
+include genesis during bootstrap. The target is required. Equal bounds return an empty delta after target validation.
 
 | Method                     | Purpose                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
@@ -140,10 +140,10 @@ account event discovery is required, including recovery of previously untracked 
 cannot discover an externally submitted transaction whose ID the client does not know.
 
 All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
-all responses and their negative lookup outcomes. Commit one local update only after every stream and proof check
-succeeds. Discard partial results after any error and retry the same pinned range. A vault/map/account target can become
-unavailable when it leaves the retained account-history window during paging; restart the entire attempt with a newly
-authenticated target in that case.
+all responses and their negative lookup outcomes. Commit one local update only after every required stream and proof
+check succeeds at the common target. A terminal error never establishes an empty suffix or a negative lookup result.
+Vault and storage-map scans can preserve progress using [block-level resumption](#resuming-vault-and-storage-map-scans).
+Other incomplete streams must be retried in full under their existing contracts.
 
 Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
 and request-list limits remain.
@@ -158,6 +158,67 @@ fits in one response, and the caller repeats the request for the remainder.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
+
+### Resuming vault and storage-map scans
+
+Block-level resumption lets a client retain downloaded account data when a connection fails or its target leaves
+retained history. It uses the existing range fields; the server keeps no synchronization session. This procedure applies
+to `SyncAccountVaultV2` and `SyncAccountStorageMapsV2` only.
+
+Both streams send absolute replacement values in non-decreasing `last_updated_at` order. All values for one update block
+arrive before values for a later block, even across internal database pages. Do not depend on the order of keys within a
+block. Apply vault removals and zero map values as deletions, rather than adding or subtracting quantities.
+
+Keep the last committed account state separate from staging. Maintain an independent scan checkpoint `P` for each
+account's vault and storage-map stream, plus a buffer for the current block. Initially, `P` is the last synchronized
+block, or absent for bootstrap. A checkpoint records completed traversal: because values are squashed at the target, the
+staged prefix need not be a valid account state at `P`.
+
+1. Authenticate target `N` and request `(P, N]`. Keep `N` fixed for that request. Decode and validate each response,
+   rejecting decreasing update blocks or blocks outside the requested range.
+2. Buffer values for the current block. When the first value from a later block `B` arrives, apply the preceding block's
+   buffer to staging and advance `P` to `B - 1`. Start a new buffer for `B`. The first response also establishes that
+   the requested prefix before its block has no matching values. If persisting progress, save staging and its checkpoint
+   atomically; the server does not persist them for the client.
+3. On a connection interruption, stalled-reader timeout, or unavailable-history error, discard the incomplete block
+   buffer and retain the completed staged prefix. Retry `(P, N]` while `N` remains available, or authenticate a newer
+   target `M` on the same chain and request `(P, M]`. Never regress the target. If no response arrived, retain the
+   previous checkpoint.
+4. Only on OK end-of-stream, apply the final buffer and mark this stream complete through its requested target,
+   including any empty suffix. An empty successful stream likewise completes through that target.
+
+For example, after receiving update blocks `40, 40, 43, 43` and then an error, resume with `from_block_exclusive = 42`
+and the chosen `to_block_inclusive`. This repeats all of block `43`; setting the lower bound to `43` could skip its
+remaining values. If the interrupted block is genesis, omit `from_block_exclusive`.
+
+When a previously downloaded key changes after `N`, its replacement or deletion appears at a later update block and is
+included in the resumed scan toward `M`. An unchanged completed prefix needs no retransmission. Keep that prefix in
+staging until final verification; it is not independently authenticated by the checkpoint.
+
+Before publishing the synchronization update, bring each required stream to the same authenticated target. A vault or
+map scan already completed at `N` can catch up with `(N, M]`. Refresh account witnesses and necessary `GetAccount`
+details at the final target. Use these details to reconcile storage-slot changes, including removed slots, and verify
+the reconstructed vault, storage and account commitments. Commit the account state and global synchronization height
+only after the other required synchronization work also completes.
+
+`SyncAccountCommitments` is ordered by account ID: its `last_updated_at` cannot establish a block checkpoint. Refresh
+its required account-list batches at the final target, using the original committed synchronization baseline for
+discovery. For other endpoints, restart incomplete results and extend or re-fetch completed results according to their
+contracts. Note proofs must be verified against their authenticated target headers. Previously verified immutable note
+bodies can be cached, but negative lookups or omitted account IDs at an old target do not establish absence at a newer
+one.
+
+Malformed records, decreasing order, an incompatible chain, or a failed final commitment check invalidate the staging
+attempt. Correct invalid requests before retrying, and investigate internal failures rather than automatically moving
+the checkpoint. Identify unavailable history by `INVALID_ARGUMENT` with detail code `4` for these endpoints, not by
+matching error text; see [stream errors](./errors-and-limits.md#finite-synchronization-stream-errors).
+
+Resumption makes progress between blocks, not within a block. A block whose values cannot be downloaded within the
+usable account-history window may be replayed repeatedly. The window is currently 50 blocks, approximately 100–150
+seconds at 2–3 seconds per block, with less time for a target already behind the tip. Continuously changing accounts
+also require enough client throughput to catch up. Fetching retention-sensitive account data early reduces this risk;
+local verification and the final commit may finish after the target has left retention if all required data was
+successfully acquired.
 
 ## Block Streaming
 

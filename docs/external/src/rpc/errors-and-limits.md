@@ -151,8 +151,13 @@ Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request
 before decoding and deduplication and return `OUT_OF_RANGE`. Streaming does not relax per-message receive limits.
 
 A stalled producer send returns `DEADLINE_EXCEEDED`. Database or encoding failures use `INTERNAL` with detail `0`.
-Errors can arrive after valid messages; a terminal error invalidates the complete assembled synchronization attempt. Do
-not interpret a partial response as an OK empty suffix or negative transaction lookup.
+Errors can arrive after valid messages; a terminal error means that stream did not complete. Do not interpret a partial
+response as an OK empty suffix or negative transaction lookup. Vault and storage-map clients can preserve completed
+block prefixes using [block-level resumption](./public-api.md#resuming-vault-and-storage-map-scans). For these two
+endpoints, `INVALID_ARGUMENT` with detail `4` requires a newer authenticated target when the old target has left
+retained history. Other `INVALID_ARGUMENT` codes are not instructions to advance a checkpoint. Connection interruptions
+and stalled-reader timeouts can retry the retained target; internal failures require diagnosis. Other incomplete streams
+must be retried in full.
 
 ## Nullifier stream errors
 

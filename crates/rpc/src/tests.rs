@@ -111,6 +111,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod sync_resumption;
 mod sync_streams;
 mod vault;
 

@@ -15,8 +15,9 @@ pub(super) trait Paginator: Send + 'static {
 
     /// Returns a bounded, nonempty page, or `None` after successful completion.
     ///
-    /// Page errors must fail the complete synchronization attempt. Do not retain database
-    /// transactions or state views after the page is loaded.
+    /// Page errors must terminate the response with an error. Clients may preserve staged
+    /// progress where the endpoint supports resumption. Do not retain database transactions
+    /// or state views after the page is loaded.
     async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>>;
 }
 

@@ -133,9 +133,11 @@ service NodeService {
     // Streams the final target asset for each public account vault key changed in the requested range.
     //
     // Use this endpoint to update a local vault after its authenticated account state changes.
-    // Repeated changes to a key produce one target value. An absent asset marks deletion.
-    // Pin the target to SyncChainMmr and verify the resulting vault against authenticated account details.
-    // Apply results only after successful stream completion.
+    // Repeated changes to a key produce one absolute target value. An absent asset marks deletion.
+    // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
+    // authenticated target fixed per request; interrupted scans may resume at the incomplete block
+    // with the same or a newer authenticated target. Publish only after OK completion and final
+    // vault verification against authenticated account details at the completed target.
     rpc SyncAccountVaultV2(SyncAccountVaultV2Request) returns (stream SyncAccountVaultV2Response) {}
 
     // Returns storage map updates for specified account and storage slots within a block range.
@@ -144,10 +146,12 @@ service NodeService {
     // Streams the final target value for each changed public account storage-map key.
     //
     // Use this endpoint to update local storage maps after an authenticated account state change.
-    // Repeated changes to a key produce one target value. A zero word marks deletion.
+    // Repeated changes to a key produce one absolute target value. A zero word marks deletion.
     // GetAccount supplies account-level slot changes, including removed slots.
-    // Pin the target to SyncChainMmr and verify the resulting storage commitments against account details.
-    // Apply results only after successful stream completion.
+    // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
+    // authenticated target fixed per request; interrupted scans may resume at the incomplete block
+    // with the same or a newer authenticated target. Publish only after OK completion and final
+    // storage verification against authenticated account details at the completed target.
     rpc SyncAccountStorageMapsV2(SyncAccountStorageMapsV2Request) returns (stream SyncAccountStorageMapsV2Response) {}
 
     // Streams target account-tree witnesses for requested accounts changed in the synchronization delta.
@@ -656,12 +660,13 @@ message SyncAccountVaultRequest {
 
 // Account vault synchronization request with squashed, server-streaming responses.
 //
-// Pin the target to the block authenticated by SyncChainMmr. Apply updates only after an OK
-// end-of-stream; discard partial updates on error and retry the same target while retained.
+// Authenticate the target with SyncChainMmr. Clients may stage completed block prefixes and
+// replay an interrupted block at the same or a newer target on that chain. A scan checkpoint
+// is not an account state at that block; publish only after completion and commitment verification.
 message SyncAccountVaultV2Request {
-    // Changes over (C, N], where C is the last synchronized block and N is the target.
-    // Omit the lower bound to include genesis. The target must remain within the retained
-    // account-history window; the lower bound may be older.
+    // Changes over (C, N], where C is the synchronized baseline or a completed scan checkpoint.
+    // After interruption in block B, use C = B - 1 to replay B; omit C for genesis. Keep N fixed
+    // during each request. N must remain within retained history; C may be older.
     StateDeltaRange range = 1;
 
     // Public account whose asset vault should be synchronized.
@@ -679,7 +684,10 @@ message SyncAccountVaultResponse {
     repeated AccountVaultUpdate updates = 2;
 }
 
-// One final vault value emitted by the streaming account vault sync endpoint.
+// One absolute target vault value, ordered by nondecreasing last_updated_at.
+//
+// The first item from a later block completes the preceding block's scan. Only OK termination
+// completes the final block and any empty suffix through the requested target.
 message SyncAccountVaultV2Response {
     // Vault key associated with the asset.
     primitives.Word vault_key = 1;
@@ -897,7 +905,10 @@ message BlockRange {
     fixed32 block_to = 2;
 }
 
-// Changes after the client's current block, materialized at an explicit target.
+// Changes after an exclusive lower bound, materialized at an explicit target.
+//
+// Vault and storage-map streams also accept a completed scan checkpoint as their lower bound.
+// Such a checkpoint does not represent synchronized account state at that block.
 message StateDeltaRange {
     // Absence includes genesis. A present value excludes that block.
     optional fixed32 from_block_exclusive = 1;
@@ -1056,14 +1067,22 @@ message SubmitProvenTxBatchResponse {
     fixed32 block_num = 1;
 }
 
-// Pin the target to SyncChainMmr. Apply the complete stream only after OK termination.
+// Storage-map changes at a target authenticated with SyncChainMmr.
+//
+// Clients may stage completed block prefixes and replay an interrupted block at the same or a
+// newer target on that chain. Publish only after completion and final commitment verification.
 message SyncAccountStorageMapsV2Request {
+    // Use the synchronized baseline or completed scan checkpoint as the exclusive lower bound.
+    // After interruption in block B, use B - 1 to replay B; omit the lower bound for genesis.
+    // Keep the target fixed per request and within retained history; the lower bound may be older.
     StateDeltaRange range = 1;
     account.AccountId account_id = 2;
 }
 
-// One changed key's value at the target. A zero word represents deletion.
-// Other account changes, including removed slots, are conveyed by GetAccount at the target.
+// One absolute target map value, ordered by nondecreasing last_updated_at. Zero marks deletion.
+//
+// The first item from a later block completes the preceding block's scan; only OK termination
+// completes the final block and empty suffix. GetAccount at the target conveys removed slots.
 message SyncAccountStorageMapsV2Response {
     string slot_name = 1;
     primitives.Word key = 2;
