@@ -13,6 +13,7 @@ use miden_protocol::errors::{
 };
 use miden_protocol::utils::serde::DeserializationError;
 use miden_standards::account::faucets::FungibleFaucetError;
+use rand::rngs::SysError;
 
 use crate::genesis::config::TokenSymbolStr;
 
@@ -90,4 +91,6 @@ pub enum GenesisConfigError {
     InvalidAccountFileName { name: String },
     #[error("failed to generate a key for the configured authentication scheme")]
     AuthScheme(#[from] AuthSchemeError),
+    #[error("failed to obtain entropy from the operating system")]
+    Entropy(#[source] SysError),
 }

@@ -76,8 +76,8 @@ pub(super) async fn request_funds(
     )
     .map_err(RequestFundsError::Internal)?;
 
-    let response = RequestFundsResponse::from(&note);
-    let note_id = note.id();
+    let response = RequestFundsResponse::from(note.note());
+    let note_id = note.note().id();
 
     state.requests.try_send(note).map_err(|err| match err {
         mpsc::error::TrySendError::Full(_) => RequestFundsError::Busy,
@@ -136,7 +136,6 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
-    use crate::deposit::native_amount;
     use crate::server::REQUEST_FUNDS_PATH;
     use crate::server::tests::{test_router, test_state};
 
@@ -201,7 +200,14 @@ mod tests {
         let answered = Note::read_from_bytes(&hex::decode(&body.note).unwrap()).unwrap();
 
         assert_eq!(answered.metadata().sender(), funder);
-        assert_eq!(native_amount(&answered, fee_asset_id), 500);
+        assert_eq!(
+            answered.assets().iter().copied().collect::<Vec<_>>(),
+            vec![
+                miden_protocol::asset::FungibleAsset::new(fee_asset_id.faucet_id(), 500)
+                    .unwrap()
+                    .into()
+            ]
+        );
         let storage =
             P2idNoteStorage::try_from(answered.recipient().storage().to_elements().as_slice())
                 .unwrap();
@@ -209,11 +215,11 @@ mod tests {
 
         // The worker receives exactly the note the requester was answered with.
         let queued = rx.try_recv().expect("the note should be queued");
-        assert_eq!(queued.id(), answered.id());
+        assert_eq!(queued.note().id(), answered.id());
         let span = telemetry.span("request_funds");
         assert_eq!(
             crate::test_utils::telemetry::attribute(&span, "note.id"),
-            Some(queued.id().to_string().into())
+            Some(queued.note().id().to_string().into())
         );
     }
 

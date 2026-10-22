@@ -7,7 +7,6 @@ use http::header::{ACCEPT, ToStrError};
 use mediatype::{Name, ReadParams};
 use miden_node_tracing::ErrorReport;
 use miden_protocol::{Word, WordError};
-use semver::{Comparator, Version, VersionReq};
 use tower::{Layer, Service};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -16,38 +15,23 @@ pub enum GenesisNegotiation {
     Mandatory,
 }
 
-/// Performs content negotiation by rejecting requests which don't match our RPC version or network.
-/// Clients can specify these as parameters in our `application/vnd.miden` accept media range.
+/// Performs content negotiation for the Miden media type and network genesis commitment.
+/// The `genesis` parameter is mandatory for configured RPC methods and optional for other requests.
+/// Legacy clients may include a `version` parameter, which is ignored because the RPC API is
+/// versioned by its protobuf package.
 ///
-/// The client can specify RPC versions it supports using the [`VersionReq`] format. The network
-/// is specified as the genesis block's commitment. If the server cannot satisfy either of these
-/// constraints then the request is rejected.
-///
-/// Note that both values are optional, as is the header itself. If unset, the server considers
-/// any value acceptable.
-///
-/// As part of the accept header's standard, all media ranges are examined in quality weighting
-/// order until a matching content type is found. This means that the client can set multiple
-/// `application/vnd.miden` values and each will be tested until one passes. If none pass, the
-/// request is rejected.
+/// A request is accepted if any supported media range has a non-zero quality value and satisfies
+/// the genesis requirement. If no Accept header is provided, only the genesis requirement applies.
 ///
 /// ## Format
 ///
-/// Parameters are optional and order is not important.
+/// Parameter order is not important.
 ///
 /// ```text
-/// application/vnd.miden; version=<version-req>; genesis=0x1234
+/// application/vnd.miden; genesis=0x1234
 /// ```
 #[derive(Clone)]
 pub struct AcceptHeaderLayer {
-    supported_versions: VersionReq,
-    /// The pre-release label (e.g. `"alpha"` from `"alpha.3"`), or `None` for stable versions. Only
-    /// the label is stored so that different pre-release numbers are accepted (e.g. a server at
-    /// `alpha.3` accepts clients at `alpha.1`).
-    expected_pre_label: Option<String>,
-    /// The patch version of the server. Used to enforce exact patch matching for pre-release
-    /// versions (patch flexibility only applies to stable versions).
-    expected_patch: u64,
     genesis_commitment: Word,
     /// RPC method names for which the `genesis` parameter is mandatory.
     ///
@@ -67,9 +51,6 @@ enum AcceptHeaderError {
     #[error("a Q value was invalid")]
     InvalidQValue(#[source] QParsingError),
 
-    #[error("version value failed to parse")]
-    InvalidVersion(#[source] semver::Error),
-
     #[error("genesis value failed to parse")]
     InvalidGenesis(#[source] WordError),
 
@@ -78,23 +59,8 @@ enum AcceptHeaderError {
 }
 
 impl AcceptHeaderLayer {
-    pub fn new(rpc_version: &Version, genesis_commitment: Word) -> Self {
-        let supported_versions = VersionReq {
-            comparators: vec![Comparator {
-                op: semver::Op::Exact,
-                major: rpc_version.major,
-                minor: rpc_version.minor.into(),
-                patch: None,
-                pre: semver::Prerelease::default(),
-            }],
-        };
-
-        let expected_pre_label = pre_release_label(&rpc_version.pre);
-
+    pub fn new(genesis_commitment: Word) -> Self {
         AcceptHeaderLayer {
-            supported_versions,
-            expected_pre_label,
-            expected_patch: rpc_version.patch,
             genesis_commitment,
             require_genesis_methods: Vec::new(),
         }
@@ -107,23 +73,6 @@ impl AcceptHeaderLayer {
     }
 }
 
-/// Extracts the label portion of a semver pre-release identifier, stripping any trailing numeric
-/// segment. For example, `"alpha.3"` returns `Some("alpha")` and `"rc.1"` returns `Some("rc")`.
-/// Returns `None` for empty (stable) pre-release identifiers.
-fn pre_release_label(pre: &semver::Prerelease) -> Option<String> {
-    if pre.is_empty() {
-        return None;
-    }
-    let s = pre.as_str();
-    // Strip the trailing `.N` numeric segment if present.
-    match s.rsplit_once('.') {
-        Some((label, suffix)) if suffix.bytes().all(|b| b.is_ascii_digit()) => {
-            Some(label.to_string())
-        },
-        _ => Some(s.to_string()),
-    }
-}
-
 impl<S> Layer<S> for AcceptHeaderLayer {
     type Service = AcceptHeaderService<S>;
 
@@ -133,7 +82,6 @@ impl<S> Layer<S> for AcceptHeaderLayer {
 }
 
 impl AcceptHeaderLayer {
-    const VERSION: Name<'static> = Name::new_unchecked("version");
     const GENESIS: Name<'static> = Name::new_unchecked("genesis");
     const GRPC: Name<'static> = Name::new_unchecked("grpc");
 
@@ -156,8 +104,8 @@ impl AcceptHeaderLayer {
         self.negotiate(&accept, genesis_mode)
     }
 
-    /// Parses the `Accept` header's contents, searching for any media type compatible with our RPC
-    /// version and genesis commitment, controlling whether `genesis` is optional or mandatory.
+    /// Parses the `Accept` header for a supported media type and matching genesis commitment. The
+    /// genesis mode controls whether the `genesis` parameter is optional or mandatory.
     fn negotiate(
         &self,
         accept: &str,
@@ -179,7 +127,7 @@ impl AcceptHeaderLayer {
 
         // Parse media types until we find one we support.
         //
-        // Since we only support a single RPC version and a single network, there is no need for
+        // Since we only serve a single representation and a single network, there is no need for
         // fancy content negotiation e.g. searching for the best variation via the quality
         // parameter. We only need to find a single match with any non-zero quality. This simplifies
         // matters quite a bit as tie-breaking is quite complex.
@@ -205,58 +153,34 @@ impl AcceptHeaderLayer {
 
             // Quality value may be set to zero, indicating that the client _does not_ want this
             // media type. So we skip those.
-            let quality = media_type
+            let quality = match media_type
                 .get_param(mediatype::names::Q)
                 .map(|value| QValue::from_str(value.unquoted_str().as_ref()))
                 .transpose()
-                .map_err(AcceptHeaderError::InvalidQValue)?
-                .unwrap_or_default();
+            {
+                Ok(quality) => quality.unwrap_or_default(),
+                Err(err) => {
+                    candidate_error.get_or_insert(AcceptHeaderError::InvalidQValue(err));
+                    continue;
+                },
+            };
 
             if quality.is_zero() {
                 continue;
             }
 
-            // Skip those that don't match the version requirement.
-            //
-            // The VersionReq checks major.minor compatibility. Pre-release labels are
-            // checked separately because semver's VersionReq matching rejects all
-            // pre-release versions when the comparator has no pre-release component.
-            let version = match media_type.get_param(Self::VERSION) {
-                Some(value) => match Version::parse(value.unquoted_str().as_ref()) {
-                    Ok(version) => Some(version),
-                    Err(err) => {
-                        candidate_error.get_or_insert(AcceptHeaderError::InvalidVersion(err));
-                        continue;
-                    },
-                },
-                None => None,
-            };
-            if let Some(version) = &version {
-                // Check major.minor match by stripping pre-release first.
-                let stable_version = Version {
-                    pre: semver::Prerelease::EMPTY,
-                    ..version.clone()
-                };
-                if !self.supported_versions.matches(&stable_version) {
-                    continue;
-                }
-                // Check the pre-release label matches (ignoring the numeric suffix).
-                if pre_release_label(&version.pre) != self.expected_pre_label {
-                    continue;
-                }
-                // Pre-release versions must also match the patch version exactly (patch flexibility
-                // only applies to stable versions).
-                if self.expected_pre_label.is_some() && version.patch != self.expected_patch {
-                    continue;
-                }
-            }
-
             // Skip if the genesis commitment does not match, or if it is required but missing.
-            let genesis = media_type
+            let genesis = match media_type
                 .get_param(Self::GENESIS)
                 .map(|value| Word::try_from(value.unquoted_str().as_ref()))
                 .transpose()
-                .map_err(AcceptHeaderError::InvalidGenesis)?;
+            {
+                Ok(genesis) => genesis,
+                Err(err) => {
+                    candidate_error.get_or_insert(AcceptHeaderError::InvalidGenesis(err));
+                    continue;
+                },
+            };
             match (genesis_mode, genesis) {
                 (_, Some(value)) if value != self.genesis_commitment => continue,
                 (GenesisNegotiation::Mandatory, None) => continue,
@@ -425,18 +349,16 @@ impl FromStr for QValue {
 #[cfg(test)]
 mod tests {
     use miden_protocol::Word;
-    use semver::Version;
 
     use super::{AcceptHeaderLayer, QParsingError};
     use crate::server::accept::QValue;
 
     const TEST_GENESIS_COMMITMENT: &str =
         "0x00000000000000000000000000000000000000000000000000000000deadbeef";
-    const TEST_RPC_VERSION: Version = Version::new(0, 2, 3);
 
     impl AcceptHeaderLayer {
         fn for_tests() -> Self {
-            Self::new(&TEST_RPC_VERSION, Word::try_from(TEST_GENESIS_COMMITMENT).unwrap())
+            Self::new(Word::try_from(TEST_GENESIS_COMMITMENT).unwrap())
         }
     }
 
@@ -449,6 +371,11 @@ mod tests {
     #[case::version_exact("application/vnd.miden; version=0.2.3")]
     #[case::version_patch_bump("application/vnd.miden; version=0.2.4")]
     #[case::version_patch_down("application/vnd.miden; version=0.2.2")]
+    #[case::legacy_client_version("application/vnd.miden; version=0.17.0")]
+    #[case::older_version("application/vnd.miden; version=0.1.0")]
+    #[case::newer_version("application/vnd.miden; version=99.0.0")]
+    #[case::prerelease_version("application/vnd.miden; version=0.18.0-alpha.1")]
+    #[case::non_semver_version("application/vnd.miden; version=not-a-version")]
     #[case::matching_network(
         "application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef"
     )]
@@ -465,6 +392,10 @@ mod tests {
     #[case::malformed_then_valid(
         "application/vnd.miden; version=not-a-version, application/vnd.miden"
     )]
+    #[case::malformed_genesis_then_valid(
+        "application/vnd.miden; genesis=aaa, application/vnd.miden"
+    )]
+    #[case::malformed_quality_then_valid("application/vnd.miden; q=2.0, application/vnd.miden")]
     // Parameter values may be quoted.
     #[case::quoted_quality(r#"application/vnd.miden; q="1""#)]
     #[case::quoted_version(r#"application/vnd.miden; version="0.2.3""#)]
@@ -482,7 +413,7 @@ mod tests {
         let mut headers = http::HeaderMap::new();
         headers.append(
             http::header::ACCEPT,
-            http::HeaderValue::from_static("application/vnd.miden; version=9.0.0"),
+            http::HeaderValue::from_static("application/vnd.miden; genesis=aaa"),
         );
         headers.append(
             http::header::ACCEPT,
@@ -500,12 +431,12 @@ mod tests {
     #[rstest::rstest]
     #[case::obsolete_format("application/vnd.miden+grpc.0.2.3")]
     #[case::with_non_grpc_suffix("application/vnd.miden+not")]
-    #[case::invalid_version("application/vnd.miden; version=0x123")]
     #[case::invalid_genesis("application/vnd.miden; genesis=aaa")]
-    #[case::version_too_old("application/vnd.miden; version=0.1.0")]
-    #[case::version_too_new("application/vnd.miden; version=0.3.0")]
-    #[case::version_prerelease_rejected_by_stable("application/vnd.miden; version=0.2.3-alpha.1")]
     #[case::zero_weighting("application/vnd.miden; q=0.0")]
+    #[case::legacy_version_zero_weighting("application/vnd.miden; version=0.17.0; q=0")]
+    #[case::legacy_version_wrong_network(
+        "application/vnd.miden; version=0.17.0; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeee"
+    )]
     #[case::wildcard_subtype("application/*")]
     #[test]
     fn request_should_be_rejected(#[case] accept: &'static str) {
@@ -538,7 +469,10 @@ mod tests {
         "application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef"
     )]
     #[case::matching_network_and_version(
-        "application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef; version=0.2.3"
+        "application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef; version=0.17.0"
+    )]
+    #[case::malformed_genesis_then_matching(
+        "application/vnd.miden; genesis=aaa, application/vnd.miden; genesis=0x00000000000000000000000000000000000000000000000000000000deadbeef"
     )]
     #[test]
     fn request_with_mandadory_genesis_should_pass(#[case] accept: &'static str) {
@@ -550,6 +484,7 @@ mod tests {
     #[rstest::rstest]
     #[case::missing_network("application/vnd.miden;")]
     #[case::missing_network_wildcard("*/*")]
+    #[case::version_without_network("application/vnd.miden; version=0.17.0")]
     #[test]
     fn request_with_mandadory_genesis_should_be_rejected(#[case] accept: &'static str) {
         AcceptHeaderLayer::for_tests()
@@ -589,43 +524,5 @@ mod tests {
     #[test]
     fn qvalue_default_is_one() {
         assert_eq!(QValue::default(), QValue::new(1_000));
-    }
-
-    mod prerelease {
-        use semver::Version;
-
-        use super::*;
-
-        impl AcceptHeaderLayer {
-            fn for_prerelease_tests() -> Self {
-                let version = Version::parse("0.14.0-alpha.3").unwrap();
-                Self::new(&version, Word::try_from(TEST_GENESIS_COMMITMENT).unwrap())
-            }
-        }
-
-        #[rstest::rstest]
-        #[case::empty("")]
-        #[case::wildcard("*/*")]
-        #[case::media_type_only("application/vnd.miden")]
-        #[case::exact_prerelease("application/vnd.miden; version=0.14.0-alpha.3")]
-        #[case::different_prerelease_number("application/vnd.miden; version=0.14.0-alpha.1")]
-        #[test]
-        fn prerelease_should_pass(#[case] accept: &'static str) {
-            AcceptHeaderLayer::for_prerelease_tests()
-                .negotiate(accept, super::super::GenesisNegotiation::Optional)
-                .unwrap();
-        }
-
-        #[rstest::rstest]
-        #[case::different_patch_same_prerelease("application/vnd.miden; version=0.14.1-alpha.3")]
-        #[case::different_patch_different_number("application/vnd.miden; version=0.14.2-alpha.5")]
-        #[case::different_prerelease_tag("application/vnd.miden; version=0.14.0-beta.3")]
-        #[case::stable_version("application/vnd.miden; version=0.14.0")]
-        #[test]
-        fn prerelease_should_be_rejected(#[case] accept: &'static str) {
-            AcceptHeaderLayer::for_prerelease_tests()
-                .negotiate(accept, super::super::GenesisNegotiation::Optional)
-                .unwrap_err();
-        }
     }
 }

@@ -16,7 +16,7 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{
-    Account,
+    AccountCode,
     AccountId,
     AccountStorageHeader,
     PartialAccount,
@@ -27,6 +27,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::crypto::merkle::smt::SmtProofError;
 use miden_protocol::errors::{AccountError, AssetError, TransactionInputError};
 use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -90,6 +91,22 @@ pub enum NtxError {
 
 type NtxResult<T> = Result<T, NtxError>;
 
+/// Errors raised while loading the native account from the RPC service.
+///
+/// None of these are attributable to the notes of the transaction, so the caller aborts the attempt
+/// without penalizing any note.
+#[derive(Debug, thiserror::Error)]
+pub enum AccountLoadError {
+    #[error("failed to fetch the account from the RPC service")]
+    Rpc(#[source] RpcError),
+    #[error("account witness is malformed")]
+    MalformedWitness(#[source] SmtProofError),
+    #[error("account witness does not open to the account root of the reference block")]
+    AccountRootMismatch,
+    #[error("account state does not match the state commitment in its witness")]
+    StateCommitmentMismatch,
+}
+
 /// Returns `true` for gRPC status codes that indicate a transient transport- or server-side problem
 /// worth retrying. Content-rejection codes (`InvalidArgument`, `FailedPrecondition`, ...) reflect
 /// the batch itself and are not retried.
@@ -132,7 +149,7 @@ fn log_transient_retry<E: std::error::Error + 'static>(
         target: COMPONENT,
         "ntx transient request failure; retrying after backoff",
         operation.name = operation,
-        retry.delay_ms = sleep.as_millis() as u64
+        retry.delay_ms = sleep
     );
 }
 
@@ -184,6 +201,9 @@ pub struct NtxContext {
     /// LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     script_cache: LruCache<Word, NoteScript>,
 
+    /// LRU cache of account code by account ID, used to avoid re-downloading unchanged code.
+    code_cache: LruCache<AccountId, AccountCode>,
+
     /// Local database for persistent note script caching.
     db: NtxDbReader,
 
@@ -208,6 +228,7 @@ impl NtxContext {
         prover: RemoteTransactionProver,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
+        code_cache: LruCache<AccountId, AccountCode>,
         db: NtxDbReader,
         max_cycles: u32,
         tx_args: TransactionArgs,
@@ -219,6 +240,7 @@ impl NtxContext {
             prover,
             rpc,
             script_cache,
+            code_cache,
             db,
             max_cycles,
             tx_args,
@@ -229,6 +251,37 @@ impl NtxContext {
     /// Returns the [`ExponentialBuilder`] used for per-request retry backoff.
     fn request_backoff(&self) -> ExponentialBuilder {
         self.request_backoff
+    }
+
+    /// Loads the native account at the reference block from the RPC service.
+    ///
+    /// The store only changes through committed blocks, so reading the account at the block the
+    /// transaction builds against gives exactly the state the transaction must start from. The
+    /// response is checked against the reference block header rather than trusted: its witness must
+    /// open to the block's account root, and the account state must match the witness.
+    #[miden_instrument(
+        target = COMPONENT,
+        name = "ntx.load_account",
+        err,
+    )]
+    pub async fn load_account(
+        &self,
+        account_id: AccountId,
+        reference_block: &BlockHeader,
+    ) -> Result<PartialAccount, AccountLoadError> {
+        let inputs = fetch_account_inputs(
+            &self.rpc,
+            &self.code_cache,
+            self.request_backoff(),
+            account_id,
+            reference_block.block_num(),
+        )
+        .await
+        .map_err(AccountLoadError::Rpc)?;
+
+        verify_account_inputs(&inputs, reference_block)?;
+
+        Ok(inputs.into_parts().0)
     }
 
     /// Creates a [`TransactionExecutor`] configured with the network transaction cycle limit.
@@ -278,10 +331,11 @@ impl NtxContext {
     )]
     pub fn execute_transaction(
         self,
+        account: PartialAccount,
         tx: TransactionCandidate,
     ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let num_notes = tx.num_notes();
-        let TransactionCandidate { account, notes, chain_state } = tx;
+        let TransactionCandidate { notes, chain_state } = tx;
         miden_span_record!(
             account.id = account.id(),
             account.id.network_prefix = account.id().prefix(),
@@ -311,6 +365,7 @@ impl NtxContext {
                         chain_state,
                         ctx.rpc.clone(),
                         ctx.script_cache.clone(),
+                        ctx.code_cache.clone(),
                         ctx.db.clone(),
                         ctx.request_backoff,
                     )?;
@@ -623,6 +678,59 @@ fn partition_cycle_limited(failed: Vec<FailedNote>) -> (Vec<FailedNote>, Vec<Fai
     failed.into_iter().partition(|note| note.num_cycles().is_some())
 }
 
+// ACCOUNT LOADING
+// ================================================================================================
+
+/// Fetches an account's inputs at `ref_block` from the RPC service, retrying transient failures.
+///
+/// Account code is cached by account ID. The cached code's commitment is sent with the request, so
+/// the RPC service only returns the code when the account's code has changed since it was cached.
+async fn fetch_account_inputs(
+    rpc: &RpcClient,
+    code_cache: &LruCache<AccountId, AccountCode>,
+    backoff: ExponentialBuilder,
+    account_id: AccountId,
+    ref_block: BlockNumber,
+) -> Result<AccountInputs, RpcError> {
+    let cached_code = code_cache.get(&account_id);
+
+    let inputs =
+        (|| async { rpc.get_account_inputs(account_id, ref_block, cached_code.as_ref()).await })
+            .retry(backoff)
+            .when(is_transient_rpc_error)
+            .notify(|err, dur| {
+                log_transient_retry("rpc.get_account_inputs", err, dur);
+            })
+            .await?;
+
+    let code = inputs.code();
+    if cached_code.is_none_or(|cached| cached.commitment() != code.commitment()) {
+        code_cache.put(account_id, code.clone());
+    }
+
+    Ok(inputs)
+}
+
+/// Checks that account inputs fetched from the RPC service describe the account state committed in
+/// `reference_block`.
+///
+/// The witness must open to the block's account root, and the partial account must hash to the
+/// state commitment in the witness. The second check also catches cached account code that no
+/// longer matches the account.
+fn verify_account_inputs(
+    inputs: &AccountInputs,
+    reference_block: &BlockHeader,
+) -> Result<(), AccountLoadError> {
+    let account_root = inputs.compute_account_root().map_err(AccountLoadError::MalformedWitness)?;
+    if account_root != reference_block.account_root() {
+        return Err(AccountLoadError::AccountRootMismatch);
+    }
+    if inputs.account().to_commitment() != inputs.witness().state_commitment() {
+        return Err(AccountLoadError::StateCommitmentMismatch);
+    }
+    Ok(())
+}
+
 // NETWORK TRANSACTION DATA STORE
 // ================================================================================================
 
@@ -635,8 +743,9 @@ fn partition_cycle_limited(failed: Vec<FailedNote>) -> (Vec<FailedNote>, Vec<Fai
 ///
 /// This is sufficient for executing a network transaction.
 struct NtxDataStore {
-    /// The native account, shared through `Arc` to avoid a deep clone per transaction.
-    account: Arc<Account>,
+    /// The native account at the reference block. It holds the account header, storage header and
+    /// code; storage map entries and vault assets are fetched on demand.
+    account: PartialAccount,
     reference_block: BlockHeader,
     protocol_config: Arc<ProtocolConfig>,
     /// The chain MMR, wrapped in `Arc` to avoid expensive clones when reading the chain state.
@@ -646,6 +755,8 @@ struct NtxDataStore {
     rpc: RpcClient,
     /// LRU cache for storing retrieved note scripts to avoid repeated RPC calls.
     script_cache: LruCache<Word, NoteScript>,
+    /// LRU cache of account code by account ID, used when loading foreign accounts.
+    code_cache: LruCache<AccountId, AccountCode>,
     /// Local database for persistent note script.
     db: NtxDbReader,
     /// Scripts fetched from the remote RPC service during execution. They are reported in the
@@ -670,10 +781,11 @@ struct NtxDataStore {
 impl NtxDataStore {
     /// Creates a new `NtxDataStore` with default cache size.
     fn new(
-        account: Arc<Account>,
+        account: PartialAccount,
         chain_state: crate::chain_state::ChainState,
         rpc: RpcClient,
         script_cache: LruCache<Word, NoteScript>,
+        code_cache: LruCache<AccountId, AccountCode>,
         db: NtxDbReader,
         request_backoff: ExponentialBuilder,
     ) -> NtxResult<Self> {
@@ -684,10 +796,17 @@ impl NtxDataStore {
         if protocol_config.to_commitment() != reference_block.protocol_config_commitment() {
             return Err(NtxError::ProtocolConfigCommitmentMismatch);
         }
+        let fee_asset_slot = FeePolicyManager::fee_asset_id_slot();
         let fee_asset_id: AssetId = account
             .storage()
-            .get_item(FeePolicyManager::fee_asset_id_slot())
-            .map_err(NtxError::FeeAssetStorage)?
+            .header()
+            .find_slot_header_by_name(fee_asset_slot)
+            .ok_or_else(|| {
+                NtxError::FeeAssetStorage(AccountError::StorageSlotNameNotFound {
+                    slot_name: fee_asset_slot.clone(),
+                })
+            })?
+            .value()
             .try_into()
             .map_err(NtxError::FeeAsset)?;
         if fee_asset_id != protocol_config.fee_asset_id() {
@@ -702,6 +821,7 @@ impl NtxDataStore {
             mast_store,
             rpc,
             script_cache,
+            code_cache,
             db,
             fetched_scripts: Arc::new(Mutex::new(Vec::new())),
             storage_slots: Arc::new(Mutex::new(HashMap::default())),
@@ -762,11 +882,10 @@ impl DataStore for NtxDataStore {
             }
 
             // Register slot names from the native account for later use.
-            self.register_storage_map_slots(account_id, &self.account.storage().to_header());
+            self.register_storage_map_slots(account_id, self.account.storage().header());
 
-            let partial_account = PartialAccount::from(self.account.as_ref());
             Ok((
-                partial_account,
+                self.account.clone(),
                 self.reference_block.clone(),
                 self.protocol_config.as_ref().clone(),
                 (*self.chain_mmr).clone(),
@@ -782,18 +901,17 @@ impl DataStore for NtxDataStore {
         async move {
             debug_assert_eq!(ref_block, self.reference_block.block_num());
 
-            // Get foreign account inputs from RPC, retrying on transient gRPC failures.
-            let account_inputs =
-                (|| async { self.rpc.get_account_inputs(foreign_account_id, ref_block).await })
-                    .retry(self.rpc_backoff())
-                    .when(is_transient_rpc_error)
-                    .notify(|err, dur| {
-                        log_transient_retry("rpc.get_account_inputs", err, dur);
-                    })
-                    .await
-                    .map_err(|err| {
-                        DataStoreError::other_with_source("failed to get account inputs", err)
-                    })?;
+            let account_inputs = fetch_account_inputs(
+                &self.rpc,
+                &self.code_cache,
+                self.rpc_backoff(),
+                foreign_account_id,
+                ref_block,
+            )
+            .await
+            .map_err(|err| {
+                DataStoreError::other_with_source("failed to get account inputs", err)
+            })?;
 
             // Ensure foreign account procedures are available to the executor via the mast store.
             // This assumes the code was not loaded from before
@@ -806,10 +924,15 @@ impl DataStore for NtxDataStore {
         }
     }
 
+    /// Fetches proofs for the requested vault assets at the transaction's reference block.
+    ///
+    /// The requested set is expected to be relatively small: the executor asks for one asset during
+    /// execution or the assets in its bounded set of input notes during preparation. Selective
+    /// queries avoid loading the account's potentially much larger vault.
     fn get_vault_asset_witnesses(
         &self,
         account_id: AccountId,
-        _vault_root: Word,
+        vault_root: Word,
         vault_keys: BTreeSet<AssetId>,
     ) -> impl FutureMaybeSend<Result<Vec<AssetWitness>, DataStoreError>> {
         async move {
@@ -820,7 +943,7 @@ impl DataStore for NtxDataStore {
                 let vault_keys = vault_keys.clone();
                 async move {
                     self.rpc
-                        .get_vault_asset_witnesses(account_id, vault_keys, Some(ref_block))
+                        .get_vault_asset_witnesses(account_id, vault_root, vault_keys, ref_block)
                         .await
                 }
             })
@@ -949,7 +1072,13 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use miden_protocol::Felt;
+    use miden_protocol::account::PartialAccount;
+    use miden_protocol::block::BlockHeader;
+    use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::protocol_config::ProtocolConfig;
+    use miden_protocol::transaction::AccountInputs;
     use miden_tx::{
         DataStore,
         FailedNote,
@@ -959,6 +1088,7 @@ mod tests {
     };
 
     use super::{
+        AccountLoadError,
         NtxDataStore,
         RpcError,
         SponsoredFeatureNote,
@@ -966,6 +1096,7 @@ mod tests {
         is_transient_status,
         partition_cycle_limited,
         should_record_failure,
+        verify_account_inputs,
     };
     use crate::test_utils::{
         mock_network_account,
@@ -982,7 +1113,7 @@ mod tests {
         let context = crate::network_transaction::NetworkTransactionContext::test(&db.reader());
         let allowed_root =
             mock_single_target_note(mock_network_account_id(), 77).as_note().script().root();
-        let account = Arc::new(mock_network_account([allowed_root]));
+        let account = PartialAccount::from(&mock_network_account([allowed_root]));
         let block_header = crate::test_utils::mock_block_header(0_u32.into());
         let protocol_config = Arc::new(ProtocolConfig::mock());
         let chain_state = crate::chain_state::ChainState::new(
@@ -991,10 +1122,11 @@ mod tests {
             protocol_config.as_ref().clone(),
         );
         let data_store = NtxDataStore::new(
-            Arc::clone(&account),
+            account.clone(),
             chain_state,
             context.clients.rpc,
             context.script_cache,
+            context.code_cache,
             db.reader(),
             miden_node_utils::retry::exponential(
                 Duration::from_millis(1),
@@ -1010,6 +1142,82 @@ mod tests {
 
         assert_eq!(returned_header, block_header);
         assert_eq!(returned_config, *protocol_config);
+    }
+
+    /// A network account allowlisting a single note script.
+    fn test_network_account() -> miden_protocol::account::Account {
+        let root = mock_single_target_note(mock_network_account_id(), 1).as_note().script().root();
+        mock_network_account([root])
+    }
+
+    /// Builds account inputs for `account` whose witness comes from an account tree holding
+    /// `tree_accounts`.
+    fn account_inputs(
+        account: &miden_protocol::account::Account,
+        tree_accounts: &[miden_protocol::account::Account],
+    ) -> AccountInputs {
+        let smt = Smt::with_entries(
+            tree_accounts
+                .iter()
+                .map(|acct| (AccountIdKey::from(acct.id()).as_word(), acct.to_commitment())),
+        )
+        .unwrap();
+        let tree = AccountTree::new(smt).unwrap();
+        AccountInputs::new(PartialAccount::from(account), tree.open(account.id()))
+    }
+
+    /// Account inputs that open to the reference block's account root and match their witness are
+    /// accepted.
+    #[test]
+    fn account_inputs_matching_the_reference_block_are_accepted() {
+        let account = test_network_account();
+        let header = BlockHeader::mock(5_u32, None, None, std::slice::from_ref(&account));
+
+        let inputs = account_inputs(&account, std::slice::from_ref(&account));
+
+        verify_account_inputs(&inputs, &header).unwrap();
+    }
+
+    /// A witness taken from a different account tree than the reference block's is rejected, so a
+    /// response for another block cannot be used.
+    #[test]
+    fn account_inputs_from_another_block_are_rejected() {
+        let account = test_network_account();
+        // The reference block's account tree does not contain the account yet.
+        let header = BlockHeader::mock(5_u32, None, None, &[]);
+
+        let inputs = account_inputs(&account, std::slice::from_ref(&account));
+
+        assert!(matches!(
+            verify_account_inputs(&inputs, &header),
+            Err(AccountLoadError::AccountRootMismatch)
+        ));
+    }
+
+    /// A partial account whose state differs from the witnessed commitment is rejected, which is
+    /// what catches stale cached code.
+    #[test]
+    fn account_inputs_with_mismatched_state_are_rejected() {
+        let account = test_network_account();
+        let header = BlockHeader::mock(5_u32, None, None, std::slice::from_ref(&account));
+        let (partial, witness) =
+            account_inputs(&account, std::slice::from_ref(&account)).into_parts();
+        let stale = PartialAccount::new(
+            partial.id(),
+            partial.nonce() + Felt::ONE,
+            partial.code().clone(),
+            partial.storage().clone(),
+            partial.vault().clone(),
+            None,
+        )
+        .unwrap();
+
+        let inputs = AccountInputs::new(stale, witness);
+
+        assert!(matches!(
+            verify_account_inputs(&inputs, &header),
+            Err(AccountLoadError::StateCommitmentMismatch)
+        ));
     }
 
     fn sponsored_note_with_two_sponsorships() -> SponsoredFeatureNote {

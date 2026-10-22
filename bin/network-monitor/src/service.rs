@@ -20,8 +20,13 @@ use crate::service_status::ServiceStatus;
 
 /// Build a lazily-connected gRPC client using the network monitor's standard settings (TLS enabled,
 /// no metadata, no OTEL propagation).
-pub fn build_tls_client<C: GrpcClient>(url: Url, timeout: Duration) -> C {
+pub fn build_tls_client<C: GrpcClient>(
+    url: Url,
+    timeout: Duration,
+    max_decoding_message_size: usize,
+) -> C {
     ClientBuilder::new(url)
+        .max_decoding_message_size(max_decoding_message_size)
         .with_tls()
         .expect("TLS is enabled")
         .with_timeout(timeout)

@@ -26,7 +26,7 @@ pub mod server;
 pub use domain::transaction::ensure_transaction_has_fee;
 pub use errors::MempoolSubmissionError;
 pub use fee_collector::deploy_fee_collector;
-pub use proof_scheduler::DEFAULT_MAX_CONCURRENT_PROOFS;
+pub use proof_scheduler::{DEFAULT_MAX_CONCURRENT_PROOFS, prove_pending_blocks};
 pub use rpc_sync::{RpcReadiness, RpcSync};
 pub use server::{
     BlockProducerApi,

@@ -4,11 +4,19 @@ use std::sync::Mutex as StdMutex;
 use std::task::{Context as TaskContext, Poll};
 
 use futures::future::BoxFuture;
+use miden_node_proto::domain::account::AccountVaultDetails;
 use miden_node_proto::generated::miden::node::v1 as rpc;
+use miden_node_proto::generated::miden::node::v1::{
+    GetNotesByIdRequest,
+    SyncNotesRequest,
+    SyncNullifiersRequest,
+};
 use miden_node_proto::generated::{note, transaction};
 use miden_node_proto::prost::Message;
+use miden_protocol::account::Account;
 use miden_protocol::asset::{AssetId, FungibleAsset};
-use miden_protocol::note::NoteType;
+use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::note::{Note, NoteType, Nullifier};
 use miden_standards::note::P2idNote;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
@@ -19,26 +27,33 @@ use tonic_prost::ProstCodec;
 use tower::Service;
 
 use super::*;
-use crate::deposit::DepositScanner;
 
 // RPC FIXTURE
 // ================================================================================================
 
 pub(crate) struct TestChain {
+    genesis_response: Option<rpc::GetBlockHeaderByNumberResponse>,
+    status_version_bytes: usize,
     pub tip: u32,
+    pub account: Option<(Account, AccountWitness)>,
+    pub chain_mmr: Option<rpc::SyncChainMmrResponse>,
     pub notes: Vec<(u32, Note)>,
     pub transactions: Vec<(u32, AccountId, TransactionId)>,
     pub spent: Vec<(u32, Nullifier)>,
     pub unavailable: Option<&'static str>,
     pub unavailable_for: Option<(&'static str, usize)>,
     pub traceparents: Vec<String>,
-    invalid_checked: Option<u32>,
+    pub(crate) invalid_checked: Option<u32>,
 }
 
 impl TestChain {
     pub(crate) fn new(tip: u32) -> Self {
         Self {
+            genesis_response: None,
+            status_version_bytes: 0,
             tip,
+            account: None,
+            chain_mmr: None,
             notes: vec![],
             transactions: vec![],
             spent: vec![],
@@ -47,6 +62,80 @@ impl TestChain {
             traceparents: Vec::new(),
             invalid_checked: None,
         }
+    }
+
+    fn get_account(&self, request: &rpc::GetAccountRequest) -> rpc::GetAccountResponse {
+        use miden_node_proto::domain::account::{
+            AccountDetails,
+            AccountStorageDetails,
+            AccountStorageMapDetails,
+            AccountStorageRequest,
+            GetAccountResponse,
+            SlotData,
+        };
+        use miden_protocol::account::StorageSlotContent;
+
+        let request = request.clone().decode_and_verify().unwrap();
+        let (account, witness) = self.account.as_ref().unwrap();
+        let requested = request.details.unwrap();
+        let maps = account
+            .storage()
+            .slots()
+            .iter()
+            .filter_map(|slot| {
+                let StorageSlotContent::Map(map) = slot.content() else {
+                    return None;
+                };
+                let slot_data = match &requested.storage_request {
+                    AccountStorageRequest::None => return None,
+                    AccountStorageRequest::AllStorageMaps => SlotData::All,
+                    AccountStorageRequest::Explicit(requests) => requests
+                        .iter()
+                        .find(|request| &request.slot_name == slot.name())?
+                        .slot_data
+                        .clone(),
+                };
+                Some(match slot_data {
+                    SlotData::All => {
+                        AccountStorageMapDetails::from_all_entries(slot.name().clone(), map)
+                    },
+                    SlotData::MapKeys(keys) => {
+                        let proofs = keys.iter().map(|key| map.open(key).into()).collect();
+                        AccountStorageMapDetails::from_proofs(
+                            slot.name().clone(),
+                            map.root(),
+                            keys,
+                            proofs,
+                        )
+                        .unwrap()
+                    },
+                })
+            })
+            .collect();
+        GetAccountResponse {
+            block_num: request.block_num.unwrap_or(self.tip.into()),
+            witness: witness.clone(),
+            details: Some(AccountDetails {
+                account_header: account.into(),
+                account_code: requested
+                    .code_commitment
+                    .filter(|commitment| *commitment != account.code().commitment())
+                    .map(|_| account.code().clone()),
+                vault_details: if matches!(
+                    requested.vault_request,
+                    miden_node_proto::domain::account::AccountVaultRequest::All(_)
+                ) {
+                    AccountVaultDetails::from_assets(account.vault().assets().collect())
+                } else {
+                    AccountVaultDetails::empty()
+                },
+                storage_details: AccountStorageDetails {
+                    header: account.storage().to_header(),
+                    map_details: maps,
+                },
+            }),
+        }
+        .into()
     }
 
     fn page(&self, range: BlockRange) -> rpc::PaginationInfo {
@@ -149,7 +238,7 @@ impl TestChain {
         }
     }
 
-    fn account_id() -> AccountId {
+    pub(crate) fn account_id() -> AccountId {
         FungibleAsset::mock_issuer()
     }
 
@@ -157,7 +246,7 @@ impl TestChain {
         TransactionId::from_raw(Word::from([serial; 4]))
     }
 
-    fn deposit(serial: u32) -> Note {
+    pub(crate) fn deposit(serial: u32) -> Note {
         P2idNote::builder()
             .sender(Self::account_id())
             .target(Self::account_id())
@@ -243,12 +332,23 @@ impl Service<http::Request<Body>> for RpcFixture {
             return Box::pin(async { Ok(tonic::Status::unavailable("retry").into_http()) });
         }
         match method {
+            "GetBlockHeaderByNumber" => {
+                self.respond(request, |chain, _: &rpc::GetBlockHeaderByNumberRequest| {
+                    chain.genesis_response.clone().unwrap_or_default()
+                })
+            },
             "Status" => {
                 self.respond(request, |chain, _: &rpc::StatusRequest| rpc::StatusResponse {
                     chain_tip: chain.tip,
+                    version: "x".repeat(chain.status_version_bytes),
                     ..Default::default()
                 })
             },
+            "SyncChainMmr" if self.0.lock().unwrap().chain_mmr.is_some() => self
+                .respond(request, |chain, _: &rpc::SyncChainMmrRequest| {
+                    chain.chain_mmr.clone().unwrap()
+                }),
+            "GetAccount" => self.respond(request, TestChain::get_account),
             "SyncTransactions" => self.respond(request, TestChain::sync_transactions),
             "SyncNotes" => self.respond(request, TestChain::sync_notes),
             "GetNotesById" => self.respond(request, TestChain::notes_by_id),
@@ -394,116 +494,76 @@ async fn invalid_pagination_does_not_establish_expiration() {
     }
 }
 
-// DEPOSIT DISCOVERY
-// ================================================================================================
+/// Serves a committed faucet whose maps are too large to return in full.
+pub(crate) async fn large_faucet_server(fixture: &crate::test_utils::Fixture) -> TestServer {
+    use miden_node_proto::domain::account::AccountStorageMapDetails;
+    use miden_protocol::account::{StorageMapKey, StorageSlotContent};
+    use miden_testing::MockChain;
 
-#[tokio::test]
-async fn discovery_recovers_historical_deposits_and_continues_with_new_blocks() {
-    let first = TestChain::deposit(1);
-    let second = TestChain::deposit(2);
-    let third = TestChain::deposit(3);
-    let mut chain = TestChain::new(12);
-    chain.notes = vec![(3, first.clone()), (10, second.clone())];
-    chain.unavailable = Some("GetNotesById");
-    let server = TestServer::start(chain).await;
-    let mut scanner = DepositScanner::new(
-        TestChain::account_id(),
-        AssetId::new_fungible(TestChain::account_id()),
-    );
-
-    assert!(scanner.scan(&server.node, 12.into()).await.is_err());
-    server.chain.lock().unwrap().unavailable = None;
-    let mut recovered = HashMap::new();
-    while !scanner.is_caught_up(12.into()) {
-        recovered.extend(
-            scanner
-                .scan(&server.node, 12.into())
-                .await
-                .unwrap()
-                .into_iter()
-                .map(|note| (note.id(), note)),
-        );
-    }
-    assert_eq!(recovered, HashMap::from([(first.id(), first), (second.id(), second)]));
-    assert!(scanner.scan(&server.node, 12.into()).await.unwrap().is_empty());
-
-    {
-        let mut chain = server.chain.lock().unwrap();
-        chain.tip = 15;
-        chain.notes.push((14, third.clone()));
-    }
-    assert_eq!(scanner.scan(&server.node, 15.into()).await.unwrap(), vec![third]);
-}
-
-#[tokio::test]
-async fn a_prefix_collision_does_not_mark_an_unspent_deposit_as_spent() {
-    let deposit = TestChain::deposit(1);
-    let mut word = deposit.nullifier().as_word();
-    word[0] += miden_protocol::Felt::ONE;
-    let other = Nullifier::from_raw(word);
-    let mut chain = TestChain::new(12);
-    chain.spent = vec![(10, other)];
-    let server = TestServer::start(chain).await;
-
-    assert!(
-        server
-            .node
-            .spent_nullifiers(&[deposit.nullifier()], 12.into())
-            .await
-            .unwrap()
-            .is_empty()
-    );
-}
-
-#[tokio::test]
-async fn invalid_nullifier_pagination_does_not_report_notes_as_unspent() {
-    let nullifier = TestChain::deposit(1).nullifier();
-    for checked in [0, 21] {
-        let mut chain = TestChain::new(20);
-        chain.invalid_checked = Some(checked);
-        let server = TestServer::start(chain).await;
-        assert!(server.node.spent_nullifiers(&[nullifier], 20.into()).await.is_err());
-    }
-}
-
-#[tokio::test]
-async fn invalid_note_pagination_does_not_skip_deposits() {
-    let deposit = TestChain::deposit(1);
-    let mut chain = TestChain::new(12);
-    chain.notes = vec![(3, deposit.clone())];
-    chain.invalid_checked = Some(13);
-    let server = TestServer::start(chain).await;
-    let mut scanner = DepositScanner::new(
-        TestChain::account_id(),
-        AssetId::new_fungible(TestChain::account_id()),
-    );
-
-    assert!(scanner.scan(&server.node, 12.into()).await.is_err());
-    server.chain.lock().unwrap().invalid_checked = None;
-    assert_eq!(scanner.scan(&server.node, 12.into()).await.unwrap(), vec![deposit]);
-}
-
-#[tokio::test]
-async fn nullifier_checks_find_spent_notes_in_a_large_set() {
-    let mut requested: Vec<_> = (0..1_500u32)
-        .map(|prefix| {
-            Nullifier::from_raw(Word::new([
-                miden_protocol::Felt::ZERO,
-                miden_protocol::Felt::ZERO,
-                miden_protocol::Felt::ZERO,
-                miden_protocol::Felt::new(u64::from(prefix) << 48).unwrap(),
-            ]))
-        })
+    let mut chain = fixture.chain.lock().await;
+    let mut faucet = chain.committed_account(fixture.fee_faucet_id).unwrap().clone();
+    let maps: Vec<_> = faucet
+        .storage()
+        .slots()
+        .iter()
+        .filter(|slot| matches!(slot.content(), StorageSlotContent::Map(_)))
+        .map(|slot| slot.name().clone())
         .collect();
-    let first = requested[0];
-    let last = *requested.last().unwrap();
-    let mut chain = TestChain::new(20);
-    chain.spent = vec![(3, first), (19, last)];
-    let server = TestServer::start(chain).await;
-    requested.push(first);
+    assert!(!maps.is_empty());
+    for slot in maps {
+        for index in 0..=AccountStorageMapDetails::MAX_RETURN_ENTRIES {
+            let key = StorageMapKey::from_array([u32::try_from(index).unwrap(), 123, 456, 789]);
+            faucet.storage_mut().set_map_item(&slot, key, Word::from([42u32; 4])).unwrap();
+        }
+    }
+    let mut builder = MockChain::builder()
+        .fee_faucet_id(fixture.fee_faucet_id)
+        .verification_base_fee(crate::test_utils::TEST_BASE_FEE);
+    builder.add_account(faucet.clone()).unwrap();
+    builder.add_account(fixture.funder.clone()).unwrap();
+    *chain = builder.build().unwrap();
+    let witness = chain.account_witnesses([faucet.id()]).remove(&faucet.id()).unwrap();
+    let mut state = TestChain::new(chain.latest_block_header().block_num().as_u32());
+    state.account = Some((faucet, witness));
+    TestServer::start(state).await
+}
 
-    assert_eq!(
-        server.node.spent_nullifiers(&requested, 20.into()).await.unwrap(),
-        HashSet::from([first, last])
-    );
+#[tokio::test]
+async fn decoding_limit_survives_genesis_discovery_and_client_reconstruction() {
+    let chain = miden_testing::MockChain::builder().build().unwrap();
+    for limit in [4_194_304, 16_777_216] {
+        let mut fixture = TestChain::new(0);
+        fixture.status_version_bytes = 4_194_305;
+        let mut genesis = rpc::GetBlockHeaderByNumberResponse {
+            block_header: Some(chain.genesis_block_header().into()),
+            protocol_config: Some(chain.protocol_config().into()),
+            ..Default::default()
+        };
+        if limit == 16_777_216 {
+            // An unused optional proof makes discovery itself exercise the larger wire ceiling.
+            genesis.mmr_path = Some(miden_node_proto::generated::primitives::MerklePath {
+                siblings: vec![miden_node_proto::generated::primitives::Word {
+                    encoded: vec![0; 4_194_305],
+                }],
+            });
+            assert!(genesis.encoded_len() > 4_194_304);
+        }
+        fixture.genesis_response = Some(genesis);
+        let server = TestServer::start(fixture).await;
+        let (mut client, commitment, protocol_config) = tokio::time::timeout(
+            Duration::from_secs(5),
+            create_genesis_aware_rpc_client(&server.url, Duration::from_secs(2), limit),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(commitment, chain.genesis_block_header().commitment());
+        assert_eq!(protocol_config, *chain.protocol_config());
+        let status = client.status(rpc::StatusRequest {}).await;
+        if limit == 4_194_304 {
+            assert_eq!(status.unwrap_err().code(), tonic::Code::OutOfRange);
+        } else {
+            assert_eq!(status.unwrap().into_inner().version.len(), 4_194_305);
+        }
+    }
 }

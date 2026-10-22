@@ -289,7 +289,10 @@ impl Rpc {
 
         api.set_genesis_commitment(genesis.commitment())?;
 
-        let api_service = miden_node_v1_node_service::service(api);
+        let max_decoding_message_size =
+            self.grpc_options.message_size.max_decoding_message_size.get();
+        let api_service = miden_node_v1_node_service::service(api)
+            .max_decoding_message_size(max_decoding_message_size);
 
         let mut tasks = Tasks::new();
 
@@ -335,10 +338,6 @@ impl Rpc {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        let rpc_version = env!("CARGO_PKG_VERSION");
-        let rpc_version =
-            semver::Version::parse(rpc_version).context("failed to parse crate version")?;
-
         let rpc = grpc::server_builder()
             .accept_http1(true)
             .timeout(self.grpc_options.request_timeout)
@@ -366,15 +365,15 @@ impl Rpc {
             // CORS headers applied, masking the accept error in web-clients (which would experience
             // CORS rejection).
             .layer(
-                AcceptHeaderLayer::new(&rpc_version, genesis.commitment())
+                AcceptHeaderLayer::new(genesis.commitment())
                     .with_genesis_enforced_method("RegisterAccount")
                     .with_genesis_enforced_method("SubmitProvenTx")
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
             .add_service(api_service)
-            .add_service(health_service)
+            .add_service(health_service.max_decoding_message_size(max_decoding_message_size))
             // Enables gRPC reflection service.
-            .add_service(reflection_service)
+            .add_service(reflection_service.max_decoding_message_size(max_decoding_message_size))
             .serve_with_incoming_shutdown(
                 grpc::tcp_incoming(self.listener),
                 shutdown.clone().cancelled_owned(),
@@ -499,7 +498,11 @@ impl SequencerInternal {
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
             .timeout(self.grpc_options.request_timeout)
-            .add_service(miden_sequencer_v1_sequencer_service::service(service))
+            .add_service(
+                miden_sequencer_v1_sequencer_service::service(service).max_decoding_message_size(
+                    self.grpc_options.message_size.max_decoding_message_size.get(),
+                ),
+            )
             .serve_with_incoming_shutdown(
                 grpc::tcp_incoming(self.listener),
                 shutdown.cancelled_owned(),

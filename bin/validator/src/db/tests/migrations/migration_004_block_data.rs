@@ -142,8 +142,11 @@ async fn migration_preserves_transaction_links_and_replacement_cascades() {
     assert_eq!(page.transactions[0].block_tx_index, 0);
     assert_eq!(page.transactions[0].record.as_ref(), Some(&record));
 
+    drop(db);
+    migrate(&path).unwrap();
+    let db = open_with_pool_size(&path, NonZeroUsize::new(2).unwrap()).unwrap();
     let replacement = block_with_header(header_with_next_timestamp(next.header()));
-    db.replace_signed_block(replacement.clone(), test_protocol_config(), Vec::new())
+    db.replace_legacy_signed_block(replacement.clone(), test_protocol_config(), Vec::new())
         .await
         .unwrap();
     assert_eq!(db.load_block(1.into()).await.unwrap(), Some(replacement));

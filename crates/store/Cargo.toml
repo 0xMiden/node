@@ -21,10 +21,11 @@ doctest = false
 anyhow                 = { workspace = true }
 arc-swap               = { workspace = true }
 fs-err                 = { workspace = true }
+futures                = { workspace = true }
 hex                    = { workspace = true }
 indexmap               = { workspace = true }
 libsqlite3-sys         = { workspace = true }
-miden-crypto           = { features = ["concurrent"], workspace = true }
+miden-crypto           = { features = ["concurrent", "persistent-forest"], workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
@@ -65,14 +66,9 @@ rand                  = { workspace = true }
 rusqlite              = { workspace = true }
 tempfile              = { workspace = true }
 
-[features]
-default = ["rocksdb"]
-rocksdb = ["miden-crypto/persistent-forest", "miden-node-utils/rocksdb"]
-
 [[bench]]
-harness           = false
-name              = "account_tree"
-required-features = ["rocksdb"]
+harness = false
+name    = "account_tree"
 
 [[bench]]
 harness = false

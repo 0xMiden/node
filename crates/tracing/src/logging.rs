@@ -330,8 +330,7 @@ pub fn setup_test_tracing() -> anyhow::Result<(
     tokio::sync::mpsc::UnboundedReceiver<opentelemetry_sdk::trace::SpanData>,
     tokio::sync::mpsc::UnboundedReceiver<()>,
 )> {
-    let (exporter, rx_export, rx_shutdown) =
-        opentelemetry_sdk::testing::trace::new_tokio_test_exporter();
+    let (exporter, rx_export, rx_shutdown) = opentelemetry_sdk::testing::trace::new_test_exporter();
 
     let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)

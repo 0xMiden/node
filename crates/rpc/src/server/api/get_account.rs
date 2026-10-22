@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use miden_node_proto::domain::account::{
     AccountStorageRequest,
+    AccountVaultRequest,
     GetAccountRequest,
     GetAccountResponse,
     SlotData,
@@ -9,7 +10,11 @@ use miden_node_proto::domain::account::{
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
 use miden_node_tracing::{debug, info_span, miden_instrument, miden_span_record};
-use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
+use miden_node_utils::limiter::{
+    QueryParamStorageMapKeyTotalLimit,
+    QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
+};
 use tonic::Status;
 
 use super::error_codes::GetAccountErrorCode;
@@ -50,10 +55,13 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
             block.number = request.block_num
         );
 
-        // Validate storage map request limits before forwarding to store.
+        // Bound requested proofs before forwarding to the store.
         if let Some(details) = &request.details {
-            let _span = info_span!(target: COMPONENT, "validate_storage_map_keys").entered();
+            let _span = info_span!(target: COMPONENT, "validate_account_details").entered();
             validate_storage_request(&details.storage_request)?;
+            if let AccountVaultRequest::Assets(ids) = &details.vault_request {
+                check::<QueryParamVaultAssetLimit>(ids.len())?;
+            }
         }
 
         let account_data = self
@@ -128,6 +136,12 @@ fn get_account_error_to_status(err: GetAccountError) -> Status {
         GetAccountError::BlockPruned(_) => {
             GetAccountErrorCode::BlockPruned.invalid_argument(message)
         },
+        GetAccountError::StorageSlotNotFound { .. } => {
+            GetAccountErrorCode::StorageSlotNotFound.invalid_argument(message)
+        },
+        GetAccountError::StorageSlotNotMap { .. } => {
+            GetAccountErrorCode::StorageSlotNotMap.invalid_argument(message)
+        },
     }
 }
 
@@ -138,7 +152,8 @@ fn get_account_error_to_status(err: GetAccountError) -> Status {
 mod tests {
     use miden_node_proto::domain::account::StorageMapRequest;
     use miden_node_utils::limiter::QueryParamLimiter;
-    use miden_protocol::account::{StorageMapKey, StorageSlotName};
+    use miden_protocol::account::{AccountId, StorageMapKey, StorageSlotName};
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use tonic::Code;
 
     use super::*;
@@ -148,6 +163,28 @@ mod tests {
         let status = get_account_error_to_status(GetAccountError::BlockPruned(1.into()));
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.details(), &[5]);
+    }
+
+    #[test]
+    fn invalid_storage_slot_errors_include_error_codes() {
+        let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+        let slot_name = StorageSlotName::new("a::0").unwrap();
+
+        let status = get_account_error_to_status(GetAccountError::StorageSlotNotFound {
+            account_id,
+            slot_name: slot_name.clone(),
+            block_num: 1.into(),
+        });
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.details(), &[6]);
+
+        let status = get_account_error_to_status(GetAccountError::StorageSlotNotMap {
+            account_id,
+            slot_name,
+            block_num: 1.into(),
+        });
+        assert_eq!(status.code(), Code::InvalidArgument);
+        assert_eq!(status.details(), &[7]);
     }
 
     fn slot_request(name: &str, slot_data: SlotData) -> StorageMapRequest {

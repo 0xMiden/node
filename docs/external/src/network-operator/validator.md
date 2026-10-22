@@ -23,11 +23,20 @@ only component that can read them, and submissions that are not encrypted are re
 
 ## Storage and Snapshots
 
-Storage upgrades use the standard `miden-validator migrate` command. See
-[Upgrades and Migrations](/network-operator/upgrades-and-migrations).
+Validator storage includes signed blocks and their proving inputs for [sequencer recovery](/network-operator/recovery).
+Proving inputs are retained indefinitely, even after proofs become available elsewhere. Plan disk and backup capacity
+for continued database growth; inputs are not automatically pruned.
 
-For live backups, take a volume snapshot that includes the complete validator data directory. Signing and storage key
-material must also remain available when restoring a validator.
+Before relying on these backups for failover, coordinate with the sequencer operator to verify that they meet the
+[recovery prerequisites](/network-operator/recovery#prerequisites). Retaining a signed block does not guarantee that its
+proving inputs are available; recovery requires usable inputs for each block that still needs a proof.
+
+For backups while the validator is running, take a consistent volume snapshot of the complete data directory, including
+the database and its write-ahead log (WAL). Keep the signing and storage keys available as well; restoring the data
+directory alone is not sufficient to restart the validator.
+
+For storage compatibility and migration procedures, see
+[Upgrades and Migrations](/network-operator/upgrades-and-migrations).
 
 ## Key Rotation
 

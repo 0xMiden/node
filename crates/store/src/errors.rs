@@ -4,7 +4,7 @@ use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::errors::ConversionError;
 use miden_node_utils::limiter::QueryLimitError;
 use miden_protocol::Word;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountId, StorageSlotName};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::MerkleError;
 use miden_protocol::crypto::merkle::mmr::MmrError;
@@ -81,6 +81,8 @@ pub enum DatabaseError {
     QueryParamLimit(#[from] QueryLimitError),
     #[error(transparent)]
     RangeBeyondTip(#[from] RangeBeyondTip),
+    #[error(transparent)]
+    RangeBelowRetention(#[from] RangeBelowRetention),
 
     // OTHER ERRORS
     // ---------------------------------------------------------------------------------------------
@@ -107,6 +109,8 @@ pub enum DatabaseError {
          use a stricter filter to reduce the number of transactions returned"
     )]
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
+    #[error("block {block_num} holds more rows than one page can return")]
+    BlockExceedsPageLimit { block_num: BlockNumber },
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
@@ -269,6 +273,14 @@ pub struct RangeBeyondTip {
     pub block_to: BlockNumber,
 }
 
+/// A requested block range ends below the oldest block for which the store keeps account history.
+#[derive(Error, Debug)]
+#[error("block_to ({block_to}) is older than the oldest retained block ({oldest_retained})")]
+pub struct RangeBelowRetention {
+    pub oldest_retained: BlockNumber,
+    pub block_to: BlockNumber,
+}
+
 #[derive(Error, Debug)]
 pub enum GetBlockHeaderError {
     #[error("database error")]
@@ -295,8 +307,6 @@ pub enum NoteSyncError {
     DatabaseError(#[from] DatabaseError),
     #[error("database error")]
     UnderlyingDatabaseError(#[from] miden_node_db::DatabaseError),
-    #[error("block headers table is empty")]
-    EmptyBlockHeadersTable,
     #[error("error retrieving the merkle proof for the block")]
     MmrError(#[from] MmrError),
     #[error("invalid block range")]
@@ -351,6 +361,20 @@ pub enum GetAccountError {
     UnknownBlock(BlockNumber),
     #[error("block {0} has been pruned")]
     BlockPruned(BlockNumber),
+    #[error("account {account_id} has no storage slot {slot_name} at block {block_num}")]
+    StorageSlotNotFound {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
+    #[error(
+        "storage slot {slot_name} of account {account_id} is not a map slot at block {block_num}"
+    )]
+    StorageSlotNotMap {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
 }
 
 // Do not scope for `cfg(test)` - if it the traitbounds don't suffice the issue will already appear

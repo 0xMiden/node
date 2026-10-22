@@ -53,7 +53,11 @@ impl BlockProducerValidatorClient {
     /// `timeout` bounds each request (notably `sign_block`) so that a silently dropped validator
     /// connection surfaces as a fast, retryable error instead of hanging on the OS-level TCP
     /// timeout and halting block production.
-    pub fn new(validator_urls: Vec<Url>, timeout: Duration) -> anyhow::Result<Self> {
+    pub fn new(
+        validator_urls: Vec<Url>,
+        timeout: Duration,
+        max_decoding_message_size: usize,
+    ) -> anyhow::Result<Self> {
         let validators = validator_urls
             .into_iter()
             .map(|validator_url| {
@@ -66,6 +70,7 @@ impl BlockProducerValidatorClient {
                 );
 
                 let client = Builder::new(validator_url)
+                    .max_decoding_message_size(max_decoding_message_size)
                     .with_tls()?
                     .with_timeout(timeout)
                     .without_metadata_version()

@@ -44,6 +44,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit,
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
+    QueryParamVaultAssetLimit,
 };
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::testing::{
@@ -103,13 +104,14 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
 /// can always flush on drop regardless of test outcome or drop ordering.
 static TEMP_DIRS: std::sync::OnceLock<std::sync::Mutex<Vec<TempDir>>> = std::sync::OnceLock::new();
 
 /// Creates a temp directory, registers it in the global registry, and returns its path.
-fn new_tempdir() -> std::path::PathBuf {
+pub(crate) fn new_tempdir() -> std::path::PathBuf {
     let dir = tempfile::tempdir().expect("tempdir should be created");
     let path = dir.path().to_path_buf();
     TEMP_DIRS
@@ -536,14 +538,23 @@ async fn rpc_server_accepts_requests_with_accept_header() {
 }
 
 #[tokio::test]
-async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
+async fn rpc_server_accepts_requests_with_legacy_version_parameter() {
     // Start the RPC.
     let (_, rpc_addr, _store, _server) = start_rpc().await;
     // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
     let url = Url::parse(format!("http://{rpc_addr}").as_str()).unwrap();
 
-    for version in ["1.9.0", "0.8.1", "0.8.0", "0.999.0", "99.0.0"] {
-        // Recreate the RPC client with an invalid version.
+    for version in [
+        "0.17.0",
+        "1.9.0",
+        "0.8.1",
+        "0.8.0",
+        "0.999.0",
+        "99.0.0",
+        "0.18.0-alpha.1",
+        "not-a-version",
+    ] {
+        // Recreate the RPC client with a legacy version parameter.
         let mut rpc_client: RpcClient = Builder::new(url.clone())
             .without_tls()
             .with_timeout(Duration::from_secs(10))
@@ -557,10 +568,7 @@ async fn rpc_server_rejects_requests_with_accept_header_invalid_version() {
         // Send any request to the RPC.
         let response = send_request(&mut rpc_client).await;
 
-        // Assert the server rejects our request on the basis of an unsupported version.
-        assert!(response.is_err());
-        assert_eq!(response.as_ref().err().unwrap().code(), tonic::Code::InvalidArgument);
-        assert!(response.as_ref().err().unwrap().message().contains("server does not support"),);
+        assert!(response.is_ok(), "version={version}: {response:?}");
     }
 }
 
@@ -2276,6 +2284,10 @@ async fn get_limits_endpoint() {
 
     // Verify GetAccount endpoint advertises both the per-key and per-slot storage map limits.
     let get_account = limits.endpoints.get("GetAccount").expect("GetAccount should exist");
+    assert_eq!(
+        get_account.parameters.get(QueryParamVaultAssetLimit::PARAM_NAME),
+        Some(&(QueryParamVaultAssetLimit::LIMIT as u32)),
+    );
     assert_eq!(
         get_account.parameters.get(QueryParamStorageMapKeyTotalLimit::PARAM_NAME),
         Some(&(QueryParamStorageMapKeyTotalLimit::LIMIT as u32)),

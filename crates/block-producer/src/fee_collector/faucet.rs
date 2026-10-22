@@ -2,6 +2,7 @@ use anyhow::Context;
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountStorageRequest,
+    AccountVaultRequest,
     GetAccountRequest,
     SlotData,
     StorageMapEntries,
@@ -46,7 +47,7 @@ impl FeeFaucet {
                 block_num: None,
                 details: Some(AccountDetailRequest {
                     code_commitment: Some(Word::empty()),
-                    asset_vault_commitment: None,
+                    vault_request: AccountVaultRequest::None,
                     storage_request: AccountStorageRequest::None,
                 }),
             })
@@ -67,7 +68,7 @@ impl FeeFaucet {
                 block_num: Some(block),
                 details: Some(AccountDetailRequest {
                     code_commitment: None,
-                    asset_vault_commitment: None,
+                    vault_request: AccountVaultRequest::None,
                     storage_request: AccountStorageRequest::None,
                 }),
             })
@@ -110,7 +111,7 @@ impl FeeFaucet {
                 block_num: Some(block),
                 details: Some(AccountDetailRequest {
                     code_commitment: None,
-                    asset_vault_commitment: None,
+                    vault_request: AccountVaultRequest::None,
                     storage_request: AccountStorageRequest::Explicit(vec![StorageMapRequest {
                         slot_name: slot_name.clone(),
                         slot_data: SlotData::MapKeys(vec![map_key]),

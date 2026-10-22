@@ -10,14 +10,15 @@ component), reducing the load in this critical component.
 
 ## RPC Versioning and the HTTP `ACCEPT` header
 
-The RPC component allows clients to negotiate their desired Miden RPC version using the well-known HTTP `ACCEPT` header, using the following format:
+The RPC API is versioned by its protobuf package, currently `miden.node.v1`, independently of the node release version.
+The RPC component checks the target network using the HTTP `Accept` header:
 
 ```sh
-application/vnd.miden; version=<version-req>; genesis=<genesis-commitment>
+application/vnd.miden; genesis=<genesis-commitment>
 ```
 
-The `version` lets the client specify their supported version and the server will attempt to comply if it can. At this early stage, only client versions which are semver compatible with the
-server version are likely to be accepted i.e. the server in all likely only supports a _single version_.
+Legacy clients may include a `version` parameter. The server ignores its value, so clients do not need to match the
+node release version.
 
 The `genesis` property is intended to let the client confirm they are on the correct network, by specifying the network's genesis commitment. This guards against operating on the wrong network,
 as well as against network resets.
@@ -32,13 +33,15 @@ the store) to keep database queries bounded and to keep response payloads within
 
 `GENERAL_REQUEST_LIMIT` is currently `1000`, and endpoint-specific limits are:
 
-| Endpoint           | Parameter          | Limit  | Rationale                                                            |
-| ------------------ | ------------------ | ------ | -------------------------------------------------------------------- |
-| `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive |
-| `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter       |
-| `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                      |
-| `SyncNullifiers`   | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans                                  |
-| `SyncTransactions` | `account_id`       | `1000` | Bounds account filter fan-out and response size                      |
+| Endpoint           | Parameter          | Limit  | Rationale                                                                     |
+| ------------------ | ------------------ | ------ | ----------------------------------------------------------------------------- |
+| `GetAccount`       | `storage_map_key`  | `64`   | SMT proof generation for storage map keys is comparatively expensive          |
+| `GetAccount`       | `storage_maps`     | `255`  | Bounds explicit slot lookups to the maximum account storage layout            |
+| `GetAccount`       | `vault_asset`      | `64`   | Matches the storage map proof cap to bound proof generation and response size |
+| `GetNotesById`     | `note_id`          | `100`  | Notes can be large (~32 KiB), so this is intentionally tighter                |
+| `SyncNotes`        | `note_tag`         | `1000` | Keeps note sync responses within payload budget                               |
+| `SyncNullifiers`   | `nullifier_prefix` | `1000` | Bounds prefix-based nullifier scans                                           |
+| `SyncTransactions` | `account_id`       | `1000` | Bounds account filter fan-out and response size                               |
 
 Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by `GetLimits`) include:
 

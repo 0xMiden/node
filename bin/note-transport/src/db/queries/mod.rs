@@ -15,6 +15,9 @@ pub use select_retained_bytes::select_retained_bytes;
 mod select_nonce;
 pub use select_nonce::select_nonce;
 
+mod select_head;
+pub use select_head::select_head;
+
 mod delete_notes_created_before;
 pub use delete_notes_created_before::delete_notes_created_before;
 

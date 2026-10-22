@@ -65,7 +65,8 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
             &mut proof_writer,
             account_file.clone(),
             validator_urls.clone(),
-            Duration::from_secs(30)
+            Duration::from_secs(30),
+            miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE
         ))
         .await
         .is_err()
@@ -81,6 +82,7 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
         account_file.clone(),
         validator_urls.clone(),
         Duration::from_secs(30),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
     ))
     .await
     .unwrap();
@@ -99,6 +101,7 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
         account_file,
         validator_urls.clone(),
         Duration::from_secs(30),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
     ))
     .await
     .unwrap();
@@ -115,6 +118,7 @@ async fn collector_deployment_proves_the_block_and_supports_a_new_collector() {
         replacement.clone(),
         validator_urls,
         Duration::from_secs(30),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
     ))
     .await
     .unwrap();

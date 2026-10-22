@@ -3,7 +3,6 @@
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
 
 use arc_swap::ArcSwap;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -14,7 +13,6 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 
-use crate::account_state_forest::AccountStateForestBackend;
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
 use crate::db::Db;
@@ -23,24 +21,18 @@ use crate::proven_tip::ProvenTipWriter;
 use crate::state::loader::{
     ACCOUNT_STATE_FOREST_STORAGE_DIR,
     ACCOUNT_TREE_STORAGE_DIR,
-    AccountForestLoader,
     NULLIFIER_TREE_STORAGE_DIR,
-    TreeStorage,
-    TreeStorageLoader,
+    load_account_state_forest,
+    load_account_tree,
     load_mmr,
+    load_nullifier_tree,
+    open_account_state_forest_storage,
+    open_tree_storage,
     verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
 use crate::state::writer::{WriteRequest, WriteWorker, WriterTask};
-use crate::state::{
-    BlockCache,
-    BlockWriter,
-    ProofCache,
-    ProofWriter,
-    SnapshotGuard,
-    State,
-    StateSnapshot,
-};
+use crate::state::{BlockCache, BlockWriter, ProofCache, ProofWriter, State, StateSnapshot};
 use crate::{COMPONENT, DataDirectory, DatabaseOptions};
 
 /// Awaits a spawned load task, forwarding its result.
@@ -186,15 +178,11 @@ impl State {
 
         let apply_block_thread_priority = storage_options.apply_block_thread_priority;
 
-        #[cfg(feature = "rocksdb")]
         let (account_storage_config, nullifier_storage_config, forest_storage_config) = (
             storage_options.account_tree.into(),
             storage_options.nullifier_tree.into(),
             storage_options.account_state_forest.into(),
         );
-        #[cfg(not(feature = "rocksdb"))]
-        let (account_storage_config, nullifier_storage_config, forest_storage_config) =
-            ((), (), ());
 
         // The four structures live in independent storages and the database pool supports
         // concurrent readers, so open and load them concurrently. Each branch is a spawned task
@@ -212,16 +200,11 @@ impl State {
             {
                 let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
                 async move {
-                    join_load_task(spawn_blocking_in_current_span(move || {
-                        TreeStorage::create(
-                            &path,
-                            &account_storage_config,
-                            ACCOUNT_TREE_STORAGE_DIR,
-                        )
+                    let storage = join_load_task(spawn_blocking_in_current_span(move || {
+                        open_tree_storage(&path, &account_storage_config, ACCOUNT_TREE_STORAGE_DIR)
                     }))
-                    .await?
-                    .load_account_tree(&db)
-                    .await
+                    .await?;
+                    load_account_tree(storage, &db).await
                 }
             }
             .in_current_span(),
@@ -230,16 +213,15 @@ impl State {
             {
                 let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
                 async move {
-                    join_load_task(spawn_blocking_in_current_span(move || {
-                        TreeStorage::create(
+                    let storage = join_load_task(spawn_blocking_in_current_span(move || {
+                        open_tree_storage(
                             &path,
                             &nullifier_storage_config,
                             NULLIFIER_TREE_STORAGE_DIR,
                         )
                     }))
-                    .await?
-                    .load_nullifier_tree(&db)
-                    .await
+                    .await?;
+                    load_nullifier_tree(storage, &db).await
                 }
             }
             .in_current_span(),
@@ -248,16 +230,15 @@ impl State {
             {
                 let (db, path) = (Arc::clone(&db), data_path.to_path_buf());
                 async move {
-                    let forest = join_load_task(spawn_blocking_in_current_span(move || {
-                        AccountStateForestBackend::create(
+                    let storage = join_load_task(spawn_blocking_in_current_span(move || {
+                        open_account_state_forest_storage(
                             &path,
                             &forest_storage_config,
                             ACCOUNT_STATE_FOREST_STORAGE_DIR,
                         )
                     }))
-                    .await?
-                    .load_account_state_forest(&db, latest_block_num)
                     .await?;
+                    let forest = load_account_state_forest(storage, &db, latest_block_num).await?;
                     verify_account_state_forest_consistency(&forest, &db).await?;
                     Ok(forest)
                 }
@@ -291,9 +272,6 @@ impl State {
         let block_cache = BlockCache::new(BLOCK_CACHE_CAPACITY);
         let proof_cache = ProofCache::new(PROOF_CACHE_CAPACITY);
 
-        // Shared counter of live snapshot generations, for observability.
-        let snapshots_live = Arc::new(AtomicUsize::new(0));
-
         // Create the initial snapshot from reader views of the just-loaded trees.
         let initial_snapshot = Arc::new(StateSnapshot::new(
             nullifier_tree
@@ -304,7 +282,6 @@ impl State {
             forest
                 .reader()
                 .map_err(|e| StateInitializationError::AccountStateForestIoError(e.as_report()))?,
-            SnapshotGuard::new(Arc::clone(&snapshots_live), latest_block_num),
         ));
         let latest_snapshot = Arc::new(ArcSwap::from(initial_snapshot));
 
@@ -324,7 +301,6 @@ impl State {
             account_tree,
             blockchain,
             forest,
-            snapshots_live,
             apply_block_thread_priority,
         );
         let state = Self {

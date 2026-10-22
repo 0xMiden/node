@@ -19,20 +19,15 @@ use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
-use crate::db::Db;
-use crate::errors::RangeBeyondTip;
+use crate::db::{Db, HISTORICAL_BLOCK_RETENTION};
+use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
 use crate::state::State;
 
 mod scoped;
 pub use scoped::{ScopedBlockNum, ScopedBlockRange};
 
 mod snapshot;
-pub(in crate::state) use snapshot::{
-    PublishedGenerations,
-    SNAPSHOTS_LIVE_WARN_THRESHOLD,
-    SnapshotGuard,
-    StateSnapshot,
-};
+pub(in crate::state) use snapshot::{PublishedGenerations, StateSnapshot};
 
 mod account;
 mod block;
@@ -53,8 +48,7 @@ pub use transaction_inputs::TransactionInputs;
 ///
 /// Obtained from [`State::view`]; create one per request and drop it when the request completes.
 /// Holding a view pins a snapshot generation (and thereby the `RocksDB` snapshots backing the
-/// trees), so it must not be stored in long-lived structs; leaked or slow readers are reported by
-/// the store's snapshot-lifetime warnings.
+/// trees), so it must not be stored in long-lived structs.
 ///
 /// Reads that are technically not block-scoped (for example, immutable content-addressed data)
 /// also live here so that every read path flows through one type.
@@ -97,9 +91,7 @@ impl State {
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
     /// I/O and no other `.await` points. Anything slower holds the pinned snapshot, and therefore
-    /// its underlying `RocksDB` snapshot, for as long as it runs. The snapshot's lifetime is logged
-    /// as a warning if held too long, but that is a backstop, not a substitute for keeping closures
-    /// short.
+    /// its underlying `RocksDB` snapshot, for as long as it runs.
     pub async fn with_view<R>(&self, f: impl AsyncFnOnce(&StateView) -> R) -> R {
         let view = self.view();
         f(&view).await
@@ -142,6 +134,25 @@ impl StateView {
             return Err(RangeBeyondTip { chain_tip: tip, block_to: *range.end() });
         }
         Ok(ScopedBlockRange::new(range))
+    }
+
+    /// Validates `range` like [`Self::scope_range`], and also validates that `range` ends inside
+    /// the account history retention window.
+    ///
+    /// The store deletes account history rows that stop being valid at or below
+    /// `tip - HISTORICAL_BLOCK_RETENTION`. A range that ends below that block can miss updates, so
+    /// account state sync reads must use this check.
+    fn scope_retained_range(
+        &self,
+        range: RangeInclusive<BlockNumber>,
+    ) -> Result<ScopedBlockRange, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let oldest_retained =
+            BlockNumber::from(self.tip().as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+        if range.end() < oldest_retained {
+            return Err(RangeBelowRetention { oldest_retained, block_to: range.end() }.into());
+        }
+        Ok(range)
     }
 
     /// Runs a synchronous read-only operation over the pinned state snapshot on Tokio's blocking

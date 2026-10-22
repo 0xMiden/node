@@ -70,6 +70,8 @@ impl BlockProducerApiConfig {
 ///
 /// Specifies how to connect to the validator and block prover components.
 pub struct Sequencer {
+    /// Maximum encoded size accepted by every outgoing gRPC client.
+    pub max_decoding_message_size: usize,
     /// The read-only store state shared with the block producer.
     pub state: Arc<State>,
     /// The store's block-write capability, handed to the block builder.
@@ -117,8 +119,11 @@ impl Sequencer {
         let fee_collector_account =
             crate::fee_collector::load_deployed_collector(&state, self.fee_collector_account)
                 .await?;
-        let validator =
-            BlockProducerValidatorClient::new(self.validator_urls.clone(), self.validator_timeout)?;
+        let validator = BlockProducerValidatorClient::new(
+            self.validator_urls.clone(),
+            self.validator_timeout,
+            self.max_decoding_message_size,
+        )?;
         let block_builder = BlockBuilder::new(
             Arc::clone(&state),
             self.block_writer,
@@ -143,7 +148,7 @@ impl Sequencer {
         let mempool = Mempool::shared(state.committed_tip(), api_config.mempool_config());
         let api = BlockProducerApi::from_shared_mempool(mempool.clone(), state, shutdown.clone());
         let block_prover = if let Some(url) = self.block_prover_url {
-            Arc::new(BlockProver::remote(url)?)
+            Arc::new(BlockProver::remote(url, self.max_decoding_message_size)?)
         } else {
             Arc::new(BlockProver::local())
         };

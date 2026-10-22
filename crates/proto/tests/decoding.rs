@@ -50,7 +50,10 @@ fn account_request_preserves_optional_fields_on_the_wire() {
     assert_eq!(decoded.block_num.unwrap().as_u32(), 0);
     let details = decoded.details.unwrap();
     assert_eq!(details.code_commitment, Some(Word::empty()));
-    assert!(details.asset_vault_commitment.is_none());
+    assert_eq!(
+        details.vault_request,
+        miden_node_proto::domain::account::AccountVaultRequest::None
+    );
     assert_eq!(details.storage_request, AccountStorageRequest::None);
 }
 

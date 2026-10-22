@@ -168,7 +168,7 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
             block_num: None,
             details: Some(AccountDetailRequest {
                 code_commitment: None,
-                asset_vault_commitment: None,
+                vault_request: miden_node_proto::domain::account::AccountVaultRequest::None,
                 storage_request: AccountStorageRequest::AllStorageMaps,
             }),
         })

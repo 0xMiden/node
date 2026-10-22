@@ -53,6 +53,8 @@ miden-standards  = { features = ["testing"], workspace = true }
 rand_chacha      = { workspace = true }
 rstest           = { workspace = true }
 tempfile         = { workspace = true }
+tonic-prost      = { workspace = true }
+tower            = { workspace = true }
 
 # Benchmark for building network transactions against very large accounts.
 [[bench]]
