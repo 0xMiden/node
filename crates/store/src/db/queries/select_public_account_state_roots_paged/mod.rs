@@ -7,7 +7,6 @@ use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountStorageHeader};
 
 use crate::db::pagination::{Page, Paginated, key_cursor};
-use crate::db::queries::VALID_FOREVER;
 use crate::errors::DatabaseError;
 
 const SQL: &str = include_str!("select_public_account_state_roots_page.sql");
@@ -47,11 +46,7 @@ impl Paginated for PublicAccountStateRootsPaged {
         // Fetch one extra to determine if there are more results
         let limit = i64::try_from(self.page_size.get() + 1).expect("page size fits within i64");
 
-        let rows = tx.query(
-            SQL,
-            &[&limit, &VALID_FOREVER, &key_cursor(next.as_ref())],
-            state_roots_from_row,
-        )?;
+        let rows = tx.query(SQL, &[&limit, &key_cursor(next.as_ref())], state_roots_from_row)?;
 
         // The columns are nullable in the schema, but a public account always has both.
         let accounts = rows
