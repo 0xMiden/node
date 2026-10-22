@@ -32,7 +32,6 @@ impl proto::server::miden_node_v1_node_service::GetNoteScriptByRoot for RpcServi
     #[miden_instrument(
         target = COMPONENT,
         name = "get_note_script_by_root",
-        err,
     )]
     async fn handle(
         &self,

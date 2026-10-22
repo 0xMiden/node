@@ -1,6 +1,168 @@
+use std::fmt::{self, Display, Formatter};
+use std::time::Duration;
+
+use http::HeaderMap;
 use http::header::HeaderName;
 use tower_governor::key_extractor::{KeyExtractor, SmartIpKeyExtractor};
-use tracing::field;
+use tower_http::classify::GrpcFailureClass;
+use tower_http::trace::{
+    DefaultOnBodyChunk,
+    DefaultOnRequest,
+    DefaultOnResponse,
+    GrpcMakeClassifier,
+    MakeSpan,
+    OnEos,
+    OnFailure,
+    OnResponse,
+    TraceLayer,
+};
+use tracing::{Level, field};
+
+/// The [`TraceLayer`] returned by [`grpc_trace_layer`].
+pub type GrpcTraceLayer = TraceLayer<
+    GrpcMakeClassifier,
+    GrpcMakeSpan,
+    DefaultOnRequest,
+    GrpcOnResponse,
+    DefaultOnBodyChunk,
+    GrpcOnEos,
+    GrpcOnFailure,
+>;
+
+/// Returns the trace layer for a gRPC server.
+///
+/// Each request gets a root span from [`grpc_trace_fn`] that records the response's gRPC status
+/// code as `rpc.grpc.status_code`. A failed request is logged once on that span, with its status
+/// code and message. `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR` with the
+/// message as a typed error, which records it as `exception.message` and marks the span as failed.
+/// Other codes are logged at `INFO`.
+///
+/// The other codes describe the request, such as an unknown account or a method that does not
+/// exist, and clients cause them. Requests from other node components can carry client content
+/// too, such as a transaction forwarded to the validator, so internal servers use the same levels.
+/// A trusted caller that sent a bad request logs its own failure.
+pub fn grpc_trace_layer() -> GrpcTraceLayer {
+    TraceLayer::new_for_grpc()
+        .make_span_with(GrpcMakeSpan)
+        .on_response(GrpcOnResponse::default())
+        .on_eos(GrpcOnEos)
+        .on_failure(GrpcOnFailure)
+}
+
+/// Creates the root span of each request with [`grpc_trace_fn`].
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcMakeSpan;
+
+impl<B> MakeSpan<B> for GrpcMakeSpan {
+    fn make_span(&mut self, request: &http::Request<B>) -> tracing::Span {
+        grpc_trace_fn(request)
+    }
+}
+
+/// Records the gRPC status of a response that carries it in its headers.
+///
+/// A handler's error is returned in the headers. Other responses carry their status in the
+/// trailers, which [`GrpcOnEos`] records.
+#[derive(Clone, Debug, Default)]
+pub struct GrpcOnResponse(DefaultOnResponse);
+
+impl<B> OnResponse<B> for GrpcOnResponse {
+    fn on_response(self, response: &http::Response<B>, latency: Duration, span: &tracing::Span) {
+        if let Some(status) = tonic::Status::from_header_map(response.headers()) {
+            record_status(&status, latency, span);
+        }
+        self.0.on_response(response, latency, span);
+    }
+}
+
+/// Records the gRPC status of a response that carries it in its trailers.
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcOnEos;
+
+impl OnEos for GrpcOnEos {
+    fn on_eos(self, trailers: Option<&HeaderMap>, stream_duration: Duration, span: &tracing::Span) {
+        if let Some(status) = trailers.and_then(tonic::Status::from_header_map) {
+            record_status(&status, stream_duration, span);
+        }
+    }
+}
+
+/// Logs a request that failed without a gRPC status, such as a response stream that failed.
+///
+/// Failed statuses are logged by [`GrpcOnResponse`] and [`GrpcOnEos`], which can read the status
+/// message.
+#[derive(Clone, Copy, Debug)]
+pub struct GrpcOnFailure;
+
+impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
+    fn on_failure(
+        &mut self,
+        classification: GrpcFailureClass,
+        latency: Duration,
+        span: &tracing::Span,
+    ) {
+        if let GrpcFailureClass::Error(message) = classification {
+            let error = FailureMessage(message);
+            tracing::error!(
+                parent: span,
+                error = &error as &(dyn std::error::Error + 'static),
+                latency = ?latency,
+                "response failed"
+            );
+        }
+    }
+}
+
+/// Records `status` as the request's status code, and logs it if it is a failure.
+fn record_status(status: &tonic::Status, latency: Duration, span: &tracing::Span) {
+    let code = status.code();
+    span.record("rpc.grpc.status_code", code as i32);
+    match code {
+        tonic::Code::Ok => {},
+        tonic::Code::Internal | tonic::Code::DataLoss | tonic::Code::Unavailable => {
+            log_failure(Level::ERROR, status, latency, span);
+        },
+        _ => log_failure(Level::INFO, status, latency, span),
+    }
+}
+
+fn log_failure(level: Level, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
+    if level == Level::ERROR {
+        let error = FailureMessage(status.message().to_owned());
+        tracing::error!(
+            parent: span,
+            error = &error as &(dyn std::error::Error + 'static),
+            grpc.code = ?status.code(),
+            grpc.message = status.message(),
+            latency = ?latency,
+            "request failed"
+        );
+    } else {
+        tracing::info!(
+            parent: span,
+            grpc.code = ?status.code(),
+            grpc.message = status.message(),
+            latency = ?latency,
+            "request failed"
+        );
+    }
+}
+
+/// The message of a failed request, logged as a typed error.
+///
+/// The OpenTelemetry layer records a typed error as `exception.message` on the event and span,
+/// like the errors that other node code logs. The status code is recorded separately, so the
+/// exception holds only the message.
+#[derive(Debug)]
+struct FailureMessage(String);
+
+impl Display for FailureMessage {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for FailureMessage {}
 
 /// Returns a [`trace_fn`](tonic::transport::server::Server) implementation for gRPC requests
 /// which adds open-telemetry information to the span.
@@ -27,6 +189,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
         rpc.system = field::Empty,
         rpc.request.size = field::Empty,
         rpc.response.size = field::Empty,
+        rpc.grpc.status_code = field::Empty,
         server.address = field::Empty,
         server.port = field::Empty,
         client.address = field::Empty,

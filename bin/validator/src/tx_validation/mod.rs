@@ -42,10 +42,7 @@ pub enum TransactionValidationError {
 /// Returns the effects of the re-executed transaction. The effects hold the account state
 /// commitments, the account patch, the input and output notes, the reference block and the
 /// expiration block.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
+#[miden_instrument(target = COMPONENT)]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,

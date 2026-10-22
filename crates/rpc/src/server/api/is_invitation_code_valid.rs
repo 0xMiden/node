@@ -1,10 +1,10 @@
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::allowlist::InvitationCode;
-use miden_node_tracing::{ErrorReport, miden_instrument};
+use miden_node_tracing::miden_instrument;
 use tonic::{Request, Status};
 
-use super::{RpcBackend, RpcService};
+use super::{RpcBackend, RpcService, log_internal_error};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
@@ -25,7 +25,7 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
     }
 
     // The invitation code is a secret. Do not record it on the span.
-    #[miden_instrument(target = COMPONENT, name = "is_invitation_code_valid", err)]
+    #[miden_instrument(target = COMPONENT, name = "is_invitation_code_valid")]
     async fn handle(
         &self,
         invitation_code: Self::Input,
@@ -42,7 +42,7 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
                 account_admission
                     .is_invitation_code_valid(invitation)
                     .await
-                    .map_err(|error| Status::internal(error.as_report()))
+                    .map_err(|error| log_internal_error(&error))
             },
             RpcBackend::FullNode { source_rpc, .. } => {
                 let mut request =

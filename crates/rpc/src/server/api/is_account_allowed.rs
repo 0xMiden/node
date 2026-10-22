@@ -1,10 +1,10 @@
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
-use miden_node_tracing::{ErrorReport, miden_instrument, miden_span_record};
+use miden_node_tracing::{miden_instrument, miden_span_record};
 use miden_protocol::account::AccountId;
-use tonic::{Request, Status};
+use tonic::Request;
 
-use super::{RpcBackend, RpcService};
+use super::{RpcBackend, RpcService, log_internal_error};
 use crate::COMPONENT;
 
 #[tonic::async_trait]
@@ -24,7 +24,7 @@ impl proto::server::miden_node_v1_node_service::IsAccountAllowed for RpcService 
         Ok(proto::miden::node::v1::IsAccountAllowedResponse { allowed })
     }
 
-    #[miden_instrument(target = COMPONENT, name = "is_account_allowed", err)]
+    #[miden_instrument(target = COMPONENT, name = "is_account_allowed")]
     async fn handle(
         &self,
         account_id: Self::Input,
@@ -37,7 +37,7 @@ impl proto::server::miden_node_v1_node_service::IsAccountAllowed for RpcService 
             RpcBackend::Sequencer { account_admission, .. } => account_admission
                 .is_account_allowed(account_id)
                 .await
-                .map_err(|error| Status::internal(error.as_report())),
+                .map_err(|error| log_internal_error(&error)),
             RpcBackend::FullNode { source_rpc, .. } => {
                 let mut request = Request::new(proto::miden::node::v1::IsAccountAllowedRequest {
                     account_id: Some(account_id.into()),

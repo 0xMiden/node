@@ -4,7 +4,7 @@ use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::vm::ExecutionProof;
 
-use super::super::{COMPONENT, RpcService};
+use super::super::{COMPONENT, RpcService, log_internal_error};
 use super::stream::{StreamItem, SubscriptionStream};
 use crate::LOG_TARGET;
 
@@ -23,8 +23,8 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
     fn encode(
         event: Self::Item,
     ) -> tonic::Result<proto::miden::node::v1::ProofSubscriptionResponse> {
-        let proof = ExecutionProof::read_from_bytes(&event.data)
-            .map_err(|err| tonic::Status::internal(format!("invalid stored proof: {err}")))?;
+        let proof =
+            ExecutionProof::read_from_bytes(&event.data).map_err(|err| log_internal_error(&err))?;
         Ok(proto::miden::node::v1::ProofSubscriptionResponse {
             block_num: event.block.as_u32(),
             proof: Some(proof.into()),
@@ -38,7 +38,6 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
         fields(
             block.from = input,
         ),
-        err,
     )]
     async fn handle(
         &self,

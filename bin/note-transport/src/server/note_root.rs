@@ -15,7 +15,7 @@ use crate::{COMPONENT, LOG_TARGET};
 
 impl Server {
     /// Returns the trusted node's note root for the requested block.
-    #[miden_instrument(target = COMPONENT, err)]
+    #[miden_instrument(target = COMPONENT)]
     pub(super) async fn get_note_root(&self, block_num: BlockNumber) -> tonic::Result<Word> {
         miden_span_record!(block.number = block_num);
         if let Some(root) = self.note_root_cache.get(&block_num) {

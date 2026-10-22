@@ -26,7 +26,6 @@ impl grpc::server::miden_validator_v1_validator_service::GetTransactionEncryptio
     #[miden_instrument(
         target = COMPONENT,
         name = "get_transaction_encryption_key",
-        err,
     )]
     async fn handle(
         &self,

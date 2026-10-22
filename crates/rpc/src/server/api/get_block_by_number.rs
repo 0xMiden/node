@@ -4,7 +4,7 @@ use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::vm::ExecutionProof;
 
 use super::error_codes::internal_error;
-use super::{RpcService, database_error_to_status};
+use super::{RpcService, database_error_to_status, log_internal_error};
 use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
@@ -31,7 +31,6 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
             block.number = request.block_num,
             request.include_proof = request.include_proof.unwrap_or_default(),
         ),
-        err,
     )]
     async fn handle(
         &self,
@@ -74,7 +73,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
                 .map(|bytes| {
                     ExecutionProof::read_from_bytes(&bytes)
                         .map(Into::into)
-                        .map_err(|err| internal_error(format!("invalid stored proof: {err}")))
+                        .map_err(|err| log_internal_error(&err))
                 })
                 .transpose()?
         } else {

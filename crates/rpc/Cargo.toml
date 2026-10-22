@@ -43,7 +43,6 @@ tonic-health              = { workspace = true }
 tonic-reflection          = { workspace = true }
 tonic-web                 = { workspace = true }
 tower                     = { workspace = true }
-tower-http                = { features = ["trace"], workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
