@@ -9,7 +9,6 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::asset::AssetId;
 use tokio::net::TcpListener;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
@@ -36,8 +35,6 @@ pub(crate) struct FundingState {
     /// Durable storage for accepted funding notes.
     pub(crate) database: Arc<FundingDatabase>,
     pub(crate) status: StatusSnapshot,
-    /// The native asset the notes hold.
-    pub(crate) fee_asset_id: AssetId,
 }
 
 /// The HTTP service of the funding service.
@@ -50,11 +47,10 @@ impl FundingServer {
     pub(crate) fn new(
         database: Arc<FundingDatabase>,
         status: StatusSnapshot,
-        fee_asset_id: AssetId,
         request_timeout: Duration,
     ) -> Self {
         Self {
-            state: FundingState { database, status, fee_asset_id },
+            state: FundingState { database, status },
             request_timeout,
         }
     }
@@ -103,7 +99,7 @@ pub(crate) mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use miden_protocol::Word;
-    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::asset::{AssetId, FungibleAsset};
     use tower::ServiceExt;
 
     use super::*;
@@ -125,14 +121,7 @@ pub(crate) mod tests {
         .await
         .unwrap();
 
-        (
-            directory,
-            FundingState {
-                database: Arc::new(database),
-                status,
-                fee_asset_id: AssetId::new_fungible(fee_faucet_id),
-            },
-        )
+        (directory, FundingState { database: Arc::new(database), status })
     }
 
     pub(crate) fn test_router(state: FundingState) -> Router {

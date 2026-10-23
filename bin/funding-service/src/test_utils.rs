@@ -5,11 +5,14 @@ pub(crate) mod telemetry;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::note::{Note, NoteType};
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
 use miden_standards::account::auth::Approver;
@@ -26,7 +29,7 @@ use miden_standards::account::policies::{
     TransferPolicy,
 };
 use miden_standards::account::wallets::create_basic_wallet;
-use miden_standards::note::{BurnNote, MintNote};
+use miden_standards::note::{BurnNote, MintNote, P2idNote};
 use miden_testing::MockChain;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
@@ -75,11 +78,6 @@ pub fn test_native_asset() -> NativeAsset {
         .expect("valid faucet");
 
     NativeAsset::new(AssetId::new_fungible(FungibleAsset::mock_issuer()), &faucet)
-}
-
-/// Builds a network fungible faucet shaped like the genesis native faucet.
-pub fn genesis_style_native_faucet(operator: AccountId, seed: [u8; 32]) -> Result<Account> {
-    native_faucet_with_transfer_policy(operator, seed, TransferPolicy::allow_all())
 }
 
 fn native_faucet_with_transfer_policy(
@@ -172,4 +170,30 @@ impl Fixture {
             fee_faucet_id,
         })
     }
+}
+
+// NOTE CREATION
+// ================================================================================================
+
+/// Builds a public P2ID note which holds `amount` base units of the fee asset and targets `target`.
+pub fn build_funding_note(
+    sender: AccountId,
+    fee_asset_id: AssetId,
+    target: AccountId,
+    amount: u64,
+    rng: &mut RandomCoin,
+) -> Result<UsdcxP2Id> {
+    let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
+        .context("failed to build the funding asset")?;
+    let note: Note = P2idNote::builder()
+        .sender(sender)
+        .target(target)
+        .asset(asset)
+        .note_type(NoteType::Public)
+        .generate_serial_number(rng)
+        .build()
+        .context("failed to build the funding note")?
+        .into();
+
+    UsdcxP2Id::from_note(note, fee_asset_id).context("the funding note must be a USDCx P2ID note")
 }

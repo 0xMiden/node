@@ -349,12 +349,7 @@ impl FundingService {
 
         let mut tasks = Tasks::new();
 
-        let server = FundingServer::new(
-            Arc::clone(&database),
-            status.clone(),
-            self.fee_asset_id,
-            self.http_timeout,
-        );
+        let server = FundingServer::new(Arc::clone(&database), status.clone(), self.http_timeout);
         let server_shutdown = shutdown.clone();
         tasks.spawn("http-server", async move {
             server

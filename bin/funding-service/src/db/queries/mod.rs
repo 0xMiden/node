@@ -5,10 +5,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::Row;
-use miden_protocol::asset::FungibleAsset;
-use miden_protocol::note::NoteType;
 use miden_protocol::transaction::TransactionId;
-use miden_standards::note::P2idNote;
 
 use crate::db::{DatabaseIdentity, Delivery, StoredRequest};
 
@@ -51,17 +48,7 @@ pub use delete_attempt::delete_attempt;
 fn read_request(row: &Row<'_>, identity: DatabaseIdentity) -> Result<StoredRequest, DatabaseError> {
     let amount = u64::try_from(row.get::<i64>(2)?)
         .map_err(|err| DatabaseError::deserialization("funding amount", err))?;
-    let asset = FungibleAsset::new(identity.fee_asset_id.faucet_id(), amount)
-        .map_err(|err| DatabaseError::deserialization("funding asset", err))?;
-    let note = P2idNote::builder()
-        .sender(identity.funding_account_id)
-        .target(row.get(1)?)
-        .asset(asset)
-        .note_type(NoteType::Public)
-        .serial_number(row.get(3)?)
-        .build()
-        .map_err(|err| DatabaseError::deserialization("funding note", err))?
-        .into();
+    let note = identity.build_note(row.get(1)?, amount, row.get(3)?)?;
     let transaction_id: Option<TransactionId> = row.get(5)?;
     let delivery = transaction_id
         .map(|transaction_id| {

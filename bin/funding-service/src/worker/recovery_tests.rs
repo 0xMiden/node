@@ -57,7 +57,7 @@ impl FunderSetup {
     }
 
     fn payout(&self, serial: u32) -> UsdcxP2Id {
-        crate::tx::build_funding_note(
+        crate::test_utils::build_funding_note(
             self.wallet.account_id(),
             self.fee_asset_id,
             miden_protocol::testing::account_id::ACCOUNT_ID_SENDER.try_into().unwrap(),
@@ -142,7 +142,11 @@ async fn a_failure_before_submission_releases_requests_for_retry() {
     setup.wallet = fixture.wallet;
     setup.fee_faucet = UsdcxFaucet::new(ForeignAccount::from_account(faucet, witness));
     let payout = setup.payout(1);
-    setup.database.store_request(payout.clone()).await.unwrap();
+    setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
 
     let error = funder
@@ -174,7 +178,12 @@ async fn state_conflict_discards_only_the_selected_deposit() {
     let payout = setup.payout(3);
     let (mut funder, _server) =
         with_deposits(setup, TestChain::new(20), &[deposit.clone(), unselected.clone()]).await;
-    funder.setup.database.store_request(payout.clone()).await.unwrap();
+    funder
+        .setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
     let status =
         tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
     let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
@@ -208,7 +217,12 @@ async fn other_rejections_preserve_notes() {
         let payout = setup.payout(2);
         let (mut funder, _server) =
             with_deposits(setup, TestChain::new(20), std::slice::from_ref(&deposit)).await;
-        funder.setup.database.store_request(payout.clone()).await.unwrap();
+        funder
+            .setup
+            .database
+            .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+            .await
+            .unwrap();
         let status =
             tonic::Status::with_details(tonic::Code::InvalidArgument, "rejected", details.into());
         let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
@@ -252,8 +266,26 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             }
             let (mut funder, server) =
                 with_deposits(setup, chain, std::slice::from_ref(&deposit)).await;
-            funder.setup.database.store_request(payout.clone()).await.unwrap();
-            funder.setup.database.store_request(waiting.clone()).await.unwrap();
+            funder
+                .setup
+                .database
+                .store_request(
+                    payout.target(),
+                    payout.amount(),
+                    payout.note().recipient().serial_num(),
+                )
+                .await
+                .unwrap();
+            funder
+                .setup
+                .database
+                .store_request(
+                    waiting.target(),
+                    waiting.amount(),
+                    waiting.note().recipient().serial_num(),
+                )
+                .await
+                .unwrap();
             let outcome = if accepted {
                 SubmissionOutcome::Accepted
             } else {
@@ -353,7 +385,12 @@ async fn admission_uses_the_reference_blocks_fee() {
     setup.wallet = fixture.wallet;
     let payout = setup.payout(1);
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    funder.setup.database.store_request(payout.clone()).await.unwrap();
+    funder
+        .setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
 
     funder.process_batch().await.unwrap();
 
@@ -389,7 +426,11 @@ async fn a_restarted_worker_loads_pending_requests_in_bounded_acceptance_order()
     setup.config.max_notes_per_tx = 2.try_into().unwrap();
     let notes: Vec<_> = (1..=3).map(|serial| setup.payout(serial)).collect();
     for note in &notes {
-        setup.database.store_request(note.clone()).await.unwrap();
+        setup
+            .database
+            .store_request(note.target(), note.amount(), note.note().recipient().serial_num())
+            .await
+            .unwrap();
     }
     let identity = setup.database.identity();
     drop(setup.database);
@@ -433,7 +474,10 @@ async fn pending_requests_are_discovered_and_retried_without_an_http_server() {
         () = wait_for_attempts(&telemetry, 1) => {},
     }
     for note in notes {
-        database.store_request(note).await.unwrap();
+        database
+            .store_request(note.target(), note.amount(), note.note().recipient().serial_num())
+            .await
+            .unwrap();
     }
     let start = Instant::now();
     tokio::select! {
@@ -463,8 +507,16 @@ async fn a_restarted_worker_waits_for_the_recorded_attempt_before_retrying_reque
     let (directory, mut setup) = FunderSetup::fixture().await;
     let payout = setup.payout(1);
     let waiting = setup.payout(2);
-    setup.database.store_request(payout.clone()).await.unwrap();
-    setup.database.store_request(waiting.clone()).await.unwrap();
+    setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
+    setup
+        .database
+        .store_request(waiting.target(), waiting.amount(), waiting.note().recipient().serial_num())
+        .await
+        .unwrap();
     let attempt = TransactionAttempt {
         transaction_id: TransactionId::from_raw(Word::empty()),
         reference_block: 10.into(),
@@ -547,7 +599,11 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
 
     let (directory, setup) = FunderSetup::fixture().await;
     let payout = setup.payout(1);
-    setup.database.store_request(payout.clone()).await.unwrap();
+    setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
     let database = Arc::clone(&setup.database);
     let transaction_id = TransactionId::from_raw(Word::empty());
     let mut chain = TestChain::new(20);
@@ -598,7 +654,11 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
 async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failures: usize) {
     let (_directory, setup) = FunderSetup::fixture().await;
     let payout = setup.payout(1);
-    setup.database.store_request(payout.clone()).await.unwrap();
+    setup
+        .database
+        .store_request(payout.target(), payout.amount(), payout.note().recipient().serial_num())
+        .await
+        .unwrap();
     let transaction_id = TransactionId::from_raw(Word::empty());
     let mut chain = TestChain::new(20);
     chain.transactions.push((19, setup.wallet.account_id(), transaction_id));

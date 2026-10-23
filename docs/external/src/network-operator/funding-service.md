@@ -207,10 +207,8 @@ handles node rejections immediately. A state-conflict rejection with error byte 
 The payouts remain queued. Accepted transactions and uncertain transport failures are monitored until commitment or
 expiration. Other rejections and expiration retain the notes for retry.
 
-Run only one writer for the funding account. The service deduplicates deposits by nullifier within its deposit pool. It
-checks the recovered pool against the full nullifier history at startup. Periodic discovery does not check nullifiers;
-the node rejects transactions with spent inputs. Failed note lookups retry the same page. Failed startup nullifier
-checks retry against the recovered pool without scanning the notes again.
+If the node cannot serve a deposit or check whether it has been spent, funding waits for synchronization to succeed. The
+service retries these failures automatically and checks the recovered deposits against the chain after a restart.
 
 One transaction consumes at most one deposit, selected by largest amount. A transaction that consumes a deposit and
 creates no funding note is only submitted when that deposit is worth more than the fee, so a note holding a single base

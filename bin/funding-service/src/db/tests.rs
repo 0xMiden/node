@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, UNIX_EPOCH};
 
 use miden_node_db::DatabaseError;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
@@ -30,7 +31,7 @@ fn note(seed: u32) -> UsdcxP2Id {
 
 fn note_for(target: AccountId, amount: u64, seed: u32) -> UsdcxP2Id {
     let identity = identity();
-    crate::tx::build_funding_note(
+    crate::test_utils::build_funding_note(
         identity.funding_account_id,
         identity.fee_asset_id,
         target,
@@ -38,6 +39,14 @@ fn note_for(target: AccountId, amount: u64, seed: u32) -> UsdcxP2Id {
         &mut RandomCoin::new(Word::from([seed; 4])),
     )
     .unwrap()
+}
+
+async fn store_request(database: &FundingDatabase, seed: u32) -> StoredRequest {
+    let note = note(seed);
+    database
+        .store_request(note.target(), note.amount(), note.note().recipient().serial_num())
+        .await
+        .unwrap()
 }
 
 fn transaction(seed: u32) -> TransactionId {
@@ -62,8 +71,22 @@ async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
         10,
     );
     let before = SystemTime::now() - Duration::from_micros(1);
-    let first = database.store_request(first_note.clone()).await.unwrap();
-    let second = database.store_request(second_note.clone()).await.unwrap();
+    let first = database
+        .store_request(
+            first_note.target(),
+            first_note.amount(),
+            first_note.note().recipient().serial_num(),
+        )
+        .await
+        .unwrap();
+    let second = database
+        .store_request(
+            second_note.target(),
+            second_note.amount(),
+            second_note.note().recipient().serial_num(),
+        )
+        .await
+        .unwrap();
     assert!(first.sequence < second.sequence);
     assert!((before..=SystemTime::now()).contains(&first.accepted_at));
     assert!(first.delivery.is_none());
@@ -84,16 +107,25 @@ async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
     );
     assert_eq!(
         database.pending_requests(NonZeroUsize::new(10).unwrap()).await.unwrap(),
-        vec![first, second]
+        vec![first.clone(), second.clone()]
     );
+    let attempt = TransactionAttempt {
+        transaction_id: transaction(1),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifier: None,
+        note_ids: vec![first.note.id(), second.note.id()],
+    };
+    database.start_attempt(attempt.clone()).await.unwrap();
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt));
 }
 
 #[tokio::test]
 async fn delivered_requests_are_retained_for_auditing_and_retries_preserve_history() {
     let (dir, database) = database().await;
-    let first = database.store_request(note(1)).await.unwrap();
-    let second = database.store_request(note(2)).await.unwrap();
-    let third = database.store_request(note(3)).await.unwrap();
+    let first = store_request(&database, 1).await;
+    let second = store_request(&database, 2).await;
+    let third = store_request(&database, 3).await;
     let before = SystemTime::now() - Duration::from_micros(1);
     database
         .record_delivery(vec![first.note.id(), second.note.id()], transaction(1), 12.into())
@@ -116,8 +148,8 @@ async fn delivered_requests_are_retained_for_auditing_and_retries_preserve_histo
         .record_delivery(vec![first.note.id()], transaction(1), 12.into())
         .await
         .unwrap();
-    assert_eq!(database.store_request(note(1)).await.unwrap(), delivered);
-    assert_eq!(database.store_request(note(3)).await.unwrap(), third);
+    assert_eq!(store_request(&database, 1).await, delivered);
+    assert_eq!(store_request(&database, 3).await, third);
     drop(database);
 
     let database = FundingDatabase::open_and_verify(
@@ -148,7 +180,7 @@ async fn stored_microsecond_timestamps_reopen_as_absolute_times() {
         ),
     ];
     for (seed, accepted_at, confirmed_at, ..) in cases {
-        let stored = database.store_request(note(seed)).await.unwrap();
+        let stored = store_request(&database, seed).await;
         database
             .writer
             .write("set stored timestamps", move |tx| {
@@ -181,8 +213,8 @@ async fn stored_microsecond_timestamps_reopen_as_absolute_times() {
 #[tokio::test]
 async fn failed_delivery_batches_leave_every_request_unchanged() {
     let (_dir, database) = database().await;
-    let first = database.store_request(note(1)).await.unwrap();
-    let second = database.store_request(note(2)).await.unwrap();
+    let first = store_request(&database, 1).await;
+    let second = store_request(&database, 2).await;
 
     assert!(
         database
@@ -210,9 +242,9 @@ async fn failed_delivery_batches_leave_every_request_unchanged() {
 #[tokio::test]
 async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leave_them_intact() {
     let (_dir, database) = database().await;
-    let first = database.store_request(note(1)).await.unwrap();
-    let second = database.store_request(note(2)).await.unwrap();
-    let waiting = database.store_request(note(3)).await.unwrap();
+    let first = store_request(&database, 1).await;
+    let second = store_request(&database, 2).await;
+    let waiting = store_request(&database, 3).await;
     let mut attempt = TransactionAttempt {
         transaction_id: transaction(1),
         reference_block: 10.into(),
@@ -307,7 +339,7 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
 #[tokio::test]
 async fn opening_requires_a_matching_database_identity() {
     let (dir, database) = database().await;
-    let original = database.store_request(note(1)).await.unwrap();
+    let original = store_request(&database, 1).await;
     drop(database);
     let path = dir.path().join("funding.sqlite3");
     let identities = [
@@ -364,38 +396,14 @@ async fn opening_requires_a_matching_database_identity() {
 }
 
 #[tokio::test]
-async fn invalid_funding_notes_are_not_stored() {
+async fn invalid_funding_requests_are_not_stored() {
     let (_dir, database) = database().await;
     let identity = identity();
     let other: AccountId = ACCOUNT_ID_SENDER.try_into().unwrap();
-    for (sender, asset, target, amount) in [
-        (other, identity.fee_asset_id, identity.funding_account_id, 1_000),
-        (
-            identity.funding_account_id,
-            AssetId::new_fungible(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap()),
-            other,
-            1_000,
-        ),
-        (identity.funding_account_id, identity.fee_asset_id, other, 0),
-        (
-            identity.funding_account_id,
-            identity.fee_asset_id,
-            identity.funding_account_id,
-            1_000,
-        ),
-    ] {
-        let note = crate::tx::build_funding_note(
-            sender,
-            asset,
-            target,
-            amount,
-            &mut RandomCoin::new(Word::from([1u32; 4])),
-        )
-        .unwrap();
-        let id = note.note().id();
-        assert!(database.store_request(note).await.is_err());
-        assert!(database.request(id).await.unwrap().is_none());
+    for (target, amount) in [(other, 0), (other, u64::MAX), (identity.funding_account_id, 1_000)] {
+        assert!(database.store_request(target, amount, Word::from([1u32; 4])).await.is_err());
     }
+    assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -405,7 +413,7 @@ async fn concurrent_retries_store_each_note_once() {
     let mut tasks = tokio::task::JoinSet::new();
     for index in 0..8 {
         let database = Arc::clone(&database);
-        tasks.spawn(async move { database.store_request(note(index % 4)).await.unwrap() });
+        tasks.spawn(async move { store_request(&database, index % 4).await });
     }
     while let Some(result) = tasks.join_next().await {
         result.unwrap();
@@ -420,8 +428,8 @@ async fn concurrent_retries_store_each_note_once() {
 #[tokio::test]
 async fn corrupt_note_data_is_reported_without_discarding_other_requests() {
     let (_dir, database) = database().await;
-    let first = database.store_request(note(1)).await.unwrap();
-    let second = database.store_request(note(2)).await.unwrap();
+    let first = store_request(&database, 1).await;
+    let second = store_request(&database, 2).await;
     let first_id = first.note.id();
     database
         .writer
@@ -451,7 +459,7 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
         )
         .await
         .unwrap();
-        database.store_request(note(1)).await.unwrap();
+        store_request(&database, 1).await;
         database
             .start_attempt(TransactionAttempt {
                 transaction_id: transaction(1),

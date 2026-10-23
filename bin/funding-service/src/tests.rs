@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 
 use miden_node_proto::clients::ForeignAccount;
 use miden_protocol::Word;
-use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::Note;
 use miden_protocol::testing::account_id::ACCOUNT_ID_SENDER;
 use miden_protocol::transaction::TransactionId;
@@ -62,21 +61,13 @@ async fn startup_serves_the_loaded_balance_and_accepts_requests_while_recovery_w
     };
     let database = FundingDatabase::bootstrap(&path, identity).await.unwrap();
     let target = ACCOUNT_ID_SENDER.try_into().unwrap();
-    let note = tx::build_funding_note(
-        identity.funding_account_id,
-        fee_asset_id,
-        target,
-        1_000,
-        &mut RandomCoin::new(Word::from([1u32; 4])),
-    )
-    .unwrap();
-    database.store_request(note.clone()).await.unwrap();
+    let note = database.store_request(target, 1_000, Word::from([1u32; 4])).await.unwrap();
     let attempt = TransactionAttempt {
         transaction_id: TransactionId::from_raw(Word::empty()),
         reference_block: initial_header.block_num(),
         expiration_block: initial_header.block_num() + 50,
         deposit_nullifier: None,
-        note_ids: vec![note.note().id()],
+        note_ids: vec![note.note.id()],
     };
     database.start_attempt(attempt.clone()).await.unwrap();
     let mut rpc_chain = TestChain::new(10);

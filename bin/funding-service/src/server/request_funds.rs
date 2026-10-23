@@ -2,7 +2,7 @@ use axum::Json;
 use axum::extract::State;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
 use miden_protocol::note::Note;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use crate::COMPONENT;
 use crate::error::RequestFundsError;
 use crate::server::FundingState;
-use crate::tx::build_funding_note;
 use crate::worker::MAX_FEE_VERIFICATION_CYCLES;
 
 // REQUEST AND RESPONSE
@@ -66,16 +65,11 @@ pub(super) async fn request_funds(
     // Each request draws its own serial number, so the handler needs no shared generator and takes
     // no lock. Two notes never collide, because the generator is seeded at random.
     let mut rng = RandomCoin::new(Word::from(rand::random::<[u32; 4]>()));
-    let note = build_funding_note(
-        state.status.account_id(),
-        state.fee_asset_id,
-        target,
-        request.amount,
-        &mut rng,
-    )
-    .map_err(RequestFundsError::Internal)?;
-
-    let stored = state.database.store_request(note).await.map_err(RequestFundsError::Internal)?;
+    let stored = state
+        .database
+        .store_request(target, request.amount, rng.draw_word())
+        .await
+        .map_err(RequestFundsError::Internal)?;
 
     miden_node_tracing::miden_span_record!(note.id = stored.note.id());
     Ok(Json(RequestFundsResponse::from(&stored.note)))
@@ -175,7 +169,7 @@ mod tests {
         let (writer, _reader) = miden_node_db::sqlite::open(&path).unwrap();
         let blocker = writer.begin_write().await.unwrap();
         let funder = state.status.account_id();
-        let fee_asset_id = state.fee_asset_id;
+        let fee_asset_id = identity.fee_asset_id;
         state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
 
         let (target, _) =
@@ -317,9 +311,12 @@ mod tests {
         let (_directory, state) = test_state(MAX_AMOUNT).await;
         let database = std::sync::Arc::clone(&state.database);
         state.status.update(10, BlockNumber::GENESIS, 0);
-        let (target, _) =
-            crate::test_utils::genesis_style_wallet(state.fee_asset_id.faucet_id(), 0, [63; 32])
-                .expect("wallet should build");
+        let (target, _) = crate::test_utils::genesis_style_wallet(
+            state.database.identity().fee_asset_id.faucet_id(),
+            0,
+            [63; 32],
+        )
+        .expect("wallet should build");
 
         let response = test_router(state)
             .oneshot(

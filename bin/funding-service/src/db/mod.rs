@@ -8,14 +8,15 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use anyhow::{Context, ensure};
+use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::asset::AssetId;
+use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteId, Nullifier};
+use miden_protocol::note::{Note, NoteId, NoteType, Nullifier};
 use miden_protocol::transaction::TransactionId;
+use miden_standards::note::P2idNote;
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
@@ -30,6 +31,28 @@ pub struct DatabaseIdentity {
     pub genesis_commitment: Word,
     pub funding_account_id: AccountId,
     pub fee_asset_id: AssetId,
+}
+
+impl DatabaseIdentity {
+    /// Builds a public P2ID note using the database's sender and native asset.
+    fn build_note(
+        self,
+        target: AccountId,
+        amount: u64,
+        serial_number: Word,
+    ) -> Result<Note, DatabaseError> {
+        let asset = FungibleAsset::new(self.fee_asset_id.faucet_id(), amount)
+            .map_err(|err| DatabaseError::deserialization("funding asset", err))?;
+        P2idNote::builder()
+            .sender(self.funding_account_id)
+            .target(target)
+            .asset(asset)
+            .note_type(NoteType::Public)
+            .serial_number(serial_number)
+            .build()
+            .map(Note::from)
+            .map_err(|err| DatabaseError::deserialization("funding note", err))
+    }
 }
 
 /// A confirmed delivery and the time the service recorded it.
@@ -129,29 +152,34 @@ impl FundingDatabase {
         Ok(Self { writer, reader, identity })
     }
 
-    /// Stores a funding note and returns only after its transaction commits durably.
+    /// Creates and stores a funding note, returning only after its transaction commits durably.
     ///
-    /// Retrying the same note preserves its original acceptance order, timestamp, and delivery
-    /// record.
-    pub async fn store_request(&self, note: UsdcxP2Id) -> anyhow::Result<StoredRequest> {
-        ensure!(
-            note.note().metadata().sender() == self.identity.funding_account_id,
-            "the note sender is not the funding account"
-        );
-        ensure!(
-            UsdcxP2Id::from_note(note.note().clone(), self.identity.fee_asset_id).is_some(),
-            "the note does not hold the configured native asset"
-        );
-        ensure!(note.amount() > 0, "the funding amount must not be zero");
-        ensure!(note.target() != self.identity.funding_account_id, "the note targets the funder");
+    /// Retrying the same target, amount, and serial number preserves the original acceptance order,
+    /// timestamp, and delivery record.
+    pub async fn store_request(
+        &self,
+        target: AccountId,
+        amount: u64,
+        serial_number: Word,
+    ) -> anyhow::Result<StoredRequest> {
+        ensure!(amount > 0, "the funding amount must not be zero");
+        ensure!(target != self.identity.funding_account_id, "the note targets the funder");
         let identity = self.identity;
+        let note = identity.build_note(target, amount, serial_number)?;
         self.writer
             .write("store funding request", move |tx| {
-                if let Some(stored) = queries::select_request(tx, note.note().id(), identity)? {
+                if let Some(stored) = queries::select_request(tx, note.id(), identity)? {
                     return Ok(stored);
                 }
-                queries::insert_request(tx, &note, SystemTime::now())?;
-                queries::select_request(tx, note.note().id(), identity)?
+                queries::insert_request(
+                    tx,
+                    note.id(),
+                    target,
+                    amount,
+                    serial_number,
+                    SystemTime::now(),
+                )?;
+                queries::select_request(tx, note.id(), identity)?
                     .context("the stored request is missing")
             })
             .await

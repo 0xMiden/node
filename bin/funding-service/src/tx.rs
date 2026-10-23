@@ -7,13 +7,11 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::{RpcClient, UsdcxFaucet};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{miden_instrument, miden_span_record};
-use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
-use miden_protocol::note::{Note, NoteType, PartialNote};
+use miden_protocol::note::{Note, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
     ExecutedTransaction,
@@ -24,39 +22,12 @@ use miden_protocol::transaction::{
     TransactionArgs,
 };
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
-use miden_standards::note::P2idNote;
 use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransactionScript};
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
 
 use crate::COMPONENT;
 use crate::data_store::InMemoryDataStore;
-
-// NOTE CREATION
-// ================================================================================================
-
-/// Builds a public P2ID note which holds `amount` base units of the fee asset and targets `target`.
-pub fn build_funding_note(
-    sender: AccountId,
-    fee_asset_id: AssetId,
-    target: AccountId,
-    amount: u64,
-    rng: &mut RandomCoin,
-) -> Result<UsdcxP2Id> {
-    let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
-        .context("failed to build the funding asset")?;
-    let note: Note = P2idNote::builder()
-        .sender(sender)
-        .target(target)
-        .asset(asset)
-        .note_type(NoteType::Public)
-        .generate_serial_number(rng)
-        .build()
-        .context("failed to build the funding note")?
-        .into();
-
-    UsdcxP2Id::from_note(note, fee_asset_id).context("the funding note must be a USDCx P2ID note")
-}
 
 // TRANSACTION EXECUTION
 // ================================================================================================
@@ -217,17 +188,15 @@ fn build_tx_args(
 #[cfg(test)]
 mod tests {
     use miden_node_proto::clients::ForeignAccount;
+    use miden_node_utils::usdcx_p2id::UsdcxP2Id;
     use miden_protocol::Word;
-    use miden_standards::note::TxFeeNote;
+    use miden_protocol::asset::{AssetId, FungibleAsset};
+    use miden_protocol::note::NoteType;
+    use miden_standards::note::{P2idNote, TxFeeNote};
 
     use super::*;
     use crate::node::tests::{TestChain, TestServer};
-    use crate::test_utils::{
-        Fixture,
-        TEST_BASE_FEE,
-        genesis_style_native_faucet,
-        genesis_style_wallet,
-    };
+    use crate::test_utils::{Fixture, TEST_BASE_FEE, build_funding_note, genesis_style_wallet};
 
     const BALANCE: u64 = 1_000_000;
     const EXPIRATION: NonZeroU16 = NonZeroU16::new(20).expect("literal is non-zero");
@@ -570,26 +539,6 @@ mod tests {
             format!("{err:#}").contains("account"),
             "expected an account failure, got: {err:#}"
         );
-
-        Ok(())
-    }
-
-    /// A funding amount which the asset type cannot express must fail while the note is built.
-    #[tokio::test]
-    async fn an_invalid_amount_fails_while_building_the_note() -> Result<()> {
-        let mut rng = RandomCoin::new(Word::from([23u32; 4]));
-        let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [71; 32])?;
-        let faucet = genesis_style_native_faucet(owner.id(), [77; 32])?;
-
-        let err = build_funding_note(
-            owner.id(),
-            AssetId::new_fungible(faucet.id()),
-            owner.id(),
-            u64::MAX,
-            &mut rng,
-        )
-        .expect_err("an amount above the asset maximum must be rejected");
-        assert!(format!("{err:#}").contains("asset"), "unexpected error: {err:#}");
 
         Ok(())
     }
