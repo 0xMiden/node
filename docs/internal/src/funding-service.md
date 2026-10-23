@@ -1,6 +1,6 @@
 # Funding Service Component
 
-The [operator documentation](../../external/src/network-operator/funding-service.md) covers configuration and the API. This page covers request persistence, transaction recovery, and wallet synchronization.
+The [operator documentation](https://github.com/0xMiden/node/blob/next/docs/external/src/network-operator/funding-service.md) covers configuration and the API. This page covers request persistence, transaction recovery, and wallet synchronization.
 
 ## The funding account
 
