@@ -6,7 +6,6 @@ use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::Note;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::COMPONENT;
 use crate::error::RequestFundsError;
@@ -44,7 +43,7 @@ impl From<&Note> for RequestFundsResponse {
 // ================================================================================================
 
 /// Creates a public P2ID note which holds `amount` base units of the native asset and targets
-/// `account_id`, persists it, and queues it for the next funding transaction.
+/// `account_id`, and persists it for the worker to create on chain.
 #[miden_node_tracing::miden_instrument(
     target = COMPONENT,
     name = "request_funds",
@@ -76,21 +75,7 @@ pub(super) async fn request_funds(
     )
     .map_err(RequestFundsError::Internal)?;
 
-    // Reserve the handoff before committing so a full or stopped worker rejects the request before
-    // it is persisted.
-    let permit = state.requests.try_reserve().map_err(|err| match err {
-        mpsc::error::TrySendError::Full(_) => RequestFundsError::Busy,
-        mpsc::error::TrySendError::Closed(_) => {
-            RequestFundsError::NotReady("the funding worker stopped")
-        },
-    })?;
-
-    let stored = state
-        .database
-        .store_request(note.clone())
-        .await
-        .map_err(RequestFundsError::Internal)?;
-    permit.send(note);
+    let stored = state.database.store_request(note).await.map_err(RequestFundsError::Internal)?;
 
     miden_node_tracing::miden_span_record!(note.id = stored.note.id());
     Ok(Json(RequestFundsResponse::from(&stored.note)))
@@ -180,12 +165,11 @@ mod tests {
         assert_eq!(err.status_code(), StatusCode::PRECONDITION_FAILED);
     }
 
-    /// The response and worker handoff wait for persistence of the exact note returned to the
-    /// caller.
+    /// The response waits for persistence of the exact note returned to the caller.
     #[tokio::test]
-    async fn the_answer_waits_for_persistence_and_carries_the_queued_note() {
+    async fn the_answer_waits_for_persistence_and_carries_the_stored_note() {
         let (telemetry, _guard) = crate::test_utils::telemetry::Telemetry::capture();
-        let (directory, state, mut rx) = test_state(MAX_AMOUNT).await;
+        let (directory, state) = test_state(MAX_AMOUNT).await;
         let path = directory.path().join(DATABASE_FILENAME);
         let identity = state.database.identity();
         let (writer, _reader) = miden_node_db::sqlite::open(&path).unwrap();
@@ -209,7 +193,6 @@ mod tests {
         );
         tokio::pin!(response);
         assert!(tokio::time::timeout(Duration::from_millis(100), &mut response).await.is_err());
-        assert!(rx.try_recv().is_err(), "the worker must not receive an unpersisted note");
 
         blocker.commit().await.unwrap();
         let response = response.await.unwrap();
@@ -233,9 +216,6 @@ mod tests {
                 .unwrap();
         assert_eq!(storage.target(), target.id());
 
-        // The worker receives exactly the note the requester was answered with.
-        let queued = rx.try_recv().expect("the note should be queued");
-        assert_eq!(queued.note(), &answered);
         let database =
             FundingDatabase::open_and_verify(&path, identity.genesis_commitment, fee_asset_id)
                 .await
@@ -246,13 +226,13 @@ mod tests {
         let span = telemetry.span("request_funds");
         assert_eq!(
             crate::test_utils::telemetry::attribute(&span, "note.id"),
-            Some(queued.note().id().to_string().into())
+            Some(answered.id().to_string().into())
         );
     }
 
     #[tokio::test]
-    async fn a_database_failure_returns_an_error_without_queuing_the_note() {
-        let (directory, state, mut rx) = test_state(MAX_AMOUNT).await;
+    async fn a_database_failure_returns_an_error_without_accepting_the_note() {
+        let (directory, state) = test_state(MAX_AMOUNT).await;
         state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
         let (writer, _reader) =
             miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
@@ -290,7 +270,6 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             serde_json::json!({ "error": "internal error" }),
         );
-        assert!(rx.try_recv().is_err(), "the worker must not receive an unpersisted note");
         assert!(
             database
                 .pending_requests(NonZeroUsize::new(1).unwrap())
@@ -300,10 +279,43 @@ mod tests {
         );
     }
 
-    /// A request the balance cannot cover must not reach the worker.
     #[tokio::test]
-    async fn an_unaffordable_request_is_refused_before_it_is_queued() {
-        let (_directory, state, mut rx) = test_state(MAX_AMOUNT).await;
+    async fn requests_are_accepted_without_a_worker_or_an_in_memory_backlog_limit() {
+        let (_directory, state) = test_state(MAX_AMOUNT).await;
+        state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
+        let database = std::sync::Arc::clone(&state.database);
+        let router = test_router(state);
+        let target: AccountId =
+            miden_protocol::testing::account_id::ACCOUNT_ID_SENDER.try_into().unwrap();
+        let mut notes = Vec::new();
+        for _ in 0..8 {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::post(REQUEST_FUNDS_PATH)
+                        .header("content-type", "application/json")
+                        .body(Body::from(format!(
+                            r#"{{"account_id":"{}","amount":1}}"#,
+                            target.to_hex()
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body: RequestFundsResponse = serde_json::from_slice(&body).unwrap();
+            notes.push(Note::read_from_bytes(&hex::decode(body.note).unwrap()).unwrap());
+        }
+        let stored = database.pending_requests(8.try_into().unwrap()).await.unwrap();
+        assert_eq!(stored.into_iter().map(|request| request.note).collect::<Vec<_>>(), notes);
+    }
+
+    /// A request the balance cannot cover must not be persisted.
+    #[tokio::test]
+    async fn an_unaffordable_request_is_refused_before_persistence() {
+        let (_directory, state) = test_state(MAX_AMOUNT).await;
+        let database = std::sync::Arc::clone(&state.database);
         state.status.update(10, BlockNumber::GENESIS, 0);
         let (target, _) =
             crate::test_utils::genesis_style_wallet(state.fee_asset_id.faucet_id(), 0, [63; 32])
@@ -323,14 +335,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        assert!(rx.try_recv().is_err(), "no note should reach the worker");
+        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
     }
 
     /// A note which targets the funding account would return to it as a deposit, so the request
-    /// must not reach the worker even when the balance covers it.
+    /// must not be persisted even when the balance covers it.
     #[tokio::test]
-    async fn a_request_for_the_funding_account_is_refused_before_it_is_queued() {
-        let (_directory, state, mut rx) = test_state(MAX_AMOUNT).await;
+    async fn a_request_for_the_funding_account_is_refused_before_persistence() {
+        let (_directory, state) = test_state(MAX_AMOUNT).await;
+        let database = std::sync::Arc::clone(&state.database);
         state.status.update(MAX_AMOUNT, BlockNumber::GENESIS, 0);
         let funder = state.status.account_id();
 
@@ -348,6 +361,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(rx.try_recv().is_err(), "no note should reach the worker");
+        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
     }
 }

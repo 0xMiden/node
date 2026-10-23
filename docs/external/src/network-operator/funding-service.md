@@ -130,15 +130,20 @@ serialized object, without a prefix:
 
 HTTP 200 confirms that the returned note has been committed to SQLite. The service answers **before** it submits the
 transaction that creates the note, so the note is not on chain yet. The service retries requests while it runs. Stored
-requests survive a restart, but the worker does not resume them or recover pending transactions after a restart. A
-client that needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated
+requests survive a restart and the worker resumes those without a delivery record. Confirmed requests are retained for
+auditing and excluded from later batches. Transaction attempts are still held in memory: a restart can replay a request
+whose transaction committed before its delivery was recorded. Recovery of in-flight attempts is not yet implemented.
+
+A client that needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated
 input note, which the node authenticates when it builds the block. The notes are public, so the node stores their
 details once they commit.
 
 The service does not authenticate requests. Restrict access to the API with a proxy or a load balancer.
 
-Requests that arrive while a transaction is in progress share the next transaction, up to `--max-notes-per-tx`. A client
-that tops up several accounts at once is therefore served by one transaction rather than one per account.
+The worker checks for pending requests at startup and waits `--poll-interval` between funding attempts. Requests that
+arrive between checks are grouped into batches in acceptance order, up to `--max-notes-per-tx`. Requests can accumulate
+while a transaction is in progress. The backlog has no configured capacity limit; requests wait for their database write
+and are subject to `--http.timeout`.
 
 ## Health and errors
 
@@ -161,12 +166,10 @@ The status code tells a client whether to change the request, add funds, or send
 | `400 Bad Request`           | The account ID is malformed or names the funding account, the requested amount is zero, or the amount exceeds `--max-amount`. |
 | `408 Request Timeout`       | The request ran longer than `--http.timeout`.                                                                                 |
 | `412 Precondition Failed`   | The balance the service last read does not cover the request plus the fee of one transaction.                                 |
-| `429 Too Many Requests`     | Too many notes are queued.                                                                                                    |
 | `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                                     |
-| `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
-Validation errors and a full or stopped worker reject requests before persistence. A database write can finish after an
-HTTP timeout, so a timeout does not establish whether the note was persisted. Retrying a request creates a new note.
+Validation errors reject requests before persistence. A database write can finish after an HTTP timeout, so a timeout
+does not establish whether the note was persisted. Retrying a request creates a new note.
 
 The 412 check is best effort. It reads the balance of an earlier block and does not account for the notes already
 queued, so a request it admits can still wait in the queue until a deposit raises the balance. Raising the balance is an
@@ -177,11 +180,11 @@ operator action, which is what the status code reports.
 `GET /status` reports the funding account's balance, which is the value to alert on.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
-notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs when a
-request batch fills and every `--poll-interval`, which defaults to one second, while no transaction is in flight. At
-startup, the worker first scans from genesis through the current chain tip. It completes that discovery before it
-processes funding requests. A restart recovers unspent deposits, including deposits sent while the service was stopped.
-Periodic scans continue from the saved cursor.
+notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs at
+`--poll-interval`, which defaults to one second, while no transaction is in flight. At startup, the worker first scans
+from genesis through the current chain tip. It completes that discovery before it processes funding requests. A restart
+recovers unspent deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved
+cursor.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds

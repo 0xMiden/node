@@ -15,14 +15,12 @@ use miden_node_proto::clients::UsdcxFaucet;
 use miden_node_tracing::{info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
-use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use url::Url;
 
 use crate::account::FundingWallet;
@@ -81,9 +79,6 @@ pub const DEFAULT_TX_PROVER_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Default timeout of an HTTP request served by this service.
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// How many notes may wait in the queue, per note of one transaction.
-const QUEUE_CAPACITY_PER_TX: usize = 4;
 
 // CONFIGURATION
 // =================================================================================================
@@ -335,15 +330,12 @@ impl FundingService {
     ) -> anyhow::Result<()> {
         let status =
             StatusSnapshot::new(self.wallet.account_id(), self.native_asset, self.max_amount);
-        let (requests, request_receiver) = mpsc::channel::<UsdcxP2Id>(
-            QUEUE_CAPACITY_PER_TX * self.worker_config.max_notes_per_tx.get(),
-        );
+        let database = Arc::new(self.database);
 
         let mut tasks = Tasks::new();
 
         let server = FundingServer::new(
-            Arc::new(self.database),
-            requests,
+            Arc::clone(&database),
             status.clone(),
             self.fee_asset_id,
             self.http_timeout,
@@ -360,6 +352,7 @@ impl FundingService {
             self.node,
             self.prover,
             FunderSetup {
+                database,
                 wallet: self.wallet,
                 fee_asset_id: self.fee_asset_id,
                 fee_faucet: self.fee_faucet,
@@ -370,9 +363,7 @@ impl FundingService {
         );
         let worker_shutdown = shutdown.clone();
         tasks.spawn("funder", async move {
-            Box::pin(funder.run(request_receiver, worker_shutdown))
-                .await
-                .context("the funding worker failed")
+            Box::pin(funder.run(worker_shutdown)).await.context("the funding worker failed")
         });
 
         tasks

@@ -9,10 +9,8 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::asset::AssetId;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -37,8 +35,6 @@ const REQUEST_FUNDS_PATH: &str = "/request-funds";
 pub(crate) struct FundingState {
     /// Durable storage for accepted funding notes.
     pub(crate) database: Arc<FundingDatabase>,
-    /// Where a handler puts the note it built, for the worker to create.
-    pub(crate) requests: mpsc::Sender<UsdcxP2Id>,
     pub(crate) status: StatusSnapshot,
     /// The native asset the notes hold.
     pub(crate) fee_asset_id: AssetId,
@@ -53,13 +49,12 @@ pub struct FundingServer {
 impl FundingServer {
     pub(crate) fn new(
         database: Arc<FundingDatabase>,
-        requests: mpsc::Sender<UsdcxP2Id>,
         status: StatusSnapshot,
         fee_asset_id: AssetId,
         request_timeout: Duration,
     ) -> Self {
         Self {
-            state: FundingState { database, requests, status, fee_asset_id },
+            state: FundingState { database, status, fee_asset_id },
             request_timeout,
         }
     }
@@ -113,12 +108,8 @@ pub(crate) mod tests {
 
     use super::*;
 
-    /// Builds handler state backed by a temporary database, with the worker channel held by the
-    /// caller.
-    pub(crate) async fn test_state(
-        max_amount: u64,
-    ) -> (tempfile::TempDir, FundingState, mpsc::Receiver<UsdcxP2Id>) {
-        let (requests, rx) = mpsc::channel(4);
+    /// Builds handler state backed by a temporary database.
+    pub(crate) async fn test_state(max_amount: u64) -> (tempfile::TempDir, FundingState) {
         let fee_faucet_id = FungibleAsset::mock_issuer();
         let status =
             StatusSnapshot::new(fee_faucet_id, crate::test_utils::test_native_asset(), max_amount);
@@ -138,11 +129,9 @@ pub(crate) mod tests {
             directory,
             FundingState {
                 database: Arc::new(database),
-                requests,
                 status,
                 fee_asset_id: AssetId::new_fungible(fee_faucet_id),
             },
-            rx,
         )
     }
 
@@ -156,7 +145,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn status_is_served_as_json_on_its_route() {
-        let (_directory, state, _rx) = test_state(500).await;
+        let (_directory, state) = test_state(500).await;
 
         let response = test_router(state)
             .oneshot(Request::get(STATUS_PATH).body(Body::empty()).unwrap())
@@ -167,10 +156,11 @@ pub(crate) mod tests {
         assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
     }
 
-    /// A malformed account ID must be rejected before the request reaches the worker.
+    /// A malformed account ID must be rejected before persistence.
     #[tokio::test]
     async fn a_malformed_account_id_is_rejected() {
-        let (_directory, state, mut rx) = test_state(500).await;
+        let (_directory, state) = test_state(500).await;
+        let database = Arc::clone(&state.database);
 
         let response = test_router(state)
             .oneshot(
@@ -183,6 +173,6 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(rx.try_recv().is_err(), "no request should reach the worker");
+        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
     }
 }
