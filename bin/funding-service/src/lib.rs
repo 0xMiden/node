@@ -17,6 +17,7 @@ use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::asset::{AssetId, FungibleAsset};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::utils::serde::Deserializable;
@@ -41,6 +42,8 @@ mod server;
 mod status;
 #[cfg(test)]
 mod test_utils;
+#[cfg(test)]
+mod tests;
 mod tx;
 mod worker;
 
@@ -233,10 +236,11 @@ impl FundingServiceConfig {
                 AuthSecretKey::read_from_bytes(&bytes)
                     .context("failed to decode the funding signing key")
             })?;
-        let chain_tip = node
-            .committed_tip()
+        let (initial_header, _) = node
+            .tip_chain_state()
             .await
-            .context("failed to read the chain tip from the node")?;
+            .context("failed to read the chain state from the node")?;
+        let chain_tip = initial_header.block_num();
         let wallet = FundingWallet::load_at(
             &mut node.rpc_client(),
             database.identity().funding_account_id,
@@ -288,6 +292,7 @@ impl FundingServiceConfig {
             node,
             prover,
             wallet,
+            initial_header,
             fee_asset_id,
             native_asset,
             fee_faucet: native_faucet,
@@ -312,6 +317,7 @@ pub struct FundingService {
     node: RpcNodeClient,
     prover: Prover,
     wallet: FundingWallet,
+    initial_header: BlockHeader,
     fee_asset_id: AssetId,
     native_asset: NativeAsset,
     fee_faucet: UsdcxFaucet,
@@ -330,6 +336,15 @@ impl FundingService {
     ) -> anyhow::Result<()> {
         let status =
             StatusSnapshot::new(self.wallet.account_id(), self.native_asset, self.max_amount);
+        status.update(
+            self.wallet
+                .account()
+                .vault()
+                .get_balance(self.fee_asset_id)
+                .map_or(0, |amount| amount.as_u64()),
+            self.initial_header.block_num(),
+            self.initial_header.fee_parameters().verification_base_fee(),
+        );
         let database = Arc::new(self.database);
 
         let mut tasks = Tasks::new();

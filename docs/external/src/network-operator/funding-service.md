@@ -87,10 +87,10 @@ Runtime options also read from an environment variable named `MIDEN_FUNDING_<OPT
 `MIDEN_FUNDING_SIGNING_KEY_FILE`.
 
 Startup requires an existing database with the current schema. The service reads the account ID from SQLite, checks the
-stored network identity against the connected node, and loads the public account state before opening the HTTP listener.
-The signing key is read once at startup and kept in memory for signing transactions. If the database is missing, run
-`bootstrap`. If migrations are pending, stop the service and follow the procedure below. A network mismatch requires the
-correct RPC endpoint and data directory; migrating does not change the database's identity.
+stored network identity against the connected node, and loads the public account state and current fee before opening
+the HTTP listener. The signing key is read once at startup and kept in memory for signing transactions. If the database
+is missing, run `bootstrap`. If migrations are pending, stop the service and follow the procedure below. A network
+mismatch requires the correct RPC endpoint and data directory; migrating does not change the database's identity.
 
 ## Migrate the database
 
@@ -154,8 +154,8 @@ and are subject to `--http.timeout`.
 The service has no health endpoint. `GET /status` answers while the service still synchronizes, so it reports that the
 process runs and does not track whether the node is reachable. A request that cannot be served fails on its own.
 
-The reported balance, block, and fee reflect the worker's latest completed wallet sync. They remain unchanged while the
-worker proves a transaction, waits for confirmation, or retries a failed sync.
+The reported balance, block, and fee are loaded before HTTP starts and updated whenever the worker completes a wallet
+sync. They remain unchanged while the worker proves a transaction, waits for confirmation, or retries a failed sync.
 
 A failed request answers with a JSON body that holds the reason:
 
