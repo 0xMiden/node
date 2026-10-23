@@ -4,9 +4,13 @@
 
 ## Operation
 
-The service reads the funding account from the node before every transaction. Only the account file, which holds the
-account ID and its signing key, is on disk. Accepted requests and pending transactions are held in memory. A restart can
-lose accepted requests whose transactions have not reached the node.
+Bootstrap initializes a SQLite database from trusted genesis data and the public funding account ID. Startup checks that
+the database matches the connected network. Database creation and migration are explicit operations; see the
+[operator documentation](../../docs/external/src/network-operator/funding-service.md) for the commands.
+
+The database supplies the funding account ID, and the service reads its public state from the node before every
+transaction. Startup reads the signing key from a separate key file. Accepted requests and pending transactions are held
+in memory. A restart can lose accepted requests whose transactions have not reached the node.
 
 Each request creates a public pay-to-ID note for the requested account. The service answers with the note at once, then
 creates it on chain in a later transaction. A single worker owns the account, keeps one transaction in flight, and

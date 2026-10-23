@@ -1,7 +1,7 @@
 //! Durable funding requests and their delivery records.
 //!
 //! Requests remain available for auditing after delivery. The database belongs to one chain,
-//! funding account, and native asset, so opening it with another identity fails.
+//! funding account, and native asset, so opening it on another network fails.
 
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -76,17 +76,32 @@ impl FundingDatabase {
         Ok(database)
     }
 
-    /// Opens an existing database after verifying its schema and identity.
+    /// Opens an existing database after verifying its schema and network identity.
     ///
-    /// Missing databases are not created, and pending migrations must be applied explicitly.
-    pub async fn open(path: &Path, identity: DatabaseIdentity) -> anyhow::Result<Self> {
-        let database = Self::handles(path, identity)?;
-        let stored = database
-            .reader
+    /// The stored identity supplies the funding account ID. Missing databases are not created,
+    /// and pending migrations must be applied explicitly.
+    pub async fn open_and_verify(
+        path: &Path,
+        genesis_commitment: Word,
+        fee_asset_id: AssetId,
+    ) -> anyhow::Result<Self> {
+        migrator()?.verify_latest_schema(path)?;
+        let (writer, reader) = miden_node_db::sqlite::open(path)?;
+        let identity = reader
             .read("read funding database identity", queries::select_database_identity)
-            .await?;
-        ensure!(stored == Some(identity), "funding database identity mismatch or missing");
-        Ok(database)
+            .await?
+            .context("funding database identity is missing")?;
+        ensure!(
+            identity.genesis_commitment == genesis_commitment
+                && identity.fee_asset_id == fee_asset_id,
+            "funding database network identity mismatch",
+        );
+        Ok(Self { writer, reader, identity })
+    }
+
+    /// The network and funding account recorded during bootstrap.
+    pub fn identity(&self) -> DatabaseIdentity {
+        self.identity
     }
 
     /// Applies pending migrations to an existing database while the service is stopped.

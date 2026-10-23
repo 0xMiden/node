@@ -6,7 +6,6 @@ pub(crate) mod telemetry;
 use std::sync::Arc;
 
 use anyhow::Result;
-use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
@@ -124,19 +123,6 @@ fn native_faucet_with_transfer_policy(
     Ok(faucet)
 }
 
-/// Writes an account file the way `miden-validator genesis` does, and loads it back.
-pub fn funding_wallet_from(
-    account: &Account,
-    secret_key: &SecretKey,
-    fee_asset_id: AssetId,
-) -> Result<FundingWallet> {
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().join("funding_service.mac");
-    AccountFile::new(account.clone(), vec![AuthSecretKey::Falcon512Poseidon2(secret_key.clone())])
-        .write(&path)?;
-    FundingWallet::load(&path, fee_asset_id)
-}
-
 // MOCK CHAIN FIXTURE
 // ================================================================================================
 
@@ -166,8 +152,11 @@ impl Fixture {
         let fee_faucet_id = faucet.id();
 
         let (funder, secret_key) = genesis_style_wallet(fee_faucet_id, balance, [9; 32])?;
-        let wallet =
-            funding_wallet_from(&funder, &secret_key, AssetId::new_fungible(fee_faucet_id))?;
+        let wallet = FundingWallet::new(
+            funder.clone(),
+            AuthSecretKey::Falcon512Poseidon2(secret_key),
+            AssetId::new_fungible(fee_faucet_id),
+        );
 
         let mut builder = MockChain::builder()
             .fee_faucet_id(fee_faucet_id)

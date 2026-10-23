@@ -15,9 +15,11 @@ use miden_node_tracing::{info, miden_instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
+use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::asset::{AssetId, FungibleAsset};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use url::Url;
@@ -33,6 +35,7 @@ mod account;
 mod data_store;
 pub mod db;
 mod error;
+pub mod lifecycle;
 mod node;
 mod prover;
 mod server;
@@ -88,7 +91,8 @@ const QUEUE_CAPACITY_PER_TX: usize = 4;
 pub struct FundingServiceConfig {
     max_decoding_message_size: usize,
     rpc_url: Url,
-    account_file: PathBuf,
+    signing_key_file: PathBuf,
+    data_directory: PathBuf,
     validator_signing_public_keys: Vec<ValidatorPublicKey>,
     tx_prover_url: Option<Url>,
     http_timeout: Duration,
@@ -111,13 +115,15 @@ impl FundingServiceConfig {
     /// Creates a configuration with default timeouts and limits.
     pub fn new(
         rpc_url: Url,
-        account_file: PathBuf,
+        signing_key_file: PathBuf,
         validator_signing_public_keys: Vec<ValidatorPublicKey>,
+        data_directory: PathBuf,
     ) -> Self {
         Self {
             rpc_url,
             max_decoding_message_size: miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
-            account_file,
+            signing_key_file,
+            data_directory,
             validator_signing_public_keys,
             tx_prover_url: None,
             http_timeout: DEFAULT_HTTP_TIMEOUT,
@@ -197,6 +203,13 @@ impl FundingServiceConfig {
 
         anyhow::ensure!(!self.poll_interval.is_zero(), "--poll-interval must be greater than zero");
 
+        let database_filepath = self.data_directory.join(lifecycle::DATABASE_FILENAME);
+        anyhow::ensure!(
+            database_filepath.is_file(),
+            "funding database {} not found; run bootstrap before start",
+            database_filepath.display(),
+        );
+
         let node = RpcNodeClient::connect(
             &self.rpc_url,
             self.rpc_timeout,
@@ -211,15 +224,35 @@ impl FundingServiceConfig {
         // every block header, and the worker publishes them with its synchronized balance.
         let protocol_config = node.protocol_config().clone();
         let fee_asset_id = protocol_config.fee_asset_id();
-        let wallet = FundingWallet::load(&self.account_file, fee_asset_id)
-            .context("failed to load the funding account file")?;
-        miden_span_record!(account.id = wallet.account_id());
-        // The native faucet cannot change the symbol, the decimals or the name of its asset, so the
-        // service reads them once.
+        let database = db::FundingDatabase::open_and_verify(
+            &database_filepath,
+            node.genesis_commitment(),
+            fee_asset_id,
+        )
+        .await
+        .context("failed to open the funding database; check its network and migration status")?;
+        let secret_key = fs_err::read(&self.signing_key_file)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| {
+                AuthSecretKey::read_from_bytes(&bytes)
+                    .context("failed to decode the funding signing key")
+            })?;
         let chain_tip = node
             .committed_tip()
             .await
             .context("failed to read the chain tip from the node")?;
+        let wallet = FundingWallet::load_at(
+            &mut node.rpc_client(),
+            database.identity().funding_account_id,
+            secret_key,
+            fee_asset_id,
+            chain_tip,
+        )
+        .await
+        .context("failed to load the public funding account from the node")?;
+        miden_span_record!(account.id = wallet.account_id());
+        // The native faucet cannot change the symbol, the decimals or the name of its asset, so the
+        // service reads them once.
         let native_faucet =
             UsdcxFaucet::load_at(&mut node.rpc_client(), fee_asset_id.faucet_id(), chain_tip)
                 .await

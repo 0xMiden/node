@@ -15,25 +15,57 @@ that source, and it gives an operator a single account to keep funded.
 ## Provision the funding account
 
 Prepare a public account with a nonzero nonce and a balance of the native asset. Pass its account file to
-`miden-validator genesis --funding-account`. Pass the same account, including its signing key, to this service through
-`--account-file`. The service reads the current vault and nonce from the node.
+`miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its signing key for startup. The
+service reads the current public account state from the node.
+
+The signing-key file contains the binary serialization of `AuthSecretKey`, including its signature scheme. It supports
+ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-usdcx-genesis new-distributor` writes this file as
+`distributor.secret` alongside the account file; see the
+[genesis tool documentation](https://github.com/0xMiden/node/tree/main/crates/usdcx-genesis). For an existing account,
+export its key in the same format. Restrict the key file to its owner and keep it outside the database directory; the
+database contains no signing key.
+
+## Initialize the database
+
+Bootstrap binds the service's database to a network and public funding account ID. It does not need the signing key.
+Keep the data directory on persistent storage and run only one service instance for that funding account.
+
+For an official network, bootstrap downloads and validates genesis from `https://genesis.<network>.miden.io`:
+
+```bash
+miden-funding-service bootstrap \
+  --data-directory /opt/miden-funding-service/data \
+  --account-id <funding-account-id> \
+  --network testnet
+```
+
+Use `--network mainnet` or `--network devnet` for the other official networks. For a custom network or a separately
+obtained trusted genesis file, replace `--network testnet` with `--genesis /path/to/genesis.dat`. See
+[Bootstrap and Genesis](./bootstrap-and-genesis.md) for obtaining trusted genesis data.
+
+The data directory must be absent or empty, and its parent directory must exist. Bootstrap needs no RPC connection. On
+success, `funding.sqlite3` contains the network and funding account identity and is ready for `start`. Bootstrap refuses
+to overwrite existing data. If initialization fails and leaves files behind, preserve those files for inspection and
+retry in an empty directory after correcting the cause.
 
 ## Start
 
 ```bash
 miden-funding-service start \
+  --data-directory /opt/miden-funding-service/data \
   --listen 0.0.0.0:50401 \
   --rpc.url http://rpc-node:57291 \
   --tx-prover.url http://tx-prover:50051 \
-  --account-file /opt/miden-funding-service/funding_service.mac \
+  --signing-key-file /opt/miden-funding-service/funding.secret \
   --validator-signing-public-key <validator-signing-public-key>
 ```
 
 | Option                           | Default      | Purpose                                                                                                                                                                 |
 | -------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-directory`               | required     | Directory containing the bootstrapped funding database.                                                                                                                 |
 | `--listen`                       | required     | Socket address of the HTTP API.                                                                                                                                         |
 | `--rpc.url`                      | required     | The node RPC API the service reads from and submits to.                                                                                                                 |
-| `--account-file`                 | required     | Path to the funding account's `.mac` file.                                                                                                                              |
+| `--signing-key-file`             | required     | Path to the funding account's serialized signing key.                                                                                                                   |
 | `--validator-signing-public-key` | required     | Hex-encoded validator signing public key trusted to attest the transaction encryption key. Repeat the flag, or pass a comma separated list, to trust more than one key. |
 | `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                    |
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
@@ -50,8 +82,28 @@ expires at or before the requested block.
 
 A funding request is answered without a call to the node, so `--http.timeout` only has to cover the service's own work.
 
-Every option also reads from an environment variable named `MIDEN_FUNDING_<OPTION>`, for example
-`MIDEN_FUNDING_ACCOUNT_FILE`.
+Runtime options also read from an environment variable named `MIDEN_FUNDING_<OPTION>`, for example
+`MIDEN_FUNDING_SIGNING_KEY_FILE`.
+
+Startup requires an existing database with the current schema. The service reads the account ID from SQLite, checks the
+stored network identity against the connected node, and loads the public account state before opening the HTTP listener.
+The signing key is read once at startup and kept in memory for signing transactions. If the database is missing, run
+`bootstrap`. If migrations are pending, stop the service and follow the procedure below. A network mismatch requires the
+correct RPC endpoint and data directory; migrating does not change the database's identity.
+
+## Migrate the database
+
+Apply migrations when a service upgrade requires a newer database schema. Stop the service and back up its complete data
+directory first, then run:
+
+```bash
+miden-funding-service migrate --data-directory /opt/miden-funding-service/data
+```
+
+Migration uses only the existing database; it needs no genesis download, signing key, or RPC connection. A successful
+exit means the database has the current schema and the service can be started again. Each migration is verified and
+committed transactionally. If migration fails, keep the service stopped, correct the reported cause, and rerun `migrate`
+against the same database.
 
 ## API
 

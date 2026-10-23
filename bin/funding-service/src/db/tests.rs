@@ -59,9 +59,13 @@ async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
     assert_eq!(first.note.to_bytes(), note(20).note().to_bytes());
     drop(database);
 
-    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
-        .await
-        .unwrap();
+    let database = FundingDatabase::open_and_verify(
+        &dir.path().join("funding.sqlite3"),
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         database.pending_requests(NonZeroUsize::new(1).unwrap()).await.unwrap(),
         vec![first.clone()]
@@ -104,9 +108,13 @@ async fn delivered_requests_are_retained_for_auditing_and_retries_preserve_histo
     assert_eq!(database.store_request(note(3)).await.unwrap(), third);
     drop(database);
 
-    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
-        .await
-        .unwrap();
+    let database = FundingDatabase::open_and_verify(
+        &dir.path().join("funding.sqlite3"),
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(database.request(first.note.id()).await.unwrap(), Some(delivered));
     assert_eq!(
         database.pending_requests(NonZeroUsize::new(10).unwrap()).await.unwrap(),
@@ -144,9 +152,13 @@ async fn stored_microsecond_timestamps_reopen_as_absolute_times() {
     }
     drop(database);
 
-    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
-        .await
-        .unwrap();
+    let database = FundingDatabase::open_and_verify(
+        &dir.path().join("funding.sqlite3"),
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap();
     for (seed, _, _, accepted_at, confirmed_at) in cases {
         let stored = database.request(note(seed).note().id()).await.unwrap().unwrap();
         assert_eq!(stored.accepted_at, UNIX_EPOCH + accepted_at);
@@ -195,10 +207,6 @@ async fn opening_requires_a_matching_database_identity() {
             ..identity()
         },
         DatabaseIdentity {
-            funding_account_id: ACCOUNT_ID_SENDER.try_into().unwrap(),
-            ..identity()
-        },
-        DatabaseIdentity {
             fee_asset_id: AssetId::new_fungible(
                 ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
             ),
@@ -206,9 +214,24 @@ async fn opening_requires_a_matching_database_identity() {
         },
     ];
     for identity in identities {
-        assert!(FundingDatabase::open(&path, identity).await.is_err());
+        assert!(
+            FundingDatabase::open_and_verify(
+                &path,
+                identity.genesis_commitment,
+                identity.fee_asset_id
+            )
+            .await
+            .is_err()
+        );
     }
-    let database = FundingDatabase::open(&path, identity()).await.unwrap();
+    let database = FundingDatabase::open_and_verify(
+        &path,
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap();
+    assert_eq!(database.identity(), identity());
     assert_eq!(database.request(original.note.id()).await.unwrap(), Some(original));
 
     database
@@ -220,7 +243,15 @@ async fn opening_requires_a_matching_database_identity() {
         .await
         .unwrap();
     drop(database);
-    assert!(FundingDatabase::open(&path, identity()).await.is_err());
+    assert!(
+        FundingDatabase::open_and_verify(
+            &path,
+            identity().genesis_commitment,
+            identity().fee_asset_id
+        )
+        .await
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -301,7 +332,13 @@ const CRASH_DATABASE_PATH: &str = "MIDEN_FUNDING_TEST_CRASH_DATABASE";
 #[tokio::test]
 async fn acknowledged_writes_survive_abrupt_process_exit() {
     if let Some(path) = std::env::var_os(CRASH_DATABASE_PATH) {
-        let database = FundingDatabase::open(Path::new(&path), identity()).await.unwrap();
+        let database = FundingDatabase::open_and_verify(
+            Path::new(&path),
+            identity().genesis_commitment,
+            identity().fee_asset_id,
+        )
+        .await
+        .unwrap();
         database.store_request(note(1)).await.unwrap();
         // Exit without running connection destructors or checkpointing the WAL.
         std::process::exit(0);
@@ -315,7 +352,13 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
         .status()
         .unwrap();
     assert!(status.success());
-    let database = FundingDatabase::open(&path, identity()).await.unwrap();
+    let database = FundingDatabase::open_and_verify(
+        &path,
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         database.request(note(1).note().id()).await.unwrap().unwrap().note,
         *note(1).note()
