@@ -27,6 +27,21 @@ pub use select_pending_requests::select_pending_requests;
 mod update_request_delivery;
 pub use update_request_delivery::update_request_delivery;
 
+mod insert_attempt;
+pub use insert_attempt::insert_attempt;
+
+mod select_attempt;
+pub use select_attempt::select_attempt;
+
+mod select_attempt_requests;
+pub use select_attempt_requests::select_attempt_requests;
+
+mod assign_request_to_attempt;
+pub use assign_request_to_attempt::assign_request_to_attempt;
+
+mod delete_attempt;
+pub use delete_attempt::delete_attempt;
+
 fn read_request(row: &Row<'_>) -> Result<StoredRequest, DatabaseError> {
     let transaction_id: Option<TransactionId> = row.get(3)?;
     let delivery = transaction_id

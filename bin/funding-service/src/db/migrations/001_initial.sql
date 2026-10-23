@@ -5,6 +5,16 @@ CREATE TABLE database_identity (
     fee_faucet_id BLOB NOT NULL CHECK (length(fee_faucet_id) = 15)
 ) STRICT;
 
+-- One transaction can be waiting for confirmation at a time.
+CREATE TABLE transaction_attempt (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    transaction_id BLOB NOT NULL UNIQUE CHECK (length(transaction_id) = 32),
+    reference_block INTEGER NOT NULL CHECK (reference_block BETWEEN 0 AND 4294967295),
+    expiration_block INTEGER NOT NULL CHECK (expiration_block BETWEEN 0 AND 4294967295),
+    deposit_nullifier BLOB CHECK (length(deposit_nullifier) = 32),
+    CHECK (expiration_block > reference_block)
+) STRICT;
+
 CREATE TABLE requests (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT CHECK (sequence > 0),
     note_id BLOB NOT NULL UNIQUE CHECK (length(note_id) = 32),
@@ -16,6 +26,8 @@ CREATE TABLE requests (
     -- Local time when the service recorded commitment, in microseconds since the Unix epoch.
     -- NULL until delivery is confirmed.
     confirmed_at INTEGER CHECK (confirmed_at >= 0),
+    -- Requests are kept after their attempt is removed.
+    attempt_id BLOB REFERENCES transaction_attempt(transaction_id) ON DELETE SET NULL,
     CHECK (
         (transaction_id IS NULL AND committed_in_block IS NULL AND confirmed_at IS NULL)
         OR
@@ -24,3 +36,4 @@ CREATE TABLE requests (
 ) STRICT;
 
 CREATE INDEX idx_pending_requests ON requests(sequence) WHERE transaction_id IS NULL;
+CREATE INDEX idx_attempt_requests ON requests(attempt_id) WHERE attempt_id IS NOT NULL;

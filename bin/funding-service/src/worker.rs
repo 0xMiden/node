@@ -16,7 +16,7 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -24,7 +24,7 @@ use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
 
 use crate::account::FundingWallet;
-use crate::db::FundingDatabase;
+use crate::db::{FundingDatabase, TransactionAttempt};
 use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
@@ -142,6 +142,11 @@ impl Funder {
         err,
     )]
     async fn process_batch(&mut self) -> Result<()> {
+        if let Some(attempt) = self.setup.database.active_attempt().await? {
+            miden_span_record!(queued.count = attempt.note_ids.len());
+            self.resolve_attempt(attempt, None).await?;
+            return Ok(());
+        }
         let queued = self.pending_requests().await?;
         miden_span_record!(queued.count = queued.len());
         let inputs = self.read_chain_state().await?;
@@ -221,17 +226,17 @@ impl Funder {
 
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
+        let attempt = TransactionAttempt {
+            transaction_id,
+            reference_block,
+            expiration_block,
+            deposit_nullifier: selection.deposit.as_ref().map(UsdcxP2Id::nullifier),
+            note_ids: selection.notes.iter().map(|note| note.note().id()).collect(),
+        };
+        self.setup.database.start_attempt(attempt.clone()).await?;
         let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
         miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
-        let resolution = self
-            .resolve_submission(
-                outcome,
-                transaction_id,
-                reference_block,
-                expiration_block,
-                selection,
-            )
-            .await?;
+        let resolution = self.resolve_attempt(attempt, Some(outcome)).await?;
         miden_span_record!(funding.outcome = resolution.as_str() #[nonstandard]);
         if resolution != Resolution::Committed {
             Span::current()
@@ -240,29 +245,36 @@ impl Funder {
         Ok(())
     }
 
-    /// Handles rejections immediately. Resolves accepted and uncertain submissions on chain.
+    /// Waits until we know whether a transaction committed, expired, or was rejected.
+    ///
+    /// A missing `outcome` means this attempt was loaded from the database. We cannot resubmit it
+    /// because we do not store the transaction payload.
     #[miden_instrument(
         target = COMPONENT,
-        name = "funding.resolve_submission",
+        name = "funding.resolve_attempt",
         fields(
             account.id = self.account_id(),
-            transaction.id = transaction_id,
-            transaction.reference_block.number = reference_block,
-            transaction.expires_at = expiration_block,
+            transaction.id = attempt.transaction_id,
+            transaction.reference_block.number = attempt.reference_block,
+            transaction.expires_at = attempt.expiration_block,
         ),
         err,
     )]
-    async fn resolve_submission(
+    async fn resolve_attempt(
         &mut self,
-        outcome: SubmissionOutcome,
-        transaction_id: TransactionId,
-        reference_block: BlockNumber,
-        expiration_block: BlockNumber,
-        selection: Selection,
+        attempt: TransactionAttempt,
+        outcome: Option<SubmissionOutcome>,
     ) -> Result<Resolution> {
-        miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
+        let TransactionAttempt {
+            transaction_id,
+            reference_block,
+            expiration_block,
+            deposit_nullifier,
+            note_ids,
+        } = attempt;
+        miden_span_record!(funding.submission_outcome = outcome.as_ref().map_or("recovered", SubmissionOutcome::as_str) #[nonstandard]);
         match outcome {
-            SubmissionOutcome::Accepted => {
+            Some(SubmissionOutcome::Accepted) => {
                 info!(
                     target: LOG_TARGET,
                     "Submitted a funding transaction",
@@ -270,20 +282,21 @@ impl Funder {
                     transaction.expires_at = expiration_block
                 );
             },
-            SubmissionOutcome::Rejected(status) => {
+            Some(SubmissionOutcome::Rejected(status)) => {
                 Span::current().set_error(&status);
+                self.setup.database.release_attempt(transaction_id).await?;
                 // With one writer and controlled outputs, a state conflict identifies the single
                 // selected deposit as invalid. Keep the payouts for the next attempt.
                 if status.code() == tonic::Code::InvalidArgument
                     && status.details() == [2]
-                    && let Some(note) = &selection.deposit
+                    && let Some(nullifier) = deposit_nullifier
                 {
-                    self.setup.wallet.remove_deposit(note.nullifier());
+                    self.setup.wallet.remove_deposit(nullifier);
                     warn!(
                         &status,
                         target: LOG_TARGET,
                         "Discarded a deposit rejected by the node",
-                        note.id = note.note().id()
+                        transaction.id = transaction_id
                     );
                     miden_span_record!(funding.outcome = "deposit_discarded" #[nonstandard]);
                     return Ok(Resolution::DepositDiscarded);
@@ -291,11 +304,19 @@ impl Funder {
                 miden_span_record!(funding.outcome = "rejected" #[nonstandard]);
                 return Err(status).context("the node rejected the funding transaction");
             },
-            SubmissionOutcome::Unknown(err) => {
+            Some(SubmissionOutcome::Unknown(err)) => {
                 warn!(
                     &err,
                     target: LOG_TARGET,
                     "The submission outcome is unknown; waiting for commitment or expiration",
+                    transaction.id = transaction_id,
+                    transaction.expires_at = expiration_block
+                );
+            },
+            None => {
+                info!(
+                    target: LOG_TARGET,
+                    "Recovering an unresolved funding transaction",
                     transaction.id = transaction_id,
                     transaction.expires_at = expiration_block
                 );
@@ -317,8 +338,6 @@ impl Funder {
                 .await
             {
                 Ok(TransactionStatus::Committed(block_num)) => {
-                    let note_ids: Vec<_> =
-                        selection.notes.iter().map(|note| note.note().id()).collect();
                     // Keep the known commitment while retrying the audit write, so a database
                     // failure cannot cause this batch to be submitted again.
                     while let Err(err) = self
@@ -334,13 +353,14 @@ impl Funder {
                         tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
                     info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
-                    if let Some(note) = selection.deposit {
-                        self.setup.wallet.remove_deposit(note.nullifier());
+                    if let Some(nullifier) = deposit_nullifier {
+                        self.setup.wallet.remove_deposit(nullifier);
                     }
                     miden_span_record!(funding.outcome = "committed" #[nonstandard]);
                     break Resolution::Committed;
                 },
                 Ok(TransactionStatus::Expired) => {
+                    self.setup.database.release_attempt(transaction_id).await?;
                     warn!(
                         target: LOG_TARGET,
                         "A funding transaction expired; its notes remain queued",

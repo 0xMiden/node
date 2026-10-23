@@ -8,10 +8,10 @@ The service sends funds from a public account that an operator keeps funded. Ref
 note containing the native asset. The service never mints.
 
 HTTP 200 confirms that a request has been durably accepted. Its note is created on chain asynchronously, and pending
-requests survive restarts. A restart can currently replay a request that already committed on chain.
+requests survive restarts.
 
 See the [operator documentation](../../docs/external/src/network-operator/funding-service.md) for account provisioning,
-setup, startup, upgrades, and recovery limitations.
+setup, startup, upgrades, and recovery.
 
 The service serves a JSON HTTP API.
 

@@ -14,7 +14,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteId};
+use miden_protocol::note::{Note, NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
@@ -49,6 +49,19 @@ pub struct StoredRequest {
     /// Local time when the service accepted the request.
     pub accepted_at: SystemTime,
     pub delivery: Option<Delivery>,
+}
+
+/// Describes a funding transaction and its contents.
+///
+/// We retain this record until we confirm that the transaction committed, expired, or was rejected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TransactionAttempt {
+    pub transaction_id: TransactionId,
+    pub reference_block: BlockNumber,
+    pub expiration_block: BlockNumber,
+    /// The nullifier of the deposit consumed by the transaction, if any.
+    pub deposit_nullifier: Option<Nullifier>,
+    pub note_ids: Vec<NoteId>,
 }
 
 /// File-backed storage for funding requests, with serialized durable writes.
@@ -144,7 +157,9 @@ impl FundingDatabase {
             .await
     }
 
-    /// Returns the oldest undelivered requests, bounded by the requested batch size.
+    /// Returns up to `limit` pending requests, oldest first.
+    ///
+    /// Requests in a transaction awaiting confirmation are excluded.
     pub async fn pending_requests(
         &self,
         limit: NonZeroUsize,
@@ -166,11 +181,56 @@ impl FundingDatabase {
             .await?)
     }
 
-    /// Records a confirmed transaction for an entire batch without removing its requests.
+    /// Records a transaction and the requests it will create.
     ///
-    /// The caller must establish commitment on chain before calling this method. Missing requests
-    /// or conflicting delivery records reject the whole batch. Repeating a confirmation preserves
-    /// its original timestamp.
+    /// Only one transaction can be waiting for confirmation at a time, so this fails if another
+    /// attempt is recorded.
+    pub async fn start_attempt(&self, attempt: TransactionAttempt) -> anyhow::Result<()> {
+        ensure!(
+            attempt.expiration_block > attempt.reference_block,
+            "invalid attempt block range"
+        );
+        ensure!(
+            !attempt.note_ids.is_empty() || attempt.deposit_nullifier.is_some(),
+            "a funding attempt must contain requests or a deposit"
+        );
+        self.writer
+            .write("record funding transaction attempt", move |tx| {
+                queries::insert_attempt(tx, &attempt)?;
+                for note_id in attempt.note_ids {
+                    ensure!(
+                        queries::assign_request_to_attempt(tx, note_id, attempt.transaction_id)?
+                            == 1,
+                        "the request is missing, already delivered, or part of an attempt"
+                    );
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// Returns the transaction we are waiting to confirm, if any.
+    pub async fn active_attempt(&self) -> anyhow::Result<Option<TransactionAttempt>> {
+        Ok(self.reader.read("read active funding attempt", queries::select_attempt).await?)
+    }
+
+    /// Removes a rejected or expired transaction so its requests can be retried.
+    pub async fn release_attempt(&self, transaction_id: TransactionId) -> anyhow::Result<()> {
+        self.writer
+            .write("release funding transaction attempt", move |tx| {
+                if let Some(attempt) = queries::select_attempt(tx)? {
+                    ensure!(attempt.transaction_id == transaction_id, "another attempt is active");
+                    queries::delete_attempt(tx, transaction_id)?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// Records delivery of the requests and removes the attempt.
+    ///
+    /// The caller must check that the transaction committed on chain. Both updates share a database
+    /// transaction so a restart cannot leave delivered requests waiting to be retried.
     pub async fn record_delivery(
         &self,
         notes: Vec<NoteId>,
@@ -179,6 +239,16 @@ impl FundingDatabase {
     ) -> anyhow::Result<()> {
         self.writer
             .write("record funding delivery", move |tx| {
+                let attempt = queries::select_attempt(tx)?;
+                if let Some(attempt) = &attempt {
+                    ensure!(attempt.transaction_id == transaction_id, "another attempt is active");
+                    ensure!(attempt.note_ids == notes, "the delivery does not match the attempt");
+                    ensure!(
+                        attempt.reference_block < committed_in_block
+                            && committed_in_block <= attempt.expiration_block,
+                        "the commitment is outside the attempt's block range"
+                    );
+                }
                 let confirmed_at = SystemTime::now();
                 for note_id in notes {
                     let stored =
@@ -198,6 +268,9 @@ impl FundingDatabase {
                         committed_in_block,
                         confirmed_at,
                     )?;
+                }
+                if attempt.is_some() {
+                    queries::delete_attempt(tx, transaction_id)?;
                 }
                 Ok(())
             })

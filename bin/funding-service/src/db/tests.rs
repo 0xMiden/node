@@ -196,6 +196,103 @@ async fn failed_delivery_batches_leave_every_request_unchanged() {
 }
 
 #[tokio::test]
+async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leave_them_intact() {
+    let (_dir, database) = database().await;
+    let first = database.store_request(note(1)).await.unwrap();
+    let second = database.store_request(note(2)).await.unwrap();
+    let waiting = database.store_request(note(3)).await.unwrap();
+    let mut attempt = TransactionAttempt {
+        transaction_id: transaction(1),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifier: Some(Nullifier::from_raw(Word::from([4u32; 4]))),
+        note_ids: vec![first.note.id(), note(4).note().id()],
+    };
+    assert!(database.start_attempt(attempt.clone()).await.is_err());
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(database.pending_requests(3.try_into().unwrap()).await.unwrap().len(), 3);
+
+    attempt.note_ids = vec![first.note.id(), first.note.id()];
+    assert!(database.start_attempt(attempt.clone()).await.is_err());
+    assert!(database.active_attempt().await.unwrap().is_none());
+
+    attempt.note_ids = vec![first.note.id(), second.note.id()];
+    database.start_attempt(attempt.clone()).await.unwrap();
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+    assert_eq!(
+        database.pending_requests(3.try_into().unwrap()).await.unwrap(),
+        vec![waiting.clone()]
+    );
+    assert!(database.start_attempt(attempt.clone()).await.is_err());
+    assert!(database.release_attempt(transaction(2)).await.is_err());
+
+    database
+        .writer
+        .write("reject attempt deletion", |tx| {
+            tx.execute(
+                "CREATE TRIGGER reject_attempt_delete BEFORE DELETE ON transaction_attempt
+             BEGIN SELECT RAISE(FAIL, 'write failed'); END",
+                &[],
+            )?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        database
+            .record_delivery(attempt.note_ids.clone(), transaction(1), 19.into())
+            .await
+            .is_err()
+    );
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+    assert_eq!(database.request(first.note.id()).await.unwrap(), Some(first.clone()));
+    assert_eq!(database.request(second.note.id()).await.unwrap(), Some(second));
+    database
+        .writer
+        .write("restore attempt deletion", |tx| {
+            tx.execute("DROP TRIGGER reject_attempt_delete", &[])?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    database
+        .record_delivery(attempt.note_ids.clone(), transaction(1), 19.into())
+        .await
+        .unwrap();
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(
+        database
+            .request(first.note.id())
+            .await
+            .unwrap()
+            .unwrap()
+            .delivery
+            .unwrap()
+            .transaction_id,
+        transaction(1)
+    );
+    assert_eq!(
+        database.pending_requests(3.try_into().unwrap()).await.unwrap(),
+        vec![waiting.clone()]
+    );
+
+    attempt.transaction_id = transaction(2);
+    attempt.note_ids = vec![waiting.note.id()];
+    database.start_attempt(attempt.clone()).await.unwrap();
+    database.release_attempt(attempt.transaction_id).await.unwrap();
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(database.pending_requests(3.try_into().unwrap()).await.unwrap(), vec![waiting]);
+
+    attempt.note_ids.clear();
+    database.start_attempt(attempt.clone()).await.unwrap();
+    database
+        .record_delivery(vec![], attempt.transaction_id, 19.into())
+        .await
+        .unwrap();
+    assert!(database.active_attempt().await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn opening_requires_a_matching_database_identity() {
     let (dir, database) = database().await;
     let original = database.store_request(note(1)).await.unwrap();
@@ -340,6 +437,16 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
         .await
         .unwrap();
         database.store_request(note(1)).await.unwrap();
+        database
+            .start_attempt(TransactionAttempt {
+                transaction_id: transaction(1),
+                reference_block: 10.into(),
+                expiration_block: 20.into(),
+                deposit_nullifier: None,
+                note_ids: vec![note(1).note().id()],
+            })
+            .await
+            .unwrap();
         // Exit without running connection destructors or checkpointing the WAL.
         std::process::exit(0);
     }
@@ -363,4 +470,10 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
         database.request(note(1).note().id()).await.unwrap().unwrap().note,
         *note(1).note()
     );
+    let attempt = database.active_attempt().await.unwrap().unwrap();
+    assert_eq!(attempt.transaction_id, transaction(1));
+    assert_eq!(attempt.reference_block, BlockNumber::from(10));
+    assert_eq!(attempt.expiration_block, BlockNumber::from(20));
+    assert_eq!(attempt.note_ids, vec![note(1).note().id()]);
+    assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
 }

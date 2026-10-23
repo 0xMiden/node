@@ -1,5 +1,6 @@
 use miden_node_proto::clients::ForeignAccount;
 use miden_protocol::asset::FungibleAsset;
+use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteType};
 use miden_standards::note::P2idNote;
 use opentelemetry::trace::Status;
@@ -79,6 +80,24 @@ impl FunderSetup {
     }
 }
 
+impl Funder {
+    async fn reserve_attempt(
+        &self,
+        notes: &[UsdcxP2Id],
+        deposit: Option<&Note>,
+    ) -> TransactionAttempt {
+        let attempt = TransactionAttempt {
+            transaction_id: TransactionId::from_raw(Word::empty()),
+            reference_block: 10.into(),
+            expiration_block: 20.into(),
+            deposit_nullifier: deposit.map(Note::nullifier),
+            note_ids: notes.iter().map(|note| note.note().id()).collect(),
+        };
+        self.setup.database.start_attempt(attempt.clone()).await.unwrap();
+        attempt
+    }
+}
+
 /// Populates the wallet through its normal synchronization path.
 async fn with_deposits(
     mut setup: FunderSetup,
@@ -113,17 +132,9 @@ async fn state_conflict_discards_only_the_selected_deposit() {
     funder.setup.database.store_request(payout.clone()).await.unwrap();
     let status =
         tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
+    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
     funder
-        .resolve_submission(
-            SubmissionOutcome::Rejected(status),
-            TransactionId::from_raw(Word::empty()),
-            10.into(),
-            20.into(),
-            Selection {
-                deposit: UsdcxP2Id::from_note(deposit, funder.setup.fee_asset_id),
-                notes: vec![payout.clone()],
-            },
-        )
+        .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
         .await
         .unwrap();
 
@@ -138,7 +149,7 @@ async fn state_conflict_discards_only_the_selected_deposit() {
         &HashMap::from([(unselected.nullifier(), unselected)])
     );
     assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
-    let span = telemetry.span("funding.resolve_submission");
+    let span = telemetry.span("funding.resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("deposit_discarded".into()));
     assert!(matches!(span.status, Status::Error { .. }));
 }
@@ -155,18 +166,10 @@ async fn other_rejections_preserve_notes() {
         funder.setup.database.store_request(payout.clone()).await.unwrap();
         let status =
             tonic::Status::with_details(tonic::Code::InvalidArgument, "rejected", details.into());
+        let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
         assert!(
             funder
-                .resolve_submission(
-                    SubmissionOutcome::Rejected(status),
-                    TransactionId::from_raw(Word::empty()),
-                    10.into(),
-                    20.into(),
-                    Selection {
-                        deposit: UsdcxP2Id::from_note(deposit.clone(), funder.setup.fee_asset_id),
-                        notes: vec![payout.clone()]
-                    },
-                )
+                .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
                 .await
                 .is_err()
         );
@@ -182,7 +185,7 @@ async fn other_rejections_preserve_notes() {
             &HashMap::from([(deposit.nullifier(), deposit)])
         );
         assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
-        let span = telemetry.span("funding.resolve_submission");
+        let span = telemetry.span("funding.resolve_attempt");
         assert_eq!(attribute(&span, "funding.outcome"), Some("rejected".into()));
         assert!(matches!(span.status, Status::Error { .. }));
     }
@@ -211,21 +214,12 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             } else {
                 SubmissionOutcome::Unknown(tonic::Status::unavailable("connection lost"))
             };
-            funder
-                .resolve_submission(
-                    outcome,
-                    transaction_id,
-                    10.into(),
-                    20.into(),
-                    Selection {
-                        deposit: UsdcxP2Id::from_note(deposit.clone(), funder.setup.fee_asset_id),
-                        notes: vec![payout.clone()],
-                    },
-                )
-                .await
-                .unwrap();
+            let attempt =
+                funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+            funder.resolve_attempt(attempt, Some(outcome)).await.unwrap();
+            assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
 
-            let span = telemetry.span("funding.resolve_submission");
+            let span = telemetry.span("funding.resolve_attempt");
             let traceparent =
                 format!("00-{}-{}-01", span.span_context.trace_id(), span.span_context.span_id());
             assert!(
@@ -414,6 +408,81 @@ async fn pending_requests_are_discovered_and_retried_without_an_http_server() {
     );
 }
 
+#[rstest::rstest]
+#[case(true)]
+#[case(false)]
+#[tokio::test]
+async fn a_restarted_worker_waits_for_the_recorded_attempt_before_retrying_requests(
+    #[case] committed: bool,
+) {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let payout = setup.payout(1);
+    let waiting = setup.payout(2);
+    setup.database.store_request(payout.clone()).await.unwrap();
+    setup.database.store_request(waiting.clone()).await.unwrap();
+    let attempt = TransactionAttempt {
+        transaction_id: TransactionId::from_raw(Word::empty()),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifier: None,
+        note_ids: vec![payout.note().id()],
+    };
+    setup.database.start_attempt(attempt.clone()).await.unwrap();
+    let identity = setup.database.identity();
+    drop(setup.database);
+    setup.database = Arc::new(
+        FundingDatabase::open_and_verify(
+            &directory.path().join(DATABASE_FILENAME),
+            identity.genesis_commitment,
+            identity.fee_asset_id,
+        )
+        .await
+        .unwrap(),
+    );
+    let database = Arc::clone(&setup.database);
+    let mut chain = TestChain::new(20);
+    chain.unavailable = Some("SyncTransactions");
+    let server = TestServer::start(chain).await;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+
+    {
+        let mut recovery = Box::pin(funder.process_batch());
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut recovery).await.is_err());
+        assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+        assert_eq!(database.pending_requests(2.try_into().unwrap()).await.unwrap().len(), 1);
+
+        {
+            let mut chain = server.chain.lock().unwrap();
+            chain.tip = 15;
+            chain.unavailable = None;
+        }
+        assert!(tokio::time::timeout(Duration::from_millis(50), &mut recovery).await.is_err());
+        assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+        {
+            let mut chain = server.chain.lock().unwrap();
+            chain.tip = 20;
+            if committed {
+                chain
+                    .transactions
+                    .push((19, identity.funding_account_id, attempt.transaction_id));
+            }
+        }
+        tokio::time::timeout(Duration::from_secs(5), recovery).await.unwrap().unwrap();
+    }
+
+    assert!(database.active_attempt().await.unwrap().is_none());
+    let delivered = database.request(payout.note().id()).await.unwrap().unwrap();
+    if committed {
+        let delivery = delivered.delivery.unwrap();
+        assert_eq!(delivery.transaction_id, attempt.transaction_id);
+        assert_eq!(delivery.committed_in_block, BlockNumber::from(19));
+        assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([waiting]));
+    } else {
+        assert!(delivered.delivery.is_none());
+        assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout, waiting]));
+    }
+}
+
 #[tokio::test]
 async fn shutdown_stops_an_idle_worker() {
     let server = TestServer::start(TestChain::new(20)).await;
@@ -435,6 +504,12 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
     let payout = setup.payout(1);
     setup.database.store_request(payout.clone()).await.unwrap();
     let database = Arc::clone(&setup.database);
+    let transaction_id = TransactionId::from_raw(Word::empty());
+    let mut chain = TestChain::new(20);
+    chain.transactions.push((19, setup.wallet.account_id(), transaction_id));
+    let server = TestServer::start(chain).await;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), None).await;
     let (writer, _reader) =
         miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
     writer
@@ -448,24 +523,11 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
         })
         .await
         .unwrap();
-    let transaction_id = TransactionId::from_raw(Word::empty());
-    let mut chain = TestChain::new(20);
-    chain.transactions.push((19, setup.wallet.account_id(), transaction_id));
-    let server = TestServer::start(chain).await;
-    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    let resolution = funder.resolve_submission(
-        SubmissionOutcome::Accepted,
-        transaction_id,
-        10.into(),
-        20.into(),
-        Selection {
-            deposit: None,
-            notes: vec![payout.clone()],
-        },
-    );
+    let resolution = funder.resolve_attempt(attempt.clone(), Some(SubmissionOutcome::Accepted));
     tokio::pin!(resolution);
     assert!(tokio::time::timeout(Duration::from_millis(50), &mut resolution).await.is_err());
     assert!(database.request(payout.note().id()).await.unwrap().unwrap().delivery.is_none());
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt));
     server.chain.lock().unwrap().unavailable = Some("SyncTransactions");
     writer
         .write("restore funding delivery updates", |tx| {
@@ -481,6 +543,7 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
     let stored = database.request(payout.note().id()).await.unwrap().unwrap();
     assert_eq!(stored.delivery.unwrap().committed_in_block, BlockNumber::from(19));
     assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+    assert!(database.active_attempt().await.unwrap().is_none());
 }
 
 #[rstest::rstest]
@@ -489,24 +552,21 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
 #[tokio::test]
 async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failures: usize) {
     let (_directory, setup) = FunderSetup::fixture().await;
+    let payout = setup.payout(1);
+    setup.database.store_request(payout.clone()).await.unwrap();
     let transaction_id = TransactionId::from_raw(Word::empty());
     let mut chain = TestChain::new(20);
     chain.transactions.push((19, setup.wallet.account_id(), transaction_id));
     chain.unavailable_for = Some(("SyncTransactions", failures));
     let server = TestServer::start(chain).await;
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    let attempt = funder.reserve_attempt(&[payout], None).await;
     let (telemetry, _guard) = Telemetry::capture();
     funder
-        .resolve_submission(
-            SubmissionOutcome::Accepted,
-            transaction_id,
-            10.into(),
-            20.into(),
-            Selection { deposit: None, notes: Vec::new() },
-        )
+        .resolve_attempt(attempt, Some(SubmissionOutcome::Accepted))
         .await
         .unwrap();
-    let span = telemetry.span("funding.resolve_submission");
+    let span = telemetry.span("funding.resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("committed".into()));
     assert_eq!(attribute(&span, "poll.count"), Some((failures + 1).to_string().into()));
     assert_eq!(attribute(&span, "poll.error.count"), Some(failures.to_string().into()));

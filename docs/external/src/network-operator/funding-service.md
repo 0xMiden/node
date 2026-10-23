@@ -130,9 +130,13 @@ serialized object, without a prefix:
 
 HTTP 200 confirms that the returned note has been committed to SQLite. The service answers **before** it submits the
 transaction that creates the note, so the note is not on chain yet. The service retries requests while it runs. Stored
-requests survive a restart and the worker resumes those without a delivery record. Confirmed requests are retained for
-auditing and excluded from later batches. Transaction attempts are still held in memory: a restart can replay a request
-whose transaction committed before its delivery was recorded. Recovery of in-flight attempts is not yet implemented.
+requests survive a restart. Confirmed requests are retained for auditing and excluded from later batches.
+
+After a restart, the service checks any unfinished transaction before creating another funding transaction. If it
+committed, the service records delivery. Otherwise, it waits until the transaction expires and the node confirms that it
+did not commit before retrying its requests. An unreachable node delays recovery; it does not cause the service to retry
+a transaction whose outcome is unknown. The service does not retain the transaction payload, so it cannot rebroadcast
+it. A crash before submission can therefore leave requests waiting until that transaction's expiration.
 
 A client that needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated
 input note, which the node authenticates when it builds the block. The notes are public, so the node stores their
