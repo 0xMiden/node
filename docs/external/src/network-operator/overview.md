@@ -36,7 +36,7 @@ the infrastructure layer instead on the load balancer or reverse proxy fronting 
 
 The node still protects itself against malformed or oversized requests through per-request limits: request timeouts,
 capped message sizes, and per-method parameter limits (see the RPC guide's Errors and Limits page). Slow subscription
-consumers are disconnected and temporarily banned by the node itself.
+consumers are disconnected by the node itself and can reconnect immediately.
 
 ## Components and Roles
 

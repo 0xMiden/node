@@ -2515,6 +2515,34 @@ async fn block_subscription_starts_with_matching_config() {
     assert_eq!(config.to_commitment(), block.header().protocol_config_commitment());
 }
 
+#[tokio::test]
+async fn subscriptions_allow_more_than_ten_concurrent_clients() {
+    let (mut client, _, _store, _server) = start_rpc().await;
+    let mut block_streams = Vec::new();
+    let mut proof_streams = Vec::new();
+
+    for _ in 0..16 {
+        block_streams.push(
+            client
+                .block_subscription(proto::miden::node::v1::BlockSubscriptionRequest {
+                    block_from: 1,
+                })
+                .await
+                .expect("block subscription should be accepted")
+                .into_inner(),
+        );
+        proof_streams.push(
+            client
+                .proof_subscription(proto::miden::node::v1::ProofSubscriptionRequest {
+                    block_from: 1,
+                })
+                .await
+                .expect("proof subscription should be accepted")
+                .into_inner(),
+        );
+    }
+}
+
 async fn next_block_with_protocol_config(
     store: &TestStore,
     config: &ProtocolConfig,

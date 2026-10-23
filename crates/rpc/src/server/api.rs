@@ -24,13 +24,11 @@ use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
 use self::error_codes::{SyncErrorCode, internal_error};
 use crate::COMPONENT;
-use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 
 // VALIDATOR FAN-OUT
@@ -120,9 +118,6 @@ pub struct RpcService {
     network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
     block_header_cache: LruCache<BlockNumber, BlockHeader>,
-    block_subscription_semaphore: Arc<Semaphore>,
-    proof_subscription_semaphore: Arc<Semaphore>,
-    subscription_ban: Arc<IpBanList>,
 }
 
 impl RpcService {
@@ -140,9 +135,6 @@ impl RpcService {
             network_tx_auth,
             genesis_commitment: None,
             block_header_cache: LruCache::new(commitment_cache_capacity),
-            block_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
-            proof_subscription_semaphore: Arc::new(Semaphore::new(MAX_REPLICA_SUBSCRIPTIONS)),
-            subscription_ban: Arc::new(IpBanList::default()),
         }
     }
 
