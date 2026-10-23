@@ -38,14 +38,6 @@ pub enum RequestFundsError {
         balance: u64,
         reserve: u64,
     },
-
-    /// The service cannot serve requests at the moment.
-    #[error("the funding service is not ready: {0}")]
-    NotReady(&'static str),
-
-    /// Too many requests are queued.
-    #[error("too many funding requests are queued")]
-    Busy,
 }
 
 impl RequestFundsError {
@@ -60,8 +52,6 @@ impl RequestFundsError {
             | Self::InvalidAmount
             | Self::AmountExceedsMaximum { .. } => StatusCode::BAD_REQUEST,
             Self::InsufficientFunds { .. } => StatusCode::PRECONDITION_FAILED,
-            Self::NotReady(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Busy => StatusCode::TOO_MANY_REQUESTS,
         }
     }
 }

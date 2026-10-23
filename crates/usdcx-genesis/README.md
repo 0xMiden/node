@@ -25,8 +25,8 @@ cargo install --path crates/usdcx-genesis --locked    # add --force to reinstall
 ## Usage
 
 Every command works in the current directory: it reads its inputs under their well-known names (each `--flag` below can
-point elsewhere) and writes one new file. No command overwrites an existing file, so a re-run needs the old output moved
-away first. Start from copies of the crate's two templates, then run the four commands in launch order:
+point elsewhere) and writes new output files. No command overwrites an existing file, so a re-run needs the old output
+moved away first. Start from copies of the crate's two templates, then run the four commands in launch order:
 
 ```sh
 cp <repo>/crates/usdcx-genesis/config.template.json config.json    # then replace every <...> value
@@ -43,7 +43,10 @@ miden-usdcx-genesis record-nonces [--faucet usdcx-faucet.mac] [--nonces nonces.j
    looks like — that file is accepted in step 3 too. Prints the distributor id: hex, bech32 for mainnet/testnet/devnet,
    and the bytes32 form that is the deposit's `remoteRecipient` on the xReserve side (the id right-aligned in 32 bytes;
    the layout is `DEV-10`, open with Circle). The id goes into `config.json` as `accounts.owner`. Every command prints
-   its ids in the same four forms.
+   its ids in the same four forms. The command also writes `distributor.secret`, which contains the signing key without
+   the account state. Both files contain the same key and are readable only by their owner. The `.secret` file contains
+   the binary serialization of `AuthSecretKey`, including its signature scheme. Keep these files private. If generation
+   fails after creating one output, preserve the files and retry in an empty directory.
 2. `faucet` builds the genesis faucet from `config.json` and writes `usdcx-faucet.mac` (nonce one, no seed). Prints the
    faucet id plus the configured role ids. Register this id with Circle and make the deposits against it.
 3. `prefund` gives the distributor the faucet's whole recorded `token_supply`, promotes it to genesis form (nonce one,
@@ -126,7 +129,7 @@ path = "distributor.genesis.mac"
 The node takes `[[account]]` files as they are (no validation, no nonce bump), which is why `prefund` emits the genesis
 form. Do not list `[[wallet]]` entries holding the xUSDC symbol: the node would overwrite the faucet's recorded
 `token_supply` with their total. `distributor.genesis.mac` carries the distributor's signing key — keep the genesis
-directory private; the same file is the funding service's `--account-file`.
+directory private.
 
 The role accounts are NOT injected at genesis — their holders deploy them with their first transaction.
 

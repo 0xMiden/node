@@ -42,7 +42,7 @@ impl NativeAsset {
 // STATUS SNAPSHOT
 // ================================================================================================
 
-/// The funding account's balance as of the last block the worker read.
+/// The funding account's balance as of the last block read from the node.
 ///
 /// The worker publishes the values, and the `Status` endpoint reads them. The two numbers are read
 /// separately, so a concurrent update can pair a balance with the neighbouring block number. That
@@ -70,7 +70,7 @@ impl StatusSnapshot {
         }
     }
 
-    /// Publishes the values the worker read at `chain_tip`.
+    /// Publishes the values read at `chain_tip`.
     pub fn update(&self, balance: u64, chain_tip: BlockNumber, verification_base_fee: u32) {
         self.balance.store(balance, Ordering::Relaxed);
         self.chain_tip.store(chain_tip.as_u32(), Ordering::Relaxed);
