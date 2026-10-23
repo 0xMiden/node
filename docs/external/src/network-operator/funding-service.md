@@ -104,8 +104,8 @@ miden-funding-service migrate --data-directory /opt/miden-funding-service/data
 
 Migration uses only the existing database; it needs no genesis download, signing key, or RPC connection. A successful
 exit means the database has the current schema and the service can be started again. Each migration is verified and
-committed transactionally. If migration fails, keep the service stopped, correct the reported cause, and rerun `migrate`
-against the same database.
+committed in a single transaction. If migration fails, keep the service stopped, correct the reported cause, and rerun
+`migrate` against the same database.
 
 ## API
 
