@@ -18,7 +18,9 @@ CREATE TABLE transaction_attempt (
 CREATE TABLE requests (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT CHECK (sequence > 0),
     note_id BLOB NOT NULL UNIQUE CHECK (length(note_id) = 32),
-    note BLOB NOT NULL,
+    target_account_id BLOB NOT NULL CHECK (length(target_account_id) = 15),
+    amount INTEGER NOT NULL CHECK (amount > 0),
+    serial_number BLOB NOT NULL CHECK (length(serial_number) = 32),
     -- Local time when the service accepted the request, in microseconds since the Unix epoch.
     accepted_at INTEGER NOT NULL CHECK (accepted_at >= 0),
     transaction_id BLOB CHECK (length(transaction_id) = 32),

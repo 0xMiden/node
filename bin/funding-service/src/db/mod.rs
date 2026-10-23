@@ -132,7 +132,7 @@ impl FundingDatabase {
     /// Stores a funding note and returns only after its transaction commits durably.
     ///
     /// Retrying the same note preserves its original acceptance order, timestamp, and delivery
-    /// record. Reusing its ID with different contents fails.
+    /// record.
     pub async fn store_request(&self, note: UsdcxP2Id) -> anyhow::Result<StoredRequest> {
         ensure!(
             note.note().metadata().sender() == self.identity.funding_account_id,
@@ -144,15 +144,15 @@ impl FundingDatabase {
         );
         ensure!(note.amount() > 0, "the funding amount must not be zero");
         ensure!(note.target() != self.identity.funding_account_id, "the note targets the funder");
-        let note = note.into_note();
+        let identity = self.identity;
         self.writer
             .write("store funding request", move |tx| {
-                if let Some(stored) = queries::select_request(tx, note.id())? {
-                    ensure!(stored.note == note, "the note ID already has different contents");
+                if let Some(stored) = queries::select_request(tx, note.note().id(), identity)? {
                     return Ok(stored);
                 }
                 queries::insert_request(tx, &note, SystemTime::now())?;
-                queries::select_request(tx, note.id())?.context("the stored request is missing")
+                queries::select_request(tx, note.note().id(), identity)?
+                    .context("the stored request is missing")
             })
             .await
     }
@@ -165,19 +165,21 @@ impl FundingDatabase {
         limit: NonZeroUsize,
     ) -> anyhow::Result<Vec<StoredRequest>> {
         let limit = i64::try_from(limit.get()).context("request batch limit exceeds i64")?;
+        let identity = self.identity;
         Ok(self
             .reader
             .read("read pending funding requests", move |tx| {
-                queries::select_pending_requests(tx, limit)
+                queries::select_pending_requests(tx, limit, identity)
             })
             .await?)
     }
 
     /// Returns a request for auditing, including requests already delivered.
     pub async fn request(&self, note_id: NoteId) -> anyhow::Result<Option<StoredRequest>> {
+        let identity = self.identity;
         Ok(self
             .reader
-            .read("read funding request", move |tx| queries::select_request(tx, note_id))
+            .read("read funding request", move |tx| queries::select_request(tx, note_id, identity))
             .await?)
     }
 
@@ -237,6 +239,7 @@ impl FundingDatabase {
         transaction_id: TransactionId,
         committed_in_block: BlockNumber,
     ) -> anyhow::Result<()> {
+        let identity = self.identity;
         self.writer
             .write("record funding delivery", move |tx| {
                 let attempt = queries::select_attempt(tx)?;
@@ -251,8 +254,8 @@ impl FundingDatabase {
                 }
                 let confirmed_at = SystemTime::now();
                 for note_id in notes {
-                    let stored =
-                        queries::select_request(tx, note_id)?.context("unknown funding request")?;
+                    let stored = queries::select_request(tx, note_id, identity)?
+                        .context("unknown funding request")?;
                     if let Some(delivery) = stored.delivery {
                         ensure!(
                             delivery.transaction_id == transaction_id

@@ -5,9 +5,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::Row;
+use miden_protocol::asset::FungibleAsset;
+use miden_protocol::note::NoteType;
 use miden_protocol::transaction::TransactionId;
+use miden_standards::note::P2idNote;
 
-use crate::db::{Delivery, StoredRequest};
+use crate::db::{DatabaseIdentity, Delivery, StoredRequest};
 
 mod insert_database_identity;
 pub use insert_database_identity::insert_database_identity;
@@ -42,21 +45,37 @@ pub use assign_request_to_attempt::assign_request_to_attempt;
 mod delete_attempt;
 pub use delete_attempt::delete_attempt;
 
-fn read_request(row: &Row<'_>) -> Result<StoredRequest, DatabaseError> {
-    let transaction_id: Option<TransactionId> = row.get(3)?;
+/// Reads a stored request, reconstructing its public P2ID note and optional delivery record.
+///
+/// The sender and asset come from the database identity because they are shared by every request.
+fn read_request(row: &Row<'_>, identity: DatabaseIdentity) -> Result<StoredRequest, DatabaseError> {
+    let amount = u64::try_from(row.get::<i64>(2)?)
+        .map_err(|err| DatabaseError::deserialization("funding amount", err))?;
+    let asset = FungibleAsset::new(identity.fee_asset_id.faucet_id(), amount)
+        .map_err(|err| DatabaseError::deserialization("funding asset", err))?;
+    let note = P2idNote::builder()
+        .sender(identity.funding_account_id)
+        .target(row.get(1)?)
+        .asset(asset)
+        .note_type(NoteType::Public)
+        .serial_number(row.get(3)?)
+        .build()
+        .map_err(|err| DatabaseError::deserialization("funding note", err))?
+        .into();
+    let transaction_id: Option<TransactionId> = row.get(5)?;
     let delivery = transaction_id
         .map(|transaction_id| {
             Ok::<_, DatabaseError>(Delivery {
                 transaction_id,
-                committed_in_block: row.get(4)?,
-                confirmed_at: read_timestamp(row, 5)?,
+                committed_in_block: row.get(6)?,
+                confirmed_at: read_timestamp(row, 7)?,
             })
         })
         .transpose()?;
     Ok(StoredRequest {
         sequence: row.get(0)?,
-        note: row.get(1)?,
-        accepted_at: read_timestamp(row, 2)?,
+        note,
+        accepted_at: read_timestamp(row, 4)?,
         delivery,
     })
 }

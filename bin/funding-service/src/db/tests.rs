@@ -7,6 +7,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_WITH_CALLBACKS,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
+    ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
     ACCOUNT_ID_SENDER,
 };
 use miden_protocol::utils::serde::Serializable;
@@ -24,12 +25,16 @@ fn identity() -> DatabaseIdentity {
 }
 
 fn note(seed: u32) -> UsdcxP2Id {
+    note_for(ACCOUNT_ID_SENDER.try_into().unwrap(), 1_000, seed)
+}
+
+fn note_for(target: AccountId, amount: u64, seed: u32) -> UsdcxP2Id {
     let identity = identity();
     crate::tx::build_funding_note(
         identity.funding_account_id,
         identity.fee_asset_id,
-        ACCOUNT_ID_SENDER.try_into().unwrap(),
-        1_000,
+        target,
+        amount,
         &mut RandomCoin::new(Word::from([seed; 4])),
     )
     .unwrap()
@@ -50,13 +55,20 @@ async fn database() -> (tempfile::TempDir, FundingDatabase) {
 #[tokio::test]
 async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
     let (dir, database) = database().await;
+    let first_note = note_for(ACCOUNT_ID_SENDER.try_into().unwrap(), 1, 20);
+    let second_note = note_for(
+        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2.try_into().unwrap(),
+        miden_protocol::asset::FungibleAsset::MAX_AMOUNT.as_u64(),
+        10,
+    );
     let before = SystemTime::now() - Duration::from_micros(1);
-    let first = database.store_request(note(20)).await.unwrap();
-    let second = database.store_request(note(10)).await.unwrap();
+    let first = database.store_request(first_note.clone()).await.unwrap();
+    let second = database.store_request(second_note.clone()).await.unwrap();
     assert!(first.sequence < second.sequence);
     assert!((before..=SystemTime::now()).contains(&first.accepted_at));
     assert!(first.delivery.is_none());
-    assert_eq!(first.note.to_bytes(), note(20).note().to_bytes());
+    assert_eq!(first.note.to_bytes(), first_note.note().to_bytes());
+    assert_eq!(second.note.to_bytes(), second_note.note().to_bytes());
     drop(database);
 
     let database = FundingDatabase::open_and_verify(
@@ -414,7 +426,10 @@ async fn corrupt_note_data_is_reported_without_discarding_other_requests() {
     database
         .writer
         .write("corrupt stored note", move |tx| {
-            tx.execute("UPDATE requests SET note = X'FF' WHERE note_id = ?1", &[&first_id])?;
+            tx.execute(
+                "UPDATE requests SET serial_number = ?1 WHERE note_id = ?2",
+                &[&vec![0xff; 32], &first_id],
+            )?;
             Ok::<_, DatabaseError>(())
         })
         .await
