@@ -80,7 +80,8 @@ miden-funding-service start \
 and the protocol lowers the expiration delta of a transaction which reads mutable state. A funding transaction therefore
 expires at or before the requested block.
 
-A funding request is answered without a call to the node, so `--http.timeout` only has to cover the service's own work.
+A funding request is answered without a call to the node. `--http.timeout` covers the service's own work, including
+committing the note to SQLite.
 
 Runtime options also read from an environment variable named `MIDEN_FUNDING_<OPTION>`, for example
 `MIDEN_FUNDING_SIGNING_KEY_FILE`.
@@ -112,7 +113,7 @@ The service serves a JSON over HTTP API on `--listen`.
 | Endpoint              | Purpose                                                                                                                                                                     |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GET /status`         | Returns the service version, the funding account's ID, its balance, the block the service is synchronized to, the configured maximum amount, and the verification base fee. |
-| `POST /request-funds` | Creates a public pay-to-ID note for an account, returns it at once, and queues it for the next funding transaction.                                                         |
+| `POST /request-funds` | Creates and persists a public pay-to-ID note for an account, returns it, and queues it for the next funding transaction.                                                    |
 
 A funding request names the target account and the amount in base units:
 
@@ -127,11 +128,12 @@ serialized object, without a prefix:
 { "note": "..." }
 ```
 
-The service answers **before** it submits the transaction that creates the note, so the note is not on chain yet. The
-service retries requests while it runs. Accepted requests are held in memory and can be lost on restart. A client that
-needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated input note,
-which the node authenticates when it builds the block. The notes are public, so the node stores their details once they
-commit.
+HTTP 200 confirms that the returned note has been committed to SQLite. The service answers **before** it submits the
+transaction that creates the note, so the note is not on chain yet. The service retries requests while it runs. Stored
+requests survive a restart, but the worker does not resume them or recover pending transactions after a restart. A
+client that needs the note on chain either polls the node for the note ID or consumes the note as an unauthenticated
+input note, which the node authenticates when it builds the block. The notes are public, so the node stores their
+details once they commit.
 
 The service does not authenticate requests. Restrict access to the API with a proxy or a load balancer.
 
@@ -163,8 +165,8 @@ The status code tells a client whether to change the request, add funds, or send
 | `500 Internal Server Error` | The service failed for a reason the client cannot act on.                                                                     |
 | `503 Service Unavailable`   | The service is shutting down.                                                                                                 |
 
-A request that fails created no note, and a client may send it again as it is. The service builds the note before it
-answers. A 200 response names the queued note, but does not guarantee delivery across a service restart.
+Validation errors and a full or stopped worker reject requests before persistence. A database write can finish after an
+HTTP timeout, so a timeout does not establish whether the note was persisted. Retrying a request creates a new note.
 
 The 412 check is best effort. It reads the balance of an earlier block and does not account for the notes already
 queued, so a request it admits can still wait in the queue until a deposit raises the balance. Raising the balance is an

@@ -9,11 +9,12 @@ the database matches the connected network. Database creation and migration are 
 [operator documentation](../../docs/external/src/network-operator/funding-service.md) for the commands.
 
 The database supplies the funding account ID, and the service reads its public state from the node before every
-transaction. Startup reads the signing key from a separate key file. Accepted requests and pending transactions are held
-in memory. A restart can lose accepted requests whose transactions have not reached the node.
+transaction. Startup reads the signing key from a separate key file. Each accepted note is committed to SQLite before
+the service returns HTTP 200. Stored requests survive a restart, but the worker does not resume them or recover pending
+transactions after a restart.
 
-Each request creates a public pay-to-ID note for the requested account. The service answers with the note at once, then
-creates it on chain in a later transaction. A single worker owns the account, keeps one transaction in flight, and
+Each request creates a public pay-to-ID note for the requested account. The service persists the note before answering,
+then creates it on chain in a later transaction. A single worker owns the account, keeps one transaction in flight, and
 tracks each submitted transaction until its commitment or expiration is known. New requests stay in a bounded channel
 while the worker processes one batch.
 
