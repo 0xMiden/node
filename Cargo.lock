@@ -4510,6 +4510,7 @@ dependencies = [
  "futures",
  "hex",
  "humantime",
+ "miden-node-db",
  "miden-node-proto",
  "miden-node-tracing",
  "miden-node-utils",

@@ -25,6 +25,7 @@ clap               = { features = ["env", "string"], workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
 humantime          = { workspace = true }
+miden-node-db      = { workspace = true }
 miden-node-proto   = { workspace = true }
 miden-node-tracing = { workspace = true }
 miden-node-utils   = { workspace = true }
@@ -40,6 +41,9 @@ tokio              = { features = ["macros", "net", "rt-multi-thread", "sync", "
 tonic              = { workspace = true }
 tower-http         = { features = ["timeout"], workspace = true }
 url                = { workspace = true }
+
+[build-dependencies]
+miden-node-db = { workspace = true }
 
 [dev-dependencies]
 miden-protocol        = { features = ["std", "testing"], workspace = true }

@@ -1,0 +1,323 @@
+use std::sync::Arc;
+use std::time::{Duration, UNIX_EPOCH};
+
+use miden_node_db::DatabaseError;
+use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_WITH_CALLBACKS,
+    ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
+    ACCOUNT_ID_SENDER,
+};
+use miden_protocol::utils::serde::Serializable;
+
+use super::*;
+
+fn identity() -> DatabaseIdentity {
+    DatabaseIdentity {
+        genesis_commitment: Word::from([1u32; 4]),
+        funding_account_id: ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap(),
+        fee_asset_id: AssetId::new_fungible(
+            ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_WITH_CALLBACKS.try_into().unwrap(),
+        ),
+    }
+}
+
+fn note(seed: u32) -> UsdcxP2Id {
+    let identity = identity();
+    crate::tx::build_funding_note(
+        identity.funding_account_id,
+        identity.fee_asset_id,
+        ACCOUNT_ID_SENDER.try_into().unwrap(),
+        1_000,
+        &mut RandomCoin::new(Word::from([seed; 4])),
+    )
+    .unwrap()
+}
+
+fn transaction(seed: u32) -> TransactionId {
+    TransactionId::from_raw(Word::from([seed; 4]))
+}
+
+async fn database() -> (tempfile::TempDir, FundingDatabase) {
+    let dir = tempfile::tempdir().unwrap();
+    let database = FundingDatabase::bootstrap(&dir.path().join("funding.sqlite3"), identity())
+        .await
+        .unwrap();
+    (dir, database)
+}
+
+#[tokio::test]
+async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
+    let (dir, database) = database().await;
+    let before = SystemTime::now() - Duration::from_micros(1);
+    let first = database.store_request(note(20)).await.unwrap();
+    let second = database.store_request(note(10)).await.unwrap();
+    assert!(first.sequence < second.sequence);
+    assert!((before..=SystemTime::now()).contains(&first.accepted_at));
+    assert!(first.delivery.is_none());
+    assert_eq!(first.note.to_bytes(), note(20).note().to_bytes());
+    drop(database);
+
+    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
+        .await
+        .unwrap();
+    assert_eq!(
+        database.pending_requests(NonZeroUsize::new(1).unwrap()).await.unwrap(),
+        vec![first.clone()]
+    );
+    assert_eq!(
+        database.pending_requests(NonZeroUsize::new(10).unwrap()).await.unwrap(),
+        vec![first, second]
+    );
+}
+
+#[tokio::test]
+async fn delivered_requests_are_retained_for_auditing_and_retries_preserve_history() {
+    let (dir, database) = database().await;
+    let first = database.store_request(note(1)).await.unwrap();
+    let second = database.store_request(note(2)).await.unwrap();
+    let third = database.store_request(note(3)).await.unwrap();
+    let before = SystemTime::now() - Duration::from_micros(1);
+    database
+        .record_delivery(vec![first.note.id(), second.note.id()], transaction(1), 12.into())
+        .await
+        .unwrap();
+    let delivered = database.request(first.note.id()).await.unwrap().unwrap();
+    let delivery = delivered.delivery.unwrap();
+    assert_eq!(delivery.transaction_id, transaction(1));
+    assert_eq!(delivery.committed_in_block, 12.into());
+    assert!((before..=SystemTime::now()).contains(&delivery.confirmed_at));
+    assert_eq!(delivered.note, first.note);
+    assert_eq!(delivered.sequence, first.sequence);
+    assert_eq!(delivered.accepted_at, first.accepted_at);
+    assert_eq!(
+        database.request(second.note.id()).await.unwrap().unwrap().delivery,
+        Some(delivery)
+    );
+
+    database
+        .record_delivery(vec![first.note.id()], transaction(1), 12.into())
+        .await
+        .unwrap();
+    assert_eq!(database.store_request(note(1)).await.unwrap(), delivered);
+    assert_eq!(database.store_request(note(3)).await.unwrap(), third);
+    drop(database);
+
+    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
+        .await
+        .unwrap();
+    assert_eq!(database.request(first.note.id()).await.unwrap(), Some(delivered));
+    assert_eq!(
+        database.pending_requests(NonZeroUsize::new(10).unwrap()).await.unwrap(),
+        vec![third]
+    );
+}
+
+#[tokio::test]
+async fn stored_microsecond_timestamps_reopen_as_absolute_times() {
+    let (dir, database) = database().await;
+    let cases = [
+        (1, 0_i64, 1_i64, Duration::ZERO, Duration::new(0, 1_000)),
+        (
+            2,
+            123_456_789_i64,
+            987_654_321_i64,
+            Duration::new(123, 456_789_000),
+            Duration::new(987, 654_321_000),
+        ),
+    ];
+    for (seed, accepted_at, confirmed_at, ..) in cases {
+        let stored = database.store_request(note(seed)).await.unwrap();
+        database
+            .writer
+            .write("set stored timestamps", move |tx| {
+                tx.execute(
+                    "UPDATE requests SET accepted_at = ?1, confirmed_at = ?2,
+                     transaction_id = ?3, committed_in_block = 12 WHERE note_id = ?4",
+                    &[&accepted_at, &confirmed_at, &transaction(1), &stored.note.id()],
+                )?;
+                Ok::<_, DatabaseError>(())
+            })
+            .await
+            .unwrap();
+    }
+    drop(database);
+
+    let database = FundingDatabase::open(&dir.path().join("funding.sqlite3"), identity())
+        .await
+        .unwrap();
+    for (seed, _, _, accepted_at, confirmed_at) in cases {
+        let stored = database.request(note(seed).note().id()).await.unwrap().unwrap();
+        assert_eq!(stored.accepted_at, UNIX_EPOCH + accepted_at);
+        assert_eq!(stored.delivery.unwrap().confirmed_at, UNIX_EPOCH + confirmed_at);
+    }
+}
+
+#[tokio::test]
+async fn failed_delivery_batches_leave_every_request_unchanged() {
+    let (_dir, database) = database().await;
+    let first = database.store_request(note(1)).await.unwrap();
+    let second = database.store_request(note(2)).await.unwrap();
+
+    assert!(
+        database
+            .record_delivery(vec![first.note.id(), note(3).note().id()], transaction(1), 12.into())
+            .await
+            .is_err()
+    );
+    assert_eq!(database.request(first.note.id()).await.unwrap(), Some(first.clone()));
+
+    database
+        .record_delivery(vec![second.note.id()], transaction(2), 13.into())
+        .await
+        .unwrap();
+    let second = database.request(second.note.id()).await.unwrap().unwrap();
+    assert!(
+        database
+            .record_delivery(vec![first.note.id(), second.note.id()], transaction(1), 12.into())
+            .await
+            .is_err()
+    );
+    assert_eq!(database.request(first.note.id()).await.unwrap(), Some(first));
+    assert_eq!(database.request(second.note.id()).await.unwrap(), Some(second));
+}
+
+#[tokio::test]
+async fn opening_requires_a_matching_database_identity() {
+    let (dir, database) = database().await;
+    let original = database.store_request(note(1)).await.unwrap();
+    drop(database);
+    let path = dir.path().join("funding.sqlite3");
+    let identities = [
+        DatabaseIdentity {
+            genesis_commitment: Word::from([2u32; 4]),
+            ..identity()
+        },
+        DatabaseIdentity {
+            funding_account_id: ACCOUNT_ID_SENDER.try_into().unwrap(),
+            ..identity()
+        },
+        DatabaseIdentity {
+            fee_asset_id: AssetId::new_fungible(
+                ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap(),
+            ),
+            ..identity()
+        },
+    ];
+    for identity in identities {
+        assert!(FundingDatabase::open(&path, identity).await.is_err());
+    }
+    let database = FundingDatabase::open(&path, identity()).await.unwrap();
+    assert_eq!(database.request(original.note.id()).await.unwrap(), Some(original));
+
+    database
+        .writer
+        .write("remove database identity", |tx| {
+            tx.execute("DELETE FROM database_identity", &[])?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    drop(database);
+    assert!(FundingDatabase::open(&path, identity()).await.is_err());
+}
+
+#[tokio::test]
+async fn invalid_funding_notes_are_not_stored() {
+    let (_dir, database) = database().await;
+    let identity = identity();
+    let other: AccountId = ACCOUNT_ID_SENDER.try_into().unwrap();
+    for (sender, asset, target, amount) in [
+        (other, identity.fee_asset_id, identity.funding_account_id, 1_000),
+        (
+            identity.funding_account_id,
+            AssetId::new_fungible(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap()),
+            other,
+            1_000,
+        ),
+        (identity.funding_account_id, identity.fee_asset_id, other, 0),
+        (
+            identity.funding_account_id,
+            identity.fee_asset_id,
+            identity.funding_account_id,
+            1_000,
+        ),
+    ] {
+        let note = crate::tx::build_funding_note(
+            sender,
+            asset,
+            target,
+            amount,
+            &mut RandomCoin::new(Word::from([1u32; 4])),
+        )
+        .unwrap();
+        let id = note.note().id();
+        assert!(database.store_request(note).await.is_err());
+        assert!(database.request(id).await.unwrap().is_none());
+    }
+}
+
+#[tokio::test]
+async fn concurrent_retries_store_each_note_once() {
+    let (_dir, database) = database().await;
+    let database = Arc::new(database);
+    let mut tasks = tokio::task::JoinSet::new();
+    for index in 0..8 {
+        let database = Arc::clone(&database);
+        tasks.spawn(async move { database.store_request(note(index % 4)).await.unwrap() });
+    }
+    while let Some(result) = tasks.join_next().await {
+        result.unwrap();
+    }
+    let pending = database.pending_requests(NonZeroUsize::new(8).unwrap()).await.unwrap();
+    assert_eq!(pending.len(), 4);
+    for seed in 0..4 {
+        assert_eq!(pending.iter().filter(|stored| stored.note == *note(seed).note()).count(), 1);
+    }
+}
+
+#[tokio::test]
+async fn corrupt_note_data_is_reported_without_discarding_other_requests() {
+    let (_dir, database) = database().await;
+    let first = database.store_request(note(1)).await.unwrap();
+    let second = database.store_request(note(2)).await.unwrap();
+    let first_id = first.note.id();
+    database
+        .writer
+        .write("corrupt stored note", move |tx| {
+            tx.execute("UPDATE requests SET note = X'FF' WHERE note_id = ?1", &[&first_id])?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    assert!(database.request(first_id).await.is_err());
+    assert!(database.pending_requests(NonZeroUsize::new(10).unwrap()).await.is_err());
+    assert_eq!(database.request(second.note.id()).await.unwrap(), Some(second));
+}
+
+const CRASH_DATABASE_PATH: &str = "MIDEN_FUNDING_TEST_CRASH_DATABASE";
+
+#[tokio::test]
+async fn acknowledged_writes_survive_abrupt_process_exit() {
+    if let Some(path) = std::env::var_os(CRASH_DATABASE_PATH) {
+        let database = FundingDatabase::open(Path::new(&path), identity()).await.unwrap();
+        database.store_request(note(1)).await.unwrap();
+        // Exit without running connection destructors or checkpointing the WAL.
+        std::process::exit(0);
+    }
+    let (dir, database) = database().await;
+    drop(database);
+    let path = dir.path().join("funding.sqlite3");
+    let status = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "db::tests::acknowledged_writes_survive_abrupt_process_exit"])
+        .env(CRASH_DATABASE_PATH, &path)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let database = FundingDatabase::open(&path, identity()).await.unwrap();
+    assert_eq!(
+        database.request(note(1).note().id()).await.unwrap().unwrap().note,
+        *note(1).note()
+    );
+}

@@ -31,6 +31,7 @@ use crate::worker::{Funder, FunderSetup, WorkerConfig};
 
 mod account;
 mod data_store;
+pub mod db;
 mod error;
 mod node;
 mod prover;
