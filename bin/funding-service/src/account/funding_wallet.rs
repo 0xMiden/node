@@ -30,6 +30,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
+use miden_standards::account::auth::AuthSingleSig;
 
 use crate::COMPONENT;
 mod deposits;
@@ -57,7 +58,7 @@ pub struct WalletUpdate {
 }
 
 impl FundingWallet {
-    /// Loads the public account at a reference block and attaches its signing key.
+    /// Loads the public account at a reference block and checks its signing key.
     pub async fn load_at(
         rpc_client: &mut RpcClient,
         account_id: AccountId,
@@ -71,6 +72,21 @@ impl FundingWallet {
              which only stores the full state of a public account",
         );
         let account = Self::load_account_at(rpc_client, account_id, block_num, None).await?;
+        let auth_root = AuthSingleSig::code()
+            .procedure_roots()
+            .next()
+            .expect("AuthSingleSig exports its authentication procedure");
+        anyhow::ensure!(
+            account.code().procedures().first() == Some(&auth_root),
+            "the funding account must use AuthSingleSig"
+        );
+        let public_key = account.storage().get_item(AuthSingleSig::public_key_slot())?;
+        let scheme_id = account.storage().get_item(AuthSingleSig::scheme_id_slot())?;
+        anyhow::ensure!(
+            public_key == Word::from(secret_key.public_key().to_commitment())
+                && scheme_id == Word::from([secret_key.auth_scheme().as_u8(), 0, 0, 0]),
+            "the signing key does not match the funding account"
+        );
         Ok(Self::new(account, secret_key, fee_asset_id))
     }
 

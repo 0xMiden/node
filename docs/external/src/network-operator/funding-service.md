@@ -14,9 +14,9 @@ that source, and it gives an operator a single account to keep funded.
 
 ## Provision the funding account
 
-Prepare a public account with a nonzero nonce and a balance of the native asset. Pass its account file to
-`miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its signing key for startup. The
-service reads the current public account state from the node.
+Prepare a public account using standard `AuthSingleSig` authentication, with a nonzero nonce and a balance of the native
+asset. Pass its account file to `miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its
+signing key for startup. The service reads the current public account state from the node.
 
 The signing-key file contains the binary serialization of `AuthSecretKey`, including its signature scheme. It supports
 ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-usdcx-genesis new-distributor` writes this file as
@@ -88,9 +88,10 @@ Runtime options also read from an environment variable named `MIDEN_FUNDING_<OPT
 
 Startup requires an existing database with the current schema. The service reads the account ID from SQLite, checks the
 stored network identity against the connected node, and loads the public account state and current fee before opening
-the HTTP listener. The signing key is read once at startup and kept in memory for signing transactions. If the database
-is missing, run `bootstrap`. If migrations are pending, stop the service and follow the procedure below. A network
-mismatch requires the correct RPC endpoint and data directory; migrating does not change the database's identity.
+the HTTP listener. Startup checks that the signing key and signature scheme match the account. The signing key is read
+once at startup and kept in memory for signing transactions. If the database is missing, run `bootstrap`. If migrations
+are pending, stop the service and follow the procedure below. A network mismatch requires the correct RPC endpoint and
+data directory; migrating does not change the database's identity.
 
 ## Migrate the database
 

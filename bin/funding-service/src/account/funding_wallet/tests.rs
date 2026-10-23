@@ -2,7 +2,6 @@ use miden_protocol::ONE;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountType};
 use miden_protocol::asset::FungibleAsset;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::note::Note;
 use miden_standards::account::auth::Approver;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -18,10 +17,10 @@ fn fee_asset_id() -> AssetId {
 }
 
 /// Builds a wallet with the authentication used by the genesis configuration.
-fn genesis_wallet(account_type: AccountType) -> (Account, SecretKey) {
+fn genesis_wallet(account_type: AccountType, scheme: AuthScheme) -> (Account, AuthSecretKey) {
     let mut rng = ChaCha20Rng::from_seed([7; 32]);
-    let secret_key = SecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let secret_key = AuthSecretKey::with_scheme_and_rng(scheme, &mut rng).unwrap();
+    let auth = Approver::from(&secret_key.public_key());
     let init_seed: [u8; 32] = rng.random();
     let mut account =
         create_basic_wallet(init_seed, auth, account_type).expect("wallet should build");
@@ -29,12 +28,16 @@ fn genesis_wallet(account_type: AccountType) -> (Account, SecretKey) {
     (account, secret_key)
 }
 
+#[rstest::rstest]
+#[case(AuthScheme::EcdsaK256Keccak)]
+#[case(AuthScheme::Falcon512Poseidon2)]
 #[tokio::test]
-async fn loads_public_state_from_the_node_with_only_an_id_and_key() -> Result<()> {
-    let (account, secret_key) = genesis_wallet(AccountType::Public);
+async fn loads_public_state_from_the_node_with_only_an_id_and_key(
+    #[case] scheme: AuthScheme,
+) -> Result<()> {
+    let (account, secret_key) = genesis_wallet(AccountType::Public, scheme);
     let server = TestServer::start(TestChain::new(12)).await;
     serve_account(&server, account.clone())?;
-    let secret_key = AuthSecretKey::Falcon512Poseidon2(secret_key);
     let wallet = FundingWallet::load_at(
         &mut server.node.rpc_client(),
         account.id(),
@@ -50,14 +53,63 @@ async fn loads_public_state_from_the_node_with_only_an_id_and_key() -> Result<()
     Ok(())
 }
 
+#[rstest::rstest]
+#[case(AuthScheme::EcdsaK256Keccak)]
+#[case(AuthScheme::Falcon512Poseidon2)]
+#[tokio::test]
+async fn rejects_an_unrelated_signing_key(#[case] scheme: AuthScheme) {
+    let (account, _) = genesis_wallet(AccountType::Public, scheme);
+    let wrong_key =
+        AuthSecretKey::with_scheme_and_rng(scheme, &mut ChaCha20Rng::from_seed([91; 32])).unwrap();
+    let server = TestServer::start(TestChain::new(12)).await;
+    serve_account(&server, account.clone()).unwrap();
+    let error = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        wrong_key,
+        fee_asset_id(),
+        12.into(),
+    )
+    .await
+    .err()
+    .expect("an unrelated signing key must be rejected");
+    assert!(error.to_string().contains("signing key does not match"), "{error:#}");
+}
+
+#[tokio::test]
+async fn rejects_a_key_with_the_wrong_signature_scheme() {
+    let (mut account, key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    account
+        .storage_mut()
+        .set_item(
+            AuthSingleSig::scheme_id_slot(),
+            Word::from([AuthScheme::EcdsaK256Keccak.as_u8(), 0, 0, 0]),
+        )
+        .unwrap();
+    let server = TestServer::start(TestChain::new(12)).await;
+    serve_account(&server, account.clone()).unwrap();
+    let error = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        key,
+        fee_asset_id(),
+        12.into(),
+    )
+    .await
+    .err()
+    .expect("a mismatched signature scheme must be rejected");
+    assert!(error.to_string().contains("signing key does not match"), "{error:#}");
+}
+
 #[tokio::test]
 async fn rejects_a_private_account() {
-    let (account, secret_key) = genesis_wallet(AccountType::Private);
+    let (account, secret_key) =
+        genesis_wallet(AccountType::Private, AuthScheme::Falcon512Poseidon2);
     let server = TestServer::start(TestChain::new(12)).await;
     let err = FundingWallet::load_at(
         &mut server.node.rpc_client(),
         account.id(),
-        AuthSecretKey::Falcon512Poseidon2(secret_key),
+        secret_key,
         fee_asset_id(),
         12.into(),
     )

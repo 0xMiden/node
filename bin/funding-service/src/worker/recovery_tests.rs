@@ -121,6 +121,51 @@ async fn with_deposits(
 }
 
 #[tokio::test]
+async fn a_failure_before_submission_releases_requests_for_retry() {
+    let fixture = Fixture::new(10_000, 0).unwrap();
+    let chain = fixture.chain.lock().await;
+    let inputs = ChainState {
+        reference_header: chain.latest_block_header(),
+        blockchain: chain.latest_partial_blockchain(),
+    };
+    let faucet = chain.committed_account(fixture.fee_faucet_id).unwrap().clone();
+    let witness = chain
+        .account_witnesses([fixture.fee_faucet_id])
+        .remove(&fixture.fee_faucet_id)
+        .unwrap();
+    drop(chain);
+    let mut rpc_chain = TestChain::new(inputs.reference_header.block_num().as_u32());
+    rpc_chain.account = Some((faucet.clone(), witness.clone()));
+    rpc_chain.unavailable_for = Some(("GetTransactionEncryptionKey", 1));
+    let server = TestServer::start(rpc_chain).await;
+    let (_directory, mut setup) = FunderSetup::fixture().await;
+    setup.wallet = fixture.wallet;
+    setup.fee_faucet = UsdcxFaucet::new(ForeignAccount::from_account(faucet, witness));
+    let payout = setup.payout(1);
+    setup.database.store_request(payout.clone()).await.unwrap();
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+
+    let error = funder
+        .submit(
+            inputs,
+            Selection {
+                deposit: None,
+                notes: vec![payout.clone()],
+            },
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.downcast_ref::<tonic::Status>().unwrap().code(), tonic::Code::Unavailable);
+    assert_eq!(
+        server.chain.lock().unwrap().unavailable_for,
+        Some(("GetTransactionEncryptionKey", 0))
+    );
+    assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
+    assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
+}
+
+#[tokio::test]
 async fn state_conflict_discards_only_the_selected_deposit() {
     let (telemetry, _guard) = Telemetry::capture();
     let (_directory, setup) = FunderSetup::fixture().await;

@@ -234,7 +234,13 @@ impl Funder {
             note_ids: selection.notes.iter().map(|note| note.note().id()).collect(),
         };
         self.setup.database.start_attempt(attempt.clone()).await?;
-        let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
+        let outcome = match self.node.submit(&transaction, &transaction_inputs).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.setup.database.release_attempt(transaction_id).await?;
+                return Err(err);
+            },
+        };
         miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
         let resolution = self.resolve_attempt(attempt, Some(outcome)).await?;
         miden_span_record!(funding.outcome = resolution.as_str() #[nonstandard]);
