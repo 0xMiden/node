@@ -41,6 +41,43 @@ fn invitation_check_request_debug_hides_invitation_code() {
     assert_eq!(decoded.verify().unwrap(), code);
 }
 
+#[test]
+fn invitation_check_response_preserves_validity_and_registration() {
+    let account_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    for (validity, valid, account_id) in [
+        (InvitationCodeValidity::Valid, true, None),
+        (InvitationCodeValidity::Invalid, false, None),
+        (InvitationCodeValidity::AlreadyUsed(account_id), false, Some(account_id.into())),
+    ] {
+        let response = proto::miden::node::v1::IsInvitationCodeValidResponse::from(validity);
+        assert_eq!(response.valid, valid);
+        assert_eq!(response.account_id, account_id);
+        assert_eq!(response.decode_fields().and_then(Verify::verify).unwrap(), validity);
+    }
+}
+
+#[test]
+fn invitation_check_response_rejects_inconsistent_or_invalid_registration() {
+    let account_id = AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+    for (valid, account_id) in [(true, account_id.into()), (false, Default::default())] {
+        let response = proto::miden::node::v1::IsInvitationCodeValidResponse {
+            valid,
+            account_id: Some(account_id),
+        };
+        assert!(response.decode_fields().and_then(Verify::verify).is_err());
+    }
+}
+
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
 }
