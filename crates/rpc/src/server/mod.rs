@@ -358,9 +358,6 @@ impl Rpc {
             // Note: must wrap the accept layer so grpc-web callers receive grpc-web-compatible
             // error responses instead of opaque transport failures.
             .layer(GrpcWebLayer::new())
-            // Resolve the (load-balancer-aware) client IP once here so handlers can read it from
-            // request extensions instead of re-deriving it from headers.
-            .layer(grpc::ResolveClientIpLayer)
             // Note: must come after the CORS layer, as otherwise accept rejections do _not_ get
             // CORS headers applied, masking the accept error in web-clients (which would experience
             // CORS rejection).
