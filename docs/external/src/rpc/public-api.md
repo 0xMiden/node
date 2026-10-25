@@ -60,6 +60,10 @@ account is allowlisted. Full nodes forward this query to the sequencer.
 registered in the invitation registry and unused. Send the code in `invitation_code`. This check does not consume the
 code.
 
+If the code has already been used, the response returns `false` and sets `account_id` to the registered account. If that
+is your account, registration is complete and retrying `RegisterAccount` with the same code succeeds. The field is
+omitted for unused or unknown codes.
+
 When account allowlist enforcement is disabled, this method always returns `true`. With enforcement enabled, an empty
 code is rejected with `INVALID_ARGUMENT`. Full nodes forward this query to the sequencer.
 
