@@ -30,9 +30,11 @@ status, explorer and faucet availability, note transport, and end-to-end network
 
 ## Rate Limiting
 
-The node does not rate limit requests. RPC deployments scale horizontally behind a load balancer, so per-node limits
-would apply per instance rather than per deployment and would not provide meaningful protection. Impose rate limits at
-the infrastructure layer instead on the load balancer or reverse proxy fronting the public entry points.
+The node does not rate limit requests or cap concurrent block and proof subscriptions. RPC deployments scale
+horizontally behind a load balancer, so per-node limits would apply per instance rather than per deployment and would
+not provide meaningful protection. Impose rate limits at the infrastructure layer instead on the load balancer or
+reverse proxy fronting the public entry points. Subscriptions are long-lived streams that a request rate limit does not
+bound, so also limit the number of concurrent streams each client can hold open.
 
 The node still protects itself against malformed or oversized requests through per-request limits: request timeouts,
 capped message sizes, and per-method parameter limits (see the RPC guide's Errors and Limits page). Slow subscription

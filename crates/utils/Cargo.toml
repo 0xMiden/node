@@ -43,9 +43,7 @@ thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "rt", "signal", "time"], workspace = true }
 tokio-util             = { workspace = true }
 tonic                  = { default-features = true, workspace = true }
-tower                  = { workspace = true }
 tower-http             = { workspace = true }
-tower_governor         = { workspace = true }
 url                    = { workspace = true }
 
 # RocksDbConfig is needed due to orphan rules
