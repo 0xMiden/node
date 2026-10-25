@@ -42,9 +42,13 @@ use miden_protocol::transaction::TransactionHeader;
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::pagination::{Page, Paginated};
 pub use crate::db::queries::{
+    AccountCommitmentChangesPage,
     HISTORICAL_BLOCK_RETENTION,
+    NullifierUpdatesPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    TransactionRecordsPage,
+    TransactionsByIdPage,
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
@@ -145,12 +149,27 @@ impl BlockHeaderCommitment {
 /// Describes the value of an asset for an account ID at `block_num` specifically.
 ///
 /// If `asset` is `None`, the asset was removed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountVaultValue {
     pub block_num: BlockNumber,
     pub vault_key: AssetId,
     /// None if the asset was removed
     pub asset: Option<Asset>,
+}
+
+/// Inclusive position of the first value in the next account-vault page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultCursor {
+    pub(crate) block_num: BlockNumber,
+    pub(crate) vault_key: AssetId,
+}
+
+/// A bounded page of squashed account-vault updates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountVaultValuesPage {
+    pub values: Vec<AccountVaultValue>,
+    /// First omitted value, or `None` when the range is complete.
+    pub next_cursor: Option<AccountVaultCursor>,
 }
 
 #[derive(Debug, PartialEq)]
