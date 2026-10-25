@@ -2166,13 +2166,9 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             query
         };
         assert!(!rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
-        assert_eq!(
-            rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner(),
-            proto::miden::node::v1::IsInvitationCodeValidResponse {
-                valid: false,
-                account_id: None,
-            }
-        );
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(!response.valid);
+        assert_eq!(response.account_id, None);
         assert_eq!(
             rpc.register_account(request()).await.unwrap_err().code(),
             tonic::Code::NotFound
@@ -2184,20 +2180,15 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             })
             .await
             .unwrap();
-        assert_eq!(
-            rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner(),
-            proto::miden::node::v1::IsInvitationCodeValidResponse { valid: true, account_id: None }
-        );
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(response.valid);
+        assert_eq!(response.account_id, None);
         rpc.register_account(request()).await.unwrap();
         rpc.register_account(request()).await.unwrap();
         assert!(rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
-        assert_eq!(
-            rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner(),
-            proto::miden::node::v1::IsInvitationCodeValidResponse {
-                valid: false,
-                account_id: Some(account.into()),
-            }
-        );
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(!response.valid);
+        assert_eq!(response.account_id, Some(account.into()));
         let mut wrong_network = query();
         wrong_network.metadata_mut().insert(
             ACCEPT.as_str(),
