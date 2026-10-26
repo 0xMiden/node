@@ -41,6 +41,48 @@ fn invitation_check_request_debug_hides_invitation_code() {
     assert_eq!(decoded.verify().unwrap(), code);
 }
 
+fn invitation_account_id() -> AccountId {
+    AccountId::dummy(
+        [7; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    )
+}
+
+#[rstest::rstest]
+#[case::valid(InvitationCodeValidity::Valid, true, None)]
+#[case::invalid(InvitationCodeValidity::Invalid, false, None)]
+#[case::already_used(
+    InvitationCodeValidity::AlreadyUsed(invitation_account_id()),
+    false,
+    Some(invitation_account_id().into())
+)]
+fn invitation_check_response_preserves_validity_and_registration(
+    #[case] validity: InvitationCodeValidity,
+    #[case] valid: bool,
+    #[case] account_id: Option<proto::account::AccountId>,
+) {
+    let response = proto::miden::node::v1::IsInvitationCodeValidResponse::from(validity);
+    assert_eq!(response.valid, valid);
+    assert_eq!(response.account_id, account_id);
+    assert_eq!(response.decode_fields().and_then(Verify::verify).unwrap(), validity);
+}
+
+#[rstest::rstest]
+#[case::registered_valid_code(true, invitation_account_id().into())]
+#[case::invalid_account(false, proto::account::AccountId::default())]
+fn invitation_check_response_rejects_inconsistent_or_invalid_registration(
+    #[case] valid: bool,
+    #[case] account_id: proto::account::AccountId,
+) {
+    let response = proto::miden::node::v1::IsInvitationCodeValidResponse {
+        valid,
+        account_id: Some(account_id),
+    };
+    assert!(response.decode_fields().and_then(Verify::verify).is_err());
+}
+
 fn word_from_u32(arr: [u32; 4]) -> Word {
     Word::from(arr)
 }

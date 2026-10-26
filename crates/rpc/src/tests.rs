@@ -2176,7 +2176,9 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             query
         };
         assert!(!rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
-        assert!(!rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(!response.valid);
+        assert_eq!(response.account_id, None);
         assert_eq!(
             rpc.register_account(request()).await.unwrap_err().code(),
             tonic::Code::NotFound
@@ -2188,11 +2190,15 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             })
             .await
             .unwrap();
-        assert!(rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(response.valid);
+        assert_eq!(response.account_id, None);
         rpc.register_account(request()).await.unwrap();
         rpc.register_account(request()).await.unwrap();
         assert!(rpc.is_account_allowed(query()).await.unwrap().into_inner().allowed);
-        assert!(!rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner().valid);
+        let response = rpc.is_invitation_code_valid(code_query()).await.unwrap().into_inner();
+        assert!(!response.valid);
+        assert_eq!(response.account_id, Some(account.into()));
         let mut wrong_network = query();
         wrong_network.metadata_mut().insert(
             ACCEPT.as_str(),
@@ -2523,6 +2529,34 @@ async fn block_subscription_starts_with_matching_config() {
         .verify()
         .unwrap();
     assert_eq!(config.to_commitment(), block.header().protocol_config_commitment());
+}
+
+#[tokio::test]
+async fn subscriptions_allow_more_than_ten_concurrent_clients() {
+    let (mut client, _, _store, _server) = start_rpc().await;
+    let mut block_streams = Vec::new();
+    let mut proof_streams = Vec::new();
+
+    for _ in 0..16 {
+        block_streams.push(
+            client
+                .block_subscription(proto::miden::node::v1::BlockSubscriptionRequest {
+                    block_from: 1,
+                })
+                .await
+                .expect("block subscription should be accepted")
+                .into_inner(),
+        );
+        proof_streams.push(
+            client
+                .proof_subscription(proto::miden::node::v1::ProofSubscriptionRequest {
+                    block_from: 1,
+                })
+                .await
+                .expect("proof subscription should be accepted")
+                .into_inner(),
+        );
+    }
 }
 
 async fn next_block_with_protocol_config(

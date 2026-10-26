@@ -48,6 +48,7 @@ service NodeService {
 
     // Returns true if the invitation code can be used to register an account. The code must be
     // registered in the invitation registry and unused. This check does not consume the code.
+    // Returns the registered account ID if the code has already been used.
     //
     // Always returns true when account allowlist enforcement is disabled. When enforcement is
     // enabled, an empty code returns INVALID_ARGUMENT.
@@ -123,14 +124,14 @@ service NodeService {
     // Streams committed blocks starting from the given block number (inclusive).
     //
     // Replays historical blocks first, then streams live blocks as they are committed.
-    // On lag (replica falls too far behind), the stream is closed with a DATA_LOSS error and
-    // the client should reconnect from its local tip.
+    // If the client falls too far behind, the stream is closed with a RESOURCE_EXHAUSTED error
+    // and the client should reconnect from its local tip.
     rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
 
     // Streams block proofs starting from the given block number (inclusive).
     //
     // Replays existing proofs first, then streams new proofs as they are generated.
-    // On lag, the stream is closed with a DATA_LOSS error.
+    // If the client falls too far behind, the stream is closed with a RESOURCE_EXHAUSTED error.
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
     // NOTE DEBUGGING ENDPOINTS
@@ -184,6 +185,10 @@ message IsInvitationCodeValidRequest {
 
 message IsInvitationCodeValidResponse {
     bool valid = 1;
+
+    // The account registered with this code, if it has already been used. Omitted for unused or
+    // unknown codes and when account allowlist enforcement is disabled.
+    optional account.AccountId account_id = 2;
 }
 
 // BLOCK SUBSCRIPTION

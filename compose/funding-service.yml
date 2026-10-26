@@ -2,11 +2,11 @@ services:
   funding-service:
     image: ${MIDEN_FUNDING_SERVICE_IMAGE:-miden-funding-service}
     pull_policy: missing
-    # The service reads the distributor account file and the trusted validator set.
+    # The service reads its signing key and trusted validator set and opens its funding database.
     volumes:
-      - node-data:/data:ro
+      - node-data:/data
     depends_on:
-      bootstrap-validator:
+      bootstrap-funding-service:
         condition: service_completed_successfully
       otel-collector:
         condition: service_started
@@ -18,10 +18,11 @@ services:
     command:
       - |
         exec miden-funding-service start \
+          --data-directory=/data/funding-service \
           --listen=0.0.0.0:50401 \
           --rpc.url=http://sequencer:57291 \
           --tx-prover.url=${MIDEN_REMOTE_PROVER_URL:-http://tx-prover:50051} \
-          --account-file=/data/usdcx/distributor.genesis.mac \
+          --signing-key-file=/data/usdcx/distributor.secret \
           --validator-signing-public-key="$$(cat /data/genesis/validator-signing-public-keys)"
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317

@@ -61,7 +61,7 @@ mod tests {
 
     #[tokio::test]
     async fn status_reports_the_configured_account_and_the_published_balance() {
-        let (state, _rx) = test_state(500);
+        let (_directory, state) = test_state(500).await;
         state.status.update(1_234, 42.into(), 7);
 
         let Json(response) = status(State(state)).await;

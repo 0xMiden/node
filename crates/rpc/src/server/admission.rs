@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationStatus};
 use miden_node_tracing::{error, miden_instrument};
@@ -52,19 +53,25 @@ impl AccountAdmission {
         self.allowlist.contains_account(account_id).await
     }
 
-    /// Returns true if the invitation code can be used to register an account. The code must be
-    /// registered in the invitation registry and unused.
+    /// Returns whether the invitation code can be used to register an account and the registered
+    /// account ID if the code has already been used.
     ///
-    /// Always returns true when account allowlist enforcement is disabled.
+    /// Returns [`InvitationCodeValidity::Valid`] when account allowlist enforcement is disabled.
     pub(crate) async fn is_invitation_code_valid(
         &self,
         invitation_code: InvitationCode,
-    ) -> Result<bool, DatabaseError> {
+    ) -> Result<InvitationCodeValidity, DatabaseError> {
         if self.disabled {
-            return Ok(true);
+            return Ok(InvitationCodeValidity::Valid);
         }
         let status = self.allowlist.invitation_status(invitation_code).await?;
-        Ok(status == InvitationStatus::Unused)
+        Ok(match status {
+            InvitationStatus::Unknown => InvitationCodeValidity::Invalid,
+            InvitationStatus::Unused => InvitationCodeValidity::Valid,
+            InvitationStatus::Registered(account_id) => {
+                InvitationCodeValidity::AlreadyUsed(account_id)
+            },
+        })
     }
 
     /// Rejects the submission if it creates an unregistered, non-network account.

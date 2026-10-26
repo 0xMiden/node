@@ -4,7 +4,8 @@
 //! order:
 //!
 //! ```text
-//! cargo run -p miden-usdcx-genesis -- new-distributor [--auth-scheme <scheme>]      # writes distributor.mac
+//! cargo run -p miden-usdcx-genesis -- new-distributor [--auth-scheme <scheme>]
+//!                                                                                   # writes distributor.mac and distributor.secret
 //! cargo run -p miden-usdcx-genesis -- faucet [--config config.json]                 # writes usdcx-faucet.mac
 //! cargo run -p miden-usdcx-genesis -- prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
 //!                                                                                   # writes distributor.genesis.mac
@@ -31,6 +32,7 @@ use miden_usdcx_genesis::config::{GenesisToolConfig, UsedNoncesFile};
 use miden_usdcx_genesis::output::{
     CONFIG_FILE,
     DISTRIBUTOR_MAC_FILE,
+    DISTRIBUTOR_SECRET_FILE,
     FAUCET_MAC_FILE,
     GENESIS_DISTRIBUTOR_MAC_FILE,
     GENESIS_FAUCET_MAC_FILE,
@@ -39,6 +41,7 @@ use miden_usdcx_genesis::output::{
     render_ids,
     render_listing,
     write_account_file,
+    write_signing_key,
 };
 
 /// Builds the genesis xUSDC faucet and its distributor offline, writes their .mac account files
@@ -52,7 +55,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Generates a fresh public basic wallet with a new signing key and writes it, key included, as
-    /// distributor.mac (undeployed: nonce zero, empty vault).
+    /// distributor.mac (undeployed: nonce zero, empty vault), plus its key as distributor.secret.
     NewDistributor {
         /// The signing scheme of the generated key.
         #[arg(long, value_enum, default_value_t = AuthSchemeArg::EcdsaK256Keccak)]
@@ -115,6 +118,13 @@ fn main() -> Result<()> {
 fn run_new_distributor(scheme: AuthScheme) -> Result<()> {
     let distributor = new_distributor(scheme).context("generating the distributor")?;
     write_account_file(&distributor, Path::new(DISTRIBUTOR_MAC_FILE))?;
+    write_signing_key(
+        distributor
+            .auth_secret_keys()
+            .first()
+            .context("the distributor has no signing key")?,
+        Path::new(DISTRIBUTOR_SECRET_FILE),
+    )?;
     print!(
         "{}",
         render_ids(
@@ -122,7 +132,7 @@ fn run_new_distributor(scheme: AuthScheme) -> Result<()> {
             distributor.account().id(),
         )
     );
-    println!("written to {DISTRIBUTOR_MAC_FILE}");
+    println!("written to {DISTRIBUTOR_MAC_FILE} and {DISTRIBUTOR_SECRET_FILE}");
     Ok(())
 }
 

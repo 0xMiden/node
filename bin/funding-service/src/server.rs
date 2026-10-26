@@ -1,5 +1,6 @@
 //! The HTTP server.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -8,14 +9,12 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_node_utils::usdcx_p2id::UsdcxP2Id;
-use miden_protocol::asset::AssetId;
 use tokio::net::TcpListener;
-use tokio::sync::mpsc;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
+use crate::db::FundingDatabase;
 use crate::status::StatusSnapshot;
 
 mod request_funds;
@@ -33,11 +32,9 @@ const REQUEST_FUNDS_PATH: &str = "/request-funds";
 /// The state the handlers share.
 #[derive(Clone)]
 pub(crate) struct FundingState {
-    /// Where a handler puts the note it built, for the worker to create.
-    pub(crate) requests: mpsc::Sender<UsdcxP2Id>,
+    /// Durable storage for accepted funding notes.
+    pub(crate) database: Arc<FundingDatabase>,
     pub(crate) status: StatusSnapshot,
-    /// The native asset the notes hold.
-    pub(crate) fee_asset_id: AssetId,
 }
 
 /// The HTTP service of the funding service.
@@ -48,13 +45,12 @@ pub struct FundingServer {
 
 impl FundingServer {
     pub(crate) fn new(
-        requests: mpsc::Sender<UsdcxP2Id>,
+        database: Arc<FundingDatabase>,
         status: StatusSnapshot,
-        fee_asset_id: AssetId,
         request_timeout: Duration,
     ) -> Self {
         Self {
-            state: FundingState { requests, status, fee_asset_id },
+            state: FundingState { database, status },
             request_timeout,
         }
     }
@@ -102,27 +98,30 @@ impl FundingServer {
 pub(crate) mod tests {
     use axum::body::Body;
     use axum::http::Request;
-    use miden_protocol::asset::FungibleAsset;
+    use miden_protocol::Word;
+    use miden_protocol::asset::{AssetId, FungibleAsset};
     use tower::ServiceExt;
 
     use super::*;
 
-    /// Builds a server whose worker channel is held by the caller, so a test can assert on what the
-    /// handlers queued without running a worker.
-    pub(crate) fn test_state(max_amount: u64) -> (FundingState, mpsc::Receiver<UsdcxP2Id>) {
-        let (requests, rx) = mpsc::channel(4);
+    /// Builds handler state backed by a temporary database.
+    pub(crate) async fn test_state(max_amount: u64) -> (tempfile::TempDir, FundingState) {
         let fee_faucet_id = FungibleAsset::mock_issuer();
         let status =
             StatusSnapshot::new(fee_faucet_id, crate::test_utils::test_native_asset(), max_amount);
-
-        (
-            FundingState {
-                requests,
-                status,
+        let directory = tempfile::tempdir().unwrap();
+        let database = FundingDatabase::bootstrap(
+            &directory.path().join(crate::lifecycle::DATABASE_FILENAME),
+            crate::db::DatabaseIdentity {
+                genesis_commitment: Word::from([1u32; 4]),
+                funding_account_id: status.account_id(),
                 fee_asset_id: AssetId::new_fungible(fee_faucet_id),
             },
-            rx,
         )
+        .await
+        .unwrap();
+
+        (directory, FundingState { database: Arc::new(database), status })
     }
 
     pub(crate) fn test_router(state: FundingState) -> Router {
@@ -135,7 +134,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn status_is_served_as_json_on_its_route() {
-        let (state, _rx) = test_state(500);
+        let (_directory, state) = test_state(500).await;
 
         let response = test_router(state)
             .oneshot(Request::get(STATUS_PATH).body(Body::empty()).unwrap())
@@ -146,10 +145,11 @@ pub(crate) mod tests {
         assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
     }
 
-    /// A malformed account ID must be rejected before the request reaches the worker.
+    /// A malformed account ID must be rejected before persistence.
     #[tokio::test]
     async fn a_malformed_account_id_is_rejected() {
-        let (state, mut rx) = test_state(500);
+        let (_directory, state) = test_state(500).await;
+        let database = Arc::clone(&state.database);
 
         let response = test_router(state)
             .oneshot(
@@ -162,6 +162,6 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(rx.try_recv().is_err(), "no request should reach the worker");
+        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
     }
 }

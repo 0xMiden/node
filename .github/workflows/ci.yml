@@ -53,7 +53,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -131,7 +131,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -161,7 +161,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository) && 30 || 90
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -174,7 +174,7 @@ jobs:
           expected-patterns: '["next", "release/v*"]'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
       - uses: WarpBuilds/rust-cache@v2.9.1
@@ -199,7 +199,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -239,11 +239,11 @@ jobs:
           sudo apt-get install --yes --no-install-recommends ca-certificates
           dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
             ge 20260816ubuntu0.24.04.1
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
@@ -271,7 +271,7 @@ jobs:
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -285,7 +285,7 @@ jobs:
           prefix-key: ${{ env.CACHE_PREFIX }}
           cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -329,7 +329,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository) && 20 || 90
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -382,7 +382,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/check-rust-versions
@@ -392,11 +392,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install cargo-audit
@@ -467,7 +467,7 @@ jobs:
           dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
             ge 20260816ubuntu0.24.04.1
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -528,7 +528,7 @@ jobs:
       # Checks workflows and local actions for unsafe permissions, script
       # injection, credential exposure, and unpinned container images.
       - name: zizmor
-        uses: zizmorcore/zizmor-action@v0.7.0
+        uses: zizmorcore/zizmor-action@v0.7.1
         with:
           advanced-security: false
           config: .config/zizmor.yml
@@ -549,15 +549,15 @@ jobs:
           sudo apt-get install --yes --no-install-recommends ca-certificates
           dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
             ge 20260816ubuntu0.24.04.1
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: typos@1.42.0
       - name: Install Markdown tools
@@ -579,7 +579,7 @@ jobs:
           sudo apt-get install --yes --no-install-recommends ca-certificates
           dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
             ge 20260816ubuntu0.24.04.1
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/setup-xtask
@@ -588,7 +588,7 @@ jobs:
       - name: Rustup +nightly
         run: rustup toolchain install --no-self-update nightly --component rustfmt
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
@@ -604,10 +604,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -617,10 +617,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
@@ -630,11 +630,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install workspace inheritance checker
@@ -646,11 +646,11 @@ jobs:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install cargo-shear
