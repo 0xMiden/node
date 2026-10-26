@@ -140,7 +140,6 @@ impl Server {
                     .expose_headers(Any),
             )
             .layer(tonic_web::GrpcWebLayer::new())
-            .layer(grpc::ResolveClientIpLayer)
             .layer(GlobalConcurrencyLimitLayer::new(self.config.max_connections.get()))
             .timeout(self.config.grpc.request_timeout)
             .add_service(health_service.max_decoding_message_size(max_decoding_message_size))

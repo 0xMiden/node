@@ -5006,9 +5006,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tonic",
- "tower",
  "tower-http",
- "tower_governor",
  "url",
 ]
 
