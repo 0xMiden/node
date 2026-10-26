@@ -36,13 +36,13 @@ jobs:
       pages: write
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       # Installation from source takes a fair while, so we install the binaries directly instead.
       - name: Install mdbook and plugins
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: mdbook@0.4.52, mdbook-linkcheck@0.7.7, mdbook-alerts@0.8.0, mdbook-katex@0.9.4
 
@@ -79,4 +79,4 @@ jobs:
     steps:
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v5.0.0
+        uses: actions/deploy-pages@v5.0.1
