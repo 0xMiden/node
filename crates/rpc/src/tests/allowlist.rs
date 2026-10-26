@@ -613,11 +613,25 @@ async fn is_invitation_code_valid_respects_enforcement() {
                 tonic::Code::InvalidArgument
             );
         } else {
-            assert!(rpc.is_invitation_code_valid(query("")).await.unwrap().into_inner().valid);
+            assert_eq!(
+                rpc.is_invitation_code_valid(query("")).await.unwrap().into_inner(),
+                proto::miden::node::v1::IsInvitationCodeValidResponse {
+                    valid: true,
+                    account_id: None,
+                }
+            );
         }
-        for (code, expected) in [(unused, true), (registered, !enforced), (unknown, !enforced)] {
+        for (code, valid, account_id) in [
+            (unused, true, None),
+            (registered, !enforced, enforced.then_some(account.into())),
+            (unknown, !enforced, None),
+        ] {
             let response = rpc.is_invitation_code_valid(query(code)).await.unwrap();
-            assert_eq!(response.into_inner().valid, expected, "code {code:?}");
+            assert_eq!(
+                response.into_inner(),
+                proto::miden::node::v1::IsInvitationCodeValidResponse { valid, account_id },
+                "code {code:?} with enforcement {enforced}"
+            );
         }
     }
 }

@@ -4817,6 +4817,7 @@ dependencies = [
  "prost",
  "prost-types",
  "rand 0.10.3",
+ "rstest",
  "thiserror 2.0.21",
  "tokio",
  "tokio-stream",

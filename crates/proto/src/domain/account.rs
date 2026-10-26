@@ -188,6 +188,46 @@ impl Verify for DecodedIsInvitationCodeValidRequest {
     }
 }
 
+// IS INVITATION CODE VALID RESPONSE
+// ================================================================================================
+
+/// Whether an invitation code can register an account, including the account ID for a used code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvitationCodeValidity {
+    Valid,
+    Invalid,
+    AlreadyUsed(AccountId),
+}
+
+impl Verify for proto::miden::node::v1::DecodedIsInvitationCodeValidResponse {
+    type Verified = InvitationCodeValidity;
+    type Error = ConversionError;
+
+    fn verify(self) -> Result<Self::Verified, Self::Error> {
+        let account_id = self.account_id.verify().context("account_id")?;
+        match (self.valid, account_id) {
+            (true, None) => Ok(InvitationCodeValidity::Valid),
+            (false, None) => Ok(InvitationCodeValidity::Invalid),
+            (false, Some(account_id)) => Ok(InvitationCodeValidity::AlreadyUsed(account_id)),
+            (true, Some(_)) => Err(ConversionError::message(
+                "a valid invitation code cannot have a registered account",
+            )
+            .context("account_id")),
+        }
+    }
+}
+
+impl From<InvitationCodeValidity> for proto::miden::node::v1::IsInvitationCodeValidResponse {
+    fn from(validity: InvitationCodeValidity) -> Self {
+        let (valid, account_id) = match validity {
+            InvitationCodeValidity::Valid => (true, None),
+            InvitationCodeValidity::Invalid => (false, None),
+            InvitationCodeValidity::AlreadyUsed(account_id) => (false, Some(account_id.into())),
+        };
+        Self { valid, account_id }
+    }
+}
+
 // ACCOUNT REQUEST
 // ================================================================================================
 

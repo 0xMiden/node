@@ -48,6 +48,7 @@ service NodeService {
 
     // Returns true if the invitation code can be used to register an account. The code must be
     // registered in the invitation registry and unused. This check does not consume the code.
+    // Returns the registered account ID if the code has already been used.
     //
     // Always returns true when account allowlist enforcement is disabled. When enforcement is
     // enabled, an empty code returns INVALID_ARGUMENT.
@@ -182,6 +183,10 @@ message IsInvitationCodeValidRequest {
 
 message IsInvitationCodeValidResponse {
     bool valid = 1;
+
+    // The account registered with this code, if it has already been used. Omitted for unused or
+    // unknown codes and when account allowlist enforcement is disabled.
+    optional account.AccountId account_id = 2;
 }
 
 // BLOCK SUBSCRIPTION
