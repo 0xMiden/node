@@ -64,18 +64,23 @@ pub fn constant(delay: Duration, max_times: Option<usize>) -> ConstantBuilder {
 ///
 /// Tonic can report connection closures as cancelled, internal, or unknown errors. Requiring a
 /// transport error in their source chain avoids retrying application errors with those codes.
+///
+/// Client request timeouts also surface as cancelled transport errors. They are excluded so that
+/// an unresponsive server fails after one timeout instead of one per attempt.
 pub fn is_retryable_grpc_error(status: &tonic::Status) -> bool {
     match status.code() {
         tonic::Code::Unavailable => true,
         tonic::Code::Cancelled | tonic::Code::Internal | tonic::Code::Unknown => {
+            let mut transport = false;
             let mut source = status.source();
             while let Some(error) = source {
-                if error.is::<tonic::transport::Error>() {
-                    return true;
+                if error.is::<tonic::TimeoutExpired>() {
+                    return false;
                 }
+                transport |= error.is::<tonic::transport::Error>();
                 source = error.source();
             }
-            false
+            transport
         },
         _ => false,
     }
