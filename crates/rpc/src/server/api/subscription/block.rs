@@ -4,7 +4,6 @@ use std::sync::Arc;
 use futures::{Stream, TryStreamExt};
 use miden_node_proto::generated as proto;
 use miden_node_tracing::{debug, error, miden_instrument};
-use miden_node_utils::grpc::ClientIp;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
 use super::super::{COMPONENT, RpcService};
@@ -40,13 +39,11 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         &self,
         input: Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
-        extensions: &tonic::codegen::http::Extensions,
+        _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let client_ip = ClientIp::from_extensions(extensions);
-
         debug!(target: LOG_TARGET, "Subscribing to blocks");
 
-        let stream = SubscriptionStream::blocks(self, input, client_ip)?;
+        let stream = SubscriptionStream::blocks(self, input)?;
         let state = Arc::clone(&self.state);
         Ok(Box::pin(futures::stream::try_unfold(
             (stream, state, None),

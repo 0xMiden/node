@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{ArgGroup, Parser};
 use miden_funding_service::{
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
@@ -14,36 +14,81 @@ use miden_funding_service::{
     DEFAULT_TX_EXPIRATION_DELTA,
     DEFAULT_TX_PROVER_TIMEOUT,
     FundingServiceConfig,
+    lifecycle,
 };
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
+use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 use miden_node_utils::shutdown::CancellationToken;
+use miden_protocol::account::AccountId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 
 const ENV_LISTEN: &str = "MIDEN_FUNDING_LISTEN";
+const ENV_DATA_DIRECTORY: &str = "MIDEN_FUNDING_DATA_DIRECTORY";
 const ENV_HTTP_TIMEOUT: &str = "MIDEN_FUNDING_HTTP_TIMEOUT";
 const ENV_RPC_URL: &str = "MIDEN_FUNDING_RPC_URL";
 const ENV_RPC_TIMEOUT: &str = "MIDEN_FUNDING_RPC_TIMEOUT";
 const ENV_TX_PROVER_URL: &str = "MIDEN_FUNDING_TX_PROVER_URL";
 const ENV_TX_PROVER_TIMEOUT: &str = "MIDEN_FUNDING_TX_PROVER_TIMEOUT";
-const ENV_ACCOUNT_FILE: &str = "MIDEN_FUNDING_ACCOUNT_FILE";
+const ENV_ACCOUNT_ID: &str = "MIDEN_FUNDING_ACCOUNT_ID";
+const ENV_SIGNING_KEY_FILE: &str = "MIDEN_FUNDING_SIGNING_KEY_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
 const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS";
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
+#[expect(clippy::large_enum_variant, reason = "CLI arguments are parsed once at startup")]
 pub enum FundingServiceCommand {
+    /// Initializes the funding database from a trusted genesis block and funding account ID.
+    #[command(group(
+        ArgGroup::new("genesis_block_source")
+            .required(true)
+            .multiple(false)
+            .args(["genesis_block_file", "network"])
+    ))]
+    Bootstrap {
+        /// Directory for the funding service's persistent database.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+
+        /// Public account used to fund requests.
+        #[arg(long, env = ENV_ACCOUNT_ID, value_parser = AccountId::from_hex, value_name = "HEX")]
+        account_id: AccountId,
+
+        /// Bootstrap from a trusted genesis block file.
+        #[arg(long = "genesis", value_name = "FILE")]
+        genesis_block_file: Option<PathBuf>,
+
+        /// Download the genesis block for an official Miden network.
+        #[arg(long, value_enum, value_name = "NETWORK")]
+        network: Option<OfficialNetwork>,
+    },
+
+    /// Applies pending database migrations while the funding service is stopped.
+    Migrate {
+        /// Directory for the funding service's persistent database.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
+    },
+
     /// Starts the funding service.
     Start {
         #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
+
+        /// Directory for the funding service's bootstrapped database.
+        #[arg(long, env = ENV_DATA_DIRECTORY, value_name = "DIR")]
+        data_directory: PathBuf,
         /// Socket address at which to serve the funding service's HTTP API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: SocketAddr,
@@ -86,9 +131,9 @@ pub enum FundingServiceCommand {
         )]
         tx_prover_timeout: Duration,
 
-        /// Path to the account file of the funding account.
-        #[arg(long = "account-file", env = ENV_ACCOUNT_FILE, value_name = "PATH")]
-        account_file: PathBuf,
+        /// Path to the serialized funding account signing key.
+        #[arg(long = "signing-key-file", env = ENV_SIGNING_KEY_FILE, value_name = "PATH")]
+        signing_key_file: PathBuf,
 
         /// Largest amount one request may ask for, in base units of the native asset.
         #[arg(
@@ -143,21 +188,52 @@ pub enum FundingServiceCommand {
 
 impl FundingServiceCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> Result<()> {
+        match self {
+            Self::Start { .. } => self.start(shutdown).await,
+            Self::Bootstrap {
+                data_directory,
+                account_id,
+                genesis_block_file,
+                network,
+            } => {
+                let genesis = match (genesis_block_file, network) {
+                    (Some(path), None) => read_genesis_block(&path)?,
+                    (None, Some(network)) => fetch_genesis_block(network).await?,
+                    _ => unreachable!("clap requires exactly one genesis block source"),
+                };
+                lifecycle::bootstrap(&data_directory, account_id, &genesis).await?;
+                info!(
+                    target: miden_funding_service::LOG_TARGET,
+                    "Funding service bootstrap complete",
+                    genesis.commitment = genesis.inner().header().commitment(),
+                    data.directory = data_directory.as_path()
+                );
+                Ok(())
+            },
+            Self::Migrate { data_directory } => lifecycle::migrate(&data_directory),
+        }
+    }
+
+    async fn start(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
             grpc_message_size,
+            data_directory,
             listen,
             http_timeout,
             rpc_url,
             rpc_timeout,
             tx_prover_url,
             tx_prover_timeout,
-            account_file,
+            signing_key_file,
             max_amount,
             max_notes_per_tx,
             tx_expiration_delta,
             poll_interval,
             validator_signing_public_keys,
-        } = self;
+        } = self
+        else {
+            unreachable!("start is only called for the Start variant")
+        };
 
         info!(
             target: miden_funding_service::LOG_TARGET,
@@ -170,42 +246,48 @@ impl FundingServiceCommand {
             rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
             tx_prover.endpoint =
                 tx_prover_url.as_ref().map_or_else(|| "local".to_owned(), format_endpoint),
-            account.file = account_file.as_path(),
+            path = signing_key_file.as_path(),
+            data.directory = data_directory.as_path(),
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
             funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
         );
 
+        let service = FundingServiceConfig::new(
+            rpc_url,
+            signing_key_file,
+            validator_signing_public_keys,
+            data_directory,
+        )
+        .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
+        .with_tx_prover_url(tx_prover_url)
+        .with_http_timeout(http_timeout)
+        .with_rpc_timeout(rpc_timeout)
+        .with_tx_prover_timeout(tx_prover_timeout)
+        .with_max_amount(max_amount)
+        .with_max_notes_per_tx(max_notes_per_tx)
+        .with_tx_expiration_delta(tx_expiration_delta)
+        .with_poll_interval(poll_interval)
+        .build()
+        .await
+        .context("failed to initialize the funding service")?;
+
         let listener = TcpListener::bind(listen)
             .await
             .context("failed to bind to the funding service's HTTP socket")?;
-
-        FundingServiceConfig::new(rpc_url, account_file, validator_signing_public_keys)
-            .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
-            .with_tx_prover_url(tx_prover_url)
-            .with_http_timeout(http_timeout)
-            .with_rpc_timeout(rpc_timeout)
-            .with_tx_prover_timeout(tx_prover_timeout)
-            .with_max_amount(max_amount)
-            .with_max_notes_per_tx(max_notes_per_tx)
-            .with_tx_expiration_delta(tx_expiration_delta)
-            .with_poll_interval(poll_interval)
-            .build()
-            .await
-            .context("failed to initialize the funding service")?
+        service
             .run(listener, shutdown)
             .await
             .context("failed while running the funding service")
     }
 
-    /// The OpenTelemetry configuration of the only command.
-    #[expect(
-        clippy::unused_self,
-        reason = "the caller reads this from the parsed command, like the other binaries"
-    )]
+    /// Enables trace export for the running service.
     pub fn open_telemetry(&self) -> OpenTelemetry {
-        OpenTelemetry::from_env().with_name("funding-service")
+        match self {
+            Self::Start { .. } => OpenTelemetry::from_env().with_name("funding-service"),
+            Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
+        }
     }
 }
 

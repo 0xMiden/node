@@ -33,6 +33,8 @@ services:
           exit 1
         fi
 
+        printf '%s\n' "$${DISTRIBUTOR_ID}" > /data/usdcx/distributor-id
+
         cat > config.json <<EOF
         {
           "accounts": {
@@ -292,3 +294,28 @@ services:
           --genesis /data/genesis/genesis.dat
 
         touch /data/ntx-builder/.bootstrapped
+
+  bootstrap-funding-service:
+    image: ${MIDEN_FUNDING_SERVICE_IMAGE:-miden-funding-service}
+    pull_policy: missing
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    depends_on:
+      bootstrap-validator:
+        condition: service_completed_successfully
+    command:
+      - |
+        set -e
+        if [ -f /data/funding-service/.bootstrapped ]; then
+          echo "Funding service already bootstrapped."
+          exit 0
+        fi
+
+        echo "Bootstrapping funding service..."
+        miden-funding-service bootstrap \
+          --data-directory /data/funding-service \
+          --account-id "$$(cat /data/usdcx/distributor-id)" \
+          --genesis /data/genesis/genesis.dat
+
+        touch /data/funding-service/.bootstrapped

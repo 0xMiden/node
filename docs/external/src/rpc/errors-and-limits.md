@@ -184,11 +184,11 @@ transaction, must complete within this window or re-anchor to a newer block.
 The RPC server checks the `Accept` header for Miden-specific media parameters:
 
 ```text
-application/vnd.miden; version=<semver>; genesis=<genesis-commitment>
+application/vnd.miden; genesis=<genesis-commitment>
 ```
 
-Both parameters are optional for read requests. Write requests, including `SubmitProvenTx` and `SubmitProvenTxBatch`,
-require the `genesis` parameter so the client explicitly targets the intended network.
+The `genesis` parameter is optional for read requests. Write requests, including `SubmitProvenTx` and
+`SubmitProvenTxBatch`, require it so the client explicitly targets the intended network.
 
-The server accepts compatible major/minor RPC versions. Stable versions allow patch flexibility. Pre-release versions
-must match the pre-release label and patch version expected by the server.
+The RPC API is versioned by its protobuf package, currently `miden.node.v1`. Legacy clients may still include a
+`version` parameter in the `Accept` header; the server ignores its value.

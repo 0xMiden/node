@@ -53,7 +53,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -131,7 +131,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -161,7 +161,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository) && 30 || 90
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -174,7 +174,7 @@ jobs:
           expected-patterns: '["next", "release/v*"]'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
       - uses: WarpBuilds/rust-cache@v2.9.1
@@ -199,7 +199,7 @@ jobs:
         'warp-ubuntu-latest-x64-8x' || 'ubuntu-24.04'
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -216,19 +216,34 @@ jobs:
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
+  # Node.js jobs use Ubuntu's updated CA bundle for HTTPS connections.
+  #
+  # Node.js 22.18.0's bundled roots still trust the compromised eMudhra intermediates.
+  # Each job updates and verifies Ubuntu's CA package before running Node.js actions,
+  # then uses --use-openssl-ca to replace Node.js's bundled roots for Node.js and npm.
+  # See https://emudhra.we-have-a-problem.com/.
   external-docs:
     name: docs - external
     runs-on: ubuntu-24.04
     env:
+      # Use the updated system CA bundle for Node.js and npm HTTPS connections.
+      NODE_OPTIONS: --use-openssl-ca
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
       # Docusaurus checks for package updates during builds and may try to write to a user config
       # directory. Disable that notifier in CI so docs output is limited to build/link failures.
       NO_UPDATE_NOTIFIER: "1"
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Update CA certificates
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates
+          dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+            ge 20260816ubuntu0.24.04.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
@@ -256,7 +271,7 @@ jobs:
     env:
       DATA_DIR: /tmp/store
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -270,7 +285,7 @@ jobs:
           prefix-key: ${{ env.CACHE_PREFIX }}
           cache-provider: warpbuild
           save-if: ${{ env.SAVE_CACHE }}
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -314,7 +329,7 @@ jobs:
           github.event.pull_request.head.repo.full_name == github.repository) && 20 || 90
       }}
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
@@ -367,7 +382,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/check-rust-versions
@@ -377,11 +392,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install cargo-audit
@@ -445,8 +460,14 @@ jobs:
       actions: read
       contents: read
     steps:
+      - name: Update CA certificates
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates
+          dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+            ge 20260816ubuntu0.24.04.1
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -468,6 +489,30 @@ jobs:
       - name: yamllint
         run: |
           python3 -m venv "${RUNNER_TEMP}/yamllint"
+          "${RUNNER_TEMP}/yamllint/bin/python" - <<'PY'
+          import subprocess
+          import sys
+          from importlib.metadata import version
+          from pip._vendor.packaging.version import Version
+
+          # Bootstrap pip using Ubuntu's patched CA bundle.
+          #
+          # Venvs can start with an older pip. Disable additive truststore loading
+          # where supported so the upgrade cannot use pip's old bundled roots.
+          if Version(version("pip")) < Version("26.2.2"):
+              tls_options = ["--cert", "/etc/ssl/certs/ca-certificates.crt"]
+              if Version(version("pip")) >= Version("24.2"):
+                  tls_options.append("--use-deprecated=legacy-certs")
+              subprocess.run(
+                  [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                   "--upgrade", *tls_options, "pip>=26.2.2"],
+                  check=True,
+              )
+
+          pip_version = version("pip")
+          if Version(pip_version) < Version("26.2.2"):
+              raise SystemExit(f"pip >= 26.2.2 is required for the updated CA bundle; found {pip_version}")
+          PY
           "${RUNNER_TEMP}/yamllint/bin/pip" install --disable-pip-version-check yamllint==1.38.0
           "${RUNNER_TEMP}/yamllint/bin/yamllint" -c .config/yamllint.yml .github/workflows .github/actions
 
@@ -483,7 +528,7 @@ jobs:
       # Checks workflows and local actions for unsafe permissions, script
       # injection, credential exposure, and unpinned container images.
       - name: zizmor
-        uses: zizmorcore/zizmor-action@v0.7.0
+        uses: zizmorcore/zizmor-action@v0.7.1
         with:
           advanced-security: false
           config: .config/zizmor.yml
@@ -493,16 +538,26 @@ jobs:
     name: lint - spelling
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      # Use the updated system CA bundle for Node.js and npm HTTPS connections.
+      NODE_OPTIONS: --use-openssl-ca
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Update CA certificates
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates
+          dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+            ge 20260816ubuntu0.24.04.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: typos@1.42.0
       - name: Install Markdown tools
@@ -513,8 +568,18 @@ jobs:
   fmt:
     name: lint - formatting
     runs-on: ubuntu-24.04
+    env:
+      # Use the updated system CA bundle for Node.js and npm HTTPS connections.
+      NODE_OPTIONS: --use-openssl-ca
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     steps:
-      - uses: actions/checkout@v6.0.2
+      - name: Update CA certificates
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ca-certificates
+          dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" \
+            ge 20260816ubuntu0.24.04.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - uses: $/.github/actions/setup-xtask
@@ -523,7 +588,7 @@ jobs:
       - name: Rustup +nightly
         run: rustup toolchain install --no-self-update nightly --component rustfmt
       - name: Setup Node.js
-        uses: actions/setup-node@v6.0.0
+        uses: actions/setup-node@v7.1.0
         with:
           node-version: "22.18.0"
           package-manager-cache: false
@@ -539,10 +604,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -552,10 +617,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.75.18
+      - uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
@@ -565,11 +630,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install workspace inheritance checker
@@ -581,11 +646,11 @@ jobs:
     name: lint - unused deps
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6.0.2
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.75.18
+        uses: taiki-e/install-action@v2.87.29
         with:
           tool: cargo-binstall@1.25.3
       - name: Install cargo-shear

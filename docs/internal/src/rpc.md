@@ -10,14 +10,15 @@ component), reducing the load in this critical component.
 
 ## RPC Versioning and the HTTP `ACCEPT` header
 
-The RPC component allows clients to negotiate their desired Miden RPC version using the well-known HTTP `ACCEPT` header, using the following format:
+The RPC API is versioned by its protobuf package, currently `miden.node.v1`, independently of the node release version.
+The RPC component checks the target network using the HTTP `Accept` header:
 
 ```sh
-application/vnd.miden; version=<version-req>; genesis=<genesis-commitment>
+application/vnd.miden; genesis=<genesis-commitment>
 ```
 
-The `version` lets the client specify their supported version and the server will attempt to comply if it can. At this early stage, only client versions which are semver compatible with the
-server version are likely to be accepted i.e. the server in all likely only supports a _single version_.
+Legacy clients may include a `version` parameter. The server ignores its value, so clients do not need to match the
+node release version.
 
 The `genesis` property is intended to let the client confirm they are on the correct network, by specifying the network's genesis commitment. This guards against operating on the wrong network,
 as well as against network resets.

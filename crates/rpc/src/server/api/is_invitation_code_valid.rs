@@ -1,3 +1,4 @@
+use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::allowlist::InvitationCode;
@@ -10,7 +11,7 @@ use crate::COMPONENT;
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcService {
     type Input = String;
-    type Output = bool;
+    type Output = InvitationCodeValidity;
 
     fn decode(
         request: proto::miden::node::v1::IsInvitationCodeValidRequest,
@@ -19,9 +20,9 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
     }
 
     fn encode(
-        valid: Self::Output,
+        output: Self::Output,
     ) -> tonic::Result<proto::miden::node::v1::IsInvitationCodeValidResponse> {
-        Ok(proto::miden::node::v1::IsInvitationCodeValidResponse { valid })
+        Ok(output.into())
     }
 
     // The invitation code is a secret. Do not record it on the span.
@@ -35,7 +36,7 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
         match &self.backend {
             RpcBackend::Sequencer { account_admission, .. } => {
                 if account_admission.is_disabled() {
-                    return Ok(true);
+                    return Ok(InvitationCodeValidity::Valid);
                 }
                 let invitation = InvitationCode::new(&invitation_code)
                     .map_err(|error| Status::invalid_argument(error.to_string()))?;
@@ -56,8 +57,10 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
                     .as_ref()
                     .clone()
                     .is_invitation_code_valid(request)
-                    .await
-                    .map(|response| response.into_inner().valid)
+                    .await?
+                    .into_inner()
+                    .decode_and_verify()
+                    .map_err(|error| log_internal_error(&error))
             },
         }
     }

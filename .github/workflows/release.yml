@@ -34,7 +34,7 @@ jobs:
       publishable_crates: ${{ steps.release.outputs.publishable_crates }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
@@ -126,7 +126,7 @@ jobs:
         include: ${{ fromJson(needs.preflight.outputs.publishable_crates) }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
@@ -159,7 +159,7 @@ jobs:
     if: ${{ github.repository_owner == '0xMiden' }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0
@@ -219,7 +219,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6.0.2
+        uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.tag }}
           fetch-depth: 0

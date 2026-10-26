@@ -47,10 +47,10 @@ pub const COMPONENT: &str = "miden-block-producer";
 pub const LOG_TARGET: &str = "user::miden-block-producer";
 
 /// The number of transactions per batch.
-pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+pub const DEFAULT_MAX_TXS_PER_BATCH: NonZeroUsize = NonZeroUsize::new(4).unwrap();
 
 /// Maximum number of batches per block.
-pub const DEFAULT_MAX_BATCHES_PER_BLOCK: NonZeroUsize = NonZeroUsize::new(8).unwrap();
+pub const DEFAULT_MAX_BATCHES_PER_BLOCK: NonZeroUsize = NonZeroUsize::new(64).unwrap();
 
 /// Default size of the batch-builder worker pool.
 ///

@@ -1,7 +1,7 @@
 //! The funding worker.
 //!
 //! One task owns the funding account and submits one transaction at a time.
-//! It holds at most one batch of requests. Other requests stay in the bounded channel.
+//! It periodically loads pending requests from SQLite, refreshes the wallet, and retries pending work.
 
 use std::collections::{HashMap, VecDeque};
 use std::num::{NonZeroU16, NonZeroUsize};
@@ -16,16 +16,15 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
-use tokio::sync::mpsc;
-use tokio::time::Instant;
 
 use crate::account::FundingWallet;
+use crate::db::{FundingDatabase, TransactionAttempt};
 use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
@@ -52,7 +51,7 @@ pub struct WorkerConfig {
     pub max_notes_per_tx: NonZeroUsize,
     /// How many blocks after its reference block a funding transaction expires.
     pub expiration_delta: NonZeroU16,
-    /// How often the worker syncs the wallet or checks a submitted transaction.
+    /// The delay between funding attempts or checks of a submitted transaction.
     pub poll_interval: Duration,
 }
 
@@ -61,6 +60,8 @@ pub struct WorkerConfig {
 
 /// What the worker needs besides its node and prover.
 pub struct FunderSetup {
+    /// Durable pending requests and delivery records.
+    pub database: Arc<FundingDatabase>,
     /// The funding wallet and its deposit scan progress.
     pub wallet: FundingWallet,
     /// The native asset, which pays the fee.
@@ -87,8 +88,6 @@ pub struct Funder {
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
-    /// The active batch contains at most `max_notes_per_tx` requests.
-    queued: VecDeque<UsdcxP2Id>,
 }
 
 impl Funder {
@@ -99,49 +98,35 @@ impl Funder {
             prover,
             setup,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
-            queued: VecDeque::new(),
         }
     }
 
-    /// Runs the worker until the request channel closes or the service shuts down.
-    pub async fn run(
-        self,
-        requests: mpsc::Receiver<UsdcxP2Id>,
-        shutdown: CancellationToken,
-    ) -> Result<()> {
-        shutdown.run_until_cancelled(self.run_loop(requests)).await.unwrap_or(Ok(()))
+    /// Runs the worker until the service shuts down.
+    pub async fn run(self, shutdown: CancellationToken) -> Result<()> {
+        shutdown.run_until_cancelled(self.run_loop()).await.unwrap_or(Ok(()))
     }
 
-    /// Discovers deposits and completes one transaction at a time.
-    async fn run_loop(mut self, mut requests: mpsc::Receiver<UsdcxP2Id>) -> Result<()> {
-        let mut next_attempt = Instant::now();
-        let mut requests_closed = false;
-
+    /// Processes pending requests on startup and waits between funding attempts.
+    async fn run_loop(mut self) -> Result<()> {
         loop {
-            if requests_closed && self.queued.is_empty() {
-                return Ok(());
-            }
-
-            let process_batch = tokio::select! {
-                // Fill the bounded batch before a ready processing deadline.
-                biased;
-                note = requests.recv(), if !requests_closed && self.queued.len() < self.setup.config.max_notes_per_tx.get() => {
-                    match note {
-                        Some(note) => self.queued.push_back(note),
-                        None => requests_closed = true,
-                    }
-                    self.queued.len() == self.setup.config.max_notes_per_tx.get()
-                },
-                () = tokio::time::sleep_until(next_attempt) => true,
-            };
-            if !process_batch {
-                continue;
-            }
-
             // Transaction execution requires a large future.
             let _ = Box::pin(self.process_batch()).await;
-            next_attempt = Instant::now() + self.setup.config.poll_interval;
+            tokio::time::sleep(self.setup.config.poll_interval).await;
         }
+    }
+
+    /// Loads the oldest pending notes up to the transaction's batch limit.
+    async fn pending_requests(&self) -> Result<VecDeque<UsdcxP2Id>> {
+        self.setup
+            .database
+            .pending_requests(self.setup.config.max_notes_per_tx)
+            .await?
+            .into_iter()
+            .map(|request| {
+                UsdcxP2Id::from_note(request.note, self.setup.fee_asset_id)
+                    .context("a stored funding request is not a valid native-asset note")
+            })
+            .collect()
     }
 
     /// Selects affordable notes and completes one funding attempt.
@@ -151,12 +136,19 @@ impl Funder {
         name = "funding.process_batch",
         fields(
             account.id = self.account_id(),
-            queued.count = self.queued.len(),
+            queued.count,
             deposit.count = self.setup.wallet.deposits().len(),
         ),
         err,
     )]
     async fn process_batch(&mut self) -> Result<()> {
+        if let Some(attempt) = self.setup.database.active_attempt().await? {
+            miden_span_record!(queued.count = attempt.note_ids.len());
+            self.resolve_attempt(attempt, None).await?;
+            return Ok(());
+        }
+        let queued = self.pending_requests().await?;
+        miden_span_record!(queued.count = queued.len());
         let inputs = self.read_chain_state().await?;
         let reference_block = inputs.reference_header.block_num();
 
@@ -175,7 +167,7 @@ impl Funder {
             transaction.reference_block.number = reference_block
         );
         let Some(selection) =
-            Selection::choose(self.setup.wallet.deposits(), &self.queued, balance, reserve)
+            Selection::choose(self.setup.wallet.deposits(), &queued, balance, reserve)
         else {
             miden_span_record!(funding.selection = "unaffordable" #[nonstandard]);
             return Ok(());
@@ -234,17 +226,23 @@ impl Funder {
 
         let transaction_id = transaction.id();
         let expiration_block = transaction.expiration_block_num();
-        let outcome = self.node.submit(&transaction, &transaction_inputs).await?;
+        let attempt = TransactionAttempt {
+            transaction_id,
+            reference_block,
+            expiration_block,
+            deposit_nullifier: selection.deposit.as_ref().map(UsdcxP2Id::nullifier),
+            note_ids: selection.notes.iter().map(|note| note.note().id()).collect(),
+        };
+        self.setup.database.start_attempt(attempt.clone()).await?;
+        let outcome = match self.node.submit(&transaction, &transaction_inputs).await {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                self.setup.database.release_attempt(transaction_id).await?;
+                return Err(err);
+            },
+        };
         miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
-        let resolution = self
-            .resolve_submission(
-                outcome,
-                transaction_id,
-                reference_block,
-                expiration_block,
-                selection,
-            )
-            .await?;
+        let resolution = self.resolve_attempt(attempt, Some(outcome)).await?;
         miden_span_record!(funding.outcome = resolution.as_str() #[nonstandard]);
         if resolution != Resolution::Committed {
             Span::current()
@@ -253,29 +251,36 @@ impl Funder {
         Ok(())
     }
 
-    /// Handles rejections immediately. Resolves accepted and uncertain submissions on chain.
+    /// Waits until we know whether a transaction committed, expired, or was rejected.
+    ///
+    /// A missing `outcome` means this attempt was loaded from the database. We cannot resubmit it
+    /// because we do not store the transaction payload.
     #[miden_instrument(
         target = COMPONENT,
-        name = "funding.resolve_submission",
+        name = "funding.resolve_attempt",
         fields(
             account.id = self.account_id(),
-            transaction.id = transaction_id,
-            transaction.reference_block.number = reference_block,
-            transaction.expires_at = expiration_block,
+            transaction.id = attempt.transaction_id,
+            transaction.reference_block.number = attempt.reference_block,
+            transaction.expires_at = attempt.expiration_block,
         ),
         err,
     )]
-    async fn resolve_submission(
+    async fn resolve_attempt(
         &mut self,
-        outcome: SubmissionOutcome,
-        transaction_id: TransactionId,
-        reference_block: BlockNumber,
-        expiration_block: BlockNumber,
-        selection: Selection,
+        attempt: TransactionAttempt,
+        outcome: Option<SubmissionOutcome>,
     ) -> Result<Resolution> {
-        miden_span_record!(funding.submission_outcome = outcome.as_str() #[nonstandard]);
+        let TransactionAttempt {
+            transaction_id,
+            reference_block,
+            expiration_block,
+            deposit_nullifier,
+            note_ids,
+        } = attempt;
+        miden_span_record!(funding.submission_outcome = outcome.as_ref().map_or("recovered", SubmissionOutcome::as_str) #[nonstandard]);
         match outcome {
-            SubmissionOutcome::Accepted => {
+            Some(SubmissionOutcome::Accepted) => {
                 info!(
                     target: LOG_TARGET,
                     "Submitted a funding transaction",
@@ -283,20 +288,21 @@ impl Funder {
                     transaction.expires_at = expiration_block
                 );
             },
-            SubmissionOutcome::Rejected(status) => {
+            Some(SubmissionOutcome::Rejected(status)) => {
                 Span::current().set_error(&status);
+                self.setup.database.release_attempt(transaction_id).await?;
                 // With one writer and controlled outputs, a state conflict identifies the single
                 // selected deposit as invalid. Keep the payouts for the next attempt.
                 if status.code() == tonic::Code::InvalidArgument
                     && status.details() == [2]
-                    && let Some(note) = &selection.deposit
+                    && let Some(nullifier) = deposit_nullifier
                 {
-                    self.setup.wallet.remove_deposit(note.nullifier());
+                    self.setup.wallet.remove_deposit(nullifier);
                     warn!(
                         &status,
                         target: LOG_TARGET,
                         "Discarded a deposit rejected by the node",
-                        note.id = note.note().id()
+                        transaction.id = transaction_id
                     );
                     miden_span_record!(funding.outcome = "deposit_discarded" #[nonstandard]);
                     return Ok(Resolution::DepositDiscarded);
@@ -304,11 +310,19 @@ impl Funder {
                 miden_span_record!(funding.outcome = "rejected" #[nonstandard]);
                 return Err(status).context("the node rejected the funding transaction");
             },
-            SubmissionOutcome::Unknown(err) => {
+            Some(SubmissionOutcome::Unknown(err)) => {
                 warn!(
                     &err,
                     target: LOG_TARGET,
                     "The submission outcome is unknown; waiting for commitment or expiration",
+                    transaction.id = transaction_id,
+                    transaction.expires_at = expiration_block
+                );
+            },
+            None => {
+                info!(
+                    target: LOG_TARGET,
+                    "Recovering an unresolved funding transaction",
                     transaction.id = transaction_id,
                     transaction.expires_at = expiration_block
                 );
@@ -329,16 +343,30 @@ impl Funder {
                 )
                 .await
             {
-                Ok(TransactionStatus::Committed) => {
-                    info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
-                    if let Some(note) = selection.deposit {
-                        self.setup.wallet.remove_deposit(note.nullifier());
+                Ok(TransactionStatus::Committed(block_num)) => {
+                    // Keep the known commitment while retrying the audit write, so a database
+                    // failure cannot cause this batch to be submitted again.
+                    while let Err(err) = self
+                        .setup
+                        .database
+                        .record_delivery(note_ids.clone(), transaction_id, block_num)
+                        .await
+                    {
+                        record_poll_failure(
+                            &err.context("failed to persist confirmed funding delivery"),
+                            transaction_id,
+                        );
+                        tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
-                    let _ = self.queued.drain(..selection.notes.len());
+                    info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
+                    if let Some(nullifier) = deposit_nullifier {
+                        self.setup.wallet.remove_deposit(nullifier);
+                    }
                     miden_span_record!(funding.outcome = "committed" #[nonstandard]);
                     break Resolution::Committed;
                 },
                 Ok(TransactionStatus::Expired) => {
+                    self.setup.database.release_attempt(transaction_id).await?;
                     warn!(
                         target: LOG_TARGET,
                         "A funding transaction expired; its notes remain queued",
@@ -400,7 +428,7 @@ impl Funder {
     }
 }
 
-/// Records a failed status poll without changing the enclosing transaction's outcome.
+/// Records a failed confirmation check or database write without changing the transaction's outcome.
 ///
 /// Each failure has a separate span so repeated exceptions cannot exhaust the resolution span's
 /// attribute budget.

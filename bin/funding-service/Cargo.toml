@@ -22,13 +22,14 @@ anyhow             = { workspace = true }
 axum               = { workspace = true }
 backon             = { workspace = true }
 clap               = { features = ["env", "string"], workspace = true }
+fs-err             = { workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
 humantime          = { workspace = true }
+miden-node-db      = { workspace = true }
 miden-node-proto   = { workspace = true }
 miden-node-tracing = { workspace = true }
 miden-node-utils   = { workspace = true }
-miden-objects      = { workspace = true }
 miden-protocol     = { features = ["std"], workspace = true }
 miden-standards    = { workspace = true }
 miden-tx           = { features = ["concurrent", "std"], workspace = true }
@@ -41,13 +42,16 @@ tonic              = { workspace = true }
 tower-http         = { features = ["timeout"], workspace = true }
 url                = { workspace = true }
 
+[build-dependencies]
+miden-node-db = { workspace = true }
+
 [dev-dependencies]
 miden-protocol        = { features = ["std", "testing"], workspace = true }
 miden-standards       = { workspace = true }
 miden-testing         = { workspace = true }
 miden-tx              = { features = ["concurrent", "std", "testing"], workspace = true }
 opentelemetry         = { workspace = true }
-opentelemetry_sdk     = { features = ["testing"], version = "0.31" }
+opentelemetry_sdk     = { features = ["testing"], version = "0.32.1" }
 rand                  = { workspace = true }
 rand_chacha           = { workspace = true }
 rstest                = { workspace = true }

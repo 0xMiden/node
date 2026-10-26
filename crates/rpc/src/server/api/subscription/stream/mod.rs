@@ -1,20 +1,18 @@
 use std::future::Future;
-use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use miden_node_store::DatabaseError;
 use miden_node_tracing::error;
 use miden_protocol::block::BlockNumber;
 use tokio::sync::mpsc::error::SendTimeoutError;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{mpsc, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
 use super::super::RpcService;
-use super::IpBanList;
 
 #[cfg(test)]
 mod tests;
@@ -56,53 +54,28 @@ pub struct StreamItem {
 
 impl SubscriptionStream {
     /// Creates a stream of committed blocks starting at `from`.
-    pub(super) fn blocks(
-        rpc: &RpcService,
-        from: BlockNumber,
-        client_ip: Option<IpAddr>,
-    ) -> tonic::Result<SubscriptionStream> {
+    pub(super) fn blocks(rpc: &RpcService, from: BlockNumber) -> tonic::Result<SubscriptionStream> {
         let store = Arc::clone(&rpc.state);
 
-        Self::create(
-            from,
-            client_ip,
-            Arc::clone(&rpc.subscription_ban),
-            Arc::clone(&rpc.block_subscription_semaphore),
-            rpc.state.subscribe_committed_tip(),
-            move |block| {
-                let store = Arc::clone(&store);
-                async move { store.load_block(block).await }
-            },
-        )
+        Self::create(from, rpc.state.subscribe_committed_tip(), move |block| {
+            let store = Arc::clone(&store);
+            async move { store.load_block(block).await }
+        })
     }
 
     /// Creates a stream of proven block proofs starting at `from`.
-    pub(super) fn proofs(
-        rpc: &RpcService,
-        from: BlockNumber,
-        client_ip: Option<IpAddr>,
-    ) -> tonic::Result<SubscriptionStream> {
+    pub(super) fn proofs(rpc: &RpcService, from: BlockNumber) -> tonic::Result<SubscriptionStream> {
         let store = Arc::clone(&rpc.state);
 
-        Self::create(
-            from,
-            client_ip,
-            Arc::clone(&rpc.subscription_ban),
-            Arc::clone(&rpc.proof_subscription_semaphore),
-            rpc.state.subscribe_proven_tip(),
-            move |block| {
-                let store = Arc::clone(&store);
-                async move { store.load_proof(block).await }
-            },
-        )
+        Self::create(from, rpc.state.subscribe_proven_tip(), move |block| {
+            let store = Arc::clone(&store);
+            async move { store.load_proof(block).await }
+        })
     }
 
     /// Builds a subscription stream around a spawned producer task.
     fn create<GetData, Fut>(
         from: BlockNumber,
-        client_ip: Option<IpAddr>,
-        ban_list: Arc<IpBanList>,
-        subscription_semaphore: Arc<Semaphore>,
         chain_tip: watch::Receiver<BlockNumber>,
         get_data: GetData,
     ) -> tonic::Result<SubscriptionStream>
@@ -111,8 +84,6 @@ impl SubscriptionStream {
         Fut: Future<Output = Result<Option<Vec<u8>>, DatabaseError>> + Send + 'static,
     {
         Self::validate_start(from, &chain_tip)?;
-        Self::reject_banned_client(client_ip, &ban_list)?;
-        let subscription_permit = Self::acquire_subscription_permit(subscription_semaphore)?;
 
         // Keep one channel slot reserved for the terminal status. This prevents a full data buffer
         // from causing the terminal status to be dropped as well.
@@ -126,9 +97,6 @@ impl SubscriptionStream {
             chain_tip,
             tx,
             terminal_permit,
-            client_ip,
-            ban_list,
-            _subscription_permit: subscription_permit,
             get_data,
             lag_tracker: SubscriberLagTracker::default(),
         };
@@ -151,29 +119,6 @@ impl SubscriptionStream {
 
         Ok(())
     }
-
-    /// Rejects clients that are still temporarily banned for a previous slow subscription.
-    fn reject_banned_client(client_ip: Option<IpAddr>, ban_list: &IpBanList) -> tonic::Result<()> {
-        if let Some(until) = client_ip.and_then(|ip| ban_list.banned_until(ip)) {
-            let remaining = until.saturating_duration_since(Instant::now());
-            return Err(Status::resource_exhausted(format!(
-                "temporarily banned from subscribing for being too slow; retry in {} seconds",
-                // Round up so the reported wait never undershoots the actual remaining ban.
-                remaining.as_secs() + 1,
-            )));
-        }
-
-        Ok(())
-    }
-
-    /// Acquires one subscription slot for the lifetime of the producer task.
-    fn acquire_subscription_permit(
-        subscription_semaphore: Arc<Semaphore>,
-    ) -> tonic::Result<OwnedSemaphorePermit> {
-        subscription_semaphore
-            .try_acquire_owned()
-            .map_err(|_| Status::resource_exhausted("maximum subscriptions reached"))
-    }
 }
 
 // PRODUCER
@@ -185,9 +130,6 @@ struct SubscriptionProducer<GetData> {
     chain_tip: watch::Receiver<BlockNumber>,
     tx: mpsc::Sender<tonic::Result<StreamItem>>,
     terminal_permit: mpsc::OwnedPermit<tonic::Result<StreamItem>>,
-    client_ip: Option<IpAddr>,
-    ban_list: Arc<IpBanList>,
-    _subscription_permit: OwnedSemaphorePermit,
     get_data: GetData,
     lag_tracker: SubscriberLagTracker,
 }
@@ -206,9 +148,6 @@ where
     async fn run(mut self) {
         let err = self.produce_until_error().await;
 
-        if let (Some(ip), StreamError::SlowSubscriber) = (self.client_ip, err) {
-            self.ban_list.add(ip);
-        }
         self.terminal_permit.send(Err(err.into_status()));
     }
 
