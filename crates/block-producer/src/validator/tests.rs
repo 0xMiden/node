@@ -3,9 +3,88 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use miden_node_proto::generated::miden::validator::v1::SignBlockRequest;
+use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use super::{BlockProducerValidatorClient, ValidatorError};
+use super::{BlockProducerValidatorClient, ValidatorError, is_retryable};
+
+#[test]
+fn application_errors_are_not_connection_failures() {
+    for code in [
+        tonic::Code::Cancelled,
+        tonic::Code::Internal,
+        tonic::Code::Unknown,
+        tonic::Code::InvalidArgument,
+        tonic::Code::PermissionDenied,
+        tonic::Code::DeadlineExceeded,
+    ] {
+        assert!(!is_retryable(&tonic::Status::new(code, "connection closed")), "{code:?}");
+    }
+    assert!(is_retryable(&tonic::Status::unavailable("reconnecting")));
+}
+
+#[tokio::test]
+#[serial_test::serial(validator_tracing)]
+async fn validator_calls_recover_from_connection_retirement() {
+    for cancel_stream in [false, true] {
+        for sign_block in [false, true] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/", listener.local_addr().unwrap()).parse().unwrap();
+            let server = tokio::spawn(async move {
+                for attempt in 0..2 {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    let mut connection = h2::server::handshake(socket).await.unwrap();
+                    let (_, mut response) = connection.accept().await.unwrap().unwrap();
+                    if attempt == 0 {
+                        // Retire an in-flight connection as an HTTP/2 proxy can.
+                        if cancel_stream {
+                            response.send_reset(h2::Reason::CANCEL);
+                            connection.graceful_shutdown();
+                        } else {
+                            connection.abrupt_shutdown(h2::Reason::NO_ERROR);
+                        }
+                    } else {
+                        // A terminal application response proves the retry reached the server.
+                        let headers = tonic::codegen::http::Response::builder()
+                            .header("content-type", "application/grpc")
+                            .header("grpc-status", "3")
+                            .header("grpc-message", "rejected by validator")
+                            .body(())
+                            .unwrap();
+                        response.send_response(headers, true).unwrap();
+                        connection.graceful_shutdown();
+                    }
+                    while connection.accept().await.is_some() {}
+                }
+            });
+            let client = BlockProducerValidatorClient::new(
+                vec![url],
+                Duration::from_secs(1),
+                miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+            )
+            .unwrap();
+            let validator = &client.validators[0];
+            let error = tokio::time::timeout(Duration::from_secs(5), async {
+                if sign_block {
+                    match validator.sign_block(SignBlockRequest::default()).await {
+                        Err(ValidatorError::Transport(error)) => error,
+                        result => panic!("expected application rejection, got {result:?}"),
+                    }
+                } else {
+                    validator
+                        .submit_proven_transaction(ProvenTransactionSubmission::default())
+                        .await
+                        .unwrap_err()
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(error.code(), tonic::Code::InvalidArgument);
+            assert_eq!(error.message(), "rejected by validator");
+            tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
+        }
+    }
+}
 
 #[derive(Clone, Default)]
 struct Capture(Arc<Mutex<Vec<u8>>>);
@@ -22,6 +101,7 @@ impl Write for Capture {
 }
 
 #[tokio::test]
+#[serial_test::serial(validator_tracing)]
 async fn connection_errors_identify_each_validator_endpoint() {
     // Listeners reserve distinct ports and are closed before use, so connections are refused.
     let listeners = [

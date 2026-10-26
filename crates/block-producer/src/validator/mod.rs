@@ -1,3 +1,4 @@
+use std::error::Error as _;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -109,7 +110,7 @@ impl BlockProducerValidatorClient {
             Duration::from_secs(2),
             10,
         ))
-        .when(|error| error.code() == tonic::Code::Unavailable)
+        .when(is_retryable)
         .await?
         .into_inner()
         .key
@@ -180,7 +181,7 @@ struct Validator {
 }
 
 impl Validator {
-    /// Submits a proven transaction to this validator, retrying while it is unavailable.
+    /// Submits a proven transaction, retrying service unavailability and connection failures.
     #[miden_instrument(
         target = COMPONENT,
         name = "validator.client.submit_proven_transaction",
@@ -206,7 +207,7 @@ impl Validator {
             Duration::from_secs(2),
             10,
         ))
-        .when(|error| error.code() == tonic::Code::Unavailable)
+        .when(is_retryable)
         .await?;
         Ok(())
     }
@@ -222,12 +223,40 @@ impl Validator {
         &self,
         message: proto::miden::validator::v1::SignBlockRequest,
     ) -> Result<SignBlockResponse, ValidatorError> {
-        let request = tonic::Request::new(message);
-        let response = self.client.clone().sign_block(request).await?.into_inner();
+        let response = (|| async { self.client.clone().sign_block(message.clone()).await })
+            .retry(retry::exponential_bounded(
+                Duration::from_millis(100),
+                Duration::from_secs(2),
+                10,
+            ))
+            .when(is_retryable)
+            .await?
+            .into_inner();
         response
             // SAFETY: The block builder matches the commitment to its proposed block and verifies
             // the signatures against the trusted parent validator set.
             .decode_and_build_unchecked()
             .map_err(ValidatorError::Conversion)
+    }
+}
+
+/// Retries unavailable services and local transport failures during connection retirement.
+///
+/// Tonic can report connection closures as cancelled, internal, or unknown errors. Requiring a
+/// transport error in their source chain avoids retrying application errors with those codes.
+fn is_retryable(status: &tonic::Status) -> bool {
+    match status.code() {
+        tonic::Code::Unavailable => true,
+        tonic::Code::Cancelled | tonic::Code::Internal | tonic::Code::Unknown => {
+            let mut source = status.source();
+            while let Some(error) = source {
+                if error.is::<tonic::transport::Error>() {
+                    return true;
+                }
+                source = error.source();
+            }
+            false
+        },
+        _ => false,
     }
 }

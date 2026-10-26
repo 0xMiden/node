@@ -4725,6 +4725,7 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "futures",
+ "h2",
  "itertools 0.14.0",
  "miden-block-prover",
  "miden-node-persistence",
