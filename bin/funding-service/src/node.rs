@@ -175,7 +175,12 @@ impl RpcNodeClient {
                     if enabled!(target: COMPONENT, Level::DEBUG) {
                         miden_span_record!(page.count = pages);
                     }
-                    return Ok(TransactionStatus::Committed);
+                    let block_num = BlockNumber::from(record.block_num);
+                    anyhow::ensure!(
+                        (start..=end).contains(&block_num),
+                        "the transaction commitment is outside the requested block range"
+                    );
+                    return Ok(TransactionStatus::Committed(block_num));
                 }
             }
 
@@ -359,7 +364,7 @@ impl SubmissionOutcome {
 #[derive(Debug, PartialEq, Eq)]
 pub enum TransactionStatus {
     Pending,
-    Committed,
+    Committed(BlockNumber),
     Expired,
 }
 

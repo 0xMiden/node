@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -16,11 +15,11 @@ use miden_node_proto::generated::miden::node::v1::get_account_request::account_d
 use miden_node_tracing::{miden_instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
-use miden_objects::account_file::AccountFile;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
     Account,
+    AccountCode,
     AccountId,
     AccountStorage,
     AccountType,
@@ -31,6 +30,7 @@ use miden_protocol::account::{
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
+use miden_standards::account::auth::AuthSingleSig;
 
 use crate::COMPONENT;
 mod deposits;
@@ -58,30 +58,47 @@ pub struct WalletUpdate {
 }
 
 impl FundingWallet {
-    /// Loads the wallet and its signing key from an account file.
-    pub fn load(path: &Path, fee_asset_id: AssetId) -> Result<Self> {
-        let account_file = AccountFile::read(path)
-            .with_context(|| format!("failed to read the account file at {}", path.display()))?;
-
-        let secret_key = account_file.auth_secret_keys().first().cloned().with_context(|| {
-            format!("the account file at {} holds no secret key", path.display())
-        })?;
-
-        let account = account_file.account();
+    /// Loads the public account at a reference block and checks its signing key.
+    pub async fn load_at(
+        rpc_client: &mut RpcClient,
+        account_id: AccountId,
+        secret_key: AuthSecretKey,
+        fee_asset_id: AssetId,
+        block_num: BlockNumber,
+    ) -> Result<Self> {
         anyhow::ensure!(
-            account.id().account_type() == AccountType::Public,
-            "the funding account {} is not public: the service reads its state from the node, \
+            account_id.account_type() == AccountType::Public,
+            "the funding account {account_id} is not public: the service reads its state from the node, \
              which only stores the full state of a public account",
-            account.id(),
         );
+        let account = Self::load_account_at(rpc_client, account_id, block_num, None).await?;
+        let auth_root = AuthSingleSig::code()
+            .procedure_roots()
+            .next()
+            .expect("AuthSingleSig exports its authentication procedure");
+        anyhow::ensure!(
+            account.code().procedures().first() == Some(&auth_root),
+            "the funding account must use AuthSingleSig"
+        );
+        let public_key = account.storage().get_item(AuthSingleSig::public_key_slot())?;
+        let scheme_id = account.storage().get_item(AuthSingleSig::scheme_id_slot())?;
+        anyhow::ensure!(
+            public_key == Word::from(secret_key.public_key().to_commitment())
+                && scheme_id == Word::from([secret_key.auth_scheme().as_u8(), 0, 0, 0]),
+            "the signing key does not match the funding account"
+        );
+        Ok(Self::new(account, secret_key, fee_asset_id))
+    }
 
-        Ok(Self {
-            account: Arc::new(account.clone()),
+    /// Creates a wallet whose deposit history has not yet been synchronized.
+    pub(crate) fn new(account: Account, secret_key: AuthSecretKey, fee_asset_id: AssetId) -> Self {
+        Self {
+            account: Arc::new(account),
             secret_key,
             fee_asset_id,
             next_sync: BlockNumber::GENESIS,
             deposits: HashMap::new(),
-        })
+        }
     }
 
     pub fn account_id(&self) -> AccountId {
@@ -154,7 +171,13 @@ impl FundingWallet {
             self.next_sync <= block_num + 1,
             "cannot sync the funding wallet to an earlier block",
         );
-        let account = self.load_account_at(rpc_client, block_num).await?;
+        let account = Self::load_account_at(
+            rpc_client,
+            self.account_id(),
+            block_num,
+            Some(self.account.code()),
+        )
+        .await?;
         let from = self.next_sync;
         let mut deposits = self.deposits.clone();
         deposits.extend(self.scan_deposits(rpc_client, from, block_num).await?);
@@ -185,18 +208,20 @@ impl FundingWallet {
 
     /// Loads authenticated account state at the reference block.
     async fn load_account_at(
-        &self,
         rpc_client: &mut RpcClient,
+        account_id: AccountId,
         block_num: BlockNumber,
+        cached_code: Option<&AccountCode>,
     ) -> Result<Account> {
-        let account_id = self.account_id();
-        // A dummy commitment forces the server to return the vault.
+        // A zero commitment requests full state when no cached commitment is available.
         let dummy: miden_node_proto::generated::primitives::Word = Word::default().into();
         let request = ProtoAccountRequest {
             account_id: Some(account_id.into()),
             block_num: Some(block_num.into()),
             details: Some(AccountDetailRequest {
-                code_commitment: Some(self.account.code().commitment().into()),
+                code_commitment: Some(
+                    cached_code.map(AccountCode::commitment).unwrap_or_default().into(),
+                ),
                 vault_request: Some(VaultRequest::AssetVaultCommitment(dummy)),
                 storage_request: Some(StorageRequest::AllStorageMaps(true)),
             }),
@@ -225,13 +250,10 @@ impl FundingWallet {
             .details
             .with_context(|| format!("no details returned for public account {account_id}"))?;
 
-        if self.next_sync == BlockNumber::GENESIS {
-            anyhow::ensure!(
-                details.account_header.code_commitment() == self.account.code().commitment(),
-                "the code of account {account_id} on chain does not match the account file: is the account file from another network?",
-            );
-        }
-        let code = details.account_code.unwrap_or_else(|| self.account.code().clone());
+        let code = details
+            .account_code
+            .or_else(|| cached_code.cloned())
+            .context("the node did not return the funding account code")?;
         anyhow::ensure!(
             code.commitment() == details.account_header.code_commitment(),
             "the wallet code does not match its commitment at the reference block",

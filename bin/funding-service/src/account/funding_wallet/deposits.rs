@@ -233,7 +233,6 @@ pub(super) async fn spent_nullifiers(
 mod tests {
     use std::collections::HashMap;
 
-    use miden_objects::account_file::AccountFile;
     use miden_protocol::Word;
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::asset::FungibleAsset;
@@ -246,12 +245,11 @@ mod tests {
     fn wallet() -> FundingWallet {
         let faucet = TestChain::account_id();
         let (account, key) = crate::test_utils::genesis_style_wallet(faucet, 0, [9; 32]).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("wallet.mac");
-        AccountFile::new(account, vec![AuthSecretKey::Falcon512Poseidon2(key)])
-            .write(&path)
-            .unwrap();
-        FundingWallet::load(&path, AssetId::new_fungible(faucet)).unwrap()
+        FundingWallet::new(
+            account,
+            AuthSecretKey::Falcon512Poseidon2(key),
+            AssetId::new_fungible(faucet),
+        )
     }
 
     fn deposit(wallet: &FundingWallet, serial: u32, amount: u64) -> Note {

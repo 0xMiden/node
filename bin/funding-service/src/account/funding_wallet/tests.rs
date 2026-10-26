@@ -2,7 +2,6 @@ use miden_protocol::ONE;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountType};
 use miden_protocol::asset::FungibleAsset;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
 use miden_protocol::note::Note;
 use miden_standards::account::auth::Approver;
 use miden_standards::account::wallets::create_basic_wallet;
@@ -17,12 +16,11 @@ fn fee_asset_id() -> AssetId {
     AssetId::new_fungible(FungibleAsset::mock_issuer())
 }
 
-/// Builds a wallet the way the genesis configuration does, so the test covers the file the service
-/// actually loads.
-fn genesis_wallet(account_type: AccountType) -> (Account, SecretKey) {
+/// Builds a wallet with the authentication used by the genesis configuration.
+fn genesis_wallet(account_type: AccountType, scheme: AuthScheme) -> (Account, AuthSecretKey) {
     let mut rng = ChaCha20Rng::from_seed([7; 32]);
-    let secret_key = SecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let secret_key = AuthSecretKey::with_scheme_and_rng(scheme, &mut rng).unwrap();
+    let auth = Approver::from(&secret_key.public_key());
     let init_seed: [u8; 32] = rng.random();
     let mut account =
         create_basic_wallet(init_seed, auth, account_type).expect("wallet should build");
@@ -30,53 +28,94 @@ fn genesis_wallet(account_type: AccountType) -> (Account, SecretKey) {
     (account, secret_key)
 }
 
-fn write_account_file(
-    dir: &Path,
-    account: &Account,
-    keys: Vec<AuthSecretKey>,
-) -> std::path::PathBuf {
-    let path = dir.join("funding_service.mac");
-    AccountFile::new(account.clone(), keys)
-        .write(&path)
-        .expect("file should be written");
-    path
+#[rstest::rstest]
+#[case(AuthScheme::EcdsaK256Keccak)]
+#[case(AuthScheme::Falcon512Poseidon2)]
+#[tokio::test]
+async fn loads_public_state_from_the_node_with_only_an_id_and_key(
+    #[case] scheme: AuthScheme,
+) -> Result<()> {
+    let (account, secret_key) = genesis_wallet(AccountType::Public, scheme);
+    let server = TestServer::start(TestChain::new(12)).await;
+    serve_account(&server, account.clone())?;
+    let wallet = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        secret_key.clone(),
+        fee_asset_id(),
+        12.into(),
+    )
+    .await?;
+
+    assert_eq!(wallet.account().as_ref(), &account);
+    assert_eq!(wallet.secret_key(), &secret_key);
+    assert!(wallet.deposits().is_empty());
+    Ok(())
 }
 
-#[test]
-fn loads_a_public_wallet_with_its_key() {
-    let dir = tempfile::tempdir().unwrap();
-    let (account, secret_key) = genesis_wallet(AccountType::Public);
-    let path = write_account_file(
-        dir.path(),
-        &account,
-        vec![AuthSecretKey::Falcon512Poseidon2(secret_key.clone())],
-    );
-
-    let funder =
-        FundingWallet::load(&path, fee_asset_id()).expect("a public wallet with a key should load");
-
-    assert_eq!(funder.account_id(), account.id());
-    assert_eq!(funder.account().code().commitment(), account.code().commitment());
-    assert_eq!(
-        funder.secret_key().public_key().to_commitment(),
-        AuthSecretKey::Falcon512Poseidon2(secret_key).public_key().to_commitment()
-    );
+#[rstest::rstest]
+#[case(AuthScheme::EcdsaK256Keccak)]
+#[case(AuthScheme::Falcon512Poseidon2)]
+#[tokio::test]
+async fn rejects_an_unrelated_signing_key(#[case] scheme: AuthScheme) {
+    let (account, _) = genesis_wallet(AccountType::Public, scheme);
+    let wrong_key =
+        AuthSecretKey::with_scheme_and_rng(scheme, &mut ChaCha20Rng::from_seed([91; 32])).unwrap();
+    let server = TestServer::start(TestChain::new(12)).await;
+    serve_account(&server, account.clone()).unwrap();
+    let error = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        wrong_key,
+        fee_asset_id(),
+        12.into(),
+    )
+    .await
+    .err()
+    .expect("an unrelated signing key must be rejected");
+    assert!(error.to_string().contains("signing key does not match"), "{error:#}");
 }
 
-/// The service reads the funder's vault from the node, which is only possible for a public account.
-#[test]
-fn rejects_a_private_account() {
-    let dir = tempfile::tempdir().unwrap();
-    let (account, secret_key) = genesis_wallet(AccountType::Private);
-    let path = write_account_file(
-        dir.path(),
-        &account,
-        vec![AuthSecretKey::Falcon512Poseidon2(secret_key)],
-    );
+#[tokio::test]
+async fn rejects_a_key_with_the_wrong_signature_scheme() {
+    let (mut account, key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    account
+        .storage_mut()
+        .set_item(
+            AuthSingleSig::scheme_id_slot(),
+            Word::from([AuthScheme::EcdsaK256Keccak.as_u8(), 0, 0, 0]),
+        )
+        .unwrap();
+    let server = TestServer::start(TestChain::new(12)).await;
+    serve_account(&server, account.clone()).unwrap();
+    let error = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        key,
+        fee_asset_id(),
+        12.into(),
+    )
+    .await
+    .err()
+    .expect("a mismatched signature scheme must be rejected");
+    assert!(error.to_string().contains("signing key does not match"), "{error:#}");
+}
 
-    let err = FundingWallet::load(&path, fee_asset_id())
-        .err()
-        .expect("a private account must be rejected");
+#[tokio::test]
+async fn rejects_a_private_account() {
+    let (account, secret_key) =
+        genesis_wallet(AccountType::Private, AuthScheme::Falcon512Poseidon2);
+    let server = TestServer::start(TestChain::new(12)).await;
+    let err = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        secret_key,
+        fee_asset_id(),
+        12.into(),
+    )
+    .await
+    .err()
+    .expect("a private account must be rejected");
     assert!(err.to_string().contains("is not public"), "unexpected error: {err}");
 }
 
@@ -322,7 +361,7 @@ async fn sync_retries_transient_rpc_failures(#[case] method: &'static str) -> Re
 }
 
 #[tokio::test]
-async fn sync_checks_initial_code_and_loads_later_code_updates() -> Result<()> {
+async fn sync_loads_code_updates() -> Result<()> {
     let fixture = Fixture::new(1_000_000, TEST_BASE_FEE)?;
     let block = fixture.chain.lock().await.latest_block_header().block_num();
     let mut wallet = fixture.wallet;
@@ -339,9 +378,6 @@ async fn sync_checks_initial_code_and_loads_later_code_updates() -> Result<()> {
     let server = TestServer::start(TestChain::new(block.as_u32())).await;
     let mut rpc = server.node.rpc_client();
 
-    serve_account(&server, updated.clone())?;
-    assert!(wallet.sync_to(&mut rpc, block).await.is_err());
-    assert_eq!(wallet.account().as_ref(), &original);
     serve_account(&server, original.clone())?;
     let update = wallet.sync_to(&mut rpc, block).await?;
     wallet.apply(update)?;

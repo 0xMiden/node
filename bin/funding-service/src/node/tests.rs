@@ -460,7 +460,7 @@ async fn commitment_on_a_later_page_takes_precedence_over_expiration() {
     ];
     let server = TestServer::start(chain).await;
 
-    assert_eq!(server.status().await.unwrap(), TransactionStatus::Committed);
+    assert_eq!(server.status().await.unwrap(), TransactionStatus::Committed(19.into()));
 }
 
 #[tokio::test]
@@ -481,7 +481,7 @@ async fn a_failed_scan_leaves_the_outcome_unknown_and_can_be_retried() {
 
     assert!(server.status().await.is_err());
     server.chain.lock().unwrap().unavailable = None;
-    assert_eq!(server.status().await.unwrap(), TransactionStatus::Committed);
+    assert_eq!(server.status().await.unwrap(), TransactionStatus::Committed(19.into()));
 }
 
 #[tokio::test]
