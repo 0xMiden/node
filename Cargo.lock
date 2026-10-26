@@ -4851,6 +4851,7 @@ dependencies = [
  "axum",
  "fs-err",
  "futures",
+ "h2",
  "http",
  "mediatype",
  "miden-node-block-producer",

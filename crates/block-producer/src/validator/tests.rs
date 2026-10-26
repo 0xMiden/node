@@ -6,22 +6,7 @@ use miden_node_proto::generated::miden::validator::v1::SignBlockRequest;
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use super::{BlockProducerValidatorClient, ValidatorError, is_retryable};
-
-#[test]
-fn application_errors_are_not_connection_failures() {
-    for code in [
-        tonic::Code::Cancelled,
-        tonic::Code::Internal,
-        tonic::Code::Unknown,
-        tonic::Code::InvalidArgument,
-        tonic::Code::PermissionDenied,
-        tonic::Code::DeadlineExceeded,
-    ] {
-        assert!(!is_retryable(&tonic::Status::new(code, "connection closed")), "{code:?}");
-    }
-    assert!(is_retryable(&tonic::Status::unavailable("reconnecting")));
-}
+use super::{BlockProducerValidatorClient, ValidatorError};
 
 #[tokio::test]
 #[serial_test::serial(validator_tracing)]

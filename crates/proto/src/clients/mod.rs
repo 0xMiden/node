@@ -34,6 +34,7 @@ use http::header::ACCEPT;
 use miden_node_tracing::grpc::OtelInterceptor;
 use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::batch::ProposedBatch;
 use tonic::metadata::AsciiMetadataValue;
@@ -725,7 +726,8 @@ impl Builder<WantsConnection> {
 }
 
 impl ValidatorClient {
-    /// Submits each transaction in the batch to the validator for re-execution.
+    /// Submits each transaction in the batch to the validator for re-execution, retrying transient
+    /// failures for each transaction independently.
     ///
     /// # Errors
     ///
@@ -745,11 +747,21 @@ impl ValidatorClient {
                 transaction: Some(tx.as_ref().into()),
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
-            self.submit_proven_transaction(
-                crate::generated::miden::validator::v1::SubmitProvenTransactionRequest {
-                    submission: Some(proven_tx),
-                },
-            )
+            (|| async {
+                self.clone()
+                    .submit_proven_transaction(
+                        crate::generated::miden::validator::v1::SubmitProvenTransactionRequest {
+                            submission: Some(proven_tx.clone()),
+                        },
+                    )
+                    .await
+            })
+            .retry(retry::exponential_bounded(
+                Duration::from_millis(100),
+                Duration::from_secs(2),
+                10,
+            ))
+            .when(retry::is_retryable_grpc_error)
             .await?;
         }
         Ok(())

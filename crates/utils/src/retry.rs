@@ -21,6 +21,7 @@
 //!     .await?;
 //! ```
 
+use std::error::Error as _;
 use std::time::Duration;
 
 pub use backon::{BackoffBuilder, Retryable, RetryableWithContext};
@@ -56,5 +57,49 @@ pub fn constant(delay: Duration, max_times: Option<usize>) -> ConstantBuilder {
     match max_times {
         Some(max_times) => builder.with_max_times(max_times),
         None => builder.without_max_times(),
+    }
+}
+
+/// Identifies service unavailability and local transport failures for retryable gRPC calls.
+///
+/// Tonic can report connection closures as cancelled, internal, or unknown errors. Requiring a
+/// transport error in their source chain avoids retrying application errors with those codes.
+pub fn is_retryable_grpc_error(status: &tonic::Status) -> bool {
+    match status.code() {
+        tonic::Code::Unavailable => true,
+        tonic::Code::Cancelled | tonic::Code::Internal | tonic::Code::Unknown => {
+            let mut source = status.source();
+            while let Some(error) = source {
+                if error.is::<tonic::transport::Error>() {
+                    return true;
+                }
+                source = error.source();
+            }
+            false
+        },
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_retryable_grpc_error;
+
+    #[test]
+    fn application_errors_are_not_connection_failures() {
+        for code in [
+            tonic::Code::Cancelled,
+            tonic::Code::Internal,
+            tonic::Code::Unknown,
+            tonic::Code::InvalidArgument,
+            tonic::Code::PermissionDenied,
+            tonic::Code::DeadlineExceeded,
+        ] {
+            assert!(
+                !is_retryable_grpc_error(&tonic::Status::new(code, "connection closed")),
+                "{code:?}"
+            );
+        }
+        assert!(is_retryable_grpc_error(&tonic::Status::unavailable("reconnecting")));
     }
 }

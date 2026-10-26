@@ -1,5 +1,6 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
@@ -21,6 +22,7 @@ use miden_node_utils::limiter::{
     QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -34,7 +36,8 @@ use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 // VALIDATOR FAN-OUT
 // ================================================================================================
 
-/// Submits the proven transaction to every validator concurrently.
+/// Submits the proven transaction to every validator concurrently, retrying transient failures
+/// independently for each validator.
 ///
 /// Every validator must observe every transaction, since a validator only signs blocks whose
 /// transactions it has previously validated. A single failed submission therefore fails the whole
@@ -44,16 +47,26 @@ pub(crate) async fn submit_tx_to_validators(
     request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
-        let mut validator = validator.clone();
+        let validator = validator.clone();
         let request = request.clone();
         async move {
-            validator
-                .submit_proven_transaction(
-                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
-                        submission: Some(request),
-                    },
-                )
-                .await
+            (|| async {
+                validator
+                    .clone()
+                    .submit_proven_transaction(
+                        proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                            submission: Some(request.clone()),
+                        },
+                    )
+                    .await
+            })
+            .retry(retry::exponential_bounded(
+                Duration::from_millis(100),
+                Duration::from_secs(2),
+                10,
+            ))
+            .when(retry::is_retryable_grpc_error)
+            .await
         }
     }))
     .await?;
@@ -78,6 +91,9 @@ pub(crate) async fn submit_batch_to_validators(
 
 // API METHODS
 // ================================================================================================
+
+#[cfg(test)]
+mod validator_tests;
 
 mod error_codes;
 mod get_account;

@@ -1,4 +1,3 @@
-use std::error::Error as _;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -110,7 +109,7 @@ impl BlockProducerValidatorClient {
             Duration::from_secs(2),
             10,
         ))
-        .when(is_retryable)
+        .when(retry::is_retryable_grpc_error)
         .await?
         .into_inner()
         .key
@@ -207,7 +206,7 @@ impl Validator {
             Duration::from_secs(2),
             10,
         ))
-        .when(is_retryable)
+        .when(retry::is_retryable_grpc_error)
         .await?;
         Ok(())
     }
@@ -229,7 +228,7 @@ impl Validator {
                 Duration::from_secs(2),
                 10,
             ))
-            .when(is_retryable)
+            .when(retry::is_retryable_grpc_error)
             .await?
             .into_inner();
         response
@@ -237,26 +236,5 @@ impl Validator {
             // the signatures against the trusted parent validator set.
             .decode_and_build_unchecked()
             .map_err(ValidatorError::Conversion)
-    }
-}
-
-/// Retries unavailable services and local transport failures during connection retirement.
-///
-/// Tonic can report connection closures as cancelled, internal, or unknown errors. Requiring a
-/// transport error in their source chain avoids retrying application errors with those codes.
-fn is_retryable(status: &tonic::Status) -> bool {
-    match status.code() {
-        tonic::Code::Unavailable => true,
-        tonic::Code::Cancelled | tonic::Code::Internal | tonic::Code::Unknown => {
-            let mut source = status.source();
-            while let Some(error) = source {
-                if error.is::<tonic::transport::Error>() {
-                    return true;
-                }
-                source = error.source();
-            }
-            false
-        },
-        _ => false,
     }
 }
