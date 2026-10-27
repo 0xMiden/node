@@ -102,6 +102,9 @@ jobs:
           done
           printf "Static linkage check passed for all of %s\n" "${bin_targets[*]}"
 
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
+
   docker:
     name: Docker dry-run
     permissions:
@@ -341,6 +344,8 @@ jobs:
         run: |
           export PATH="$PWD/target/release:$PATH"
           ./scripts/bench-local.sh
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
       - name: Dump component logs on failure
         if: failure()
         run: |

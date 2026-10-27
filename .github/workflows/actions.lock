@@ -16,6 +16,7 @@ workflows:
         - 'actions/cache@v5.0.3'
         - 'actions/checkout@v7.0.1'
         - 'actions/setup-node@v7.1.0'
+        - 'actions/upload-artifact@v7.0.2'
         - 'aws-actions/configure-aws-credentials@v6.3.0'
         - 'kunobi-ninja/kache-action@v1'
         - 'taiki-e/install-action@v2.87.29'
