@@ -14,6 +14,7 @@ updates:
       - /
       - /xtask
     target-branch: next
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
       day: monday

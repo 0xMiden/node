@@ -51,7 +51,7 @@ miden-standards       = { workspace = true }
 miden-testing         = { workspace = true }
 miden-tx              = { features = ["concurrent", "std", "testing"], workspace = true }
 opentelemetry         = { workspace = true }
-opentelemetry_sdk     = { features = ["testing"], version = "0.33.1" }
+opentelemetry_sdk     = { features = ["testing"], version = "0.32.1" }
 rand                  = { workspace = true }
 rand_chacha           = { workspace = true }
 rstest                = { workspace = true }

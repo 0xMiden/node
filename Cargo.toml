@@ -86,8 +86,8 @@ build-rs           = { version = "0.3" }
 chacha20poly1305   = { version = "0.11" }
 clap               = { features = ["derive"], version = "4.5" }
 codegen            = { version = "0.3" }
-deadpool           = { default-features = false, version = "0.13" }
-deadpool-sync      = { default-features = false, version = "0.2" }
+deadpool           = { default-features = false, version = "0.12" }
+deadpool-sync      = { default-features = false, version = "0.1" }
 fs-err             = { version = "3" }
 futures            = { version = "0.3" }
 golden-core        = { version = "0.4.0" }
@@ -99,21 +99,21 @@ hex                = { version = "0.4" }
 http               = { version = "1.3" }
 humantime          = { version = "2.2" }
 indexmap           = { version = "2.12" }
-iroh               = { version = "=1.3.0" }
-itertools          = { version = "0.15" }
+iroh               = { version = "=1.0.3" }
+itertools          = { version = "0.14" }
 libsqlite3-sys     = { features = ["bundled"], version = "0.35" }
-lru                = { default-features = false, version = "0.19" }
+lru                = { default-features = false, version = "0.18" }
 miette             = { version = "7.6" }
-opentelemetry      = { version = "0.33" }
+opentelemetry      = { version = "0.32" }
 pretty_assertions  = { version = "1.4" }
 proc-macro2        = { version = "1.0" }
 # prost and protox are from different authors and are _not_ released in
 # lockstep, nor are they adhering to semver semantics. We keep this
 # to avoid future breakage.
-prost                 = { default-features = false, version = "=0.14.4" }
+prost                 = { default-features = false, version = "=0.14.3" }
 prost-build           = { version = "=0.14.3" }
-prost-types           = { default-features = false, version = "=0.14.4" }
-protox                = { version = "=0.10.0" }
+prost-types           = { default-features = false, version = "=0.14.3" }
+protox                = { version = "=0.9.1" }
 quote                 = { version = "1.0" }
 rand                  = { version = "0.10" }
 rand_chacha           = { default-features = false, version = "0.10" }
@@ -121,13 +121,13 @@ rand_chacha_03        = { package = "rand_chacha", version = "0.3" }
 rand_core_06          = { features = ["getrandom"], package = "rand_core", version = "0.6" }
 rayon                 = { version = "1.10" }
 reqwest               = { version = "0.13" }
-rstest                = { version = "0.28" }
+rstest                = { version = "0.26" }
 rusqlite              = { features = ["array", "bundled"], version = "0.37" }
 serde                 = { features = ["derive"], version = "1" }
 serde_json            = { version = "1.0" }
-serial_test           = { version = "4.0" }
-sha2                  = { version = "0.11" }
-syn                   = { version = "3.0" }
+serial_test           = { version = "3.2" }
+sha2                  = { version = "0.10" }
+syn                   = { version = "2.0" }
 tempfile              = { version = "3.12" }
 thiserror             = { default-features = false, version = "2.0" }
 thread-priority       = { version = "3.1" }
@@ -142,10 +142,10 @@ tonic-prost-build     = { version = "0.14" }
 tonic-reflection      = { version = "0.14" }
 tonic-web             = { version = "0.14" }
 tower                 = { version = "0.5" }
-tower-http            = { features = ["cors", "trace"], version = "0.7" }
+tower-http            = { features = ["cors", "trace"], version = "0.6" }
 tower_governor        = { version = "0.8" }
 tracing               = { version = "0.1" }
-tracing-opentelemetry = { version = "0.34" }
+tracing-opentelemetry = { version = "0.33" }
 tracing-subscriber    = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 trybuild              = { version = "1.0" }
 url                   = { features = ["serde"], version = "2.5" }
