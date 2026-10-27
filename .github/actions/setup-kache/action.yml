@@ -30,9 +30,11 @@ runs:
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
+        if [[ "${REMOTE_CACHE}" != true ]]; then
+          exit 0
+        fi
         config="$(mktemp "${RUNNER_TEMP}/kache-config.XXXXXX")"
-        if [[ "${REMOTE_CACHE}" == true ]]; then
-          python3 - > "${config}" <<'PYTHON'
+        python3 - > "${config}" <<'PYTHON'
         import json
         import os
 
@@ -46,9 +48,6 @@ runs:
         }.items():
             print(f"{key} = {json.dumps(value)}")
         PYTHON
-        else
-          printf '[cache]\nremote_readonly = true\n' > "${config}"
-        fi
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
 
     - name: Authenticate to the Rust cache
@@ -65,6 +64,7 @@ runs:
     # The upstream action reuses this verified binary while retaining its setup
     # and post-job hooks. Remove this step once an official release has the fix.
     - name: Install patched kache
+      if: steps.cache.outputs.remote == 'true'
       shell: bash
       env:
         TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v1.2.2-prefetch.1
@@ -84,21 +84,23 @@ runs:
         rm "${archive}"
 
     - name: Set up Rust compiler cache
+      if: steps.cache.outputs.remote == 'true'
       uses: kunobi-ninja/kache-action@v1
       with:
         version: v1.2.2-miden.1
-        s3-bucket: ${{ steps.cache.outputs.remote == 'true' && vars.KACHE_S3_BUCKET || '' }}
+        s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
         s3-region: ${{ vars.KACHE_S3_REGION }}
         s3-prefix: protected-branch
         manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
         max-size: 50GiB
         cache-executables: true
         github-cache: false
-        save-cache: ${{ steps.cache.outputs.remote == 'true' }}
+        save-cache: true
         sync: false
         pr-comment: false
         job-summary: false
 
     - name: Report cache configuration
+      if: steps.cache.outputs.remote == 'true'
       shell: bash
       run: kache doctor
