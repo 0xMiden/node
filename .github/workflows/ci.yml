@@ -66,6 +66,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -150,6 +151,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
       - uses: $/.github/actions/report-kache
@@ -192,6 +194,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -224,6 +227,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
       - uses: $/.github/actions/report-kache
@@ -299,6 +303,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
@@ -366,6 +371,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
       - name: Build benchmark stack
         run: |
           cargo build --release --locked \

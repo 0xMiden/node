@@ -11,6 +11,9 @@ inputs:
   s3-role-arn:
     description: AWS role to assume for cache access
     default: ""
+  download-endpoint:
+    description: CloudFront URL for anonymous downloads; uploads still use S3
+    default: ""
 
 runs:
   using: composite
@@ -38,6 +41,7 @@ runs:
           }}
         KACHE_S3_BUCKET: ${{ inputs.s3-bucket }}
         KACHE_S3_REGION: ${{ inputs.s3-region }}
+        KACHE_DOWNLOAD_ENDPOINT: ${{ inputs.download-endpoint }}
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
@@ -58,6 +62,8 @@ runs:
             "pull_request_prefix": "prs",
         }.items():
             print(f"{key} = {json.dumps(value)}")
+        if endpoint := os.environ["KACHE_DOWNLOAD_ENDPOINT"]:
+            print(f"download_endpoint = {json.dumps(endpoint)}")
         PYTHON
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
 
@@ -70,35 +76,49 @@ runs:
         role-duration-seconds: 3600
         unset-current-credentials: true
 
-    # Installs the v1.2.2 prefetch fix in the runner's tool cache.
+    # Installs the CloudFront client and engine in the runner's tool cache.
     #
-    # The upstream action reuses this verified binary while retaining its setup
-    # and post-job hooks. Remove this step once an official release has the fix.
+    # The upstream action reuses this verified installation for setup and cleanup.
+    # Remove this step once an official release includes CloudFront downloads
+    # and the prefetch cancellation fix.
     - name: Install patched kache
+      id: install
       if: steps.cache.outputs.remote == 'true'
       shell: bash
       env:
-        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v1.2.2-prefetch.1
-        TRIAL_SHA256: 8a221c37e8ceff15f7899c118f1c08b174ee13985b5bfa195fe4018156bebe07
+        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-cloudfront.1
       run: |
-        [[ "${RUNNER_OS}/${RUNNER_ARCH}" == Linux/X64 ]]
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            target=x86_64-unknown-linux-gnu
+            architecture=x64
+            checksum=2676165f54f2ea8eadb350cc1e886772287d676132cddce6704979fa1ba12159
+            ;;
+          Linux/ARM64)
+            target=aarch64-unknown-linux-gnu
+            architecture=arm64
+            checksum=7fb9c979619cd2825a8547bad6decad120fa297a10864ea4673fda909c69b1ba
+            ;;
+          *) echo "Unsupported runner: ${RUNNER_OS}/${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
         archive="$(mktemp "${RUNNER_TEMP}/kache-trial.XXXXXX")"
         curl --fail --location --silent --show-error --retry 3 \
-          "${TRIAL_RELEASE}/kache-v1.2.2-miden.1-x86_64-unknown-linux-gnu.tar.gz" \
+          "${TRIAL_RELEASE}/kache-v2.0.0-rc.2-miden.1-${target}.tar.gz" \
           --output "${archive}"
-        printf '%s  %s\n' "${TRIAL_SHA256}" "${archive}" | sha256sum --check --status
-        tool_dir="${RUNNER_TOOL_CACHE}/kache/1.2.2-miden.1/x64"
+        printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check --status
+        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.1/${architecture}"
         mkdir -p "${tool_dir}"
-        tar -xzf "${archive}" -C "${tool_dir}" kache
+        tar -xzf "${archive}" -C "${tool_dir}" kache kache-engine
         "${tool_dir}/kache" --version
         touch "${tool_dir}.complete"
+        echo "binary=${tool_dir}/kache" >> "${GITHUB_OUTPUT}"
         rm "${archive}"
 
     - name: Set up Rust compiler cache
       if: steps.cache.outputs.remote == 'true'
       uses: kunobi-ninja/kache-action@v1
       with:
-        version: v1.2.2-miden.1
+        version: v2.0.0-rc.2-miden.1
         s3-bucket: ${{ inputs.s3-bucket }}
         s3-region: ${{ inputs.s3-region }}
         s3-prefix: protected-branch
