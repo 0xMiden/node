@@ -1,19 +1,31 @@
 name: Report kache performance
-description: Preserve cache timing, transfer, and daemon diagnostics
+description: Collect Rust cache reports for the workflow summary
+
+inputs:
+  diagnostics:
+    description: Include traces, daemon logs, and runner diagnostics
+    default: "false"
 
 runs:
   using: composite
   steps:
-    # Captures diagnostics while the job's kache daemon and runtime still exist.
+    # Captures reports before the setup action removes the kache runtime.
     #
-    # The setup action removes its runtime in the post step, so its ordinary
-    # summary cannot explain why prefetch plans or artifact restores were slow.
-    - name: Collect cache diagnostics
+    # Job artifacts let the final summary collect results after every build
+    # finishes, with optional diagnostics for investigating slow restores.
+    - name: Collect cache report
       shell: bash
       run: |
         report_dir="${RUNNER_TEMP}/kache-performance"
         mkdir -p "${report_dir}"
         kache stats --full --format json --output "${report_dir}/report.json"
+        kache stats --full --format github --output "${report_dir}/report.md"
+
+    - name: Collect cache diagnostics
+      if: inputs.diagnostics == 'true'
+      shell: bash
+      run: |
+        report_dir="${RUNNER_TEMP}/kache-performance"
         kache stats --full --format trace --output "${report_dir}/trace.json"
         kache daemon status --json > "${report_dir}/daemon-status.json"
         for log in "${KACHE_RUNTIME_DIR}"/*.log; do
@@ -35,7 +47,7 @@ runs:
           done
         } > "${report_dir}/runner.txt"
 
-    - name: Upload cache diagnostics
+    - name: Upload cache report
       uses: actions/upload-artifact@v7.0.2
       with:
         name: kache-performance-${{ github.job }}-${{ github.run_attempt }}
