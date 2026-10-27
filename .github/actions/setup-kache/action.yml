@@ -15,18 +15,26 @@ inputs:
     description: CloudFront URL for anonymous downloads; uploads still use S3
     default: ""
 
+outputs:
+  enabled:
+    description: Whether shared cache access is configured
+    value: ${{ steps.cache.outputs.remote }}
+  writable:
+    description: Whether this job may authenticate and publish cache entries
+    value: ${{ steps.cache.outputs.writable }}
+
 runs:
   using: composite
   steps:
     # Configures the remote before the action starts the kache daemon.
     #
-    # The daemon reads its remote from a file. PRs read both prefixes and publish
-    # to prs; protected-branch pushes read and publish only protected-branch.
+    # Trusted jobs can publish to S3. Forks and other readers use anonymous
+    # CloudFront access, with remote uploads disabled for the whole job.
     - name: Configure cache
       id: cache
       shell: bash
       env:
-        REMOTE_CACHE: >-
+        WRITABLE_CACHE: >-
           ${{
             inputs.s3-bucket != '' &&
             inputs.s3-region != '' &&
@@ -44,7 +52,14 @@ runs:
         KACHE_DOWNLOAD_ENDPOINT: ${{ inputs.download-endpoint }}
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
+        REMOTE_CACHE=false
+        if [[ "${WRITABLE_CACHE}" == true || (
+          -n "${KACHE_S3_BUCKET}" && -n "${KACHE_S3_REGION}" && -n "${KACHE_DOWNLOAD_ENDPOINT}"
+        ) ]]; then
+          REMOTE_CACHE=true
+        fi
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
+        echo "writable=${WRITABLE_CACHE}" >> "${GITHUB_OUTPUT}"
         if [[ "${REMOTE_CACHE}" != true ]]; then
           exit 0
         fi
@@ -53,6 +68,9 @@ runs:
         import json
         import os
 
+        print('[cache]')
+        readonly = os.environ["WRITABLE_CACHE"] != "true"
+        print(f"remote_readonly = {str(readonly).lower()}")
         print('[cache.remote]')
         for key, value in {
             "type": "s3",
@@ -68,7 +86,7 @@ runs:
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
 
     - name: Authenticate to the Rust cache
-      if: steps.cache.outputs.remote == 'true'
+      if: steps.cache.outputs.writable == 'true'
       uses: aws-actions/configure-aws-credentials@v6.3.0
       with:
         role-to-assume: ${{ inputs.s3-role-arn }}
@@ -126,7 +144,7 @@ runs:
         max-size: 50GiB
         cache-executables: true
         github-cache: false
-        save-cache: true
+        save-cache: ${{ steps.cache.outputs.writable == 'true' }}
         sync: false
         pr-comment: false
         job-summary: false

@@ -1,6 +1,6 @@
 # Continuous integration jobs.
-# Fork pull requests use GitHub-hosted runners without kache. Internal builds use
-# WarpBuild runners and share Rust artifacts when the S3 cache is configured.
+# Fork pull requests use GitHub-hosted runners with read-only CloudFront caching.
+# Internal builds use WarpBuild runners and upload Rust artifacts to S3.
 name: CI
 
 permissions:
