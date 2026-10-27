@@ -28,8 +28,13 @@ runs:
   steps:
     # Configures the remote before the action starts the kache daemon.
     #
-    # Trusted jobs can publish to S3. Forks and other readers use anonymous
-    # CloudFront access, with remote uploads disabled for the whole job.
+    # Protected-branch pushes can publish to S3. Pull requests, forks and other
+    # readers use anonymous CloudFront access, with remote uploads disabled for
+    # the whole job.
+    #
+    # This matches the rule kache itself applies to remote writes. Other jobs
+    # never receive AWS credentials, so build scripts and tests in untrusted
+    # code cannot use them to bypass kache and write to the shared prefix.
     - name: Configure cache
       id: cache
       shell: bash
@@ -40,10 +45,9 @@ runs:
             inputs.s3-region != '' &&
             inputs.s3-role-arn != '' &&
             github.repository == '0xMiden/node' &&
-            (github.event_name != 'pull_request' ||
-              github.event.pull_request.head.repo.full_name == github.repository) &&
-            github.event_name != 'pull_request_target' &&
-            github.event_name != 'workflow_run' &&
+            github.event_name == 'push' &&
+            github.ref_type == 'branch' &&
+            github.ref_protected &&
             github.actor != 'dependabot[bot]' && github.actor != 'dependabot' &&
             github.actor != 'github-actions[bot]'
           }}
