@@ -13,6 +13,9 @@ inputs:
   s3-role-arn:
     description: AWS role for the compiler cache
     default: ""
+  download-endpoint:
+    description: CloudFront URL for compiler artifact downloads
+    default: ""
 outputs:
   context:
     description: Directory replacing Docker's builder stage
@@ -32,6 +35,7 @@ runs:
         s3-bucket: ${{ inputs.s3-bucket }}
         s3-region: ${{ inputs.s3-region }}
         s3-role-arn: ${{ inputs.s3-role-arn }}
+        download-endpoint: ${{ inputs.download-endpoint }}
 
     - name: Compile image binaries
       id: build

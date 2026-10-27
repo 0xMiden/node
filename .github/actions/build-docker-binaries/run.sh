@@ -22,6 +22,7 @@ args=(
 if [[ "${CACHE_ENABLED}" == true ]]; then
     args+=(
         --mount "type=bind,src=${CACHE_BINARY},dst=/usr/local/bin/kache,readonly"
+        --mount "type=bind,src=${CACHE_BINARY%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
         --mount "type=bind,src=${CACHE_CONFIG},dst=/run/remote.toml,readonly"
         -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN
         -e AWS_REGION -e AWS_DEFAULT_REGION

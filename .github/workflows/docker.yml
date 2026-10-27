@@ -246,6 +246,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
 
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v4.4.1
@@ -305,6 +306,7 @@ jobs:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
 
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v4.4.1
