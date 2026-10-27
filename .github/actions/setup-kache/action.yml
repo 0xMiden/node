@@ -57,6 +57,11 @@ runs:
         s3-region: eu-north-1
         s3-prefix: protected-branch
         manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+        # Includes early, cheap dependencies in the manifest prefetch plan.
+        #
+        # Otherwise their initial requests look unrelated to the expensive-only
+        # plan and kache cancels useful prefetch before those crates are needed.
+        min-compile-ms: 0
         max-size: 50GiB
         cache-executables: true
         github-cache: false

@@ -301,6 +301,12 @@ jobs:
   # Smoke-tests `miden-benchmark` end-to-end against a locally bootstrapped node.
   benchmark:
     name: benchmark smoke
+    env:
+      # Retains source locations in backtraces for the smoke-test binaries.
+      #
+      # Full variable/type debug information makes cached executables exceed
+      # 1 GiB each and adds substantial transfer and restore work to this job.
+      CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
     permissions:
       contents: read
       id-token: write
