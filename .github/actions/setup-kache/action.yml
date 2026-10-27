@@ -1,0 +1,70 @@
+name: Setup kache
+description: Configure Rust compiler caching for subsequent Cargo commands
+
+runs:
+  using: composite
+  steps:
+    # Configures the remote before the action starts the kache daemon.
+    #
+    # The daemon reads its remote from a file. PRs read both prefixes and publish
+    # to prs; protected-branch pushes read and publish only protected-branch.
+    - name: Configure cache
+      id: cache
+      shell: bash
+      env:
+        REMOTE_CACHE: >-
+          ${{
+            github.repository == '0xMiden/node' &&
+            (github.event_name != 'pull_request' ||
+              github.event.pull_request.head.repo.full_name == github.repository) &&
+            github.event_name != 'pull_request_target' &&
+            github.event_name != 'workflow_run' &&
+            github.actor != 'dependabot[bot]' && github.actor != 'dependabot' &&
+            github.actor != 'github-actions[bot]'
+          }}
+      # Only a runner-created temporary path is exported to the job environment.
+      run: | # zizmor: ignore[github-env]
+        echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
+        config="$(mktemp "${RUNNER_TEMP}/kache-config.XXXXXX")"
+        if [[ "${REMOTE_CACHE}" == true ]]; then
+          cat > "${config}" <<'TOML'
+        [cache.remote]
+        type = "s3"
+        bucket = "miden-kache"
+        region = "eu-north-1"
+        prefix = "protected-branch"
+        pull_request_prefix = "prs"
+        TOML
+        else
+          printf '[cache]\nremote_readonly = true\n' > "${config}"
+        fi
+        echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
+
+    - name: Authenticate to the Rust cache
+      if: steps.cache.outputs.remote == 'true'
+      uses: aws-actions/configure-aws-credentials@v6.3.0
+      with:
+        role-to-assume: arn:aws:iam::507751502557:role/miden-node-kache-github
+        aws-region: eu-north-1
+        role-duration-seconds: 3600
+        unset-current-credentials: true
+
+    - name: Set up Rust compiler cache
+      uses: kunobi-ninja/kache-action@v1
+      with:
+        version: v1.2.2
+        s3-bucket: ${{ steps.cache.outputs.remote == 'true' && 'miden-kache' || '' }}
+        s3-region: eu-north-1
+        s3-prefix: protected-branch
+        manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+        max-size: 50GiB
+        cache-executables: true
+        github-cache: false
+        save-cache: ${{ steps.cache.outputs.remote == 'true' }}
+        sync: false
+        pr-comment: false
+        job-summary: true
+
+    - name: Report cache configuration
+      shell: bash
+      run: kache doctor
