@@ -62,6 +62,10 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -106,6 +110,8 @@ jobs:
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
         with:
           diagnostics: "true"
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
 
   docker:
     name: Docker dry-run
@@ -140,6 +146,10 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
       - uses: $/.github/actions/report-kache
@@ -178,6 +188,10 @@ jobs:
         with:
           tool: nextest@0.9.122
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -206,6 +220,10 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
       - uses: $/.github/actions/report-kache
@@ -277,6 +295,10 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
@@ -340,6 +362,10 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
       - name: Build benchmark stack
         run: |
           cargo build --release --locked \
@@ -364,6 +390,8 @@ jobs:
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
         with:
           diagnostics: "true"
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
       - name: Dump component logs on failure
         if: failure()
         run: |

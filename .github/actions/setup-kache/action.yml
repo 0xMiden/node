@@ -1,6 +1,17 @@
 name: Setup kache
 description: Configure Rust compiler caching for subsequent Cargo commands
 
+inputs:
+  s3-bucket:
+    description: S3 bucket for shared compiler artifacts
+    default: ""
+  s3-region:
+    description: AWS region of the cache bucket
+    default: ""
+  s3-role-arn:
+    description: AWS role to assume for cache access
+    default: ""
+
 runs:
   using: composite
   steps:
@@ -14,9 +25,9 @@ runs:
       env:
         REMOTE_CACHE: >-
           ${{
-            vars.KACHE_S3_BUCKET != '' &&
-            vars.KACHE_S3_REGION != '' &&
-            vars.KACHE_S3_ROLE_ARN != '' &&
+            inputs.s3-bucket != '' &&
+            inputs.s3-region != '' &&
+            inputs.s3-role-arn != '' &&
             github.repository == '0xMiden/node' &&
             (github.event_name != 'pull_request' ||
               github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -25,8 +36,8 @@ runs:
             github.actor != 'dependabot[bot]' && github.actor != 'dependabot' &&
             github.actor != 'github-actions[bot]'
           }}
-        KACHE_S3_BUCKET: ${{ vars.KACHE_S3_BUCKET }}
-        KACHE_S3_REGION: ${{ vars.KACHE_S3_REGION }}
+        KACHE_S3_BUCKET: ${{ inputs.s3-bucket }}
+        KACHE_S3_REGION: ${{ inputs.s3-region }}
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
@@ -54,8 +65,8 @@ runs:
       if: steps.cache.outputs.remote == 'true'
       uses: aws-actions/configure-aws-credentials@v6.3.0
       with:
-        role-to-assume: ${{ vars.KACHE_S3_ROLE_ARN }}
-        aws-region: ${{ vars.KACHE_S3_REGION }}
+        role-to-assume: ${{ inputs.s3-role-arn }}
+        aws-region: ${{ inputs.s3-region }}
         role-duration-seconds: 3600
         unset-current-credentials: true
 
@@ -88,8 +99,8 @@ runs:
       uses: kunobi-ninja/kache-action@v1
       with:
         version: v1.2.2-miden.1
-        s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-        s3-region: ${{ vars.KACHE_S3_REGION }}
+        s3-bucket: ${{ inputs.s3-bucket }}
+        s3-region: ${{ inputs.s3-region }}
         s3-prefix: protected-branch
         manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
         max-size: 50GiB
