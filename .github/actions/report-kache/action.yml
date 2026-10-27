@@ -2,6 +2,12 @@ name: Report kache performance
 description: Collect Rust cache reports for the workflow summary
 
 inputs:
+  s3-bucket:
+    description: S3 bucket to probe during diagnostics
+    default: ""
+  s3-region:
+    description: AWS region of the cache bucket
+    default: ""
   diagnostics:
     description: Include traces, daemon logs, and runner diagnostics
     default: "false"
@@ -25,8 +31,8 @@ runs:
       if: inputs.diagnostics == 'true'
       shell: bash
       env:
-        KACHE_S3_BUCKET: ${{ vars.KACHE_S3_BUCKET }}
-        KACHE_S3_REGION: ${{ vars.KACHE_S3_REGION }}
+        KACHE_S3_BUCKET: ${{ inputs.s3-bucket }}
+        KACHE_S3_REGION: ${{ inputs.s3-region }}
       run: |
         report_dir="${RUNNER_TEMP}/kache-performance"
         kache stats --full --format trace --output "${report_dir}/trace.json"
