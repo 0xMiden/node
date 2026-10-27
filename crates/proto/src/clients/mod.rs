@@ -34,6 +34,7 @@ use http::header::ACCEPT;
 use miden_node_tracing::grpc::OtelInterceptor;
 use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
+use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::batch::ProposedBatch;
 use tonic::metadata::AsciiMetadataValue;
@@ -725,13 +726,14 @@ impl Builder<WantsConnection> {
 }
 
 impl ValidatorClient {
-    /// Submits each transaction in the batch to the validator for re-execution.
+    /// Submits each transaction in the batch to the validator for re-execution, retrying transient
+    /// failures for each transaction independently.
     ///
     /// # Errors
     ///
     /// - If `sealed_transaction_inputs` does not match the batch's transactions in length
     pub async fn submit_batch(
-        &mut self,
+        &self,
         proposed_batch: &ProposedBatch,
         sealed_transaction_inputs: &[SealedTransactionInputs],
     ) -> Result<(), Status> {
@@ -745,11 +747,16 @@ impl ValidatorClient {
                 transaction: Some(tx.as_ref().into()),
                 sealed_transaction_inputs: Some(inputs.clone()),
             };
-            self.submit_proven_transaction(
-                crate::generated::miden::validator::v1::SubmitProvenTransactionRequest {
-                    submission: Some(proven_tx),
-                },
-            )
+            (|| async {
+                self.clone()
+                    .submit_proven_transaction(
+                        crate::generated::miden::validator::v1::SubmitProvenTransactionRequest {
+                            submission: Some(proven_tx.clone()),
+                        },
+                    )
+                    .await
+            })
+            .retry_transient()
             .await?;
         }
         Ok(())

@@ -21,6 +21,7 @@ use miden_node_utils::limiter::{
     QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -34,7 +35,8 @@ use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 // VALIDATOR FAN-OUT
 // ================================================================================================
 
-/// Submits the proven transaction to every validator concurrently.
+/// Submits the proven transaction to every validator concurrently, retrying transient failures
+/// independently for each validator.
 ///
 /// Every validator must observe every transaction, since a validator only signs blocks whose
 /// transactions it has previously validated. A single failed submission therefore fails the whole
@@ -44,16 +46,21 @@ pub(crate) async fn submit_tx_to_validators(
     request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
-        let mut validator = validator.clone();
+        let validator = validator.clone();
         let request = request.clone();
         async move {
-            validator
-                .submit_proven_transaction(
-                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
-                        submission: Some(request),
-                    },
-                )
-                .await
+            (|| async {
+                validator
+                    .clone()
+                    .submit_proven_transaction(
+                        proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                            submission: Some(request.clone()),
+                        },
+                    )
+                    .await
+            })
+            .retry_transient()
+            .await
         }
     }))
     .await?;
@@ -68,16 +75,20 @@ pub(crate) async fn submit_batch_to_validators(
     proposed_batch: &miden_protocol::batch::ProposedBatch,
     sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
-    futures::future::try_join_all(validators.iter().map(|validator| {
-        let mut validator = validator.clone();
-        async move { validator.submit_batch(proposed_batch, sealed_transaction_inputs).await }
-    }))
+    futures::future::try_join_all(
+        validators
+            .iter()
+            .map(|validator| validator.submit_batch(proposed_batch, sealed_transaction_inputs)),
+    )
     .await?;
     Ok(())
 }
 
 // API METHODS
 // ================================================================================================
+
+#[cfg(test)]
+mod validator_tests;
 
 mod error_codes;
 mod get_account;

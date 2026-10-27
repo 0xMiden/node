@@ -46,6 +46,7 @@ url                    = { workspace = true }
 
 [dev-dependencies]
 assert_matches     = { workspace = true }
+h2                 = { workspace = true }
 miden-node-tracing = { features = ["testing"], workspace = true }
 miden-node-utils   = { features = ["testing-prover"], workspace = true }
 miden-protocol     = { default-features = true, features = ["testing"], workspace = true }
