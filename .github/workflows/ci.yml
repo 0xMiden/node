@@ -104,6 +104,8 @@ jobs:
 
       - uses: $/.github/actions/report-kache
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
+        with:
+          diagnostics: "true"
 
   docker:
     name: Docker dry-run
@@ -140,6 +142,8 @@ jobs:
       - uses: $/.github/actions/setup-kache
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   tests:
     permissions:
@@ -180,6 +184,8 @@ jobs:
         run: cargo nextest run --all-features --workspace
       - name: Doc tests
         run: cargo test --doc --workspace --all-features
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   doc:
     permissions:
@@ -202,6 +208,8 @@ jobs:
       - uses: $/.github/actions/setup-kache
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   # Node.js jobs use Ubuntu's updated CA bundle for HTTPS connections.
   #
@@ -297,6 +305,8 @@ jobs:
           cargo run --bin miden-node-stress-test benchmark-store \
             --data-directory ${{ env.DATA_DIR }} \
             --iterations 10 --concurrency 1 sync-nullifiers --prefixes 10
+      - uses: $/.github/actions/report-kache
+        if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   # Smoke-tests `miden-benchmark` end-to-end against a locally bootstrapped node.
   benchmark:
@@ -352,6 +362,8 @@ jobs:
           ./scripts/bench-local.sh
       - uses: $/.github/actions/report-kache
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
+        with:
+          diagnostics: "true"
       - name: Dump component logs on failure
         if: failure()
         run: |
@@ -362,6 +374,67 @@ jobs:
             tail -n 200 "$f"
             echo "::endgroup::"
           done
+
+  # Collects Rust cache reports in one workflow summary.
+  #
+  # Reports from earlier attempts remain useful when only some jobs are rerun;
+  # each row identifies the attempt that produced its latest available report.
+  kache-summary:
+    name: Rust cache summary
+    needs: [build, clippy, tests, doc, stress-test, benchmark]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          pattern: kache-performance-*
+          path: ${{ runner.temp }}/kache-reports
+      - name: Summarize Rust cache
+        env:
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          report_root="${RUNNER_TEMP}/kache-reports"
+          mkdir -p "${report_root}"
+          details="$(mktemp "${RUNNER_TEMP}/kache-details.XXXXXX")"
+          {
+            echo '## Rust compiler cache'
+            echo
+            echo '| Job | Result | Attempt | Hit rate | Hits | Misses | Downloaded | Uploaded |'
+            echo '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |'
+            for job in build clippy tests doc stress-test benchmark; do
+              result="$(jq -r --arg job "${job}" '.[$job].result' <<< "${JOB_RESULTS}")"
+              directory="$(find "${report_root}" -mindepth 1 -maxdepth 1 -type d \
+                -name "kache-performance-${job}-*" | sort -V | tail -n 1)"
+              if [[ ! -f "${directory}/report.json" ]]; then
+                printf '| %s | %s; report unavailable | — | — | — | — | — | — |\n' "${job}" "${result}"
+                continue
+              fi
+              attempt="${directory##*-}"
+              jq -r --arg job "${job}" --arg result "${result}" --arg attempt "${attempt}" '
+                def size:
+                  if . >= 1073741824 then ((. / 1073741824 * 100 | round) / 100 | tostring) + " GiB"
+                  else ((. / 1048576 * 100 | round) / 100 | tostring) + " MiB" end;
+                .summary as $s | .network as $n |
+                ($s.local_hits + $s.prefetch_hits + $s.remote_hits) as $hits |
+                [$job, $result, $attempt,
+                 (if $s.total_crates > 0 then ($s.hit_rate_pct | tostring) + "%" else "—" end),
+                 $hits, $s.misses, ($n.bytes_down | size), ($n.bytes_up | size)] |
+                "| " + (map(tostring) | join(" | ")) + " |"
+              ' "${directory}/report.json"
+              if [[ -f "${directory}/report.md" ]]; then
+                {
+                  printf '\n<details>\n<summary>%s — attempt %s</summary>\n\n' "${job}" "${attempt}"
+                  cat "${directory}/report.md"
+                  printf '\n</details>\n'
+                } >> "${details}"
+              fi
+            done
+            echo
+            echo 'Each row uses the latest available report for that job in this run.'
+            echo 'Transfer counts exclude any uploads completed during post-job finalization.'
+            cat "${details}"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
   # ===============================================================================================
   # Jobs that don't require caching to be efficient

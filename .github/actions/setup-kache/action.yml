@@ -86,7 +86,7 @@ runs:
         save-cache: ${{ steps.cache.outputs.remote == 'true' }}
         sync: false
         pr-comment: false
-        job-summary: true
+        job-summary: false
 
     - name: Report cache configuration
       shell: bash
