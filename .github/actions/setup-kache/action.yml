@@ -14,6 +14,9 @@ runs:
       env:
         REMOTE_CACHE: >-
           ${{
+            vars.KACHE_S3_BUCKET != '' &&
+            vars.KACHE_S3_REGION != '' &&
+            vars.KACHE_S3_ROLE_ARN != '' &&
             github.repository == '0xMiden/node' &&
             (github.event_name != 'pull_request' ||
               github.event.pull_request.head.repo.full_name == github.repository) &&
@@ -22,19 +25,27 @@ runs:
             github.actor != 'dependabot[bot]' && github.actor != 'dependabot' &&
             github.actor != 'github-actions[bot]'
           }}
+        KACHE_S3_BUCKET: ${{ vars.KACHE_S3_BUCKET }}
+        KACHE_S3_REGION: ${{ vars.KACHE_S3_REGION }}
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
         config="$(mktemp "${RUNNER_TEMP}/kache-config.XXXXXX")"
         if [[ "${REMOTE_CACHE}" == true ]]; then
-          cat > "${config}" <<'TOML'
-        [cache.remote]
-        type = "s3"
-        bucket = "miden-kache"
-        region = "eu-north-1"
-        prefix = "protected-branch"
-        pull_request_prefix = "prs"
-        TOML
+          python3 - > "${config}" <<'PYTHON'
+        import json
+        import os
+
+        print('[cache.remote]')
+        for key, value in {
+            "type": "s3",
+            "bucket": os.environ["KACHE_S3_BUCKET"],
+            "region": os.environ["KACHE_S3_REGION"],
+            "prefix": "protected-branch",
+            "pull_request_prefix": "prs",
+        }.items():
+            print(f"{key} = {json.dumps(value)}")
+        PYTHON
         else
           printf '[cache]\nremote_readonly = true\n' > "${config}"
         fi
@@ -44,8 +55,8 @@ runs:
       if: steps.cache.outputs.remote == 'true'
       uses: aws-actions/configure-aws-credentials@v6.3.0
       with:
-        role-to-assume: arn:aws:iam::507751502557:role/miden-node-kache-github
-        aws-region: eu-north-1
+        role-to-assume: ${{ vars.KACHE_S3_ROLE_ARN }}
+        aws-region: ${{ vars.KACHE_S3_REGION }}
         role-duration-seconds: 3600
         unset-current-credentials: true
 
@@ -76,8 +87,8 @@ runs:
       uses: kunobi-ninja/kache-action@v1
       with:
         version: v1.2.2-miden.1
-        s3-bucket: ${{ steps.cache.outputs.remote == 'true' && 'miden-kache' || '' }}
-        s3-region: eu-north-1
+        s3-bucket: ${{ steps.cache.outputs.remote == 'true' && vars.KACHE_S3_BUCKET || '' }}
+        s3-region: ${{ vars.KACHE_S3_REGION }}
         s3-prefix: protected-branch
         manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
         max-size: 50GiB
