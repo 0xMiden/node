@@ -2,7 +2,8 @@
 
 ## Patched kache prefetch trial
 
-Status: waiting for an official kache release containing the prefetch cancellation fix.
+Status: waiting for an official kache release containing the
+[prefetch cancellation fix](https://github.com/kunobi-ninja/kache/issues/1735).
 
 [Setup kache](.github/actions/setup-kache/action.yml) installs a checksum-pinned
 Linux x64 build from [the trial fork](https://github.com/Mirko-von-Leipzig/kache/tree/miden-prefetch-v1.2.2).
