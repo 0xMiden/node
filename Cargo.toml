@@ -145,7 +145,7 @@ tower                 = { version = "0.5" }
 tower-http            = { features = ["cors", "trace"], version = "0.6" }
 tower_governor        = { version = "0.8" }
 tracing               = { version = "0.1" }
-tracing-opentelemetry = { version = "0.33" }
+tracing-opentelemetry = { version = "0.34" }
 tracing-subscriber    = { features = ["env-filter", "fmt", "json"], version = "0.3" }
 trybuild              = { version = "1.0" }
 url                   = { features = ["serde"], version = "2.5" }
