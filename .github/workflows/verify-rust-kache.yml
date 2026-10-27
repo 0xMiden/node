@@ -19,6 +19,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
+      - name: Report OIDC availability
+        shell: bash
+        run: |
+          if [[ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" && -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ]]; then
+            echo "OIDC token request is available"
+          else
+            echo "OIDC token request is unavailable"
+          fi
+
       - name: Authenticate as the cache role
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
