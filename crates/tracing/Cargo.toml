@@ -35,7 +35,7 @@ opentelemetry-otlp = { default-features = false, features = [
   "tls-roots",
   "trace",
 ], version = "0.32" }
-opentelemetry_sdk = { features = ["rt-tokio"], version = "0.32.1" }
+opentelemetry_sdk = { features = ["rt-tokio"], version = "0.33.1" }
 tokio = { features = ["rt"], workspace = true }
 tonic = { default-features = true, workspace = true }
 tower-http = { features = ["catch-panic"], workspace = true }
@@ -46,7 +46,7 @@ tracing-opentelemetry = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
-opentelemetry_sdk = { features = ["testing"], version = "0.32.1" }
+opentelemetry_sdk = { features = ["testing"], version = "0.33.1" }
 thiserror         = { workspace = true }
 tower             = { features = ["util"], workspace = true }
 trybuild          = { workspace = true }
