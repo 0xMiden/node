@@ -16,7 +16,7 @@ fs-err           = "3"
 semver           = "1.0"
 serde            = { features = ["derive"], version = "1" }
 toml             = "1.0"
-tree-sitter      = "0.26"
+tree-sitter      = "0.27"
 tree-sitter-rust = "0.24"
 
 [lints.clippy]
