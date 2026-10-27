@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -69,6 +70,45 @@ async fn validator_calls_recover_from_connection_retirement() {
             tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
         }
     }
+}
+
+#[tokio::test]
+#[serial_test::serial(validator_tracing)]
+async fn validator_timeouts_are_not_retried() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap()).parse().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server = tokio::spawn({
+        let requests = Arc::clone(&requests);
+        async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut connection = h2::server::handshake(socket).await.unwrap();
+            // Hold every request open without responding, as an unresponsive validator would.
+            let mut pending = Vec::new();
+            while let Some(Ok(stream)) = connection.accept().await {
+                requests.fetch_add(1, Ordering::SeqCst);
+                pending.push(stream);
+            }
+        }
+    });
+    let client = BlockProducerValidatorClient::new(
+        vec![url],
+        Duration::from_millis(100),
+        miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+    )
+    .unwrap();
+
+    let error = tokio::time::timeout(
+        Duration::from_secs(5),
+        client.validators[0].submit_proven_transaction(ProvenTransactionSubmission::default()),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
+
+    assert_eq!(error.code(), tonic::Code::Cancelled);
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    server.abort();
 }
 
 #[derive(Clone, Default)]
