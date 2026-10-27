@@ -24,6 +24,9 @@ runs:
     - name: Collect cache diagnostics
       if: inputs.diagnostics == 'true'
       shell: bash
+      env:
+        KACHE_S3_BUCKET: ${{ vars.KACHE_S3_BUCKET }}
+        KACHE_S3_REGION: ${{ vars.KACHE_S3_REGION }}
       run: |
         report_dir="${RUNNER_TEMP}/kache-performance"
         kache stats --full --format trace --output "${report_dir}/trace.json"
@@ -39,12 +42,15 @@ runs:
           df -h "${GITHUB_WORKSPACE}" "${KACHE_CACHE_DIR}"
           timing='S3 endpoint: dns=%{time_namelookup}s connect=%{time_connect}s '
           timing+='tls=%{time_appconnect}s first_byte=%{time_starttransfer}s\n'
-          for attempt in 1 2 3; do
-            curl --head --silent --show-error --output /dev/null \
-              --connect-timeout 5 --max-time 10 \
-              --write-out "${timing}" \
-              https://miden-kache.s3.eu-north-1.amazonaws.com/ || printf 'S3 endpoint probe failed\n'
-          done
+          if [[ -n "${KACHE_S3_BUCKET}" && -n "${KACHE_S3_REGION}" ]]; then
+            for attempt in 1 2 3; do
+              curl --head --silent --show-error --output /dev/null \
+                --connect-timeout 5 --max-time 10 \
+                --write-out "${timing}" \
+                "https://${KACHE_S3_BUCKET}.s3.${KACHE_S3_REGION}.amazonaws.com/" \
+                || printf 'S3 endpoint probe failed\n'
+            done
+          fi
         } > "${report_dir}/runner.txt"
 
     - name: Upload cache report
