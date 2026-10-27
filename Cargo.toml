@@ -86,7 +86,7 @@ build-rs           = { version = "0.3" }
 chacha20poly1305   = { version = "0.11" }
 clap               = { features = ["derive"], version = "4.5" }
 codegen            = { version = "0.3" }
-deadpool           = { default-features = false, version = "0.12" }
+deadpool           = { default-features = false, version = "0.13" }
 deadpool-sync      = { default-features = false, version = "0.1" }
 fs-err             = { version = "3" }
 futures            = { version = "0.3" }
