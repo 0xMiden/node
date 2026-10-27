@@ -42,6 +42,7 @@ runs:
       shell: bash
       env:
         CACHE_ENABLED: ${{ steps.cache.outputs.enabled }}
+        CACHE_WRITABLE: ${{ steps.cache.outputs.writable }}
         CACHE_BINARY: ${{ steps.cache.outputs.binary }}
         CACHE_CONFIG: ${{ steps.cache.outputs.config }}
         ARCHITECTURE: ${{ inputs.architecture }}

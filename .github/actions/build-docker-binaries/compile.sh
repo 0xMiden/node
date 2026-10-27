@@ -8,7 +8,7 @@ finish() {
     result=$?
     trap - EXIT
     if command -v kache >/dev/null; then
-        if [[ "${result}" == 0 ]]; then
+        if [[ "${result}" == 0 && "${CACHE_WRITABLE:-false}" == true ]]; then
             kache save-manifest --manifest-key "${KACHE_MANIFEST_KEY}" --namespace "${KACHE_NAMESPACE}" || result=$?
             kache sync --push || result=$?
         fi

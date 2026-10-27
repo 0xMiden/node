@@ -24,12 +24,17 @@ if [[ "${CACHE_ENABLED}" == true ]]; then
         --mount "type=bind,src=${CACHE_BINARY},dst=/usr/local/bin/kache,readonly"
         --mount "type=bind,src=${CACHE_BINARY%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
         --mount "type=bind,src=${CACHE_CONFIG},dst=/run/remote.toml,readonly"
-        -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN
-        -e AWS_REGION -e AWS_DEFAULT_REGION
+        -e CACHE_WRITABLE
         -e GITHUB_ACTIONS -e GITHUB_EVENT_NAME -e GITHUB_REF_TYPE -e GITHUB_REF_PROTECTED
         -e KACHE_MANIFEST_KEY="node-docker-${ARCHITECTURE}"
         -e KACHE_NAMESPACE="node-docker-${ARCHITECTURE}"
     )
+    if [[ "${CACHE_WRITABLE}" == true ]]; then
+        args+=(
+            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN
+            -e AWS_REGION -e AWS_DEFAULT_REGION
+        )
+    fi
 fi
 docker run "${args[@]}" node-ci-build-env bash /run/compile.sh
 echo "context=${output}" >> "${GITHUB_OUTPUT}"
