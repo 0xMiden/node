@@ -1,0 +1,81 @@
+name: Verify Rust kache access
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/verify-rust-kache.yml
+      - .github/workflows/actions.lock
+
+permissions: {}
+
+env:
+  KACHE_ROLE_ARN: arn:aws:iam::507751502557:role/miden-node-kache-github
+  OTHER_BUCKET: miden-account-admin-584968076953
+
+jobs:
+  verify:
+    permissions:
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Authenticate as the cache role
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: ${{ env.KACHE_ROLE_ARN }}
+          aws-region: eu-north-1
+          role-duration-seconds: 900
+          retry-max-attempts: 1
+          unset-current-credentials: true
+
+      - name: Verify cache permissions
+        env:
+          AWS_PAGER: ""
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$OTHER_BUCKET" != miden-kache
+          aws sts get-caller-identity
+          probe_dir="$(mktemp -d)"
+          trap 'rm -rf "$probe_dir"' EXIT
+          probe="access-check-${GITHUB_REPOSITORY_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          printf '%s\n' "$probe" > "$probe_dir/source"
+
+          # Checks for an authorization denial rather than accepting any failed request.
+          #
+          # Missing buckets, expired credentials, and network errors do not prove isolation.
+          expect_denied() {
+            if "$@" > "$probe_dir/result" 2> "$probe_dir/error"; then
+              echo "FAIL: expected AccessDenied for $*"
+              exit 1
+            fi
+            if ! grep -Fq '(AccessDenied)' "$probe_dir/error"; then
+              cat "$probe_dir/error" >&2
+              echo "FAIL: request failed for a reason other than AccessDenied"
+              exit 1
+            fi
+            echo "PASS: denied $*"
+          }
+
+          for prefix in protected-branch prs; do
+            key="$prefix/$probe"
+            aws s3api put-object --bucket miden-kache --key "$key" \
+              --body "$probe_dir/source" > /dev/null
+            aws s3api get-object --bucket miden-kache --key "$key" \
+              "$probe_dir/restored" > /dev/null
+            cmp "$probe_dir/source" "$probe_dir/restored"
+            aws s3api list-objects-v2 --bucket miden-kache --prefix "$key" \
+              --query 'Contents[].Key' --output text | grep -Fx -- "$key"
+            echo "PASS: write, read, and list $prefix/"
+          done
+
+          expect_denied aws s3api put-object --bucket miden-kache \
+            --key "outside-prefix/$probe" --body "$probe_dir/source"
+          expect_denied aws s3api get-object --bucket miden-kache \
+            --key "outside-prefix/$probe" "$probe_dir/forbidden"
+          expect_denied aws s3api list-objects-v2 --bucket miden-kache \
+            --prefix outside-prefix/ --max-keys 1
+          expect_denied aws s3api list-objects-v2 --bucket "$OTHER_BUCKET" --max-keys 1
+          expect_denied aws s3api delete-object --bucket miden-kache \
+            --key "protected-branch/$probe"
+          echo "PASS: all cache permission checks"
