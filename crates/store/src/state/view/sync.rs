@@ -52,7 +52,7 @@ impl StateView {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn sync_chain_mmr(
         &self,
@@ -120,7 +120,7 @@ impl StateView {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn sync_notes(
         &self,

@@ -34,7 +34,6 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         fields(
             block.from = input,
         ),
-        err,
     )]
     async fn handle(
         &self,

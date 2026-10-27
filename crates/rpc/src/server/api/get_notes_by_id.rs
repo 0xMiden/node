@@ -28,7 +28,6 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "get_notes_by_id",
-        err,
     )]
     async fn handle(
         &self,

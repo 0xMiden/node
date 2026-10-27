@@ -24,7 +24,6 @@ impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for 
     #[miden_instrument(
         target = COMPONENT,
         name = "get_transaction_encryption_key",
-        err,
     )]
     async fn handle(
         &self,

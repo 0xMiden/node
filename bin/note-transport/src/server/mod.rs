@@ -5,7 +5,7 @@ use miden_node_proto::Verify;
 use miden_node_proto::clients::{Builder, RpcClient};
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::miden::note_transport::v1::DecodedTransportNote;
-use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{debug, error, info};
 use miden_node_utils::clap::GrpcOptions;
@@ -18,9 +18,7 @@ use miden_protocol::note::{NoteDetails, NoteHeader};
 use tokio::net::TcpListener;
 use tower::limit::GlobalConcurrencyLimitLayer;
 use tower_http::catch_panic::CatchPanicLayer;
-use tower_http::classify::{GrpcCode, GrpcErrorsAsFailures, SharedClassifier};
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::trace::TraceLayer;
 use url::Url;
 
 use crate::{COMPONENT, LOG_TARGET, db};
@@ -121,17 +119,7 @@ impl Server {
         grpc::server_builder()
             .accept_http1(true)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(
-                TraceLayer::new(SharedClassifier::new(
-                    GrpcErrorsAsFailures::new()
-                        .with_success(GrpcCode::InvalidArgument)
-                        .with_success(GrpcCode::NotFound)
-                        .with_success(GrpcCode::ResourceExhausted)
-                        .with_success(GrpcCode::Unimplemented)
-                        .with_success(GrpcCode::Unknown),
-                ))
-                .make_span_with(grpc_trace_fn),
-            )
+            .layer(grpc_trace_layer())
             .layer(
                 CorsLayer::new()
                     .allow_origin(Any)

@@ -28,6 +28,7 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
+pub(crate) use self::error_codes::log_internal_error;
 use self::error_codes::{SyncErrorCode, internal_error};
 use crate::COMPONENT;
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
@@ -230,10 +231,12 @@ impl RpcService {
             return Ok(());
         }
 
-        let network_accounts =
-            self.state.view().filter_network_accounts(&account_ids).await.map_err(|err| {
-                Status::internal(format!("network-account classification failed: {err}"))
-            })?;
+        let network_accounts = self
+            .state
+            .view()
+            .filter_network_accounts(&account_ids)
+            .await
+            .map_err(|err| log_internal_error(&err))?;
 
         if !network_accounts.is_empty() {
             return Err(Status::invalid_argument(
@@ -268,7 +271,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => internal_error(err.to_string()),
+        GetBlockHeaderError::MmrError(err) => log_internal_error(&err),
     }
 }
 
@@ -283,7 +286,7 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::RangeBelowRetention(_) | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
-        _ => internal_error(message),
+        _ => log_internal_error(err),
     }
 }
 
@@ -299,7 +302,7 @@ async fn load_protocol_config(
     let commitment = header.protocol_config_commitment();
     view.get_protocol_config(commitment)
         .await
-        .map_err(|err| internal_error(err.to_string()))?
+        .map_err(|err| log_internal_error(&err))?
         .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 

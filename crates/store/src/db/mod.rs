@@ -285,7 +285,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_protocol_config_by_commitment(
         &self,
@@ -323,7 +323,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub(crate) async fn page<Q: Paginated>(
         &self,
@@ -373,7 +373,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_block_header_by_block_num(
         &self,
@@ -403,7 +403,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_block_header_and_signatures_by_block_num(
         &self,
@@ -420,7 +420,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_block_headers(
         &self,
@@ -437,7 +437,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
         self.reader
@@ -449,7 +449,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
         self.reader
@@ -461,7 +461,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn filter_network_accounts(
         &self,
@@ -524,7 +524,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.reader
@@ -536,7 +536,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_existing_note_ids(
         &self,
@@ -555,7 +555,7 @@ impl Db {
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
-        err,
+        err(level = "debug"),
     )]
     pub async fn select_note_inclusion_proofs(
         &self,

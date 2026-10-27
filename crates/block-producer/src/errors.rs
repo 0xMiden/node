@@ -41,7 +41,7 @@ pub enum ProofSchedulerError {
 pub enum MempoolSubmissionError {
     #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreStateReadFailed(#[source] StoreError),
+    StoreStateReadFailed(#[source] DatabaseError),
 
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
@@ -123,6 +123,8 @@ pub enum StateConflict {
         expected: Word,
         current: Word,
     },
+    #[error("the ID prefix of new account {0} already exists")]
+    AccountIdPrefixAlreadyExists(AccountId),
 }
 
 impl From<TransactionAuthenticationError> for StateConflict {
@@ -223,10 +225,6 @@ impl BuildBlockError {
 /// Errors returned by the store state.
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("account Id prefix already exists: {0}")]
-    DuplicateAccountIdPrefix(AccountId),
-    #[error("failed to get transaction inputs from store")]
-    GetTransactionInputsFailed(#[source] DatabaseError),
     #[error("failed to get block inclusion proofs from store")]
     GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
     #[error("failed to get block header from store")]
@@ -279,9 +277,7 @@ mod tests {
     #[test]
     fn internal_submission_failure_hides_cause() {
         let status = Status::from(MempoolSubmissionError::StoreStateReadFailed(
-            StoreError::GetTransactionInputsFailed(DatabaseError::DataCorrupted(
-                "private database data".into(),
-            )),
+            DatabaseError::DataCorrupted("private database data".into()),
         ));
 
         assert_eq!(status.code(), Code::Internal);

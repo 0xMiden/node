@@ -4827,6 +4827,8 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tower",
+ "tracing",
+ "tracing-subscriber",
  "url",
 ]
 
@@ -4880,7 +4882,6 @@ dependencies = [
  "tonic-reflection",
  "tonic-web",
  "tower",
- "tower-http",
  "url",
 ]
 
@@ -4965,6 +4966,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tonic",
+ "tower",
  "tower-http",
  "tower_governor",
  "tracing",
@@ -5076,7 +5078,6 @@ dependencies = [
  "tonic-prost",
  "tonic-reflection",
  "tower",
- "tower-http",
  "url",
 ]
 
@@ -8702,7 +8703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.52.0",

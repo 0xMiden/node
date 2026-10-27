@@ -84,7 +84,7 @@ impl AccountAllowlistReader {
         target = COMPONENT,
         name = "store.allowlist.allowlisted_at",
         fields(account.id = account_id),
-        err,
+        err(level = "debug"),
     )]
     pub async fn allowlisted_at(
         &self,
@@ -97,7 +97,7 @@ impl AccountAllowlistReader {
     }
 
     /// Returns the invitation's registration and allowlist entry timestamp, if it exists.
-    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_info", err)]
+    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_info", err(level = "debug"))]
     pub async fn invitation_info(
         &self,
         invitation_code: InvitationCode,
@@ -115,7 +115,7 @@ impl AccountAllowlistReader {
         target = COMPONENT,
         name = "store.allowlist.contains_account",
         fields(account.id = account_id),
-        err,
+        err(level = "debug"),
     )]
     pub async fn contains_account(&self, account_id: AccountId) -> Result<bool, DatabaseError> {
         self.db
@@ -127,7 +127,7 @@ impl AccountAllowlistReader {
     }
 
     /// Returns the registration state of the invitation code.
-    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_status", err)]
+    #[miden_instrument(target = COMPONENT, name = "store.allowlist.invitation_status", err(level = "debug"))]
     pub async fn invitation_status(
         &self,
         invitation_code: InvitationCode,

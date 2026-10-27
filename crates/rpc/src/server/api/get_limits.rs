@@ -20,7 +20,6 @@ impl proto::server::miden_node_v1_node_service::GetLimits for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "get_limits",
-        err,
     )]
     async fn handle(
         &self,
