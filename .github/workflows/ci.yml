@@ -1,6 +1,6 @@
 # Continuous integration jobs.
-# Fork pull requests use GitHub-hosted runners without shared caches. Internal
-# builds use WarpBuild, with Rust caches updated on pushes to protected branches.
+# Fork pull requests use GitHub-hosted runners with local Rust caching. Internal
+# builds use WarpBuild runners and share Rust artifacts through kache and S3.
 name: CI
 
 permissions:
@@ -25,11 +25,7 @@ env:
       github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository
     }}
-  # Shared prefix key for the Rust caches.
-  #
-  # Cache is specific to the target development or release branch.
-  CACHE_PREFIX: rust-cache-${{ github.base_ref || github.ref_name }}
-  # Push triggers are limited to protected branches; internal PRs restore from that branch.
+  # Only protected-branch pushes save the separate xtask binary cache.
   SAVE_CACHE: ${{ github.event_name == 'push' }}
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -46,6 +42,9 @@ jobs:
 
   # Normal cargo build that verifies the workspace compiles.
   build:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -62,13 +61,7 @@ jobs:
       - uses: $/.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          cache-provider: warpbuild
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -124,6 +117,9 @@ jobs:
 
   clippy:
     name: lint - clippy
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -138,17 +134,14 @@ jobs:
         if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          cache-provider: warpbuild
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
 
   tests:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -177,13 +170,7 @@ jobs:
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          cache-provider: warpbuild
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -192,6 +179,9 @@ jobs:
         run: cargo test --doc --workspace --all-features
 
   doc:
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -206,13 +196,7 @@ jobs:
         if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          cache-provider: warpbuild
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
 
@@ -257,6 +241,9 @@ jobs:
   # Ensure the stress-test still functions by running some cheap benchmarks.
   stress-test:
     name: stress test
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -278,13 +265,7 @@ jobs:
         if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          cache-provider: warpbuild
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - uses: taiki-e/install-action@v2.87.29
         with:
           tool: nextest@0.9.122
@@ -317,6 +298,9 @@ jobs:
   # Smoke-tests `miden-benchmark` end-to-end against a locally bootstrapped node.
   benchmark:
     name: benchmark smoke
+    permissions:
+      contents: read
+      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -336,12 +320,7 @@ jobs:
         if: env.USE_CACHE != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: WarpBuilds/rust-cache@v2.9.1
-        if: env.USE_CACHE == 'true'
-        with:
-          shared-key: ${{ github.job }}
-          prefix-key: ${{ env.CACHE_PREFIX }}
-          save-if: ${{ env.SAVE_CACHE }}
+      - uses: $/.github/actions/setup-kache
       - name: Build benchmark stack
         run: |
           cargo build --release --locked \
