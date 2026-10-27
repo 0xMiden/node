@@ -1,0 +1,43 @@
+name: Report kache performance
+description: Preserve cache timing, transfer, and daemon diagnostics
+
+runs:
+  using: composite
+  steps:
+    # Captures diagnostics while the job's kache daemon and runtime still exist.
+    #
+    # The setup action removes its runtime in the post step, so its ordinary
+    # summary cannot explain why prefetch plans or artifact restores were slow.
+    - name: Collect cache diagnostics
+      shell: bash
+      run: |
+        report_dir="${RUNNER_TEMP}/kache-performance"
+        mkdir -p "${report_dir}"
+        kache stats --full --format json --output "${report_dir}/report.json"
+        kache stats --full --format trace --output "${report_dir}/trace.json"
+        kache daemon status --json > "${report_dir}/daemon-status.json"
+        for log in "${KACHE_RUNTIME_DIR}"/*.log; do
+          if [[ -f "${log}" ]]; then
+            cp "${log}" "${report_dir}/"
+          fi
+        done
+        {
+          findmnt -T "${GITHUB_WORKSPACE}"
+          findmnt -T "${KACHE_CACHE_DIR}"
+          df -h "${GITHUB_WORKSPACE}" "${KACHE_CACHE_DIR}"
+          timing='S3 endpoint: dns=%{time_namelookup}s connect=%{time_connect}s '
+          timing+='tls=%{time_appconnect}s first_byte=%{time_starttransfer}s\n'
+          for attempt in 1 2 3; do
+            curl --head --silent --show-error --output /dev/null \
+              --connect-timeout 5 --max-time 10 \
+              --write-out "${timing}" \
+              https://miden-kache.s3.eu-north-1.amazonaws.com/ || printf 'S3 endpoint probe failed\n'
+          done
+        } > "${report_dir}/runner.txt"
+
+    - name: Upload cache diagnostics
+      uses: actions/upload-artifact@v7.0.2
+      with:
+        name: kache-performance-${{ github.job }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/kache-performance
+        retention-days: 3
