@@ -19,6 +19,9 @@ updates:
       day: monday
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      cargo:
+        patterns: ["*"]
     cooldown:
       default-days: 7
 
