@@ -11,7 +11,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, VerifyWith, generated as proto};
 use miden_node_tracing::{info, miden_instrument};
 use miden_node_utils::formatting::format_endpoint;
-use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -104,12 +104,7 @@ impl BlockProducerValidatorClient {
                 )
                 .await
         })
-        .retry(retry::exponential_bounded(
-            Duration::from_millis(100),
-            Duration::from_secs(2),
-            10,
-        ))
-        .when(|error| error.code() == tonic::Code::Unavailable)
+        .retry_transient()
         .await?
         .into_inner()
         .key
@@ -180,7 +175,7 @@ struct Validator {
 }
 
 impl Validator {
-    /// Submits a proven transaction to this validator, retrying while it is unavailable.
+    /// Submits a proven transaction, retrying service unavailability and connection failures.
     #[miden_instrument(
         target = COMPONENT,
         name = "validator.client.submit_proven_transaction",
@@ -201,12 +196,7 @@ impl Validator {
                 )
                 .await
         })
-        .retry(retry::exponential_bounded(
-            Duration::from_millis(100),
-            Duration::from_secs(2),
-            10,
-        ))
-        .when(|error| error.code() == tonic::Code::Unavailable)
+        .retry_transient()
         .await?;
         Ok(())
     }
@@ -222,8 +212,10 @@ impl Validator {
         &self,
         message: proto::miden::validator::v1::SignBlockRequest,
     ) -> Result<SignBlockResponse, ValidatorError> {
-        let request = tonic::Request::new(message);
-        let response = self.client.clone().sign_block(request).await?.into_inner();
+        let response = (|| async { self.client.clone().sign_block(message.clone()).await })
+            .retry_transient()
+            .await?
+            .into_inner();
         response
             // SAFETY: The block builder matches the commitment to its proposed block and verifies
             // the signatures against the trusted parent validator set.

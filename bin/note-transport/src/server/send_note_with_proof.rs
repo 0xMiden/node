@@ -42,7 +42,7 @@ impl SendNoteWithProof for Server {
         Ok(SendNoteWithProofResponse {})
     }
 
-    #[miden_instrument(target = COMPONENT, err)]
+    #[miden_instrument(target = COMPONENT)]
     async fn handle(
         &self,
         (header, details, proof): Self::Input,

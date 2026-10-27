@@ -36,6 +36,17 @@ custom opaque future trait can require an explicit result type in the async bloc
 Callers cannot set `exception.message` or `exception.stacktrace` through the event macros. Pass the error as the first
 argument so the subscriber can record both fields.
 
+## gRPC servers
+
+`grpc::grpc_trace_layer()` creates a root span for each request and records the response's gRPC status code as
+`rpc.grpc.status_code`. It logs each failed request once, with its status code and message. `INTERNAL`, `DATA_LOSS` and
+`UNAVAILABLE` are logged at `ERROR`, which sets the span status to error. Other codes describe the request, so they are
+logged at `INFO`.
+
+A function that handles requests does not need `#[miden_instrument(err)]`, because the trace layer already logs the
+failure at the level its status code calls for. Log an internal error with its causes where it is converted to a status
+instead, since the status message should not expose node internals to clients.
+
 ## License
 
 This project is [MIT licensed](../../LICENSE).

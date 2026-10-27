@@ -30,7 +30,6 @@ impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService 
     #[miden_instrument(
         target = COMPONENT,
         name = "sync_transactions",
-        err,
     )]
     async fn handle(
         &self,

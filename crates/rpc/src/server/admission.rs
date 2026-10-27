@@ -3,13 +3,14 @@ use std::sync::Arc;
 use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationStatus};
-use miden_node_tracing::{error, miden_instrument};
+use miden_node_tracing::miden_instrument;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
 
-use crate::{COMPONENT, FundingClient, LOG_TARGET};
+use crate::server::api::log_internal_error;
+use crate::{COMPONENT, FundingClient};
 
 /// Account creation policy shared by the public and internal sequencer APIs.
 #[derive(Clone)]
@@ -79,7 +80,6 @@ impl AccountAdmission {
         target = COMPONENT,
         name = "account_admission.check",
         fields(account.id = update.account_id()),
-        err,
     )]
     pub(crate) async fn check(&self, update: &TxAccountUpdate) -> tonic::Result<()> {
         if self.disabled || !update.initial_state_commitment().is_empty() {
@@ -98,10 +98,10 @@ impl AccountAdmission {
         }
 
         let account_id = update.account_id();
-        let allowed = self.is_account_allowed(account_id).await.map_err(|err| {
-            error!(err, target: LOG_TARGET, "Account allowlist lookup failed");
-            Status::internal("account allowlist lookup failed")
-        })?;
+        let allowed = self
+            .is_account_allowed(account_id)
+            .await
+            .map_err(|err| log_internal_error(&err))?;
         if !allowed {
             return Err(Status::permission_denied(format!(
                 "account {account_id} is not registered"

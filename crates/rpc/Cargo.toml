@@ -43,12 +43,12 @@ tonic-health              = { workspace = true }
 tonic-reflection          = { workspace = true }
 tonic-web                 = { workspace = true }
 tower                     = { workspace = true }
-tower-http                = { features = ["trace"], workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
 axum               = { workspace = true }
 fs-err             = { workspace = true }
+h2                 = { workspace = true }
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
 miden-node-utils   = { features = ["testing-prover"], workspace = true }
 miden-protocol     = { default-features = true, features = ["testing"], workspace = true }

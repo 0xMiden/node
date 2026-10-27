@@ -39,7 +39,6 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "get_account",
-        err,
     )]
     async fn handle(
         &self,

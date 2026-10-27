@@ -26,6 +26,8 @@ pub enum TestError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use super::*;
 
     #[test]
@@ -65,5 +67,52 @@ mod tests {
         let client_status: tonic::Status = TestError::ClientError1.into();
         assert_eq!(client_status.code(), tonic::Code::InvalidArgument);
         assert_eq!(client_status.message(), "client error 1");
+    }
+
+    /// Records the level and error message of each event that carries an error.
+    #[derive(Clone, Default)]
+    struct ErrorEvents(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ErrorEvents {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            struct ErrorField(Option<String>);
+            impl tracing::field::Visit for ErrorField {
+                fn record_error(
+                    &mut self,
+                    _field: &tracing::field::Field,
+                    value: &(dyn std::error::Error + 'static),
+                ) {
+                    self.0 = Some(value.to_string());
+                }
+                fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+            }
+
+            let mut error = ErrorField(None);
+            event.record(&mut error);
+            if let Some(error) = error.0 {
+                self.0.lock().unwrap().push((*event.metadata().level(), error));
+            }
+        }
+    }
+
+    #[test]
+    fn internal_errors_are_logged_on_conversion() {
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let events = ErrorEvents::default();
+        let subscriber = tracing_subscriber::registry().with(events.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let _: tonic::Status = TestError::InternalError1.into();
+            let _: tonic::Status = TestError::ClientError1.into();
+        });
+
+        assert_eq!(
+            *events.0.lock().unwrap(),
+            [(tracing::Level::ERROR, "internal error 1".to_owned())]
+        );
     }
 }
