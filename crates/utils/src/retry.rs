@@ -60,6 +60,30 @@ pub fn constant(delay: Duration, max_times: Option<usize>) -> ConstantBuilder {
     }
 }
 
+// GRPC RETRIES
+// ================================================================================================
+
+/// Retries a gRPC call with the node's standard policy for transient connection failures.
+///
+/// It is implemented for closures that start the call rather than for the call's future, since each
+/// attempt needs a fresh request future.
+pub trait RetryableGrpc<T> {
+    /// Retries the call up to ten times with exponential backoff from 100 ms to 2 s while it fails
+    /// with an error accepted by [`is_retryable_grpc_error`].
+    fn retry_transient(self) -> impl Future<Output = Result<T, tonic::Status>>;
+}
+
+impl<F, Fut, T> RetryableGrpc<T> for F
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, tonic::Status>>,
+{
+    fn retry_transient(self) -> impl Future<Output = Result<T, tonic::Status>> {
+        self.retry(exponential_bounded(Duration::from_millis(100), Duration::from_secs(2), 10))
+            .when(is_retryable_grpc_error)
+    }
+}
+
 /// Identifies service unavailability and local transport failures for retryable gRPC calls.
 ///
 /// Tonic can report connection closures as cancelled, internal, or unknown errors. Requiring a

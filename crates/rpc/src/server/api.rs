@@ -1,6 +1,5 @@
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
-use std::time::Duration;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
@@ -22,7 +21,7 @@ use miden_node_utils::limiter::{
     QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
-use miden_node_utils::retry::{self, Retryable};
+use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -60,12 +59,7 @@ pub(crate) async fn submit_tx_to_validators(
                     )
                     .await
             })
-            .retry(retry::exponential_bounded(
-                Duration::from_millis(100),
-                Duration::from_secs(2),
-                10,
-            ))
-            .when(retry::is_retryable_grpc_error)
+            .retry_transient()
             .await
         }
     }))
