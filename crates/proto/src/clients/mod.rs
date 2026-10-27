@@ -733,7 +733,7 @@ impl ValidatorClient {
     ///
     /// - If `sealed_transaction_inputs` does not match the batch's transactions in length
     pub async fn submit_batch(
-        &mut self,
+        &self,
         proposed_batch: &ProposedBatch,
         sealed_transaction_inputs: &[SealedTransactionInputs],
     ) -> Result<(), Status> {
