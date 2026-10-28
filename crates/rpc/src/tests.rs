@@ -111,6 +111,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod sync_account;
 mod sync_resumption;
 mod sync_streams;
 mod vault;
@@ -1909,6 +1910,7 @@ async fn start_rpc_with_allowlist(
                 ntx_builder: None,
                 grpc_options,
                 network_tx_auth: None,
+                sync_account: crate::SyncAccountConfig::default(),
             }
             .serve(shutdown)
             .await

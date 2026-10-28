@@ -205,7 +205,7 @@ fn insert_storage_map_value(
     slot_name: StorageSlotName,
     key: StorageMapKey,
     value: Word,
-) -> Result<usize> {
+) -> Result<i64> {
     db.write(move |tx| {
         queries::insert_storage_map_value(tx, account_id, block_num, &slot_name, key, value)
     })
@@ -217,7 +217,7 @@ fn insert_vault_asset(
     block_num: BlockNumber,
     vault_key: AssetId,
     asset: Option<Asset>,
-) -> Result<usize> {
+) -> Result<i64> {
     db.write(move |tx| queries::insert_vault_asset(tx, account_id, block_num, vault_key, asset))
 }
 

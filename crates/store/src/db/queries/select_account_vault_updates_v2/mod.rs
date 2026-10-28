@@ -11,7 +11,7 @@ use miden_protocol::block::BlockNumber;
 
 use crate::db::pagination::{Page, Paginated, key_cursor};
 use crate::db::queries::check_account_history_target;
-use crate::db::{AccountVaultCursor, AccountVaultValue};
+use crate::db::{AccountVaultCursor, AccountVaultValue, AccountVaultValuesPage};
 use crate::errors::DatabaseError;
 use crate::state::ScopedBlockRange;
 
@@ -88,4 +88,19 @@ impl Paginated for AccountVaultUpdatesV2 {
             })
         }))
     }
+}
+
+/// Fetches one bounded page of account updates within the supplied read transaction.
+pub fn account_vault_updates_page(
+    tx: &ReadTx<'_>,
+    account: AccountId,
+    range: ScopedBlockRange,
+    cursor: Option<AccountVaultCursor>,
+    page_size: NonZeroUsize,
+) -> Result<AccountVaultValuesPage, DatabaseError> {
+    let page = AccountVaultUpdatesV2::new(account, range, page_size).page(tx, &cursor)?;
+    Ok(AccountVaultValuesPage {
+        values: page.items,
+        next_cursor: page.next.flatten(),
+    })
 }

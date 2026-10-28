@@ -21,6 +21,11 @@ impl ScopedBlockNum {
         Self(block_num)
     }
 
+    /// Returns a range ending at this validated block. Queries reject an inverted range.
+    pub fn range_from(self, start: BlockNumber) -> ScopedBlockRange {
+        ScopedBlockRange(start..=self.0)
+    }
+
     /// Constructs a scoped block number without validation.
     ///
     /// Test-only: lets database tests exercise scoped queries without a running state.
@@ -68,10 +73,17 @@ impl ScopedBlockRange {
         *self.0.end()
     }
 
+    /// Returns the start of a nonempty validated range as a scoped block number.
+    ///
+    /// Its lower bound cannot exceed the validated upper bound.
+    pub fn scoped_start(&self) -> ScopedBlockNum {
+        ScopedBlockNum(*self.0.start())
+    }
+
     /// Returns the end of the validated range as a scoped block number.
     ///
     /// Sound because the range's upper bound is exactly what its proof covers.
-    pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
+    pub fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
     }
 

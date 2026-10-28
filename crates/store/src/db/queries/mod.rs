@@ -13,6 +13,13 @@
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
 
+mod account_reads;
+pub use account_reads::{account_code, account_headers, account_size, account_state};
+
+mod account_size;
+pub use account_size::AccountSize;
+pub(crate) use account_size::{select_account_size, update_account_size};
+
 // SHARED COLUMN TYPES
 // =================================================================================================
 
@@ -201,7 +208,9 @@ pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesP
 pub use select_account_storage_map_values_paged::{StorageMapValue, StorageMapValuesPage};
 
 mod select_account_vault_updates_v2;
+#[cfg(test)]
 pub(crate) use select_account_vault_updates_v2::AccountVaultUpdatesV2;
+pub use select_account_vault_updates_v2::account_vault_updates_page;
 
 mod select_account_vault_assets;
 pub(crate) use select_account_vault_assets::AccountVaultAssets;
@@ -224,8 +233,13 @@ mod apply_block;
 pub(crate) use apply_block::apply_block;
 
 mod select_account_storage_map_updates_v2;
+#[cfg(test)]
 pub(crate) use select_account_storage_map_updates_v2::AccountStorageMapUpdatesV2;
-pub use select_account_storage_map_updates_v2::{StorageMapCursor, StorageMapUpdatesPage};
+pub use select_account_storage_map_updates_v2::{
+    StorageMapCursor,
+    StorageMapUpdatesPage,
+    account_storage_map_updates_page,
+};
 
 mod check_account_history_target;
 pub(crate) use check_account_history_target::check_account_history_target;
@@ -252,3 +266,6 @@ pub use select_transactions_records_page::{TransactionCursor, TransactionRecords
 mod select_nullifier_updates_page;
 pub(crate) use select_nullifier_updates_page::NullifierUpdatesPaged;
 pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};
+
+mod load_full_account_at;
+pub(crate) use load_full_account_at::load_full_account_at;

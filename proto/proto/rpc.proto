@@ -21,15 +21,23 @@ service NodeService {
     // Returns the status info of the node.
     rpc Status(StatusRequest) returns (StatusResponse) {}
 
-    // Returns the query parameter limits configured for RPC methods.
+    // Returns request limits and the account size limit configured for RPC methods.
     //
-    // These define the maximum number of each parameter a method will accept.
-    // Exceeding the limit will result in the request being rejected and you should instead send
-    // multiple smaller requests.
+    // List limits define the maximum number of each parameter a method accepts. Exceeding one
+    // requires multiple smaller requests. SyncAccount's account_entries limit instead bounds
+    // the total live storage slots, map entries, and vault assets at the requested target.
     rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
 
     // Returns the latest details of the specified account.
-    rpc GetAccount(GetAccountRequest) returns (GetAccountResponse) {}
+    // Use SyncAccount or the streaming account synchronization endpoints instead.
+    rpc GetAccount(GetAccountRequest) returns (GetAccountResponse) {
+        option deprecated = true;
+    }
+
+    // Synchronizes a public account with a bounded number of slots, map entries, and vault assets.
+    // Returns a complete snapshot or a delta over the requested range. Oversized accounts must
+    // use the streaming account synchronization endpoints instead.
+    rpc SyncAccount(SyncAccountRequest) returns (SyncAccountResponse) {}
 
     // Registers an account with an invitation code on the sequencer.
     // A retry with the same code and account succeeds without changes.
@@ -423,6 +431,46 @@ message GetNoteScriptByRootRequest {
 message GetNoteScriptByRootResponse {
     // The script for a note by its root.
     optional note.NoteScript script = 1;
+}
+
+// SYNC ACCOUNT
+// ================================================================================================
+
+message SyncAccountRequest {
+    account.AccountId account_id = 1;
+    // Synchronize (from, target]. An absent lower bound requests a snapshot including genesis.
+    StateDeltaRange range = 2;
+    // Omit to request no code. Otherwise return code only when this commitment differs from the
+    // target header. Send the empty word when no code is cached.
+    optional primitives.Word code_commitment = 3;
+}
+
+// Complete target headers and absolute values, grouped by storage slot.
+message AccountSyncState {
+    message MapEntries {
+        string slot_name = 1;
+        repeated account.StorageMapEntry entries = 2;
+    }
+    account.AccountHeader header = 1;
+    account.AccountStorageHeader storage_header = 2;
+    repeated MapEntries maps = 3;
+    repeated account.AccountVaultPatchEntry vault = 4;
+}
+
+message SyncAccountResponse {
+    fixed32 block_num = 1;
+    // Authenticate against the requested target header's account root.
+    account.AccountWitness witness = 2;
+    oneof update {
+        // Replace all vault and storage contents with these values.
+        AccountSyncState snapshot = 3;
+        // Retain unchanged values. Remove slots absent from storage_header, initialize new slots,
+        // and apply the absolute map/vault values. Empty words delete entries. Both headers are
+        // complete target headers. A snapshot may be returned even when a starting block was supplied.
+        AccountSyncState delta = 4;
+    }
+    // Present only when requested and different from the supplied code commitment.
+    optional account.AccountCode code = 5;
 }
 
 // GET ACCOUNT PROOF

@@ -111,6 +111,7 @@ include genesis during bootstrap. The target is required. Equal bounds return an
 | Method                     | Purpose                                                                                          |
 | -------------------------- | ------------------------------------------------------------------------------------------------ |
 | `SyncChainMmr`             | Returns the chain MMR delta, authenticated target header, and required protocol config.          |
+| `SyncAccount`              | Returns a complete account snapshot or delta for accounts within the advertised size limit.      |
 | `SyncAccountCommitments`   | Streams one target account witness for each changed tracked account, including private accounts. |
 | `SyncNotesV2`              | Streams block frames and compact matching notes with target-anchored block paths.                |
 | `SyncNullifiersV2`         | Streams every matching 16-bit-prefix consumption through the target.                             |
@@ -123,9 +124,10 @@ Vault, storage-map, account-commitment, and nullifier stream items report the bl
 `last_updated_at`. This is a block number, not a timestamp or the authenticated target.
 
 Verify account witnesses against the target header's account root. Compare each proven commitment with the local account
-header. Fetch `GetAccount` at `N` only for divergent accounts. Verify fetched details and the recomputed vault/storage
-commitments before applying the update. Vault deletions have no asset. Storage-map deletions have a zero word.
-`GetAccount` supplies slot changes, including removed slots, which map-key updates cannot describe.
+header. For divergent public accounts, use [complete account synchronization](#complete-account-synchronization).
+Accounts above its size limit use the streaming account synchronization endpoints. Verify fetched details and the
+recomputed vault/storage commitments before applying the update. Streamed vault deletions have no asset. Storage-map
+deletions have a zero word.
 
 `SyncNotesV2` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
@@ -158,6 +160,37 @@ fits in one response, and the caller repeats the request for the remainder.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
+
+### Complete account synchronization
+
+`SyncAccount` synchronizes a public account in one response. Clients supporting accounts within its size limit need only
+this account endpoint; implementing component streams is optional.
+
+1. Authenticate a target header with `SyncChainMmr`. Send its block number as `range.to_block_inclusive` and the account
+   ID as `account_id`. Set `range.from_block_exclusive` to the last synchronized block, or omit it for bootstrap.
+2. To request code, supply its cached commitment as `code_commitment`. Send the empty word if no code is cached. The
+   response includes complete target code only when that commitment differs from the target header. Omitting the field
+   requests no code, including during bootstrap. Use cached code whose commitment matches the target header.
+3. Verify the returned account witness against the authenticated target header's account root. Both response variants
+   contain complete target account and storage headers.
+4. For `snapshot`, replace all vault and storage contents. For `delta`, retain unchanged entries, remove slots absent
+   from the target storage header, initialize new slots, and apply the supplied absolute map and vault values. A zero
+   word deletes an entry. Value-slot contents come from the complete target storage header. Code changes are carried
+   separately in the optional `code` field.
+5. Recompute the code, storage, vault, and account commitments. Commit the update and synchronization height together
+   only after they match the authenticated target state.
+
+The combined count of storage slots, storage map entries, and vault assets at the requested target must not exceed
+`GetLimits.endpoints["SyncAccount"].parameters["account_entries"]`. Eligibility depends on target state, regardless of
+range length or whether code was requested. An account becomes eligible again if it shrinks below the limit. A missing
+or pruned starting state selects a complete snapshot without requiring additional client requests. Small accounts also
+return snapshots, and larger accounts return snapshots if their delta exceeds the server's configured delta limit. The
+starting account may exceed the account-size limit. Matching account commitments return an empty delta, with code
+included if requested and different from the supplied code commitment.
+
+`RESOURCE_EXHAUSTED` with detail `5` means the target account exceeds this limit. A client may report that the account
+is unsupported. Clients supporting large accounts use the streaming account synchronization endpoints. A pruned target
+requires a newer authenticated target; it does not select a snapshot at another block.
 
 ### Resuming vault and storage-map scans
 

@@ -50,6 +50,11 @@ Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by 
 | `note_commitment` | `1000` | Internal note proof lookups            |
 | `block_header`    | `1000` | Internal batch/block header operations |
 
+## Account synchronization
+
+There are two paths for syncing an account. Small accounts are covered by a single `SyncAccount` request;
+larger accounts require the `SyncXxx` streams.
+
 ## Error Handling
 
 The RPC boundary maps errors to gRPC status codes and method-specific detail bytes. The first byte of `Status.details`

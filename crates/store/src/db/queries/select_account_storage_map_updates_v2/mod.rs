@@ -96,3 +96,18 @@ impl Paginated for AccountStorageMapUpdatesV2 {
         }))
     }
 }
+
+/// Fetches one bounded page of account updates within the supplied read transaction.
+pub fn account_storage_map_updates_page(
+    tx: &ReadTx<'_>,
+    account: AccountId,
+    range: ScopedBlockRange,
+    cursor: Option<StorageMapCursor>,
+    page_size: NonZeroUsize,
+) -> Result<StorageMapUpdatesPage, DatabaseError> {
+    let page = AccountStorageMapUpdatesV2::new(account, range, page_size).page(tx, &cursor)?;
+    Ok(StorageMapUpdatesPage {
+        values: page.items,
+        next_cursor: page.next.flatten(),
+    })
+}

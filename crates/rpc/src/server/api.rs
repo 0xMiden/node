@@ -30,9 +30,9 @@ use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
 use self::error_codes::{SyncErrorCode, internal_error};
-use crate::COMPONENT;
 use crate::server::api::subscription::{IpBanList, MAX_REPLICA_SUBSCRIPTIONS};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
+use crate::{COMPONENT, SyncAccountConfig};
 
 // VALIDATOR FAN-OUT
 // ================================================================================================
@@ -102,6 +102,7 @@ mod submit_auth_tx_batch;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription;
+mod sync_account;
 mod sync_account_commitments;
 mod sync_account_storage_maps;
 mod sync_account_storage_maps_v2;
@@ -125,6 +126,7 @@ const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 // ================================================================================================
 
 pub struct RpcService {
+    sync_account: SyncAccountConfig,
     state: Arc<State>,
     backend: RpcBackend,
     ntx_builder: Option<NtxBuilderClient>,
@@ -145,6 +147,7 @@ impl RpcService {
         network_tx_auth: Option<NetworkTxAuth>,
     ) -> Self {
         Self {
+            sync_account: SyncAccountConfig::default(),
             state,
             backend,
             ntx_builder,
@@ -167,6 +170,11 @@ impl RpcService {
         }
         self.genesis_commitment = Some(commitment);
         Ok(())
+    }
+
+    /// Configures account eligibility and snapshot selection for synchronization.
+    pub(crate) fn set_sync_account_config(&mut self, config: SyncAccountConfig) {
+        self.sync_account = config;
     }
 
     /// Reads the genesis block header from the local store.
