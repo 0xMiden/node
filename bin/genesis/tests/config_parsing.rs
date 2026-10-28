@@ -3,11 +3,11 @@
 mod common;
 
 use assert_matches::assert_matches;
+use miden_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
 use miden_protocol::account::AccountId;
 use miden_protocol::address::NetworkId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
-use miden_usdcx_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
 
 use crate::common::{
     ATTESTER_KEY_BYTES,

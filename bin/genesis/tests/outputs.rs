@@ -2,13 +2,13 @@
 
 mod common;
 
-use miden_objects::account_file::AccountFile;
-use miden_usdcx_genesis::output::{
+use miden_genesis::output::{
     DISTRIBUTOR_MAC_FILE,
     FAUCET_MAC_FILE,
     read_account_file,
     write_account_file,
 };
+use miden_objects::account_file::AccountFile;
 
 use crate::common::{fresh_distributor, genesis_faucet};
 
@@ -90,12 +90,12 @@ fn read_account_file_names_the_path_on_garbage() {
 #[case("ecdsa-k256-keccak")]
 #[case("falcon512-poseidon2")]
 fn generated_signing_key_is_private_and_matches_the_account(#[case] scheme: &str) {
+    use miden_genesis::output::DISTRIBUTOR_SECRET_FILE;
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::utils::serde::Deserializable;
-    use miden_usdcx_genesis::output::DISTRIBUTOR_SECRET_FILE;
 
     let dir = tempfile::tempdir().unwrap();
-    let result = std::process::Command::new(env!("CARGO_BIN_EXE_miden-usdcx-genesis"))
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_miden-genesis"))
         .args(["new-distributor", "--auth-scheme", scheme])
         .current_dir(dir.path())
         .output()

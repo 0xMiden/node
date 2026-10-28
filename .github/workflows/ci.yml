@@ -380,7 +380,7 @@ jobs:
             --bin miden-ntx-builder \
             --bin miden-remote-prover \
             --bin miden-benchmark \
-            --bin miden-usdcx-genesis
+            --bin miden-genesis
       - name: Run benchmark with N=5
         env:
           N_TXS: "5"

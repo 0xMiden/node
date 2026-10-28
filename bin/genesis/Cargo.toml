@@ -1,0 +1,42 @@
+[package]
+authors.workspace      = true
+description            = "Builds the Miden genesis block and its required USDCx accounts"
+edition.workspace      = true
+homepage.workspace     = true
+keywords               = ["genesis", "miden", "usdcx"]
+license.workspace      = true
+name                   = "miden-genesis"
+publish                = true
+readme                 = "README.md"
+repository.workspace   = true
+rust-version.workspace = true
+version.workspace      = true
+
+[lints]
+workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow                 = { workspace = true }
+clap                   = { features = ["env"], workspace = true }
+fs-err                 = { workspace = true }
+hex                    = { workspace = true }
+miden-node-persistence = { workspace = true }
+miden-node-store       = { workspace = true }
+miden-node-utils       = { workspace = true }
+miden-objects          = { workspace = true }
+miden-protocol         = { workspace = true }
+miden-standards        = { workspace = true }
+miden-usdcx            = { workspace = true }
+rand                   = { workspace = true }
+serde                  = { workspace = true }
+serde_json             = { workspace = true }
+thiserror              = { workspace = true }
+
+[dev-dependencies]
+assert_matches = { workspace = true }
+miden-testing  = { workspace = true }
+rstest         = { workspace = true }
+tempfile       = { workspace = true }

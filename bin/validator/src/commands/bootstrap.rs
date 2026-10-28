@@ -8,7 +8,7 @@ use miden_node_utils::genesis::read_genesis_block;
 use miden_validator::DataDirectory;
 
 /// Runs the `bootstrap` command: seeds this validator's database from the genesis block file
-/// produced by the `genesis` command.
+/// produced by `miden-genesis build`.
 ///
 /// The genesis block is the chain's trust root and carries no signatures; it must come from a
 /// trusted source. This command verifies the block and its protocol configuration. It persists
@@ -57,25 +57,48 @@ pub async fn bootstrap(
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::block::BlockNumber;
-    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_node_store::genesis::config::{GenesisConfig, GenesisInputs};
+    use miden_protocol::block::{BlockNumber, FeeParameters, ValidatorConfig};
+    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
     use miden_protocol::utils::serde::{Deserializable, Serializable};
+    use miden_testing::{Auth, MockChainBuilder};
 
     use super::*;
+
+    /// Writes a genesis block committing to `validator_key` to `path`, with a native faucet and a
+    /// funding wallet as its only accounts.
+    fn write_genesis_block(path: &Path, validator_key: PublicKey) -> anyhow::Result<()> {
+        let mut builder = MockChainBuilder::new();
+        let funding_account = builder.add_existing_wallet(Auth::basic_ecdsa())?;
+        let native_faucet = builder.add_existing_basic_faucet(
+            Auth::basic_ecdsa(),
+            "USDCX",
+            1_000_000,
+            Some(1_000),
+        )?;
+        let (genesis_state, _) = GenesisConfig::default().into_state(GenesisInputs {
+            native_faucet,
+            funding_account,
+            fee_parameters: FeeParameters::new(7),
+            timestamp: 1_717_344_256,
+            validator_config: ValidatorConfig::new(vec![validator_key], 1)?,
+        })?;
+        let genesis_block = genesis_state.into_block()?;
+        fs_err::create_dir_all(path.parent().expect("genesis path has a parent"))?;
+        fs_err::write(path, miden_node_persistence::encode(&genesis_block))?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn bootstrap_writes_all_outputs_before_returning_success() {
         let root = tempfile::tempdir().unwrap();
         let genesis_directory = root.path().join("genesis");
-        let accounts_directory = root.path().join("accounts");
         let data_directory = root.path().join("data");
 
         let validator_key = SigningKey::read_from_bytes(&[7; 32])
             .expect("test signing key should decode")
             .public_key();
-        super::super::genesis::tests::command(root.path(), vec![validator_key])
-            .unwrap()
-            .execute()
+        write_genesis_block(&genesis_directory.join("genesis.dat"), validator_key)
             .expect("genesis should complete");
 
         bootstrap(
@@ -117,11 +140,6 @@ mod tests {
         assert_eq!(
             db.select_protocol_config_by_commitment(commitment).await.unwrap(),
             Some(config)
-        );
-
-        assert!(
-            fs_err::read_dir(&accounts_directory).unwrap().next().is_none(),
-            "imported accounts do not generate account secret files",
         );
     }
 

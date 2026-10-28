@@ -16,7 +16,7 @@ NODE_BINARY="${MIDEN_NODE_BIN:-./target/debug/miden-node}"
 VALIDATOR_BINARY="${MIDEN_VALIDATOR_BIN:-./target/debug/miden-validator}"
 NTX_BUILDER_BINARY="${MIDEN_NTX_BUILDER_BIN:-./target/debug/miden-ntx-builder}"
 REMOTE_PROVER_BINARY="${MIDEN_REMOTE_PROVER_BIN:-./target/debug/miden-remote-prover}"
-USDCX_GENESIS_BINARY="$(realpath "${MIDEN_USDCX_GENESIS_BIN:-./target/debug/miden-usdcx-genesis}")"
+GENESIS_BINARY="$(realpath "${MIDEN_GENESIS_BIN:-./target/debug/miden-genesis}")"
 # Runs two validators, hard-coded for local development. Genesis commits both validators' keys
 # but is not signed; both must sign every block after genesis, and the sequencer fans block
 # signing and transaction submission out to both.
@@ -157,10 +157,10 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     mkdir "$USDCX_DIR"
     pushd "$USDCX_DIR"
 
-    DISTRIBUTOR_OUTPUT="$("$USDCX_GENESIS_BINARY" new-distributor)"
+    DISTRIBUTOR_OUTPUT="$("$GENESIS_BINARY" new-distributor)"
     DISTRIBUTOR_ID="$(printf '%s\n' "${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
     if [ -z "${DISTRIBUTOR_ID}" ]; then
-      echo "USDCx genesis did not report the distributor account ID." >&2
+      echo "Genesis did not report the distributor account ID." >&2
       exit 1
     fi
 
@@ -184,11 +184,12 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
     }
 EOF
 
-    "$USDCX_GENESIS_BINARY" faucet
-    "$USDCX_GENESIS_BINARY" prefund
+    "$GENESIS_BINARY" faucet
+    "$GENESIS_BINARY" prefund
 
-    MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET="${USDCX_DIR}/usdcx-faucet.mac"
-    MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT="${USDCX_DIR}/distributor.genesis.mac"
+    # Callers such as large-account-harness.sh may supply their own seeded accounts.
+    MIDEN_GENESIS_NATIVE_FAUCET="${MIDEN_GENESIS_NATIVE_FAUCET:-${USDCX_DIR}/usdcx-faucet.mac}"
+    MIDEN_GENESIS_FUNDING_ACCOUNT="${MIDEN_GENESIS_FUNDING_ACCOUNT:-${USDCX_DIR}/distributor.genesis.mac}"
 
     popd
 
@@ -204,17 +205,17 @@ EOF
     GENESIS_ARGS=(
         --genesis-block-directory "$GENESIS_DIR"
         --accounts-directory "$ACCOUNTS_DIR"
-        --native-faucet "$MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET"
-        --funding-account "$MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT"
-        --verification-base-fee "${MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE:-7}"
-        --timestamp "${MIDEN_VALIDATOR_GENESIS_TIMESTAMP:-$(date +%s)}"
+        --native-faucet "$MIDEN_GENESIS_NATIVE_FAUCET"
+        --funding-account "$MIDEN_GENESIS_FUNDING_ACCOUNT"
+        --verification-base-fee "${MIDEN_GENESIS_VERIFICATION_BASE_FEE:-7}"
+        --timestamp "${MIDEN_GENESIS_TIMESTAMP:-$(date +%s)}"
         --validator.key "$VALIDATOR_1_PUBKEY"
         --validator.key "$VALIDATOR_2_PUBKEY"
     )
     if [[ -n "$ACCOUNTS_CONFIG" ]]; then
         GENESIS_ARGS+=(--accounts-config "$ACCOUNTS_CONFIG")
     fi
-    "$VALIDATOR_BINARY" genesis "${GENESIS_ARGS[@]}"
+    "$GENESIS_BINARY" build "${GENESIS_ARGS[@]}"
 
     echo "Bootstrapping validator 1 (seeds from the genesis block)..."
     "$VALIDATOR_BINARY" bootstrap \
