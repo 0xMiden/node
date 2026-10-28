@@ -7,12 +7,12 @@
 
 mod common;
 
+use miden_genesis::accounts::build_faucet;
 use miden_protocol::account::StorageMapKey;
 use miden_protocol::asset::AssetId;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::fees::FeePolicyManager;
 use miden_usdcx::account::xreserve::XReserveFaucetExtension;
-use miden_usdcx_genesis::accounts::build_faucet;
 
 use crate::common::Fixture;
 

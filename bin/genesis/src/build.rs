@@ -1,3 +1,6 @@
+//! The `build` command: assembles the genesis block from the required accounts, the network
+//! parameters and the validator set, and writes it with the generated account files.
+
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -6,13 +9,24 @@ use miden_node_utils::fs::ensure_empty_directory;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
+use miden_protocol::utils::serde::Deserializable;
 
 /// Name of the genesis block file written to the genesis block directory.
-const GENESIS_BLOCK_FILE_NAME: &str = "genesis.dat";
+pub const GENESIS_BLOCK_FILE_NAME: &str = "genesis.dat";
+
+const ENV_ACCOUNTS_CONFIG: &str = "MIDEN_GENESIS_ACCOUNTS_CONFIG";
+const ENV_NATIVE_FAUCET: &str = "MIDEN_GENESIS_NATIVE_FAUCET";
+const ENV_FUNDING_ACCOUNT: &str = "MIDEN_GENESIS_FUNDING_ACCOUNT";
+const ENV_VERIFICATION_BASE_FEE: &str = "MIDEN_GENESIS_VERIFICATION_BASE_FEE";
+const ENV_TIMESTAMP: &str = "MIDEN_GENESIS_TIMESTAMP";
+const ENV_VALIDATOR_KEYS: &str = "MIDEN_GENESIS_VALIDATOR_KEYS";
+
+// BUILD COMMAND
+// ================================================================================================
 
 /// Inputs used to build the genesis block.
 #[derive(clap::Args, Debug)]
-pub struct GenesisCommand {
+pub struct BuildCommand {
     /// Directory in which to write the genesis block.
     #[arg(long, value_name = "DIR")]
     pub genesis_block_directory: PathBuf,
@@ -20,34 +34,34 @@ pub struct GenesisCommand {
     #[arg(long, value_name = "DIR")]
     pub accounts_directory: PathBuf,
     /// TOML file containing additional accounts.
-    #[arg(long, env = "MIDEN_VALIDATOR_GENESIS_ACCOUNTS_CONFIG", value_name = "FILE")]
+    #[arg(long, env = ENV_ACCOUNTS_CONFIG, value_name = "FILE")]
     pub accounts_config: Option<PathBuf>,
     /// Account file for the native fungible faucet.
-    #[arg(long, env = "MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET", value_name = "FILE")]
+    #[arg(long, env = ENV_NATIVE_FAUCET, value_name = "FILE")]
     pub native_faucet: PathBuf,
     /// Account file for the public funding account.
-    #[arg(long, env = "MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT", value_name = "FILE")]
+    #[arg(long, env = ENV_FUNDING_ACCOUNT, value_name = "FILE")]
     pub funding_account: PathBuf,
     /// Verification base fee in base units of the native asset.
-    #[arg(long, env = "MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE")]
+    #[arg(long, env = ENV_VERIFICATION_BASE_FEE)]
     pub verification_base_fee: u32,
     /// Genesis timestamp in seconds since the Unix epoch.
-    #[arg(long, env = "MIDEN_VALIDATOR_GENESIS_TIMESTAMP")]
+    #[arg(long, env = ENV_TIMESTAMP)]
     pub timestamp: u32,
     /// Hex-encoded public keys of all genesis validators. Repeat the flag for each validator. The
     /// environment variable accepts a comma-separated list.
     #[arg(
         long = "validator.key",
-        env = super::ENV_GENESIS_VALIDATOR_KEYS,
+        env = ENV_VALIDATOR_KEYS,
         value_name = "VALIDATOR_PUBLIC_KEY",
         value_delimiter = ',',
         required = true,
-        value_parser = super::parse_validator_public_key
+        value_parser = parse_validator_public_key
     )]
     pub validator_keys: Vec<PublicKey>,
 }
 
-impl GenesisCommand {
+impl BuildCommand {
     /// Builds the unsigned genesis block and writes generated account files.
     pub fn execute(self) -> anyhow::Result<()> {
         let Self {
@@ -125,86 +139,21 @@ impl GenesisCommand {
             println!("{name} account id: {}", account_id.to_hex());
         }
         println!();
-        println!("Seed each validator's database with:");
+        println!("Seed each service's database with:");
         println!();
-        println!(
-            "  miden-validator bootstrap --data-directory <DIR> --genesis {}",
-            genesis_block_path.display()
-        );
+        for binary in ["miden-validator", "miden-node", "miden-ntx-builder"] {
+            println!(
+                "  {binary} bootstrap --data-directory <DIR> --genesis {}",
+                genesis_block_path.display()
+            );
+        }
 
         Ok(())
     }
 }
 
-#[cfg(test)]
-pub(super) mod tests {
-    use std::path::Path;
-
-    use miden_node_utils::genesis::read_genesis_block;
-    use miden_testing::{Auth, MockChainBuilder};
-
-    use super::*;
-
-    pub(crate) fn command(
-        root: &Path,
-        validator_keys: Vec<PublicKey>,
-    ) -> anyhow::Result<GenesisCommand> {
-        let mut builder = MockChainBuilder::new();
-        let funding_account = builder.add_existing_wallet(Auth::basic_ecdsa())?;
-        let native_faucet = builder.add_existing_basic_faucet(
-            Auth::basic_ecdsa(),
-            "USDCX",
-            1_000_000,
-            Some(1_000),
-        )?;
-        let funding_path = root.join("funding.mac");
-        let faucet_path = root.join("native.mac");
-        AccountFile::new(funding_account, vec![]).write(&funding_path)?;
-        AccountFile::new(native_faucet, vec![]).write(&faucet_path)?;
-        Ok(GenesisCommand {
-            genesis_block_directory: root.join("genesis"),
-            accounts_directory: root.join("accounts"),
-            accounts_config: None,
-            native_faucet: faucet_path,
-            funding_account: funding_path,
-            verification_base_fee: 7,
-            timestamp: 1_717_344_256,
-            validator_keys,
-        })
-    }
-
-    #[test]
-    fn genesis_imports_required_accounts_and_exports_additional_wallets() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        let key = miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::new().public_key();
-        let mut command = command(root.path(), vec![key])?;
-        let native_id = AccountFile::read(&command.native_faucet)?.account().id();
-        let funding = AccountFile::read(&command.funding_account)?.account().clone();
-        let config = root.path().join("extra.toml");
-        fs_err::write(
-            &config,
-            "[[wallet]]\nname = 'extra'\naccount_type = 'public'\nassets = [{ symbol = 'USDCX', amount = 40 }]\n",
-        )?;
-        command.accounts_config = Some(config);
-        command.execute()?;
-        let genesis = read_genesis_block(&root.path().join("genesis/genesis.dat"))?;
-        assert_eq!(genesis.protocol_config().fee_asset_id().faucet_id(), native_id);
-        assert_eq!(genesis.inner().header().fee_parameters().verification_base_fee(), 7);
-        assert_eq!(genesis.inner().header().timestamp(), 1_717_344_256);
-        assert!(genesis.inner().body().updated_accounts().iter().any(|update| {
-            update.account_id() == funding.id()
-                && update.final_state_commitment() == funding.to_commitment()
-        }));
-        let extra = AccountFile::read(root.path().join("accounts/extra.mac"))?;
-        assert_eq!(
-            extra
-                .account()
-                .vault()
-                .get_balance(miden_protocol::asset::AssetId::new_fungible(native_id))?
-                .as_u64(),
-            40
-        );
-        assert_eq!(extra.auth_secret_keys().len(), 1);
-        Ok(())
-    }
+/// Parses a hex-encoded validator public key CLI argument.
+fn parse_validator_public_key(hex_key: &str) -> Result<PublicKey, String> {
+    let bytes = hex::decode(hex_key).map_err(|err| err.to_string())?;
+    PublicKey::read_from_bytes(&bytes).map_err(|err| err.to_string())
 }

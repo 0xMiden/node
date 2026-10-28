@@ -8,7 +8,7 @@ set -euo pipefail
 binaries=(
     miden-node miden-validator miden-note-transport miden-ntx-builder
     miden-network-monitor miden-funding-service miden-remote-prover
-    miden-benchmark miden-usdcx-genesis
+    miden-benchmark miden-genesis
 )
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/app/target}"
 output_dir="${OUTPUT_DIR:-/app/bin}"

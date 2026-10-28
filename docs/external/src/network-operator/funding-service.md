@@ -15,15 +15,14 @@ that source, and it gives an operator a single account to keep funded.
 ## Provision the funding account
 
 Prepare a public account using standard `AuthSingleSig` authentication, with a nonzero nonce and a balance of the native
-asset. Pass its account file to `miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its
+asset. Pass its account file to `miden-genesis build --funding-account`. Keep its account ID for bootstrap and its
 signing key for startup. The service reads the current public account state from the node.
 
 The signing-key file contains the binary serialization of `AuthSecretKey`, including its signature scheme. It supports
-ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-usdcx-genesis new-distributor` writes this file as
-`distributor.secret` alongside the account file; see the
-[genesis tool documentation](https://github.com/0xMiden/node/tree/main/crates/usdcx-genesis). For an existing account,
-export its key in the same format. Restrict the key file to its owner and keep it outside the database directory; the
-database contains no signing key.
+ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-genesis new-distributor` writes this file as `distributor.secret`
+alongside the account file; see the [genesis tool documentation](https://github.com/0xMiden/node/tree/main/bin/genesis).
+For an existing account, export its key in the same format. Restrict the key file to its owner and keep it outside the
+database directory; the database contains no signing key.
 
 ## Initialize the database
 

@@ -2,13 +2,13 @@
 
 mod common;
 
+use miden_genesis::accounts::record_nonces;
 use miden_protocol::asset::AssetId;
 use miden_protocol::{EMPTY_WORD, ONE, Word};
 use miden_standards::account::faucets::FungibleFaucet;
 use miden_standards::account::fees::FeePolicyManager;
 use miden_usdcx::account::xreserve::XReserveFaucetExtension;
 use miden_usdcx::xreserve::encoding::DepositNonce;
-use miden_usdcx_genesis::accounts::record_nonces;
 
 use crate::common::{NoncesFixture, TOKEN_SUPPLY, genesis_faucet};
 

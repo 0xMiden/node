@@ -1,6 +1,59 @@
 services:
-  bootstrap-usdcx:
-    image: ${MIDEN_USDCX_GENESIS_IMAGE:-miden-usdcx-genesis}
+  bootstrap-validator-keys:
+    image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
+    pull_policy: missing
+    network_mode: none
+    environment:
+      MIDEN_VALIDATOR_1_SIGNING_KEY: ${MIDEN_VALIDATOR_1_SIGNING_KEY:-0101010101010101010101010101010101010101010101010101010101010101}
+      MIDEN_VALIDATOR_2_SIGNING_KEY: ${MIDEN_VALIDATOR_2_SIGNING_KEY:-0303030303030303030303030303030303030303030303030303030303030303}
+      MIDEN_VALIDATOR_3_SIGNING_KEY: ${MIDEN_VALIDATOR_3_SIGNING_KEY:-0404040404040404040404040404040404040404040404040404040404040404}
+    volumes:
+      - node-data:/data
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        if [ -f /data/validators/.keys-bootstrapped ] &&
+           [ -s /data/validators/signing-public-keys ]; then
+          echo "Validator keys already bootstrapped."
+          exit 0
+        fi
+        if [ -d /data/validators ] || [ -d /data/usdcx ] || [ -d /data/genesis ]; then
+          echo "Reset the local network with make local-network-delete before bootstrap." >&2
+          exit 1
+        fi
+
+        mkdir /data/validators
+
+        echo "Generating persistent validator endpoint identities..."
+        ENDPOINTS=/data/validators/endpoints
+        mkdir "$${ENDPOINTS}"
+        for VALIDATOR in 1 2 3; do
+          ENDPOINT_OUTPUT="$$(miden-validator privacy dkg generate-endpoint \
+            --output-file "$${ENDPOINTS}/$${VALIDATOR}.secret")"
+          ENDPOINT_ID="$$(printf '%s\n' "$${ENDPOINT_OUTPUT}" | sed -n 's/^Iroh endpoint ID: //p')"
+          if [ -z "$${ENDPOINT_ID}" ]; then
+            echo "Validator $${VALIDATOR} did not report its endpoint ID." >&2
+            exit 1
+          fi
+          printf '%s\n' "$${ENDPOINT_ID}" > "$${ENDPOINTS}/$${VALIDATOR}.id"
+        done
+
+        echo "Deriving validator signing public keys..."
+        # The validator set consists of the public keys derived from the three
+        # signing keys configured in validator.yml, ordered by validator service.
+        VALIDATOR_1_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")"
+        VALIDATOR_2_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")"
+        VALIDATOR_3_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
+        printf '%s,%s,%s\n' \
+          "$${VALIDATOR_1_PUBLIC_KEY}" \
+          "$${VALIDATOR_2_PUBLIC_KEY}" \
+          "$${VALIDATOR_3_PUBLIC_KEY}" > /data/validators/signing-public-keys
+
+        touch /data/validators/.keys-bootstrapped
+
+  bootstrap-genesis:
+    image: ${MIDEN_GENESIS_IMAGE:-miden-genesis}
     pull_policy: missing
     network_mode: none
     environment:
@@ -8,12 +61,15 @@ services:
       MIDEN_USDCX_INITIAL_SUPPLY: ${MIDEN_USDCX_INITIAL_SUPPLY:-1000000000000000}
     volumes:
       - node-data:/data
+    depends_on:
+      bootstrap-validator-keys:
+        condition: service_completed_successfully
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        if [ -f /data/usdcx/.bootstrapped ]; then
-          echo "USDCx already bootstrapped."
+        if [ -f /data/genesis/.bootstrapped ] && [ -s /data/genesis/native-faucet-id ]; then
+          echo "Genesis already bootstrapped."
           exit 0
         fi
         if [ -d /data/usdcx ] || [ -d /data/genesis ]; then
@@ -25,11 +81,11 @@ services:
         cd /data/usdcx
 
         echo "Creating the bootstrap admin and funding account..."
-        DISTRIBUTOR_OUTPUT="$$(miden-usdcx-genesis new-distributor)"
+        DISTRIBUTOR_OUTPUT="$$(miden-genesis new-distributor)"
         printf '%s\n' "$${DISTRIBUTOR_OUTPUT}"
         DISTRIBUTOR_ID="$$(printf '%s\n' "$${DISTRIBUTOR_OUTPUT}" | sed -n 's/^  hex: *//p')"
         if [ -z "$${DISTRIBUTOR_ID}" ]; then
-          echo "USDCx genesis did not report the distributor account ID." >&2
+          echo "Genesis did not report the distributor account ID." >&2
           exit 1
         fi
 
@@ -56,9 +112,32 @@ services:
         EOF
 
         echo "Creating the native USDCx faucet and prefunding the distributor..."
-        miden-usdcx-genesis faucet
-        miden-usdcx-genesis prefund
-        touch /data/usdcx/.bootstrapped
+        miden-genesis faucet
+        miden-genesis prefund
+
+        echo "Building genesis block..."
+        # The genesis block directory must not exist yet: build refuses a non-empty directory.
+        GENESIS_OUTPUT="$$(
+          miden-genesis build \
+            --genesis-block-directory /data/genesis \
+            --accounts-directory /data/accounts \
+            --native-faucet /data/usdcx/usdcx-faucet.mac \
+            --funding-account /data/usdcx/distributor.genesis.mac \
+            --verification-base-fee 7 \
+            --timestamp 1717344256 \
+            --validator.key "$$(cat /data/validators/signing-public-keys)"
+        )"
+        printf '%s\n' "$${GENESIS_OUTPUT}"
+        NATIVE_FAUCET_ID="$$(
+          printf '%s\n' "$${GENESIS_OUTPUT}" | sed -n 's/^Native faucet account id: //p'
+        )"
+        if [ -z "$${NATIVE_FAUCET_ID}" ]; then
+          echo "Genesis did not report the native faucet account ID." >&2
+          exit 1
+        fi
+        printf '%s\n' "$${NATIVE_FAUCET_ID}" > /data/genesis/native-faucet-id
+
+        touch /data/genesis/.bootstrapped
 
   bootstrap-validator:
     image: ${MIDEN_VALIDATOR_IMAGE:-miden-validator}
@@ -80,67 +159,24 @@ services:
     volumes:
       - node-data:/data
     depends_on:
-      bootstrap-usdcx:
+      bootstrap-genesis:
         condition: service_completed_successfully
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -e
-        if [ -f /data/validators/.bootstrapped ] &&
-           [ -s /data/genesis/native-faucet-id ] &&
-           [ -s /data/genesis/validator-signing-public-keys ]; then
+        if [ -f /data/validators/.bootstrapped ]; then
           echo "Validators already bootstrapped."
           exit 0
         fi
 
-        mkdir /data/genesis /data/validators /data/accounts
-
-        echo "Generating persistent validator endpoint identities..."
         ENDPOINTS=/data/validators/endpoints
-        mkdir "$${ENDPOINTS}"
-        for VALIDATOR in 1 2 3; do
-          ENDPOINT_OUTPUT="$$(miden-validator privacy dkg generate-endpoint \
-            --output-file "$${ENDPOINTS}/$${VALIDATOR}.secret")"
-          ENDPOINT_ID="$$(printf '%s\n' "$${ENDPOINT_OUTPUT}" | sed -n 's/^Iroh endpoint ID: //p')"
-          if [ -z "$${ENDPOINT_ID}" ]; then
-            echo "Validator $${VALIDATOR} did not report its endpoint ID." >&2
-            exit 1
-          fi
-          printf '%s\n' "$${ENDPOINT_ID}" > "$${ENDPOINTS}/$${VALIDATOR}.id"
-        done
-
-        echo "Building genesis block..."
-        # The validator set consists of the public keys derived from the three
-        # signing keys configured in validator.yml, ordered by validator service.
-        VALIDATOR_1_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_1_SIGNING_KEY}")"
-        VALIDATOR_2_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_2_SIGNING_KEY}")"
-        VALIDATOR_3_PUBLIC_KEY="$$(miden-validator pubkey --signing-key.hex "$${MIDEN_VALIDATOR_3_SIGNING_KEY}")"
-        GENESIS_OUTPUT="$$(
-          miden-validator genesis \
-            --genesis-block-directory /data/genesis \
-            --accounts-directory /data/accounts \
-            --native-faucet /data/usdcx/usdcx-faucet.mac \
-            --funding-account /data/usdcx/distributor.genesis.mac \
-            --verification-base-fee 7 \
-            --timestamp 1717344256 \
-            --validator.key "$${VALIDATOR_1_PUBLIC_KEY}" \
-            --validator.key "$${VALIDATOR_2_PUBLIC_KEY}" \
-            --validator.key "$${VALIDATOR_3_PUBLIC_KEY}"
-        )"
-        printf '%s\n' "$${GENESIS_OUTPUT}"
-        NATIVE_FAUCET_ID="$$(
-          printf '%s\n' "$${GENESIS_OUTPUT}" | sed -n 's/^Native faucet account id: //p'
-        )"
-        if [ -z "$${NATIVE_FAUCET_ID}" ]; then
-          echo "Genesis did not report the native faucet account ID." >&2
-          exit 1
-        fi
-        printf '%s\n' "$${NATIVE_FAUCET_ID}" > /data/genesis/native-faucet-id
-
-        printf '%s,%s,%s\n' \
-          "$${VALIDATOR_1_PUBLIC_KEY}" \
-          "$${VALIDATOR_2_PUBLIC_KEY}" \
-          "$${VALIDATOR_3_PUBLIC_KEY}" > /data/genesis/validator-signing-public-keys
+        # The keys bootstrap service writes the three public keys comma-joined, in service order.
+        VALIDATOR_PUBLIC_KEYS="$$(cat /data/validators/signing-public-keys)"
+        VALIDATOR_1_PUBLIC_KEY="$${VALIDATOR_PUBLIC_KEYS%%,*}"
+        VALIDATOR_3_PUBLIC_KEY="$${VALIDATOR_PUBLIC_KEYS##*,}"
+        VALIDATOR_2_PUBLIC_KEY="$${VALIDATOR_PUBLIC_KEYS#*,}"
+        VALIDATOR_2_PUBLIC_KEY="$${VALIDATOR_2_PUBLIC_KEY%,*}"
 
         for VALIDATOR in 1 2 3; do
           echo "Bootstrapping validator $${VALIDATOR}..."
