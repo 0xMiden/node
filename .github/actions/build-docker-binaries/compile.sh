@@ -4,13 +4,17 @@ set -euo pipefail
 # Configures the compiler cache for this container's build and uploads its results.
 #
 # Keeping this setup in CI lets the Dockerfile build without AWS or kache.
+#
+# A failed upload only warns, so an S3 error or expired credentials never
+# fail a build whose binaries compiled.
 finish() {
     result=$?
     trap - EXIT
     if command -v kache >/dev/null; then
         if [[ "${result}" == 0 && "${CACHE_WRITABLE:-false}" == true ]]; then
-            kache save-manifest --manifest-key "${KACHE_MANIFEST_KEY}" --namespace "${KACHE_NAMESPACE}" || result=$?
-            kache sync --push || result=$?
+            kache save-manifest --manifest-key "${KACHE_MANIFEST_KEY}" --namespace "${KACHE_NAMESPACE}" \
+                || echo "::warning::Failed to save the compiler cache manifest"
+            kache sync --push || echo "::warning::Failed to upload compiler cache artifacts"
         fi
         kache stats --full --format github --output /output/report.md || true
         kache stats --full --format json --output /output/report.json || true
