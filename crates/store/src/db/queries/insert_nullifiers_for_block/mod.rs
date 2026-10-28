@@ -1,11 +1,10 @@
 //! Records the nullifiers created by a block and marks the notes they consume.
 
 use miden_node_db::sqlite::{InList, WriteTx};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 
-use crate::COMPONENT;
 use crate::db::utils::get_nullifier_prefix;
 use crate::errors::DatabaseError;
 
@@ -23,10 +22,7 @@ const SQL_INSERT_NULLIFIER: &str = include_str!("insert_nullifier.sql");
 /// # Returns
 ///
 /// The number of affected rows, counting both the consumed notes and the inserted nullifiers.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
+#[instrument_v2(err)]
 pub(crate) fn insert_nullifiers_for_block(
     tx: &WriteTx<'_>,
     nullifiers: &[Nullifier],

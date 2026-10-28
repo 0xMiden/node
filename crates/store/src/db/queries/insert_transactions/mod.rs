@@ -1,7 +1,7 @@
 //! Inserts the transactions included in a block.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{
@@ -10,7 +10,6 @@ use miden_protocol::transaction::{
     TransactionHeader,
 };
 
-use crate::COMPONENT;
 use crate::errors::DatabaseError;
 
 const SQL: &str = include_str!("insert_transaction.sql");
@@ -20,10 +19,7 @@ const SQL: &str = include_str!("insert_transaction.sql");
 /// # Returns
 ///
 /// The number of affected rows.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
+#[instrument_v2(err)]
 pub(crate) fn insert_transactions(
     tx: &WriteTx<'_>,
     block_num: BlockNumber,

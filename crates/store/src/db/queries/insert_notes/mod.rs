@@ -1,14 +1,13 @@
 //! Inserts the notes created by a block.
 
 use miden_node_db::sqlite::{DbValue, ToSqlValue, WriteTx};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteAssets, NoteDetails, NoteStorage, Nullifier};
 use miden_standards::note::NetworkAccountTarget;
 
-use crate::COMPONENT;
 use crate::db::NoteRecord;
 use crate::errors::DatabaseError;
 
@@ -41,10 +40,7 @@ impl ToSqlValue for NetworkNoteType {
 /// # Returns
 ///
 /// The number of affected rows.
-#[miden_instrument(
-    target = COMPONENT,
-    err,
-)]
+#[instrument_v2(err)]
 pub(crate) fn insert_notes(
     tx: &WriteTx<'_>,
     notes: &[(NoteRecord, Option<Nullifier>)],
