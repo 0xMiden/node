@@ -324,6 +324,10 @@ impl WriteWorker {
     /// write-path CPU work lands on the pool. The returned forest update is bound to the forest
     /// state observed here; it remains valid until applied because the writer is the sole forest
     /// mutator.
+    #[miden_instrument(
+        target = COMPONENT,
+        err,
+    )]
     fn prepare_block_update(
         &self,
         signed_block: &SignedBlock,
@@ -392,6 +396,9 @@ impl WriteWorker {
     /// # Panics
     ///
     /// Panics if applying any prepared mutation fails; see above.
+    #[miden_instrument(
+        target = COMPONENT,
+    )]
     fn apply_prepared_mutations(
         &mut self,
         block_num: BlockNumber,
