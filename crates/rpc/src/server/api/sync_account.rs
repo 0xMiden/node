@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use miden_node_proto::domain::account::{
@@ -173,8 +174,8 @@ fn read_account_update(
         return Ok(AccountSyncUpdate::Delta(AccountSyncState {
             header,
             storage_header,
-            maps: Default::default(),
-            vault: Default::default(),
+            maps: BTreeMap::new(),
+            vault: BTreeMap::new(),
         }));
     }
 
@@ -238,13 +239,13 @@ fn read_account_delta(
     let mut delta = AccountSyncState {
         header,
         storage_header,
-        maps: Default::default(),
-        vault: Default::default(),
+        maps: BTreeMap::new(),
+        vault: BTreeMap::new(),
     };
     // Page queries take an inclusive range; the client's starting block is exclusive.
     let range = target.range_from(from.child());
     let maps =
-        queries::account_storage_map_updates_page(tx, account, range.clone(), None, entry_limit)
+        queries::account_storage_map_updates_page(tx, account, range.clone(), &None, entry_limit)
             .map_err(database_error_to_sync_status)?;
     // More map entries remain than the delta budget allows; return a snapshot instead.
     if maps.next_cursor.is_some() {
@@ -256,7 +257,7 @@ fn read_account_delta(
         tx,
         account,
         range,
-        None,
+        &None,
         NonZeroUsize::new(remaining).unwrap_or(NonZeroUsize::MIN),
     )
     .map_err(database_error_to_sync_status)?;

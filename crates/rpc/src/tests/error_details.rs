@@ -10,6 +10,7 @@ fn assert_client_error(status: &Status, detail: u8) {
 }
 
 #[tokio::test]
+#[expect(deprecated, reason = "Exercises the retained GetAccount endpoint")]
 async fn malformed_read_requests_return_method_specific_codes() {
     let (mut client, _, _store, _server) = start_rpc().await;
 
@@ -164,6 +165,7 @@ async fn private_account_sync_returns_method_specific_codes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[expect(deprecated, reason = "Exercises the retained GetAccount endpoint")]
 async fn account_lookup_returns_distinct_error_codes() {
     let (mut client, _, _store, _server) = start_rpc().await;
     let public_id = AccountId::dummy(

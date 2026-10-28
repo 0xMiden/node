@@ -95,10 +95,10 @@ pub fn account_vault_updates_page(
     tx: &ReadTx<'_>,
     account: AccountId,
     range: ScopedBlockRange,
-    cursor: Option<AccountVaultCursor>,
+    cursor: &Option<AccountVaultCursor>,
     page_size: NonZeroUsize,
 ) -> Result<AccountVaultValuesPage, DatabaseError> {
-    let page = AccountVaultUpdatesV2::new(account, range, page_size).page(tx, &cursor)?;
+    let page = AccountVaultUpdatesV2::new(account, range, page_size).page(tx, cursor)?;
     Ok(AccountVaultValuesPage {
         values: page.items,
         next_cursor: page.next.flatten(),

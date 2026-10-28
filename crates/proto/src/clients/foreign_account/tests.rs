@@ -236,6 +236,10 @@ impl Drop for TestServer {
 }
 
 #[tokio::test]
+#[expect(
+    deprecated,
+    reason = "Exercises GetAccount reads of selected keys from large maps"
+)]
 async fn foreign_account_reads_only_requested_keys_from_large_maps() -> Result<()> {
     use miden_protocol::account::{StorageMapKey, StorageSlotType};
 

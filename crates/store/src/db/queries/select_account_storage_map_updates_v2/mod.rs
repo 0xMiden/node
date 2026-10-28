@@ -102,10 +102,10 @@ pub fn account_storage_map_updates_page(
     tx: &ReadTx<'_>,
     account: AccountId,
     range: ScopedBlockRange,
-    cursor: Option<StorageMapCursor>,
+    cursor: &Option<StorageMapCursor>,
     page_size: NonZeroUsize,
 ) -> Result<StorageMapUpdatesPage, DatabaseError> {
-    let page = AccountStorageMapUpdatesV2::new(account, range, page_size).page(tx, &cursor)?;
+    let page = AccountStorageMapUpdatesV2::new(account, range, page_size).page(tx, cursor)?;
     Ok(StorageMapUpdatesPage {
         values: page.items,
         next_cursor: page.next.flatten(),

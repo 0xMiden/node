@@ -184,6 +184,10 @@ impl FundingWallet {
     }
 
     /// Loads authenticated account state at the reference block.
+    #[expect(
+        deprecated,
+        reason = "The funding wallet reconstructs account state from GetAccount"
+    )]
     async fn load_account_at(
         &self,
         rpc_client: &mut RpcClient,

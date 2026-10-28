@@ -528,6 +528,10 @@ pub fn active_fee_funder(
 ///
 /// Used for the monitor's wallet and counter accounts, whose complete state is needed to apply
 /// transaction patches locally.
+#[expect(
+    deprecated,
+    reason = "The network monitor reconstructs account state from GetAccount"
+)]
 pub(crate) async fn fetch_public_account(
     rpc_client: &mut RpcClient,
     account_id: AccountId,
@@ -931,6 +935,10 @@ fn decode_chain_state(
 }
 
 /// Fetch the account-tree witness proving an account's state in the given block.
+#[expect(
+    deprecated,
+    reason = "GetAccount supports witness reads for accounts of any size"
+)]
 async fn fetch_account_witness(
     rpc_client: &mut RpcClient,
     account_id: AccountId,

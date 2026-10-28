@@ -248,6 +248,11 @@ unused_rpc!(
     proto::miden::node::v1::GetAccountResponse
 );
 unused_rpc!(
+    SyncAccount,
+    proto::miden::node::v1::SyncAccountRequest,
+    proto::miden::node::v1::SyncAccountResponse
+);
+unused_rpc!(
     GetBlockByNumber,
     proto::miden::node::v1::GetBlockByNumberRequest,
     proto::miden::node::v1::GetBlockByNumberResponse
