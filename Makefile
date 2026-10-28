@@ -29,6 +29,8 @@ MARKDOWN_TOOLS_BIN = $(MARKDOWN_TOOLS_DIR)/node_modules/.bin
 MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 CSPELL_CONFIG = $(CONFIG_DIR)/cspell.yaml
 RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
+# Modules declared inside target_scope! are not discovered by cargo fmt.
+SCOPED_RUST_FILES = $(shell git ls-files --cached --others --exclude-standard 'crates/store/src/*.rs' 'crates/tracing/tests/targets/*.rs' | $(EXISTING_TRACKED_FILES))
 TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------
@@ -51,6 +53,7 @@ fix: ## Runs Fix with configs
 format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
 	$(XTASK) fmt-comments --write --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all -- --config-path $(RUSTFMT_CONFIG)
+	rustfmt +nightly --config-path $(RUSTFMT_CONFIG) $(SCOPED_RUST_FILES)
 	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all -- --config-path $(RUSTFMT_CONFIG)
 
 
@@ -58,6 +61,7 @@ format: markdown-format ## Runs rustfmt, README formatting, and comment reflow
 format-check: markdown-format-check ## Checks rustfmt, README formatting, and comment reflow
 	$(XTASK) fmt-comments --check --rustfmt-config $(RUSTFMT_CONFIG)
 	cargo +nightly fmt --all --check -- --config-path $(RUSTFMT_CONFIG)
+	rustfmt +nightly --check --config-path $(RUSTFMT_CONFIG) $(SCOPED_RUST_FILES)
 	cargo +nightly fmt --manifest-path xtask/Cargo.toml --all --check -- --config-path $(RUSTFMT_CONFIG)
 
 

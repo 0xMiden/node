@@ -3,15 +3,24 @@
 //! The [State] provides data access and modifications methods, its main purpose is to ensure that
 //! data is atomically written, and that reads are consistent.
 
-mod block_lifecycle;
-mod bootstrap;
-mod disk_monitor;
-mod lifecycle;
-mod loader;
-mod replica;
-mod tip;
-mod view;
-mod writer;
+miden_node_tracing::target_scope! {
+    "miden::storage";
+
+    mod block_lifecycle;
+    mod bootstrap;
+    mod disk_monitor;
+    mod lifecycle;
+    mod replica;
+    mod tip;
+    mod view;
+    mod writer;
+}
+
+miden_node_tracing::target_scope! {
+    "miden::storage::rocksdb";
+
+    mod loader;
+}
 
 use std::path::PathBuf;
 use std::sync::Arc;

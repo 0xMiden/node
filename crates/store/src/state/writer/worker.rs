@@ -4,14 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
-use miden_node_tracing::{
-    ErrorReport,
-    Instrument,
-    debug,
-    miden_instrument,
-    miden_span_record,
-    warn,
-};
+use miden_node_tracing::{ErrorReport, Instrument, debug, instrument_v2, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -179,10 +172,7 @@ impl WriteWorker {
     ///   lag the DB by one block, which is detected by the consistency checks at startup (the same
     ///   crash semantics as the previous lock-based implementation).
     /// - the new snapshot is published atomically, making the block visible to readers.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     async fn write_block(
         &mut self,
         signed_block: SignedBlock,
@@ -442,10 +432,7 @@ impl WriteWorker {
     ///
     /// Consistency between the header and the block body is checked in
     /// [`Self::prepare_block_update`], where the hashing runs on the apply-block pool.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     async fn validate_block_header(&self, header: &BlockHeader) -> Result<Word, ApplyBlockError> {
         let block_num = header.block_num();
 
@@ -471,10 +458,7 @@ impl WriteWorker {
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
@@ -539,10 +523,7 @@ impl WriteWorker {
     }
 
     /// Builds note records with inclusion proofs from the block body.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,

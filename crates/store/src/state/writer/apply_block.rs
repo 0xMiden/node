@@ -1,9 +1,8 @@
 use miden_node_proto::domain::proof_request::BlockProofRequest;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockInputs, BlockNumber, SignedBlock};
 
-use crate::COMPONENT;
 use crate::errors::ApplyBlockWithProvingInputsError;
 use crate::state::BlockWriter;
 
@@ -11,10 +10,7 @@ impl BlockWriter {
     /// Saves proving inputs for a signed block and applies it to the state.
     ///
     /// Used by the in-process block producer after it has built and signed a block.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     pub async fn apply_block_with_proving_inputs(
         &mut self,
         ordered_batches: OrderedBatches,

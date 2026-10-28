@@ -13,7 +13,7 @@ use miden_node_proto::domain::account::{
     AccountVaultDetails,
     StorageMapEntries,
 };
-use miden_node_tracing::{ErrorReport, miden_instrument, trace};
+use miden_node_tracing::{ErrorReport, instrument_v2, trace};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::{
     AccountId,
@@ -45,7 +45,6 @@ use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{EMPTY_WORD, Word};
 use thiserror::Error;
 
-use crate::COMPONENT;
 pub use crate::db::HISTORICAL_BLOCK_RETENTION;
 use crate::db::{PrecomputedPublicAccountState, PrecomputedPublicAccountStates};
 use crate::errors::AccountStateForestUpdateError;
@@ -568,9 +567,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     /// assets if all hashed keys are known in the reverse-key LRU cache. Returns `Ok(None)` when at
     /// least one raw key is missing from the cache, so the caller should fall back to database
     /// reconstruction.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub(crate) fn get_vault_details(
         &self,
         account_id: AccountId,
@@ -614,7 +611,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     }
 
     /// Returns proofs of inclusion or absence for the requested assets at a specific block.
-    #[miden_instrument(target = COMPONENT)]
+    #[instrument_v2]
     pub(crate) fn get_vault_details_for_assets(
         &self,
         account_id: AccountId,
@@ -651,9 +648,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
@@ -727,9 +722,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     /// Returns `AccountStorageMapResult::CannotReconstructKeysFromCache` when the forest has hashed
     /// entries but at least one raw key is missing from the reverse-key cache, so the caller
     /// should fall back to database reconstruction.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub(crate) fn get_storage_map_details_for_all_entries(
         &self,
         account_id: AccountId,
