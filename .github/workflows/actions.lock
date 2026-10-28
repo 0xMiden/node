@@ -45,8 +45,6 @@ workflows:
     '.github/workflows/release.yml':
         - 'actions/checkout@v7.0.1'
         - 'warpbuilds/rust-cache@v2.9.1'
-    '.github/workflows/reset-docker-builder-cache.yml':
-        - 'warpbuilds/docker-configure@v1.1.7'
 dependencies:
     '0xmiden/node@next':
         ref: 'next'
@@ -145,11 +143,6 @@ dependencies:
         commit: 'sha1-8cca0918f8471c33515202b73f56ab27f2bed283'
         owner_id: 43724913
         repo_id: 442947557
-    'warpbuilds/docker-configure@v1.1.7':
-        ref: 'v1.1.7'
-        commit: 'sha1-ecbf49a7b0e21c97813fa9e00a689e740206dd57'
-        owner_id: 142974432
-        repo_id: 935822519
     'warpbuilds/rust-cache@v2.9.1':
         ref: 'v2.9.1'
         commit: 'sha1-9d0cc3090d9c87de74ea67617b246e978735b1a1'
