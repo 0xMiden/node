@@ -24,6 +24,72 @@ use syn::{
 
 mod instrument;
 
+/// Sets the default target for `#[instrument_v2]` on enclosed items and their child modules.
+///
+/// Supply a string literal followed by a semicolon and the module items. Child modules inherit
+/// the target, including modules in separate files, and can use their own scope to override it.
+/// Explicit `target` arguments take precedence. Existing instrumentation and event macros retain
+/// their own target defaults.
+#[proc_macro]
+pub fn target_scope(input: TokenStream) -> TokenStream {
+    let TargetScope { target, items } = parse_macro_input!(input as TargetScope);
+    // Keep the helper and its users in one expansion so child scopes can shadow parent helpers.
+    quote! {
+        #[allow(unused_macros)]
+        macro_rules! __miden_instrument_v2_with_scoped_target {
+            ([$($args:tt)*] $($item:tt)*) => {
+                #[::miden_node_tracing::miden_instrument(target = #target, $($args)*)]
+                $($item)*
+            };
+        }
+
+        #items
+    }
+    .into()
+}
+
+struct TargetScope {
+    target: LitStr,
+    items: TokenStream2,
+}
+
+impl Parse for TargetScope {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let target = input.parse()?;
+        input.parse::<Token![;]>()?;
+        Ok(Self { target, items: input.parse()? })
+    }
+}
+
+/// Instruments a function using canonical tracing attributes and a scoped target.
+///
+/// Uses the target from an enclosing `target_scope!` in this module or an ancestor module, unless
+/// an explicit `target` argument is supplied. All other options and field and error conventions are
+/// the same as `miden_instrument`. An explicit target can be used without a scope.
+#[proc_macro_attribute]
+pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = TokenStream2::from(attr);
+    let item = TokenStream2::from(item);
+    let explicit_target = split_top_level_args(attr.clone()).iter().any(|arg| {
+        matches!(arg.clone().into_iter().next(), Some(TokenTree::Ident(ident)) if ident == "target")
+    });
+
+    if explicit_target {
+        quote! {
+            #[::miden_node_tracing::miden_instrument(#attr)]
+            #item
+        }
+    } else {
+        quote! {
+            __miden_instrument_v2_with_scoped_target! {
+                [#attr]
+                #item
+            }
+        }
+    }
+    .into()
+}
+
 /// Instruments a function using canonical tracing attributes.
 ///
 /// Field values must implement `RecordAttribute`, and their names must be registered for the value
