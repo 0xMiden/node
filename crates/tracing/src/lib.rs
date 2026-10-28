@@ -27,8 +27,10 @@ pub use miden_node_tracing_macro::{
     debug,
     error,
     info,
+    instrument_v2,
     miden_instrument,
     miden_span_record,
+    target_scope,
     trace,
     warn,
 };

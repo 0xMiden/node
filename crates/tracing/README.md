@@ -5,6 +5,61 @@ layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
+## Scoped targets
+
+Use `target_scope!` to give `#[instrument_v2]` functions a shared diagnostic target without repeating it on each
+function. Wrap a module's items in a scope containing a target string followed by a semicolon. A `mod.rs` can contain
+just the scope, child module declarations, and re-exports:
+
+```rust
+// store/src/storage/mod.rs
+miden_node_tracing::target_scope! {
+    "miden::storage";
+
+    pub mod sqlite;
+    pub mod rocksdb;
+    pub mod files;
+    mod maintenance;
+}
+```
+
+Child modules inherit the target, including modules in separate files. A child can override it with its own scope:
+
+```rust
+// store/src/storage/sqlite/mod.rs
+miden_node_tracing::target_scope! {
+    "miden::storage::sqlite";
+
+    mod queries;
+    mod migrations;
+}
+```
+
+Functions in `queries.rs` and `migrations.rs` use the SQLite target without imports or repeated declarations:
+
+```rust
+// store/src/storage/sqlite/queries.rs
+#[miden_node_tracing::instrument_v2(err)]
+fn load_account() -> Result<(), std::io::Error> {
+    // Perform the database operation.
+    Ok(())
+}
+```
+
+The RocksDB and file modules can similarly select their own targets. The maintenance module inherits `miden::storage`.
+Nested scopes do not change the target of parent or sibling modules. Keep instrumented items and child module
+declarations inside the scope so the target helper and its uses share the enclosing macro expansion. Generic functions
+use the target at their definition, regardless of where they are instantiated.
+
+Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
+also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s
+canonical fields, inferred fields from `miden_span_record!`, and typed error reporting. Function arguments are always
+skipped.
+
+The scoped target applies to the function's span and its automatic `err` event. Existing `miden_instrument`, event
+macros such as `info!`, and manual span macros keep their existing target defaults; use their explicit target options
+when needed.
+
 ## Error events
 
 `#[miden_instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")`

@@ -1,0 +1,5 @@
+error: expected string literal
+ --> tests/ui/tracing_macros/nonliteral_target_scope.rs:4:5
+  |
+4 |     TARGET;
+  |     ^^^^^^
