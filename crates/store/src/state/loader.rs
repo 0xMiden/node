@@ -18,7 +18,7 @@ use miden_crypto::merkle::smt::{
     RocksDbStorage,
     SmtStorageReader,
 };
-use miden_node_tracing::{info, instrument_v2};
+use miden_node_tracing::{info_v2, instrument_v2};
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
@@ -27,7 +27,6 @@ use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
 
-use crate::LOG_TARGET;
 use crate::account_state_forest::AccountStateForest;
 use crate::db::queries::{
     AccountCommitmentsPaged,
@@ -133,7 +132,7 @@ pub async fn load_account_tree(
         return AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree);
     }
 
-    info!(target: LOG_TARGET, "RocksDB account tree storage is empty, populating from SQLite");
+    info_v2!("RocksDB account tree storage is empty, populating from SQLite");
 
     let mut smt = LargeSmt::with_entries(storage, std::iter::empty())
         .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -170,7 +169,7 @@ pub async fn load_nullifier_tree(
         return Ok(NullifierTree::new_unchecked(smt));
     }
 
-    info!(target: LOG_TARGET, "RocksDB nullifier tree storage is empty, populating from SQLite");
+    info_v2!("RocksDB nullifier tree storage is empty, populating from SQLite");
 
     let mut smt = LargeSmt::with_entries(storage, std::iter::empty())
         .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -239,10 +238,7 @@ pub async fn load_account_state_forest(
         return Ok(forest);
     }
 
-    info!(
-        target: LOG_TARGET,
-        "RocksDB account state forest storage is empty, populating from SQLite"
-    );
+    info_v2!("RocksDB account state forest storage is empty, populating from SQLite");
     rebuild_account_state_forest(&mut forest, db, block_num).await?;
     Ok(forest)
 }

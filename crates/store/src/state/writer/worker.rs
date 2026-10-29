@@ -4,7 +4,14 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
-use miden_node_tracing::{ErrorReport, Instrument, debug, instrument_v2, miden_span_record, warn};
+use miden_node_tracing::{
+    ErrorReport,
+    Instrument,
+    debug_v2,
+    instrument_v2,
+    miden_span_record,
+    warn_v2,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -20,6 +27,7 @@ use thread_priority::{ThreadPriority, set_current_thread_priority};
 use tokio::sync::{mpsc, watch};
 
 use super::WriteRequest;
+use crate::HistoricalError;
 use crate::account_state_forest::{
     AccountStateForest,
     AccountStateForestBackend,
@@ -33,7 +41,6 @@ use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification};
-use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 // WRITE WORKER
 // ================================================================================================
@@ -301,7 +308,7 @@ impl WriteWorker {
         if let Some(block_lifecycle) = block_lifecycle {
             block_lifecycle.emit(&resolved_note_ids);
         }
-        debug!(target: LOG_TARGET, "Block applied");
+        debug_v2!("Block applied");
 
         Ok(())
     }
@@ -583,9 +590,8 @@ fn raise_thread_priority() {
     static WARN_ONCE: Once = Once::new();
     if let Err(error) = set_current_thread_priority(ThreadPriority::Max) {
         WARN_ONCE.call_once(|| {
-            warn!(
+            warn_v2!(
                 &error,
-                target: COMPONENT,
                 "failed to raise apply-block thread priority; continuing at normal priority"
             );
         });

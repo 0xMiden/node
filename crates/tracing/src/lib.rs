@@ -25,14 +25,19 @@ pub use logging::{
 };
 pub use miden_node_tracing_macro::{
     debug,
+    debug_v2,
     error,
+    error_v2,
     info,
+    info_v2,
     instrument_v2,
     miden_instrument,
     miden_span_record,
     target_scope,
     trace,
+    trace_v2,
     warn,
+    warn_v2,
 };
 pub use span_ext::ErrorSpanExt;
 // Used directly by applications and by expansions of `tracing::instrument`.

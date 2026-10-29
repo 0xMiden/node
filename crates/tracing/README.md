@@ -7,9 +7,9 @@ It is part of the [Miden node](https://github.com/0xMiden/node#readme) repositor
 
 ## Scoped targets
 
-Use `target_scope!` to give `#[instrument_v2]` functions a shared diagnostic target without repeating it on each
-function. Wrap a module's items in a scope containing a target string followed by a semicolon. A `mod.rs` can contain
-just the scope, child module declarations, and re-exports:
+Use `target_scope!` to give `#[instrument_v2]` functions and v2 event macros a shared diagnostic target without
+repeating it at each call site. Wrap a module's items in a scope containing a target string followed by a semicolon. A
+`mod.rs` can contain just the scope, child module declarations, and re-exports:
 
 ```rust
 // store/src/storage/mod.rs
@@ -41,6 +41,7 @@ Functions in `queries.rs` and `migrations.rs` use the SQLite target without impo
 // store/src/storage/sqlite/queries.rs
 #[miden_node_tracing::instrument_v2(err)]
 fn load_account() -> Result<(), std::io::Error> {
+    miden_node_tracing::debug_v2!("account.load_started");
     // Perform the database operation.
     Ok(())
 }
@@ -56,9 +57,22 @@ also works without a scope; otherwise a missing scope is a compile error. The at
 canonical fields, inferred fields from `miden_span_record!`, and typed error reporting. Function arguments are always
 skipped.
 
-The scoped target applies to the function's span and its automatic `err` event. Existing `miden_instrument`, event
-macros such as `info!`, and manual span macros keep their existing target defaults; use their explicit target options
-when needed.
+The scoped target applies to the function's span, its automatic `err` event, and calls to `trace_v2!`, `debug_v2!`,
+`info_v2!`, `warn_v2!`, and `error_v2!`. These event macros accept the same arguments as their original counterparts,
+including typed errors, canonical fields, and an optional `parent:`. An explicit `target:` overrides the scope and works
+without one; otherwise a missing scope is a compile error.
+
+```rust
+miden_node_tracing::info_v2!("account.loaded", block.number = 42_u32);
+miden_node_tracing::warn_v2!(error, parent: &span, "account.load_failed");
+miden_node_tracing::info_v2!(target: "miden::rpc::server", "request.completed");
+```
+
+Event targets follow their lexical scope, independently of the current span or an explicit event parent. Overriding a
+function's span target with `#[instrument_v2(target = "...")]` does not change the target of explicit events in its
+body. Existing `miden_instrument`, event macros such as `info!`, and manual span macros keep their existing target
+defaults; use their explicit target options when needed. Explicit `enabled!` checks must use the same target as the
+events they guard.
 
 ## Error events
 
