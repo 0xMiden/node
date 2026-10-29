@@ -17,20 +17,6 @@ toolchain and the system support needed by RocksDB bindings.
 For operator-facing storage configuration, use the `node` help output and start from the
 [primary README](https://github.com/0xMiden/node#readme).
 
-## Tracing targets
-
-Store operation spans use `miden::storage`, with more specific targets for SQLite access (`miden::storage::sqlite`), the
-RocksDB-backed trees and their loader (`miden::storage::rocksdb`), and block-file storage (`miden::storage::files`).
-These categories let you adjust diagnostic verbosity independently of the calling service. Tree tests using in-memory
-backends retain the same target as the production tree code.
-
-For example, `MIDEN_OTEL_FILTER=info,miden::storage::sqlite=debug` enables debug-level SQLite spans in the OpenTelemetry
-export. `MIDEN_STDOUT_FILTER` controls stdout filtering; both filters fall back to `RUST_LOG` when unset. Existing
-explicitly targeted log events still use `miden-store` or `user::miden-store`.
-
-Targets are assigned at module boundaries with [`target_scope!`](../tracing/README.md#scoped-targets). Store
-instrumentation uses `#[instrument_v2]` to inherit those targets, including across child modules.
-
 ## License
 
 This project is [MIT licensed](../../LICENSE).
