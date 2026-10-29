@@ -11,6 +11,8 @@ use std::ops::{Deref, RangeInclusive};
 
 use miden_protocol::block::BlockNumber;
 
+use crate::errors::DatabaseError;
+
 /// A block number proven to be at or below the issuing view's chain tip.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopedBlockNum(BlockNumber);
@@ -21,9 +23,15 @@ impl ScopedBlockNum {
         Self(block_num)
     }
 
-    /// Returns a range ending at this validated block. Queries reject an inverted range.
-    pub fn range_from(self, start: BlockNumber) -> ScopedBlockRange {
-        ScopedBlockRange(start..=self.0)
+    /// Returns a range ending at this validated block, rejecting starts beyond it.
+    ///
+    /// Both endpoints must be within the validated bound because either can be used as a scoped
+    /// block number.
+    pub fn range_from(self, start: BlockNumber) -> Result<ScopedBlockRange, DatabaseError> {
+        if start > self.0 {
+            return Err(DatabaseError::InvalidBlockRange { from: start, to: self.0 });
+        }
+        Ok(ScopedBlockRange(start..=self.0))
     }
 
     /// Constructs a scoped block number without validation.
@@ -90,5 +98,30 @@ impl ScopedBlockRange {
     /// Returns the validated range.
     pub(crate) fn into_inner(self) -> RangeInclusive<BlockNumber> {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_from_accepts_starts_at_or_before_the_validated_block() {
+        let target = ScopedBlockNum::new(10.into());
+        for start in [BlockNumber::GENESIS, 9.into(), 10.into()] {
+            let range = target.range_from(start).unwrap();
+            assert_eq!(*range.scoped_start(), start);
+            assert_eq!(*range.scoped_end(), *target);
+        }
+    }
+
+    #[test]
+    fn range_from_rejects_starts_beyond_the_validated_block() {
+        let target = ScopedBlockNum::new(10.into());
+        let start = BlockNumber::from(11);
+        assert!(matches!(
+            target.range_from(start),
+            Err(DatabaseError::InvalidBlockRange { from, to }) if from == start && to == *target
+        ));
     }
 }
