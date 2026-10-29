@@ -74,6 +74,10 @@ body. Existing `miden_instrument`, event macros such as `info!`, and manual span
 defaults; use their explicit target options when needed. Explicit `enabled!` checks must use the same target as the
 events they guard.
 
+If the compiler reports a missing macro whose name ends in `requires_target_scope_or_explicit_target`, wrap the
+enclosing module declarations or items in `target_scope!`, or supply an explicit target. For instrumentation, use
+`#[instrument_v2(target = "miden::storage")]`; for an event, use `info_v2!(target: "miden::storage", "account.loaded")`.
+
 ## Error events
 
 `#[miden_instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")`

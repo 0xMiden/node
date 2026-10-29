@@ -33,10 +33,11 @@ mod instrument;
 #[proc_macro]
 pub fn target_scope(input: TokenStream) -> TokenStream {
     let TargetScope { target, items } = parse_macro_input!(input as TargetScope);
-    // Keep the helper and its users in one expansion so child scopes can shadow parent helpers.
+    // Keep the helper and its users in one expansion so child scopes can shadow parent helpers. The
+    // helper names explain the remedy when Rust reports a missing scope during name resolution.
     quote! {
         #[allow(unused_macros)]
-        macro_rules! __miden_instrument_v2_with_scoped_target {
+        macro_rules! __miden_instrument_v2_requires_target_scope_or_explicit_target {
             ([$($args:tt)*] $($item:tt)*) => {
                 #[::miden_node_tracing::miden_instrument(target = #target, $($args)*)]
                 $($item)*
@@ -44,7 +45,7 @@ pub fn target_scope(input: TokenStream) -> TokenStream {
         }
 
         #[allow(unused_macros)]
-        macro_rules! __miden_event_v2_with_scoped_target {
+        macro_rules! __miden_event_v2_requires_target_scope_or_explicit_target {
             ([$level:ident] $($args:tt)*) => {
                 ::miden_node_tracing::__private::$level!(target: #target, $($args)*)
             };
@@ -88,7 +89,7 @@ pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     } else {
         quote! {
-            __miden_instrument_v2_with_scoped_target! {
+            __miden_instrument_v2_requires_target_scope_or_explicit_target! {
                 [#attr]
                 #item
             }
@@ -489,7 +490,7 @@ impl Event {
             #(, #fields)*
         };
         let event = if scoped_target && self.target.is_none() {
-            quote! { __miden_event_v2_with_scoped_target! { [#level] #args } }
+            quote! { __miden_event_v2_requires_target_scope_or_explicit_target! { [#level] #args } }
         } else {
             quote! { ::miden_node_tracing::__private::#level!(#args) }
         };
