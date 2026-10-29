@@ -64,6 +64,10 @@ impl ForeignAccount {
         Ok(())
     }
 
+    #[expect(
+        deprecated,
+        reason = "GetAccount supports header and code reads for accounts of any size"
+    )]
     async fn load_with_code(
         rpc: &mut RpcClient,
         id: AccountId,
@@ -111,6 +115,10 @@ impl ForeignAccount {
     }
 
     /// Fetches a proof for one storage key, authenticated against the loaded account state.
+    #[expect(
+        deprecated,
+        reason = "GetAccount provides the individual storage proofs needed here"
+    )]
     pub async fn storage_map_witness(
         &self,
         rpc: &mut RpcClient,

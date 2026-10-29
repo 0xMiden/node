@@ -703,6 +703,10 @@ impl RpcClient {
 
     /// Issues a `GetAccount` request and verifies the response against the requested account and
     /// block.
+    #[expect(
+        deprecated,
+        reason = "GetAccount provides the individual account proofs needed here"
+    )]
     async fn get_account(
         &self,
         request: proto::miden::node::v1::GetAccountRequest,

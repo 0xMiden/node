@@ -11,6 +11,8 @@ use std::ops::{Deref, RangeInclusive};
 
 use miden_protocol::block::BlockNumber;
 
+use crate::errors::DatabaseError;
+
 /// A block number proven to be at or below the issuing view's chain tip.
 #[derive(Debug, Clone, Copy)]
 pub struct ScopedBlockNum(BlockNumber);
@@ -19,6 +21,17 @@ impl ScopedBlockNum {
     /// Issued by [`StateView`](super::StateView) after validating the bound against its tip.
     pub(super) fn new(block_num: BlockNumber) -> Self {
         Self(block_num)
+    }
+
+    /// Returns a range ending at this validated block, rejecting starts beyond it.
+    ///
+    /// Both endpoints must be within the validated bound because either can be used as a scoped
+    /// block number.
+    pub fn range_from(self, start: BlockNumber) -> Result<ScopedBlockRange, DatabaseError> {
+        if start > self.0 {
+            return Err(DatabaseError::InvalidBlockRange { from: start, to: self.0 });
+        }
+        Ok(ScopedBlockRange(start..=self.0))
     }
 
     /// Constructs a scoped block number without validation.
@@ -68,15 +81,47 @@ impl ScopedBlockRange {
         *self.0.end()
     }
 
+    /// Returns the start of a nonempty validated range as a scoped block number.
+    ///
+    /// Its lower bound cannot exceed the validated upper bound.
+    pub fn scoped_start(&self) -> ScopedBlockNum {
+        ScopedBlockNum(*self.0.start())
+    }
+
     /// Returns the end of the validated range as a scoped block number.
     ///
     /// Sound because the range's upper bound is exactly what its proof covers.
-    pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
+    pub fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
     }
 
     /// Returns the validated range.
     pub(crate) fn into_inner(self) -> RangeInclusive<BlockNumber> {
         self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn range_from_accepts_starts_at_or_before_the_validated_block() {
+        let target = ScopedBlockNum::new(10.into());
+        for start in [BlockNumber::GENESIS, 9.into(), 10.into()] {
+            let range = target.range_from(start).unwrap();
+            assert_eq!(*range.scoped_start(), start);
+            assert_eq!(*range.scoped_end(), *target);
+        }
+    }
+
+    #[test]
+    fn range_from_rejects_starts_beyond_the_validated_block() {
+        let target = ScopedBlockNum::new(10.into());
+        let start = BlockNumber::from(11);
+        assert!(matches!(
+            target.range_from(start),
+            Err(DatabaseError::InvalidBlockRange { from, to }) if from == start && to == *target
+        ));
     }
 }

@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{
@@ -779,6 +779,89 @@ impl From<AccountStorageDetails> for proto::miden::node::v1::AccountStorageDetai
         Self {
             header: Some(header.into()),
             map_details: map_details.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// ACCOUNT SYNCHRONIZATION RESPONSE
+//================================================================================================
+
+/// Account headers and absolute storage-map and vault values for synchronization.
+#[derive(Debug, Clone)]
+pub struct AccountSyncState {
+    pub header: AccountHeader,
+    pub storage_header: AccountStorageHeader,
+    pub maps: BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
+    pub vault: BTreeMap<AssetId, Word>,
+}
+
+/// Account contents to replace or apply to the client's starting state.
+pub enum AccountSyncUpdate {
+    Snapshot(AccountSyncState),
+    Delta(AccountSyncState),
+}
+
+impl AccountSyncUpdate {
+    /// Returns the account header at the synchronization target.
+    pub fn header(&self) -> &AccountHeader {
+        match self {
+            Self::Snapshot(state) | Self::Delta(state) => &state.header,
+        }
+    }
+}
+
+/// An account update at the requested target, with its witness and optional code.
+pub struct SyncAccountResponse {
+    pub block_num: BlockNumber,
+    pub witness: AccountWitness,
+    pub update: AccountSyncUpdate,
+    pub code: Option<AccountCode>,
+}
+
+impl From<SyncAccountResponse> for proto::miden::node::v1::SyncAccountResponse {
+    fn from(value: SyncAccountResponse) -> Self {
+        use proto::miden::node::v1::sync_account_response::Update;
+
+        let SyncAccountResponse { block_num, witness, update, code } = value;
+        Self {
+            block_num: block_num.as_u32(),
+            witness: Some(witness.into()),
+            update: Some(match update {
+                AccountSyncUpdate::Snapshot(state) => Update::Snapshot(state.into()),
+                AccountSyncUpdate::Delta(state) => Update::Delta(state.into()),
+            }),
+            code: code.as_ref().map(Into::into),
+        }
+    }
+}
+
+impl From<AccountSyncState> for proto::miden::node::v1::AccountSyncState {
+    fn from(state: AccountSyncState) -> Self {
+        Self {
+            header: Some(state.header.into()),
+            storage_header: Some(state.storage_header.into()),
+            maps: state
+                .maps
+                .into_iter()
+                .map(|(name, entries)| proto::miden::node::v1::account_sync_state::MapEntries {
+                    slot_name: name.to_string(),
+                    entries: entries
+                        .into_iter()
+                        .map(|(key, value)| proto::account::StorageMapEntry {
+                            key: Some(Word::from(key).into()),
+                            value: Some(value.into()),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            vault: state
+                .vault
+                .into_iter()
+                .map(|(key, value)| proto::account::AccountVaultPatchEntry {
+                    asset_id: Some(Word::from(key).into()),
+                    value: Some(value.into()),
+                })
+                .collect(),
         }
     }
 }

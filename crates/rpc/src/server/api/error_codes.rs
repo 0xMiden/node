@@ -34,6 +34,16 @@ error_codes!(GetAccountErrorCode {
     StorageSlotNotMap = 7,
 });
 
+error_codes!(SyncAccountErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    AccountTooLarge = 5,
+    AccountNotPublic = 6,
+    AccountNotFound = 7,
+});
+
 error_codes!(GetNotesByIdErrorCode { DeserializationFailed = 1 });
 error_codes!(GetNoteScriptByRootErrorCode { DeserializationFailed = 1 });
 

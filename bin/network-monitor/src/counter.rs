@@ -997,6 +997,7 @@ fn update_expected_and_pending(
 /// Fetch the storage header of the given account from RPC.
 ///
 /// Returns `None` if the account does not exist or has no details available.
+#[expect(deprecated, reason = "GetAccount supports header reads for accounts of any size")]
 async fn fetch_account_storage_header(
     rpc_client: &mut RpcClient,
     account_id: AccountId,

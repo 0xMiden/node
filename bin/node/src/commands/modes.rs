@@ -138,6 +138,7 @@ impl SequencerCommand {
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
             network_tx_auth,
+            sync_account: self.runtime.rpc.sync_account.into(),
         };
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
@@ -407,6 +408,7 @@ impl FullNodeCommand {
             ntx_builder: None,
             grpc_options: runtime.grpc_options,
             network_tx_auth,
+            sync_account: self.runtime.rpc.sync_account.into(),
         };
         let mut tasks = Tasks::new();
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));

@@ -35,10 +35,12 @@ use crate::db::queries::{
     VALID_FOREVER,
     insert_storage_map_value,
     insert_vault_asset,
+    select_account_size,
 };
 use crate::errors::DatabaseError;
 
 mod delta;
+mod storage;
 use delta::{
     AccountStateForInsert,
     LatestAccountStateRow,
@@ -173,22 +175,47 @@ fn upsert_account(
         created_at_block,
         &account_state,
     );
+    // Private accounts have no public storage, vault entries, or size counters to write.
+    if account_id.is_private() {
+        row.upsert(tx)?;
+        return Ok(());
+    }
+
+    let header = row.storage_header.as_ref().expect("public account has a storage header");
+    let mut size = select_account_size(tx, account_id, block_num)?.unwrap_or_default();
+    size.storage_slots = header.slots().count() as u64;
     row.upsert(tx)?;
+
+    if let Some(existing) = &existing {
+        let removed = storage::expire_removed_map_entries(tx, update, existing, &row)?;
+        adjust_count(&mut size.storage_map_entries, -removed)?;
+    }
 
     // Insert pending storage map entries. TODO consider batching
     for (acc_id, slot_name, key, value) in pending_storage_inserts {
-        if account_is_new {
+        let change = if account_is_new {
             // A brand-new account cannot have a previous open row to invalidate.
-            insert_storage_map_value_inner(tx, acc_id, block_num, &slot_name, key, value, false)?;
+            insert_storage_map_value_inner(tx, acc_id, block_num, &slot_name, key, value, false)?
         } else {
-            insert_storage_map_value(tx, acc_id, block_num, &slot_name, key, value)?;
-        }
+            insert_storage_map_value(tx, acc_id, block_num, &slot_name, key, value)?
+        };
+        adjust_count(&mut size.storage_map_entries, change)?;
     }
 
     for (acc_id, vault_key, asset) in pending_asset_inserts {
-        insert_vault_asset(tx, acc_id, block_num, vault_key, asset)?;
+        let change = insert_vault_asset(tx, acc_id, block_num, vault_key, asset)?;
+        adjust_count(&mut size.vault_assets, change)?;
     }
 
+    crate::db::queries::update_account_size(tx, account_id, block_num, size)?;
+
+    Ok(())
+}
+
+fn adjust_count(count: &mut u64, change: i64) -> Result<(), DatabaseError> {
+    *count = count
+        .checked_add_signed(change)
+        .ok_or_else(|| DatabaseError::DataCorrupted("invalid account size counter".into()))?;
     Ok(())
 }
 

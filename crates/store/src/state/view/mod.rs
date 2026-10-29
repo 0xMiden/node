@@ -5,7 +5,7 @@
 //! [`scoped`] proof types). This makes it impossible to implement a read whose tree and database
 //! halves observe different chain tips — mid-apply, the database may already contain rows for a
 //! block the snapshot cannot prove yet. The only deliberately unscoped reads are the
-//! content-addressed note and protocol-configuration lookups and the network-account
+//! content-addressed note, account-code, and protocol-configuration lookups and the network-account
 //! classification.
 //!
 //! The submodules hold the read endpoints, all `impl StateView`; the snapshot internals
@@ -15,6 +15,7 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
+use miden_node_db::sqlite::ReadTx;
 use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
@@ -99,6 +100,32 @@ impl State {
 }
 
 impl StateView {
+    /// Runs queries in one database snapshot with a range validated against this view's height.
+    ///
+    /// The callback receives the read transaction and scoped block bounds. Queries remain on the
+    /// same snapshot while blocks commit or history is pruned. Keep transaction work bounded.
+    pub async fn read<R, F>(
+        &self,
+        blocks: RangeInclusive<BlockNumber>,
+        read: F,
+    ) -> Result<R, DatabaseError>
+    where
+        F: FnOnce(&ReadTx<'_>, ScopedBlockRange) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        if blocks.is_empty() {
+            return Err(DatabaseError::InvalidBlockRange {
+                from: *blocks.start(),
+                to: *blocks.end(),
+            });
+        }
+        let blocks = self.scope_range(blocks)?;
+        self.db
+            .reader
+            .read("Read state", move |tx| Ok::<_, DatabaseError>(read(tx, blocks)))
+            .await
+    }
+
     /// Returns this view's tip as a scoped block number for tip-bounded database queries.
     pub fn tip(&self) -> ScopedBlockNum {
         ScopedBlockNum::new(self.snapshot.latest_block_num())

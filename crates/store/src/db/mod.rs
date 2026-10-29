@@ -104,7 +104,7 @@ impl Default for DatabaseOptions {
 /// framework reader pool.
 pub struct Db {
     writer: DbWriter,
-    reader: DbReader,
+    pub(crate) reader: DbReader,
 }
 
 /// Inserts the genesis block and the protocol configuration that it activates.

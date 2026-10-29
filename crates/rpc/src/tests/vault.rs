@@ -92,6 +92,7 @@ async fn get_account_selects_assets_from_a_large_vault() {
 }
 
 #[tokio::test]
+#[expect(deprecated, reason = "Exercises the retained GetAccount endpoint")]
 async fn get_account_rejects_excessive_and_duplicate_vault_ids() {
     let (mut client, _, _store, _server) = start_rpc().await;
     let faucet = AccountIdBuilder::new()

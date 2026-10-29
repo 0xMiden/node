@@ -153,6 +153,7 @@ impl SubmissionClient {
     /// This is how the harness observes progress on the *other* side: the wallet's slot counts what
     /// this tool submitted, while the counter account's slot only advances when the ntx-builder has
     /// actually loaded the large account and consumed a network note.
+    #[expect(deprecated, reason = "GetAccount supports header reads for accounts of any size")]
     pub async fn slot_value(&self, account_id: AccountId, slot_name: &str) -> Result<Option<u64>> {
         let request = GetAccountRequest {
             account_id: Some(account_id.into()),
@@ -212,6 +213,10 @@ impl SubmissionClient {
     /// Every increment emits a note targeted at the counter, which makes the wallet's auth procedure
     /// invoke the counter's `estimate_note_fee` through FPI. The kernel authenticates that foreign
     /// account against the reference block's account root, so the executor needs this witness.
+    #[expect(
+        deprecated,
+        reason = "GetAccount supports witness reads for accounts of any size"
+    )]
     pub async fn account_witness(
         &self,
         account_id: AccountId,

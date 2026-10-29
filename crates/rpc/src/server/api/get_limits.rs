@@ -30,6 +30,11 @@ impl proto::server::miden_node_v1_node_service::GetLimits for RpcService {
     ) -> tonic::Result<Self::Output> {
         debug!(target: LOG_TARGET, "Getting limits");
 
-        Ok(RPC_LIMITS.clone())
+        let mut limits = RPC_LIMITS.clone();
+        limits.endpoints.insert(
+            "SyncAccount".into(),
+            super::endpoint_limits(&[("account_entries", self.sync_account.limit.get() as usize)]),
+        );
+        Ok(limits)
     }
 }

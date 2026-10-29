@@ -257,14 +257,15 @@ impl StateView {
         cursor: Option<AccountVaultCursor>,
         page_size: NonZeroUsize,
     ) -> Result<AccountVaultValuesPage, DatabaseError> {
-        let block_range = self.scope_range(block_range)?;
-        let query =
-            crate::db::queries::AccountVaultUpdatesV2::new(account_id, block_range, page_size);
-        let page = self.db.page(query, cursor).await?;
-        Ok(AccountVaultValuesPage {
-            values: page.items,
-            next_cursor: page.next.flatten(),
-        })
+        let range = self.scope_range(block_range)?;
+        self.db
+            .reader
+            .read("Read vault updates page", move |tx| {
+                crate::db::queries::account_vault_updates_page(
+                    tx, account_id, range, &cursor, page_size,
+                )
+            })
+            .await
     }
 
     /// Loads a bounded page of squashed storage-map updates at the requested target.
@@ -276,13 +277,14 @@ impl StateView {
         page_size: NonZeroUsize,
     ) -> Result<StorageMapUpdatesPage, DatabaseError> {
         let range = self.scope_range(range)?;
-        let query =
-            crate::db::queries::AccountStorageMapUpdatesV2::new(account_id, range, page_size);
-        let page = self.db.page(query, cursor).await?;
-        Ok(StorageMapUpdatesPage {
-            values: page.items,
-            next_cursor: page.next.flatten(),
-        })
+        self.db
+            .reader
+            .read("Read storage map updates page", move |tx| {
+                crate::db::queries::account_storage_map_updates_page(
+                    tx, account_id, range, &cursor, page_size,
+                )
+            })
+            .await
     }
 
     /// Loads changed-account identities at the requested target; witnesses must use the same view.

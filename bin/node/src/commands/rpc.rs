@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -16,6 +17,9 @@ pub struct RpcOptions {
     /// Socket address at which to serve the public RPC API.
     #[arg(long = "rpc.listen", env = "MIDEN_NODE_RPC_LISTEN", value_name = "IP:PORT")]
     pub listen: SocketAddr,
+
+    #[command(flatten)]
+    pub sync_account: SyncAccountOptions,
 
     /// Optional metadata header value for internal network-transaction RPC authentication.
     #[arg(
@@ -47,6 +51,49 @@ impl RpcOptions {
                     .context("invalid rpc.network-tx-auth-header-value")
             })
             .transpose()
+    }
+}
+
+#[derive(clap::Args, Clone, Copy, Debug)]
+pub struct SyncAccountOptions {
+    /// Maximum total storage slots, map entries, and vault assets accepted by `SyncAccount`.
+    #[arg(
+        long = "rpc.sync-account.limit",
+        env = "MIDEN_NODE_RPC_SYNC_ACCOUNT_LIMIT",
+        default_value_t = miden_node_rpc::SyncAccountConfig::default().limit,
+        value_name = "ENTRIES",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
+    )]
+    pub limit: NonZeroU32,
+
+    /// Return a snapshot for changed accounts with at most this many map entries and vault assets.
+    #[arg(
+        long = "rpc.sync-account.snapshot-threshold",
+        env = "MIDEN_NODE_RPC_SYNC_ACCOUNT_SNAPSHOT_THRESHOLD",
+        default_value_t = miden_node_rpc::SyncAccountConfig::default().snapshot_threshold,
+        value_name = "ENTRIES",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
+    )]
+    pub snapshot_threshold: u32,
+
+    /// Maximum map entries and vault assets in a delta before falling back to a snapshot.
+    #[arg(
+        long = "rpc.sync-account.delta-limit",
+        env = "MIDEN_NODE_RPC_SYNC_ACCOUNT_DELTA_LIMIT",
+        default_value_t = miden_node_rpc::SyncAccountConfig::default().delta_limit,
+        value_name = "ENTRIES",
+        help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
+    )]
+    pub delta_limit: NonZeroU32,
+}
+
+impl From<SyncAccountOptions> for miden_node_rpc::SyncAccountConfig {
+    fn from(options: SyncAccountOptions) -> Self {
+        Self {
+            limit: options.limit,
+            snapshot_threshold: options.snapshot_threshold,
+            delta_limit: options.delta_limit,
+        }
     }
 }
 
@@ -105,6 +152,41 @@ impl SyncOptions {
             (Some(url), None) => url.clone(),
             (None, Some(network)) => network.rpc_url(),
             _ => unreachable!("clap requires exactly one block sync source"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::SyncAccountOptions;
+
+    #[derive(Parser)]
+    struct Command {
+        #[command(flatten)]
+        options: SyncAccountOptions,
+    }
+
+    #[test]
+    fn sync_account_options_accept_tuning_and_reject_zero_limits() {
+        let options = Command::try_parse_from([
+            "node",
+            "--rpc.sync-account.limit",
+            "2000",
+            "--rpc.sync-account.snapshot-threshold",
+            "0",
+            "--rpc.sync-account.delta-limit",
+            "50",
+        ])
+        .unwrap()
+        .options;
+        let config = miden_node_rpc::SyncAccountConfig::from(options);
+        assert_eq!(config.limit.get(), 2000);
+        assert_eq!(config.snapshot_threshold, 0);
+        assert_eq!(config.delta_limit.get(), 50);
+        for flag in ["--rpc.sync-account.limit", "--rpc.sync-account.delta-limit"] {
+            assert!(Command::try_parse_from(["node", flag, "0"]).is_err());
         }
     }
 }
