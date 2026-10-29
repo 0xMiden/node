@@ -587,6 +587,57 @@ fn scoped_events_can_be_filtered_by_storage_backend() {
 }
 
 #[test]
+fn enabled_checks_follow_scopes_levels_and_explicit_overrides() {
+    const OVERRIDE: &str = "miden::rpc::server";
+    for (filter, expected) in [
+        ("off", [false, false, false, false]),
+        ("off,miden::storage=debug", [true, true, true, false]),
+        ("off,miden::storage::sqlite=debug", [true, false, false, false]),
+        ("off,miden::storage::sqlite=info", [false, false, false, false]),
+        ("off,miden::storage::rocksdb=debug", [false, true, false, false]),
+        ("off,miden::rpc::server=debug", [false, false, false, true]),
+    ] {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(filter));
+        tracing::subscriber::with_default(subscriber, || {
+            assert_eq!(
+                [
+                    targets::database::child::debug_enabled(),
+                    targets::rocksdb::debug_enabled(),
+                    targets::maintenance::debug_enabled(),
+                    targets::database::child::override_enabled(),
+                ],
+                expected,
+                "{filter}"
+            );
+            assert_eq!(
+                miden_node_tracing::enabled_v2!(target: OVERRIDE, Level::DEBUG),
+                expected[3],
+                "{filter}"
+            );
+        });
+    }
+}
+
+#[test]
+fn enabled_checks_forward_field_names_to_subscribers() {
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(|metadata| {
+            metadata.fields().field("block.number").is_some()
+        }));
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(!targets::database::child::debug_enabled());
+        assert!(targets::database::child::fields_enabled());
+        assert!(
+            miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, block.number)
+        );
+        assert!(
+            !miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, account.id)
+        );
+    });
+}
+
+#[test]
 fn ui_tests() {
     let tests = trybuild::TestCases::new();
     tests.pass("tests/ui/tracing_macros/pass.rs");
@@ -622,4 +673,5 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/missing_event_target_scope.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_scoped_events.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_scoped_event_errors.rs");
+    tests.compile_fail("tests/ui/tracing_macros/missing_enabled_target_scope.rs");
 }

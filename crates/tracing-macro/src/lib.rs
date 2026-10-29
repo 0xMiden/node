@@ -24,7 +24,7 @@ use syn::{
 
 mod instrument;
 
-/// Sets the default target for v2 instrumentation and event macros on enclosed items and modules.
+/// Sets the default target for v2 instrumentation, events, and enabled checks on enclosed items.
 ///
 /// Supply a string literal followed by a semicolon and the module items. Child modules inherit
 /// the target, including modules in separate files, and can use their own scope to override it.
@@ -48,6 +48,13 @@ pub fn target_scope(input: TokenStream) -> TokenStream {
         macro_rules! __miden_event_v2_requires_target_scope_or_explicit_target {
             ([$level:ident] $($args:tt)*) => {
                 ::miden_node_tracing::__private::$level!(target: #target, $($args)*)
+            };
+        }
+
+        #[allow(unused_macros)]
+        macro_rules! __miden_enabled_v2_requires_target_scope_or_explicit_target {
+            ($($args:tt)*) => {
+                ::miden_node_tracing::enabled!(target: #target, $($args)*)
             };
         }
 
@@ -330,6 +337,26 @@ pub fn warn_v2(input: TokenStream) -> TokenStream {
 #[proc_macro]
 pub fn error_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true, true)
+}
+
+/// Checks subscriber interest at a level using the enclosing `target_scope!` target.
+///
+/// Accepts a level followed by optional field names, just like `tracing::enabled!`. A leading
+/// `target:` overrides the scope and can be used without one. Otherwise, a scope is required.
+/// This is an interest hint, not a guarantee that a particular span or event will be recorded.
+#[proc_macro]
+pub fn enabled_v2(input: TokenStream) -> TokenStream {
+    let input = TokenStream2::from(input);
+    let mut tokens = input.clone().into_iter();
+    let explicit_target = matches!(tokens.next(), Some(TokenTree::Ident(name)) if name == "target")
+        && matches!(tokens.next(), Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+
+    if explicit_target {
+        quote! { ::miden_node_tracing::enabled!(#input) }
+    } else {
+        quote! { __miden_enabled_v2_requires_target_scope_or_explicit_target!(#input) }
+    }
+    .into()
 }
 
 fn expand_event(

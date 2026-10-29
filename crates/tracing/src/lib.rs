@@ -26,6 +26,7 @@ pub use logging::{
 pub use miden_node_tracing_macro::{
     debug,
     debug_v2,
+    enabled_v2,
     error,
     error_v2,
     info,

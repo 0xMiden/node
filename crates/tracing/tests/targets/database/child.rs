@@ -50,6 +50,18 @@ pub fn events() {
     error_v2!(&error, "error.event", block.number = 5_u32);
 }
 
+pub fn debug_enabled() -> bool {
+    miden_node_tracing::enabled_v2!(tracing::Level::DEBUG)
+}
+
+pub fn override_enabled() -> bool {
+    miden_node_tracing::enabled_v2!(target: "miden::rpc::server", tracing::Level::DEBUG)
+}
+
+pub fn fields_enabled() -> bool {
+    miden_node_tracing::enabled_v2!(tracing::Level::DEBUG, block.number)
+}
+
 #[miden_node_tracing::instrument_v2(target = "miden::rpc::server")]
 pub fn parented_events(parent: &tracing::Span) {
     miden_node_tracing::info_v2!("contextual.event");

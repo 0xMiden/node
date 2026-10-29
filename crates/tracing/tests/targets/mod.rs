@@ -15,6 +15,10 @@ miden_node_tracing::target_scope! {
             pub fn event() {
                 miden_node_tracing::info_v2!("rocksdb.event");
             }
+
+            pub fn debug_enabled() -> bool {
+                miden_node_tracing::enabled_v2!(tracing::Level::DEBUG)
+            }
         }
     }
 

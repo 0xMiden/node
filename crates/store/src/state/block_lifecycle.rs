@@ -124,7 +124,7 @@ impl BlockLifecycle {
 
 /// Returns whether any subscriber is interested in user-facing lifecycle events.
 pub(super) fn lifecycle_events_enabled() -> bool {
-    miden_node_tracing::enabled!(target: "miden::storage", miden_node_tracing::Level::DEBUG)
+    miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG)
 }
 
 struct RegisteredAccount {

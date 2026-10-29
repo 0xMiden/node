@@ -7,9 +7,9 @@ It is part of the [Miden node](https://github.com/0xMiden/node#readme) repositor
 
 ## Scoped targets
 
-Use `target_scope!` to give `#[instrument_v2]` functions and v2 event macros a shared diagnostic target without
-repeating it at each call site. Wrap a module's items in a scope containing a target string followed by a semicolon. A
-`mod.rs` can contain just the scope, child module declarations, and re-exports:
+Use `target_scope!` to give `#[instrument_v2]` functions, v2 events, and enabled checks a shared diagnostic target
+without repeating it at each call site. Wrap a module's items in a scope containing a target string followed by a
+semicolon. A `mod.rs` can contain just the scope, child module declarations, and re-exports:
 
 ```rust
 // store/src/storage/mod.rs
@@ -71,8 +71,14 @@ miden_node_tracing::info_v2!(target: "miden::rpc::server", "request.completed");
 Event targets follow their lexical scope, independently of the current span or an explicit event parent. Overriding a
 function's span target with `#[instrument_v2(target = "...")]` does not change the target of explicit events in its
 body. Existing `miden_instrument`, event macros such as `info!`, and manual span macros keep their existing target
-defaults; use their explicit target options when needed. Explicit `enabled!` checks must use the same target as the
-events they guard.
+defaults; use their explicit target options when needed.
+
+Use `enabled_v2!(Level::DEBUG)` to check subscriber interest before preparing diagnostic data. The check inherits the
+same target as scoped spans and events. It also accepts optional field names, such as
+`enabled_v2!(Level::DEBUG, block.number)`, and an explicit `target:` override that works without a scope. Like
+`tracing::enabled!`, this is an interest hint: filters that depend on event/span kind, source location, or additional
+fields can still treat an individual span or event differently. If an event overrides its target, use that same override
+in its enabled check.
 
 If the compiler reports a missing macro whose name ends in `requires_target_scope_or_explicit_target`, wrap the
 enclosing module declarations or items in `target_scope!`, or supply an explicit target. For instrumentation, use
