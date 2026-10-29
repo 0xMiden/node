@@ -35,7 +35,6 @@ impl Prover {
     #[miden_instrument(
         target=COMPONENT,
         name="prove",
-        err,
     )]
     pub fn prove(
         &self,

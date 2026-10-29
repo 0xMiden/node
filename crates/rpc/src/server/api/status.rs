@@ -21,7 +21,6 @@ impl proto::server::miden_node_v1_node_service::Status for RpcService {
     #[miden_instrument(
         target = COMPONENT,
         name = "status",
-        err,
     )]
     async fn handle(
         &self,

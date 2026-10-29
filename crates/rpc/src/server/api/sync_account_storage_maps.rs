@@ -29,7 +29,6 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMaps for RpcSe
     #[miden_instrument(
         target = COMPONENT,
         name = "sync_account_storage_maps",
-        err,
     )]
     async fn handle(
         &self,

@@ -30,7 +30,6 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService 
     #[miden_instrument(
         target = COMPONENT,
         name = "sync_account_vault",
-        err,
     )]
     async fn handle(
         &self,

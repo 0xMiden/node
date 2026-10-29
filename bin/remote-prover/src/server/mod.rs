@@ -5,7 +5,7 @@ use miden_node_proto::server::{
     miden_remote_prover_v1_prover_service,
     miden_remote_prover_v1_worker_status_service,
 };
-use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
@@ -16,7 +16,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
 use crate::server::service::ProverService;
@@ -114,7 +113,7 @@ impl Server {
             .accept_http1(true)
             .timeout(self.timeout)
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .layer(grpc_trace_layer())
             .layer(cors_for_grpc_web_layer())
             .layer(GrpcWebLayer::new())
             .add_service(prover_service.max_decoding_message_size(max_decoding_message_size))

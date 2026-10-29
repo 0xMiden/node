@@ -9,6 +9,20 @@ multi-ecosystem-groups:
       prefix: "chore(deps)"
 
 updates:
+  - package-ecosystem: cargo
+    directories:
+      - /
+      - /xtask
+    schedule:
+      interval: weekly
+      day: monday
+    # Security updates use a separate pull request limit.
+    open-pull-requests-limit: 0
+    commit-message:
+      prefix: "chore(deps)"
+    cooldown:
+      default-days: 7
+
   - package-ecosystem: github-actions
     directory: /
     patterns: ["*"]

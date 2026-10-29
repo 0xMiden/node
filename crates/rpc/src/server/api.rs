@@ -21,12 +21,14 @@ use miden_node_utils::limiter::{
     QueryParamVaultAssetLimit,
 };
 use miden_node_utils::lru_cache::LruCache;
+use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
+pub(crate) use self::error_codes::log_internal_error;
 use self::error_codes::{SyncErrorCode, internal_error};
 use crate::COMPONENT;
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
@@ -34,7 +36,8 @@ use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 // VALIDATOR FAN-OUT
 // ================================================================================================
 
-/// Submits the proven transaction to every validator concurrently.
+/// Submits the proven transaction to every validator concurrently, retrying transient failures
+/// independently for each validator.
 ///
 /// Every validator must observe every transaction, since a validator only signs blocks whose
 /// transactions it has previously validated. A single failed submission therefore fails the whole
@@ -44,16 +47,21 @@ pub(crate) async fn submit_tx_to_validators(
     request: &proto::submission::ProvenTransactionSubmission,
 ) -> tonic::Result<()> {
     futures::future::try_join_all(validators.iter().map(|validator| {
-        let mut validator = validator.clone();
+        let validator = validator.clone();
         let request = request.clone();
         async move {
-            validator
-                .submit_proven_transaction(
-                    proto::miden::validator::v1::SubmitProvenTransactionRequest {
-                        submission: Some(request),
-                    },
-                )
-                .await
+            (|| async {
+                validator
+                    .clone()
+                    .submit_proven_transaction(
+                        proto::miden::validator::v1::SubmitProvenTransactionRequest {
+                            submission: Some(request.clone()),
+                        },
+                    )
+                    .await
+            })
+            .retry_transient()
+            .await
         }
     }))
     .await?;
@@ -68,16 +76,20 @@ pub(crate) async fn submit_batch_to_validators(
     proposed_batch: &miden_protocol::batch::ProposedBatch,
     sealed_transaction_inputs: &[proto::submission::SealedTransactionInputs],
 ) -> tonic::Result<()> {
-    futures::future::try_join_all(validators.iter().map(|validator| {
-        let mut validator = validator.clone();
-        async move { validator.submit_batch(proposed_batch, sealed_transaction_inputs).await }
-    }))
+    futures::future::try_join_all(
+        validators
+            .iter()
+            .map(|validator| validator.submit_batch(proposed_batch, sealed_transaction_inputs)),
+    )
     .await?;
     Ok(())
 }
 
 // API METHODS
 // ================================================================================================
+
+#[cfg(test)]
+mod validator_tests;
 
 mod error_codes;
 mod get_account;
@@ -219,10 +231,12 @@ impl RpcService {
             return Ok(());
         }
 
-        let network_accounts =
-            self.state.view().filter_network_accounts(&account_ids).await.map_err(|err| {
-                Status::internal(format!("network-account classification failed: {err}"))
-            })?;
+        let network_accounts = self
+            .state
+            .view()
+            .filter_network_accounts(&account_ids)
+            .await
+            .map_err(|err| log_internal_error(&err))?;
 
         if !network_accounts.is_empty() {
             return Err(Status::invalid_argument(
@@ -257,7 +271,7 @@ pub(crate) struct SequencerInternalService {
 fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
     match err {
         GetBlockHeaderError::DatabaseError(err) => database_error_to_status(&err),
-        GetBlockHeaderError::MmrError(err) => internal_error(err.to_string()),
+        GetBlockHeaderError::MmrError(err) => log_internal_error(&err),
     }
 }
 
@@ -272,7 +286,7 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::RangeBelowRetention(_) | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
-        _ => internal_error(message),
+        _ => log_internal_error(err),
     }
 }
 
@@ -288,7 +302,7 @@ async fn load_protocol_config(
     let commitment = header.protocol_config_commitment();
     view.get_protocol_config(commitment)
         .await
-        .map_err(|err| internal_error(err.to_string()))?
+        .map_err(|err| log_internal_error(&err))?
         .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
 }
 

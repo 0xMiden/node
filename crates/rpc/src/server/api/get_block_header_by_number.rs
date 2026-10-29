@@ -29,7 +29,6 @@ impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcSe
             block.number = request.block_num(),
             request.include_mmr_proof = request.include_mmr_proof.unwrap_or_default(),
         ),
-        err,
     )]
     async fn handle(
         &self,

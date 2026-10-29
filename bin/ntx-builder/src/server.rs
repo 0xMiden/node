@@ -3,14 +3,13 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::server::miden_ntx_builder_v1_network_transaction_builder_service;
 use miden_node_proto_build::ntx_builder_api_descriptor;
-use miden_node_tracing::grpc::grpc_trace_fn;
+use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::info;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tonic_reflection::server;
-use tower_http::trace::TraceLayer;
 
 use crate::LOG_TARGET;
 use crate::db::NtxDbReader;
@@ -72,7 +71,7 @@ impl NtxBuilderRpcServer {
 
         grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
-            .layer(TraceLayer::new_for_grpc().make_span_with(grpc_trace_fn))
+            .layer(grpc_trace_layer())
             .timeout(request_timeout)
             .add_service(api_service.max_decoding_message_size(max_decoding_message_size))
             .add_service(reflection_service.max_decoding_message_size(max_decoding_message_size))

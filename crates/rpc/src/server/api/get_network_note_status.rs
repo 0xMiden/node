@@ -35,7 +35,6 @@ impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcServ
     #[miden_instrument(
         target = COMPONENT,
         name = "get_network_note_status",
-        err,
     )]
     async fn handle(
         &self,

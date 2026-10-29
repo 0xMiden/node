@@ -72,8 +72,9 @@ async fn forwarding_rejects_new_accounts_with_an_existing_prefix() {
     for nullifiers in [vec![], vec![nullifier]] {
         let tx = fixture.transaction(colliding_id, &nullifiers, 2);
         let error = check_nullifiers_and_expiration(&fixture.state, tx).await.unwrap_err();
-        assert_eq!(error.code(), Code::Internal);
-        assert_eq!(error.details(), &[0]);
+        assert_eq!(error.code(), Code::InvalidArgument);
+        assert_eq!(error.details(), &[8]);
+        assert!(error.message().contains("already exists"), "{}", error.message());
     }
 
     id[0] ^= 1;

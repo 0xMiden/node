@@ -40,7 +40,7 @@ impl FetchNotes for Server {
         Ok(response)
     }
 
-    #[miden_instrument(target = COMPONENT, err)]
+    #[miden_instrument(target = COMPONENT)]
     async fn handle(
         &self,
         request: Self::Input,

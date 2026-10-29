@@ -106,7 +106,7 @@ pub fn encoded_note_payload_len(header: &NoteHeader, details: &NoteDetails) -> O
 
 /// Stores a validated note and removes up to ten expired notes in the same transaction. A retry
 /// preserves the first record for the note ID and does not remove expired notes.
-#[miden_instrument(target = COMPONENT, err)]
+#[miden_instrument(target = COMPONENT, err(level = "debug"))]
 pub async fn store_note(
     writer: &DbWriter,
     note: NewNote,
@@ -161,7 +161,7 @@ pub async fn store_note(
 }
 
 /// Returns one bounded page from a single database snapshot, in cursor order.
-#[miden_instrument(target = COMPONENT, err)]
+#[miden_instrument(target = COMPONENT, err(level = "debug"))]
 pub async fn fetch_notes(
     reader: &DbReader,
     tags: Vec<u32>,
