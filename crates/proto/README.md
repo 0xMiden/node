@@ -39,10 +39,6 @@ Conversion errors retain the field path and source. Use `ConversionError::into_s
 This crate does not provide a ready-to-use TLS client for official public RPC endpoints. Client applications should
 configure transport security in their generated client stack.
 
-Shared client connection diagnostics use `miden::rpc::client`. The target is declared around the client module, so it is
-the same for every generic client type and every caller. Select `miden::rpc::client=debug` in `RUST_LOG`,
-`MIDEN_STDOUT_FILTER`, or `MIDEN_OTEL_FILTER` to include repeated connection failures.
-
 ## License
 
 This project is [MIT licensed](../../LICENSE).
