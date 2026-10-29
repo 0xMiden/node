@@ -5,7 +5,7 @@ use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, debug, miden_instrument, miden_span_record, trace};
+use miden_node_tracing::{ErrorReport, debug_v2, instrument_v2, miden_span_record, trace_v2};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::transaction::{
     OutputNote,
@@ -16,8 +16,7 @@ use miden_protocol::transaction::{
 };
 use tonic::{Request, Status};
 
-use super::{COMPONENT, RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
-use crate::LOG_TARGET;
+use super::{RpcBackend, RpcService, load_protocol_config, submit_tx_to_validators};
 
 #[cfg(test)]
 mod tests;
@@ -48,10 +47,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
         Ok(proto::miden::node::v1::SubmitProvenTxResponse { block_num: output.block_num })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "submit_proven_tx",
-    )]
+    #[instrument_v2(name = "submit_proven_tx")]
     async fn handle(
         &self,
         input: Self::Input,
@@ -62,7 +58,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
         let is_authorized_network_tx = self.is_authorized_network_tx(metadata);
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
-        trace!(target: LOG_TARGET, "Received transaction submission");
+        trace_v2!("Received transaction submission");
 
         miden_span_record!(
             transaction.id = tx.id(),
@@ -72,7 +68,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
             transaction.reference_block.commitment = tx.ref_block_commitment()
         );
 
-        debug!(target: LOG_TARGET, "Submitting transaction");
+        debug_v2!("Submitting transaction");
 
         if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
             account_admission.check(tx.account_update()).await?;

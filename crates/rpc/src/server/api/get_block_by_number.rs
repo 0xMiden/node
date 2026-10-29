@@ -1,11 +1,10 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, error, miden_instrument};
+use miden_node_tracing::{debug_v2, error_v2, instrument_v2};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::vm::ExecutionProof;
 
 use super::error_codes::internal_error;
 use super::{RpcService, database_error_to_status, log_internal_error};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService {
@@ -24,8 +23,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "get_block_by_number",
         fields(
             block.number = request.block_num,
@@ -38,8 +36,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug!(
-            target: LOG_TARGET,
+        debug_v2!(
             "Getting block by number",
             block.number = request.block_num,
             request.include_proof = request.include_proof.unwrap_or_default()
@@ -54,12 +51,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
             .map(|bytes| {
                 miden_node_persistence::decode::<SignedBlock>(&bytes).map(Into::into).map_err(
                     |err| {
-                        error!(
-                            err,
-                            target: LOG_TARGET,
-                            "Failed to decode stored block",
-                            block.number = block_num
-                        );
+                        error_v2!(err, "Failed to decode stored block", block.number = block_num);
                         internal_error(format!("Failed to decode stored block {block_num}."))
                     },
                 )

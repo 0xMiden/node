@@ -30,7 +30,7 @@ MARKDOWNLINT_CONFIG = $(CONFIG_DIR)/markdownlint-cli2.yaml
 CSPELL_CONFIG = $(CONFIG_DIR)/cspell.yaml
 RUSTFMT_CONFIG = $(CONFIG_DIR)/rustfmt.toml
 # Modules declared inside target_scope! are not discovered by cargo fmt.
-SCOPED_RUST_FILES = $(shell git ls-files --cached --others --exclude-standard 'crates/store/src/*.rs' 'crates/tracing/tests/targets/*.rs' | $(EXISTING_TRACKED_FILES))
+SCOPED_RUST_FILES = $(shell git ls-files --cached --others --exclude-standard 'crates/store/src/*.rs' 'crates/rpc/src/*.rs' 'crates/proto/src/clients/*.rs' 'crates/tracing/tests/targets/*.rs' | $(EXISTING_TRACKED_FILES))
 TAPLO_CONFIG = $(CONFIG_DIR)/taplo.toml
 
 # -- linting --------------------------------------------------------------------------------------

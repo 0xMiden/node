@@ -25,7 +25,7 @@ impl ProxyStatusService for StatusService {
     deprecated,
     reason = "Transport fixtures use raw tonic services without domain decoding."
 )]
-async fn server(
+pub(super) async fn server(
     payload_bytes: usize,
 ) -> (url::Url, CancellationToken, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
