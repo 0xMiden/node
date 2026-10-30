@@ -7,6 +7,7 @@ use miden_node_tracing::{
     ErrorReport,
     Instrument,
     debug,
+    error,
     miden_instrument,
     miden_span_record,
     warn,
@@ -37,6 +38,7 @@ use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
+use crate::state::snapshots::RetiredSnapshots;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification, RecentSnapshots};
 use crate::{COMPONENT, HistoricalError, LOG_TARGET};
@@ -54,6 +56,8 @@ pub(in crate::state) struct WriteWorker {
     block_store: Arc<BlockStore>,
     /// Bounded history through which new snapshots are published to readers.
     snapshots: Arc<RecentSnapshots>,
+    /// Evicted generations still held by readers, checked after each publication.
+    retired_snapshots: RetiredSnapshots,
     committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     block_cache: BlockCache,
     rx: mpsc::Receiver<WriteRequest>,
@@ -125,6 +129,7 @@ impl WriteWorker {
             db,
             block_store,
             snapshots,
+            retired_snapshots: RetiredSnapshots::new(),
             committed_tip_tx,
             block_cache,
             rx,
@@ -294,7 +299,18 @@ impl WriteWorker {
         // Publish the new generation while retaining recent predecessors for readers whose SQL
         // snapshots were established before this block. Acquired readers survive history eviction.
         self.published_generations.record(block_num, &snapshot);
-        self.snapshots.push(block_num, snapshot);
+        if let Some((height, snapshot)) = self.snapshots.push(block_num, snapshot) {
+            self.retired_snapshots.push(height, snapshot);
+        }
+        self.retired_snapshots.reclaim(|error| {
+            error!(
+                &error,
+                target: LOG_TARGET,
+                "Evicted state snapshot is still held",
+                snapshot.block.number = error.block_num,
+                snapshot.references.count = error.references
+            );
+        });
 
         miden_span_record!(snapshots.live = self.published_generations.live());
 

@@ -473,7 +473,7 @@ mod read_acquisition_tests {
         tokio::pin!(read);
         assert!(tokio::time::timeout(Duration::from_millis(100), &mut read).await.is_err());
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-        state.snapshots.push(1.into(), published);
+        assert!(state.snapshots.push(1.into(), published).is_none());
         state.committed_tip_tx.send_replace(1.into());
         tokio::time::timeout(Duration::from_secs(5), read).await.unwrap().unwrap();
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
