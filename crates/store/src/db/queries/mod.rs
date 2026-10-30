@@ -117,9 +117,6 @@ pub(crate) use select_notes_by_id::select_notes_by_id;
 mod select_notes_since_block_by_tag;
 pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 
-mod select_existing_note_ids;
-pub(crate) use select_existing_note_ids::select_existing_note_ids;
-
 mod select_note_ids_by_nullifier;
 pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
 

@@ -235,15 +235,6 @@ fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord
     db.read(move |tx| queries::select_notes_by_id(tx, &note_ids))
 }
 
-fn select_existing_note_ids(
-    db: &TestDb,
-    note_ids: &[NoteId],
-    up_to_block: BlockNumber,
-) -> Result<HashSet<NoteId>> {
-    let note_ids = note_ids.to_vec();
-    db.read(move |tx| queries::select_existing_note_ids(tx, &note_ids, up_to_block))
-}
-
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
     db.read(move |tx| queries::select_note_script_by_root(tx, root))
 }
@@ -1152,44 +1143,6 @@ fn notes() {
     let note_1 = res[1].clone();
     assert_eq!(note_0.details, note.details);
     assert_eq!(note_1.details, None);
-}
-
-#[test]
-fn existing_note_ids_respect_requested_ids_and_block_limit() {
-    let db = &TestDb::new();
-    let notes = [
-        Note::mock_noop(Word::from([1u32, 0, 0, 0])),
-        Note::mock_noop(Word::from([2u32, 0, 0, 0])),
-        Note::mock_noop(Word::from([3u32, 0, 0, 0])),
-    ];
-    let note_ids = notes.each_ref().map(Note::id);
-
-    for (note, block_num) in notes.into_iter().zip([1u32, 2, 3]) {
-        let block_num = BlockNumber::from(block_num);
-        create_block(db, block_num);
-        let record = NoteRecord {
-            block_num,
-            note_index: BlockNoteIndex::new(0, 0).unwrap(),
-            note_id: note.id().as_word(),
-            metadata: *note.metadata(),
-            details: None,
-            attachments: note.attachments().clone(),
-            inclusion_path: SparseMerklePath::default(),
-        };
-        insert_notes(db, &[(record, None)]).unwrap();
-    }
-
-    let missing_id = NoteId::from_raw(Word::from([4u32, 0, 0, 0]));
-    let requested_ids = [note_ids[1], note_ids[2], missing_id, note_ids[1]];
-    for (block_num, expected) in [
-        (1u32, HashSet::new()),
-        (2, HashSet::from([note_ids[1]])),
-        (3, HashSet::from([note_ids[1], note_ids[2]])),
-    ] {
-        let found = select_existing_note_ids(db, &requested_ids, block_num.into()).unwrap();
-        assert_eq!(found, expected);
-    }
-    assert!(select_existing_note_ids(db, &[], 3.into()).unwrap().is_empty());
 }
 
 /// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
