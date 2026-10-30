@@ -166,11 +166,12 @@ pub(in crate::state) struct GenerationsStatus {
 /// [`PublishedGenerations::advance`]).
 ///
 /// The writer and lifecycle construct snapshots via [`Self::new`]. Legacy views access the trees
-/// within this module; caller-composed reads borrow the blockchain through [`crate::read::ReadView`].
+/// within this module; caller-composed reads borrow the trees and blockchain through
+/// [`crate::read::ReadView`].
 pub(crate) struct StateSnapshot {
-    pub(super) nullifier_tree: NullifierTree<LargeSmt<TreeStorageReader>>,
+    pub(crate) nullifier_tree: NullifierTree<LargeSmt<TreeStorageReader>>,
     pub(crate) blockchain: Blockchain,
-    pub(super) account_tree: AccountTreeWithHistory<TreeStorageReader>,
+    pub(crate) account_tree: AccountTreeWithHistory<TreeStorageReader>,
     pub(super) forest: AccountStateForest<AccountStateForestBackendReader>,
 }
 
