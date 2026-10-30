@@ -2,6 +2,9 @@ name: Setup kache
 description: Configure Rust compiler caching for subsequent Cargo commands
 
 inputs:
+  prepare-only:
+    description: Install kache and configure AWS access without starting a host daemon
+    default: "false"
   s3-bucket:
     description: S3 bucket for shared compiler artifacts
     default: ""
@@ -22,6 +25,12 @@ outputs:
   writable:
     description: Whether this job may authenticate and publish cache entries
     value: ${{ steps.cache.outputs.writable }}
+  binary:
+    description: Installed kache executable for a container bind mount
+    value: ${{ steps.install.outputs.binary }}
+  config:
+    description: Remote configuration file for a container bind mount
+    value: ${{ steps.cache.outputs.config }}
 
 runs:
   using: composite
@@ -84,6 +93,7 @@ runs:
             print(f"download_endpoint = {json.dumps(endpoint)}")
         PYTHON
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
+        echo "config=${config}" >> "${GITHUB_OUTPUT}"
 
     - name: Authenticate to the Rust cache
       if: steps.cache.outputs.writable == 'true'
@@ -133,7 +143,7 @@ runs:
         rm "${archive}"
 
     - name: Set up Rust compiler cache
-      if: steps.cache.outputs.remote == 'true'
+      if: steps.cache.outputs.remote == 'true' && inputs.prepare-only != 'true'
       uses: kunobi-ninja/kache-action@v1
       with:
         version: v2.0.0-rc.2-miden.1
@@ -150,6 +160,6 @@ runs:
         job-summary: false
 
     - name: Report cache configuration
-      if: steps.cache.outputs.remote == 'true'
+      if: steps.cache.outputs.remote == 'true' && inputs.prepare-only != 'true'
       shell: bash
       run: kache doctor
