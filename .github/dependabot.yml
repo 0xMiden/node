@@ -13,16 +13,13 @@ updates:
     directories:
       - /
       - /xtask
-    target-branch: next
-    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
       day: monday
+    # Security updates use a separate pull request limit.
+    open-pull-requests-limit: 0
     commit-message:
       prefix: "chore(deps)"
-    groups:
-      cargo:
-        patterns: ["*"]
     cooldown:
       default-days: 7
 
