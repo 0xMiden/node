@@ -3,8 +3,14 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
-use arc_swap::ArcSwap;
-use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
+use miden_node_tracing::{
+    ErrorReport,
+    Instrument,
+    debug,
+    instrument,
+    miden_span_record,
+    warn,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -33,7 +39,7 @@ use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
-use crate::state::{BlockCache, BlockNotification};
+use crate::state::{BlockCache, BlockNotification, RecentSnapshots};
 
 // WRITE WORKER
 // ================================================================================================
@@ -46,8 +52,8 @@ use crate::state::{BlockCache, BlockNotification};
 pub(in crate::state) struct WriteWorker {
     db: Arc<Db>,
     block_store: Arc<BlockStore>,
-    /// Atomically swappable pointer through which new snapshots are published.
-    latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+    /// Bounded history through which new snapshots are published to readers.
+    snapshots: Arc<RecentSnapshots>,
     committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     block_cache: BlockCache,
     rx: mpsc::Receiver<WriteRequest>,
@@ -91,7 +97,7 @@ impl WriteWorker {
     pub(in crate::state) fn new(
         db: Arc<Db>,
         block_store: Arc<BlockStore>,
-        latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+        snapshots: Arc<RecentSnapshots>,
         committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
         block_cache: BlockCache,
         rx: mpsc::Receiver<WriteRequest>,
@@ -104,7 +110,7 @@ impl WriteWorker {
         // Seed the generation log with the initial snapshot so its readers hold back pruning
         // exactly like readers of any later generation.
         let mut published_generations = PublishedGenerations::new();
-        let initial_snapshot = latest_snapshot.load_full();
+        let initial_snapshot = snapshots.latest();
         published_generations.record(initial_snapshot.latest_block_num(), &initial_snapshot);
 
         let mut pool_builder =
@@ -118,7 +124,7 @@ impl WriteWorker {
         Self {
             db,
             block_store,
-            latest_snapshot,
+            snapshots,
             committed_tip_tx,
             block_cache,
             rx,
@@ -282,10 +288,10 @@ impl WriteWorker {
             account_forest_update,
         );
 
-        // Atomically publish the new state. Readers that call `snapshot()` after this point will
-        // see the updated state. Readers that hold the old snapshot are not affected.
+        // Publish the new generation while retaining recent predecessors for readers whose SQL
+        // snapshots were established before this block. Acquired readers survive history eviction.
         self.published_generations.record(block_num, &snapshot);
-        self.latest_snapshot.swap(snapshot);
+        self.snapshots.push(block_num, snapshot);
 
         miden_span_record!(snapshots.live = self.published_generations.live());
 
