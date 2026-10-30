@@ -9,6 +9,7 @@ mod disk_monitor;
 mod lifecycle;
 mod loader;
 mod replica;
+mod snapshots;
 mod tip;
 mod view;
 mod writer;
@@ -16,10 +17,10 @@ mod writer;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 pub use lifecycle::LoadedState;
 use miden_protocol::block::BlockNumber;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+pub(crate) use snapshots::RecentSnapshots;
 use tokio::sync::watch;
 pub(crate) use view::StateSnapshot;
 pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
@@ -51,12 +52,11 @@ pub struct State {
     /// The block store which stores full block contents for all blocks.
     block_store: Arc<BlockStore>,
 
-    /// Atomically swappable pointer to the latest in-memory state snapshot.
+    /// Recent immutable tree generations, shared with the block writer.
     ///
-    /// Readers load the snapshot wait-free via [`ArcSwap::load_full`]; the
-    /// [`WriteWorker`](writer::WriteWorker) task atomically replaces the pointer after each
-    /// committed block. Readers holding an old snapshot are unaffected by the swap.
-    latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+    /// Readers look up the generation matching their SQLite transaction's tip. Legacy views load
+    /// the latest generation; acquired readers keep their generation alive after cache eviction.
+    snapshots: Arc<RecentSnapshots>,
 
     /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
     proven_tip: ProvenTipWriter,
@@ -88,7 +88,7 @@ impl State {
     {
         crate::read::acquire::read(
             self.db.reader(),
-            Arc::clone(&self.latest_snapshot),
+            Arc::clone(&self.snapshots),
             self.subscribe_committed_tip(),
             read,
         )
