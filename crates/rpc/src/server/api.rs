@@ -278,6 +278,7 @@ fn get_block_header_error_to_status(err: GetBlockHeaderError) -> Status {
 fn database_error_to_status(err: &DatabaseError) -> Status {
     let message = err.to_string();
     match err {
+        DatabaseError::ReadSnapshotUnavailable => Status::unavailable(message),
         DatabaseError::AccountNotFoundInDb(_)
         | DatabaseError::AccountsNotFoundInDb(_)
         | DatabaseError::AccountNotPublic(_) => Status::not_found(message),
@@ -401,6 +402,15 @@ mod tests {
         for error in errors {
             assert_eq!(error.code(), tonic::Code::InvalidArgument);
         }
+    }
+
+    #[test]
+    fn snapshot_acquisition_failure_is_retryable() {
+        let status = get_block_header_error_to_status(GetBlockHeaderError::DatabaseError(
+            DatabaseError::ReadSnapshotUnavailable,
+        ));
+        assert_eq!(status.code(), tonic::Code::Unavailable);
+        assert!(miden_node_utils::retry::is_retryable_grpc_error(&status));
     }
 
     #[test]

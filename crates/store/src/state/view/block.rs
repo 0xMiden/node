@@ -31,7 +31,7 @@ impl StateView {
             return Ok((None, None));
         };
 
-        let block_header = self.db.select_block_header_by_block_num(Some(scoped_block)).await?;
+        let block_header = self.db.select_block_header(scoped_block).await?;
         if let Some(header) = block_header {
             let mmr_proof = if include_mmr_proof {
                 let mmr_proof = self.blockchain().open(header.block_num())?;
