@@ -257,7 +257,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// Loads the blockchain MMR from all block headers in the database.
 #[instrument(target = "miden::storage")]
 pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
-    let latest_header = db.select_block_header_by_block_num(None).await?;
+    let latest_header = db.select_chain_tip().await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
@@ -358,7 +358,7 @@ pub async fn verify_tree_consistency(
     db: &Db,
 ) -> Result<(), StateInitializationError> {
     // Fetch the latest block header to get the expected roots
-    let latest_header = db.select_block_header_by_block_num(None).await?;
+    let latest_header = db.select_chain_tip().await?;
 
     let (block_num, expected_account_root, expected_nullifier_root) = latest_header
         .map(|header| (header.block_num(), header.account_root(), header.nullifier_root()))
