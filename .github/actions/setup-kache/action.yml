@@ -1,0 +1,155 @@
+name: Setup kache
+description: Configure Rust compiler caching for subsequent Cargo commands
+
+inputs:
+  s3-bucket:
+    description: S3 bucket for shared compiler artifacts
+    default: ""
+  s3-region:
+    description: AWS region of the cache bucket
+    default: ""
+  s3-role-arn:
+    description: AWS role to assume for cache access
+    default: ""
+  download-endpoint:
+    description: CloudFront URL for anonymous downloads; uploads still use S3
+    default: ""
+
+outputs:
+  enabled:
+    description: Whether shared cache access is configured
+    value: ${{ steps.cache.outputs.remote }}
+  writable:
+    description: Whether this job may authenticate and publish cache entries
+    value: ${{ steps.cache.outputs.writable }}
+
+runs:
+  using: composite
+  steps:
+    # Configures the remote before the action starts the kache daemon.
+    #
+    # Trusted jobs can publish to S3. Forks and other readers use anonymous
+    # CloudFront access, with remote uploads disabled for the whole job.
+    - name: Configure cache
+      id: cache
+      shell: bash
+      env:
+        WRITABLE_CACHE: >-
+          ${{
+            inputs.s3-bucket != '' &&
+            inputs.s3-region != '' &&
+            inputs.s3-role-arn != '' &&
+            github.repository == '0xMiden/node' &&
+            (github.event_name != 'pull_request' ||
+              github.event.pull_request.head.repo.full_name == github.repository) &&
+            github.event_name != 'pull_request_target' &&
+            github.event_name != 'workflow_run' &&
+            github.actor != 'dependabot[bot]' && github.actor != 'dependabot' &&
+            github.actor != 'github-actions[bot]'
+          }}
+        KACHE_S3_BUCKET: ${{ inputs.s3-bucket }}
+        KACHE_S3_REGION: ${{ inputs.s3-region }}
+        KACHE_DOWNLOAD_ENDPOINT: ${{ inputs.download-endpoint }}
+      # Only a runner-created temporary path is exported to the job environment.
+      run: | # zizmor: ignore[github-env]
+        REMOTE_CACHE=false
+        if [[ "${WRITABLE_CACHE}" == true || (
+          -n "${KACHE_S3_BUCKET}" && -n "${KACHE_S3_REGION}" && -n "${KACHE_DOWNLOAD_ENDPOINT}"
+        ) ]]; then
+          REMOTE_CACHE=true
+        fi
+        echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
+        echo "writable=${WRITABLE_CACHE}" >> "${GITHUB_OUTPUT}"
+        if [[ "${REMOTE_CACHE}" != true ]]; then
+          exit 0
+        fi
+        config="$(mktemp "${RUNNER_TEMP}/kache-config.XXXXXX")"
+        python3 - > "${config}" <<'PYTHON'
+        import json
+        import os
+
+        print('[cache]')
+        readonly = os.environ["WRITABLE_CACHE"] != "true"
+        print(f"remote_readonly = {str(readonly).lower()}")
+        print('[cache.remote]')
+        for key, value in {
+            "type": "s3",
+            "bucket": os.environ["KACHE_S3_BUCKET"],
+            "region": os.environ["KACHE_S3_REGION"],
+            "prefix": "protected-branch",
+            "pull_request_prefix": "prs",
+        }.items():
+            print(f"{key} = {json.dumps(value)}")
+        if endpoint := os.environ["KACHE_DOWNLOAD_ENDPOINT"]:
+            print(f"download_endpoint = {json.dumps(endpoint)}")
+        PYTHON
+        echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
+
+    - name: Authenticate to the Rust cache
+      if: steps.cache.outputs.writable == 'true'
+      uses: aws-actions/configure-aws-credentials@v6.3.0
+      with:
+        role-to-assume: ${{ inputs.s3-role-arn }}
+        aws-region: ${{ inputs.s3-region }}
+        role-duration-seconds: 3600
+        unset-current-credentials: true
+
+    # Installs the CloudFront client and engine in the runner's tool cache.
+    #
+    # The upstream action reuses this verified installation for setup and cleanup.
+    # Remove this step once an official release includes CloudFront downloads
+    # and the prefetch cancellation fix.
+    - name: Install patched kache
+      id: install
+      if: steps.cache.outputs.remote == 'true'
+      shell: bash
+      env:
+        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-cloudfront.1
+      run: |
+        case "${RUNNER_OS}/${RUNNER_ARCH}" in
+          Linux/X64)
+            target=x86_64-unknown-linux-gnu
+            architecture=x64
+            checksum=2676165f54f2ea8eadb350cc1e886772287d676132cddce6704979fa1ba12159
+            ;;
+          Linux/ARM64)
+            target=aarch64-unknown-linux-gnu
+            architecture=arm64
+            checksum=7fb9c979619cd2825a8547bad6decad120fa297a10864ea4673fda909c69b1ba
+            ;;
+          *) echo "Unsupported runner: ${RUNNER_OS}/${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
+        archive="$(mktemp "${RUNNER_TEMP}/kache-trial.XXXXXX")"
+        curl --fail --location --silent --show-error --retry 3 \
+          "${TRIAL_RELEASE}/kache-v2.0.0-rc.2-miden.1-${target}.tar.gz" \
+          --output "${archive}"
+        printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check --status
+        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.1/${architecture}"
+        mkdir -p "${tool_dir}"
+        tar -xzf "${archive}" -C "${tool_dir}" kache kache-engine
+        "${tool_dir}/kache" --version
+        touch "${tool_dir}.complete"
+        echo "binary=${tool_dir}/kache" >> "${GITHUB_OUTPUT}"
+        rm "${archive}"
+
+    - name: Set up Rust compiler cache
+      if: steps.cache.outputs.remote == 'true'
+      uses: kunobi-ninja/kache-action@v1
+      with:
+        version: v2.0.0-rc.2-miden.1
+        s3-bucket: ${{ inputs.s3-bucket }}
+        s3-region: ${{ inputs.s3-region }}
+        s3-prefix: protected-branch
+        manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+        max-size: 50GiB
+        cache-executables: true
+        github-cache: false
+        save-cache: ${{ steps.cache.outputs.writable == 'true' }}
+        sync: false
+        pr-comment: false
+        job-summary: false
+
+    - name: Report cache configuration
+      if: steps.cache.outputs.remote == 'true'
+      shell: bash
+      run: kache doctor
