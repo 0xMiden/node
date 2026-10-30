@@ -76,6 +76,12 @@ miden-funding-service start \
 | `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
 | `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
 
+With `--tx-prover.url` set, the service proves only through the remote prover and never in process, so its host does not
+need the memory that proving requires. If the remote prover fails or times out, the affected requests stay queued and
+the service retries them on the next poll. An overloaded or unavailable prover therefore delays funding without taking
+the service down. Watch for repeated proving failures in the service's logs and traces, and restore the prover to resume
+funding.
+
 `--tx-expiration-delta` is an upper bound, not a fixed value. A funding transaction reads the chain's fee configuration,
 and the protocol lowers the expiration delta of a transaction which reads mutable state. A funding transaction therefore
 expires at or before the requested block.
