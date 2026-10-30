@@ -7,7 +7,7 @@ use miden_protocol::block::BlockNumber;
 
 use crate::db::NoteSyncUpdate;
 use crate::db::pagination::{Page, Paginated};
-use crate::db::queries::{select_block_header_by_block_num, select_notes_since_block_by_tag};
+use crate::db::queries::{select_block_header, select_notes_since_block_by_tag};
 use crate::errors::DatabaseError;
 use crate::state::ScopedBlockNum;
 
@@ -99,10 +99,9 @@ fn get_note_sync_multi(
             return Ok(Page { items: updates, next: Some(next) });
         }
 
-        let block_header =
-            select_block_header_by_block_num(tx, Some(block_num))?.ok_or_else(|| {
-                DatabaseError::DataCorrupted(format!("block {block_num} has notes but no header"))
-            })?;
+        let block_header = select_block_header(tx, block_num)?.ok_or_else(|| {
+            DatabaseError::DataCorrupted(format!("block {block_num} has notes but no header"))
+        })?;
         updates.push(NoteSyncUpdate { notes, block_header });
         current_from = block_num + 1;
     }
