@@ -14,13 +14,12 @@ use miden_protocol::{Felt, Word};
 use miden_standards::account::fees::FeePolicyManager;
 use miden_usdcx::account::xreserve::XReserveFaucetExtension;
 
-use crate::common::Fixture;
+use crate::common::dev_config;
 
 /// The faucet is a genesis account (nonce one, no seed) whose fee-asset slot holds its OWN asset.
 #[test]
 fn the_faucet_is_a_native_fee_genesis_account() {
-    let fixture = Fixture::new();
-    let config = fixture.config();
+    let config = dev_config();
     let faucet = build_faucet(&config).expect("the dev fixture must build");
 
     assert_eq!(faucet.nonce(), Felt::ONE, "a genesis faucet carries nonce one");
@@ -38,8 +37,7 @@ fn the_faucet_is_a_native_fee_genesis_account() {
 /// The built faucet carries an enabled attester-allowlist row for every configured key.
 #[test]
 fn the_configured_attesters_are_allowlisted_in_storage() {
-    let fixture = Fixture::new();
-    let config = fixture.config();
+    let config = dev_config();
     let faucet = build_faucet(&config).expect("the dev fixture must build");
 
     assert!(
@@ -65,8 +63,7 @@ fn the_configured_attesters_are_allowlisted_in_storage() {
 /// amount to the distributor.
 #[test]
 fn the_faucet_records_the_configured_supply() {
-    let fixture = Fixture::new();
-    let config = fixture.config();
+    let config = dev_config();
     let faucet = build_faucet(&config).expect("the dev fixture must build");
 
     let recorded = miden_standards::account::faucets::FungibleFaucet::try_from(&faucet)
@@ -84,14 +81,10 @@ fn the_faucet_records_the_configured_supply() {
 fn a_multi_holder_role_builds_with_every_member_seeded() {
     use miden_protocol::account::{AccountId, RoleSymbol};
 
-    let extra_pauser = "0x2bb51b585b2a98916aebb827cc5899";
-    let mut fixture = Fixture::new();
-    let existing = fixture.json["accounts"]["pausers"][0].clone();
-    fixture.json["accounts"]["pausers"] = serde_json::Value::from(vec![
-        existing.as_str().expect("the fixture pauser is a string").to_string(),
-        extra_pauser.to_string(),
-    ]);
-    let config = fixture.config();
+    let extra_pauser = AccountId::from_hex("0x2bb51b585b2a98916aebb827cc5899")
+        .expect("the extra pauser id is valid hex");
+    let mut config = dev_config();
+    config.accounts.pausers.push(extra_pauser);
     let faucet = build_faucet(&config).expect("the two-pauser fixture must build");
 
     let role = RoleSymbol::new("DOM_PAUSER").expect("DOM_PAUSER is a valid role symbol");
@@ -111,18 +104,15 @@ fn a_multi_holder_role_builds_with_every_member_seeded() {
             "every configured pauser must be seeded as a DOM_PAUSER member",
         );
     }
-    let _: AccountId = config.accounts.pausers[1];
+    assert_eq!(config.accounts.pausers.len(), 2, "the fixture exercises two pausers");
 }
 
-/// An operational role configured with an empty list (or absent) still builds: the role is
-/// populated later through the standard role-action note. Only `owner` is required.
+/// An operational role with no holder still builds: the role is populated later through the
+/// standard role-action note. Only `owner` is required.
 #[test]
 fn an_empty_operational_role_builds() {
-    let mut fixture = Fixture::new();
-    fixture.json["accounts"]["pausers"] = serde_json::Value::from(Vec::<String>::new());
-    fixture.json["accounts"]
-        .as_object_mut()
-        .expect("the accounts section is an object")
-        .remove("unpausers");
-    build_faucet(&fixture.config()).expect("empty and absent operational roles must build");
+    let mut config = dev_config();
+    config.accounts.pausers.clear();
+    config.accounts.unpausers.clear();
+    build_faucet(&config).expect("empty operational roles must build");
 }

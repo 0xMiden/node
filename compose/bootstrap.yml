@@ -91,28 +91,12 @@ services:
 
         printf '%s\n' "$${DISTRIBUTOR_ID}" > /data/usdcx/distributor-id
 
-        cat > config.json <<EOF
-        {
-          "accounts": {
-            "owner": "$${DISTRIBUTOR_ID}",
-            "attest_admins": [],
-            "pausers": [],
-            "unpausers": [],
-            "blocklist_managers": []
-          },
-          "faucet": {
-            "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
-            "token_supply": $${MIDEN_USDCX_INITIAL_SUPPLY},
-            "domain": 10007,
-            "min_burn_amount": 1,
-            "verification_base_fee": 7,
-            "attesters": []
-          }
-        }
-        EOF
-
         echo "Creating the native USDCx faucet and prefunding the distributor..."
-        miden-genesis faucet
+        miden-genesis faucet \
+          --owner "$${DISTRIBUTOR_ID}" \
+          --token-supply "$${MIDEN_USDCX_INITIAL_SUPPLY}" \
+          --min-burn-amount 1 \
+          --verification-base-fee 7
         miden-genesis prefund
 
         echo "Building genesis block..."

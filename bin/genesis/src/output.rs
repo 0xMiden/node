@@ -17,12 +17,6 @@ use miden_usdcx::xreserve::encoding::EthEmbeddedAccountId;
 
 use crate::config::{GenesisToolConfig, Role};
 
-/// The faucet config `faucet` reads (a filled copy of the crate's `config.template.json`).
-pub const CONFIG_FILE: &str = "config.json";
-
-/// The nonces file `record-nonces` reads.
-pub const NONCES_FILE: &str = "nonces.json";
-
 /// The fresh distributor `new-distributor` writes and `prefund` reads.
 pub const DISTRIBUTOR_MAC_FILE: &str = "distributor.mac";
 
@@ -91,7 +85,7 @@ pub fn render_ids(label: &str, id: AccountId) -> String {
     out
 }
 
-/// Renders the `faucet` listing: the faucet ids, then the configured role ids echoed back.
+/// Renders the `faucet` listing: the faucet ids, then the role ids echoed back.
 pub fn render_listing(faucet: &Account, config: &GenesisToolConfig) -> String {
     let mut out = render_ids(&format!("usdcx-faucet ({FAUCET_MAC_FILE})"), faucet.id());
     let _ = writeln!(out, "role accounts:");
