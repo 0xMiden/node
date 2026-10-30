@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
 use miden_node_db::sqlite::{DbReader, ReadTransaction as SqlReadTransaction};
 use miden_node_tracing::{Instrument, info_span, miden_instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
@@ -27,7 +26,7 @@ const ACQUISITION_TIMEOUT: Duration = Duration::from_millis(500);
 /// operation runs once, after a matching pair is acquired.
 pub(crate) async fn read<R, E, F>(
     reader: &DbReader,
-    snapshots: Arc<ArcSwap<crate::state::StateSnapshot>>,
+    snapshots: Arc<crate::state::RecentSnapshots>,
     mut committed: watch::Receiver<BlockNumber>,
     read: F,
 ) -> Result<R, E>
@@ -37,11 +36,9 @@ where
     E: From<DatabaseError> + Send + 'static,
 {
     let deadline = tokio::time::Instant::now() + ACQUISITION_TIMEOUT;
-    // Retry with a fresh SQL transaction until its tip matches the published tree generation.
-    //
-    // SQL can be ahead while tree updates are being applied. Trees can also advance after a
-    // SQL snapshot is established, leaving that transaction behind. Neither mismatch can be
-    // resolved by reusing the same pair.
+    // Retry if the SQL tip has not been published to the tree history yet, or if its generation was
+    // evicted before lookup. A retained generation can be acquired even after the writer has
+    // published newer blocks.
     let AcquiredRead { snapshot, transaction } = loop {
         let acquired =
             tokio::time::timeout_at(deadline, acquire(reader, &snapshots, &mut committed))
@@ -87,15 +84,16 @@ struct AcquiredRead {
 
 /// Attempts to acquire matching snapshots, returning `None` when acquisition must be retried.
 ///
-/// Each attempt has its own span so its observed SQL and tree heights remain available even if
-/// later attempts observe newer blocks. Waiting for tree publication is part of the attempt.
+/// The tree history is searched by the SQL tip, so newer publications do not force a retry while
+/// that generation remains retained. Each attempt records the SQL tip and matching tree height,
+/// or the latest published height if no match exists. Waiting for tree publication is part of the attempt.
 #[miden_instrument(
     target = COMPONENT,
     name = "store.read.acquire",
 )]
 async fn acquire(
     reader: &DbReader,
-    snapshots: &Arc<ArcSwap<crate::state::StateSnapshot>>,
+    snapshots: &crate::state::RecentSnapshots,
     committed: &mut watch::Receiver<BlockNumber>,
 ) -> Result<Option<AcquiredRead>, DatabaseError> {
     // Mark earlier publications as seen before examining SQL and the trees.
@@ -105,23 +103,24 @@ async fn acquire(
     // that resolves the mismatch and make acquisition wait for another block.
     committed.borrow_and_update();
     let transaction = reader.begin_read().await.map_err(DatabaseError::from)?;
-    let snapshots = Arc::clone(snapshots);
     // The first query establishes SQLite's snapshot; BEGIN DEFERRED alone does not. Reading the tip
     // here fixes the height that the tree snapshot must match.
-    let (header, snapshot) = transaction
+    let header = transaction
         .run("store read tip", move |tx| {
             let header = crate::db::queries::select_chain_tip(tx)?.ok_or_else(|| {
                 DatabaseError::DataCorrupted("block headers table is empty".into())
             })?;
-            Ok::<_, DatabaseError>((header, snapshots.load_full()))
+            Ok::<_, DatabaseError>(header)
         })
         .await?;
     let block_num = header.block_num();
-    miden_span_record!(
-        block.number = block_num,
-        snapshot.block.number = snapshot.latest_block_num(),
+    let snapshot = snapshots.get(block_num);
+    let tree_block_num = snapshot.as_ref().map_or_else(
+        || snapshots.latest().latest_block_num(),
+        |snapshot| snapshot.latest_block_num(),
     );
-    if block_num == snapshot.latest_block_num() {
+    miden_span_record!(block.number = block_num, snapshot.block.number = tree_block_num);
+    if let Some(snapshot) = snapshot {
         // This is a cheap sanity check that matching heights identify the same block. Both
         // commitments are available in memory; no disk reads or hashing are needed.
         if snapshot.blockchain.as_mmr().get(block_num.as_usize()).ok() != Some(header.commitment())
@@ -132,15 +131,15 @@ async fn acquire(
         }
         return Ok(Some(AcquiredRead { snapshot, transaction }));
     }
-    // Release both snapshots before retrying. If trees are ahead, a fresh SQL transaction can see
-    // their block. If SQL is ahead, wait for tree publication before opening another transaction.
+    // Release the SQL snapshot before retrying. If its tree generation was evicted, a fresh SQL
+    // transaction can see a retained block. If SQL is ahead, wait for tree publication before
+    // opening another transaction.
     //
     // After committing SQL, the writer may use the same reader pool to resolve consumed-note IDs
     // before publishing the trees. Holding transactions while waiting could exhaust that pool and
     // prevent the writer from making progress. Releasing them avoids this circular wait, at the
     // cost of potentially observing a newer SQL tip on the next attempt.
-    let wait_for_publication = block_num > snapshot.latest_block_num();
-    drop(snapshot);
+    let wait_for_publication = block_num > tree_block_num;
     transaction.close().await.map_err(DatabaseError::from)?;
     if wait_for_publication {
         committed.changed().await.map_err(|_| DatabaseError::ReadSnapshotUnavailable)?;

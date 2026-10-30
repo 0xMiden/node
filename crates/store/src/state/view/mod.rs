@@ -65,7 +65,7 @@ impl State {
     /// snapshot generation pinned until the end of the scope.
     pub fn view(&self) -> StateView {
         StateView {
-            snapshot: self.latest_snapshot.load_full(),
+            snapshot: self.snapshots.latest(),
             db: Arc::clone(&self.db),
         }
     }

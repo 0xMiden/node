@@ -2,8 +2,9 @@
 //!
 //! Readers access the store's tree state through immutable [`StateSnapshot`] snapshots published
 //! by the block writer after each committed block. The writer remembers each published generation
-//! in [`PublishedGenerations`]. The oldest still-pinned height feeds snapshot-aware history
-//! pruning, since legacy view queries open separate SQLite transactions. Caller-composed reads instead
+//! in [`PublishedGenerations`]. Recent generations are also retained by
+//! [`RecentSnapshots`](crate::state::RecentSnapshots). The oldest still-pinned height feeds history
+//! pruning, since legacy view queries open separate SQLite transactions. Caller-composed reads
 //! retain a SQLite snapshot for the whole operation.
 //!
 //! Everything here operates on whole generations. Readers acquire a snapshot through
@@ -41,11 +42,11 @@ const SNAPSHOT_PRUNE_LAG_CAP: u32 = HISTORICAL_BLOCK_RETENTION;
 // ================================================================================================
 
 /// The writer's log of published snapshot generations, used to derive the oldest height still
-/// pinned by a reader.
+/// pinned by a reader or the retained snapshot history.
 ///
 /// Owned exclusively by the writer — no locks or shared state. Liveness is not tracked
-/// separately: a [`Weak`] per generation asks the snapshot's own [`Arc`] refcount, which is the
-/// ground truth for "some reader can still see this height". Dead entries are discarded on each
+/// separately: a [`Weak`] per generation asks the snapshot's own [`Arc`] refcount, which reflects
+/// both readers and the retained snapshot history. Dead entries are discarded on each
 /// [`Self::advance`] call (once per applied block); pinned entries are kept regardless of age so
 /// the true oldest pinned height stays observable, which bounds the deque to one entry per live
 /// snapshot generation (each entry is small next to the pinned snapshot itself).
@@ -64,9 +65,9 @@ struct Generation<T> {
     ///
     /// [`PublishedGenerations::record`] sets this field on the previous back entry. A
     /// generation's age is measured from this point rather than from its publication, because
-    /// the writer itself keeps the latest generation alive through the published pointer: on an
-    /// idle chain the latest generation can stay alive for hours with no reader holding it. Only
-    /// time spent alive after a successor exists is evidence that a reader holds the generation.
+    /// the snapshot history keeps the latest generation alive: on an idle chain it can stay alive
+    /// for hours with no reader holding it. Time spent alive after a successor exists measures
+    /// retention by readers or the snapshot history.
     superseded_at: Option<Instant>,
     pinned: Weak<T>,
 }
@@ -140,13 +141,13 @@ pub(in crate::state) struct GenerationsStatus {
     /// The effective chain tip for history pruning: the oldest still-pinned generation within
     /// [`SNAPSHOT_PRUNE_LAG_CAP`], or the chain tip when none is pinned.
     pub(in crate::state) prune_tip: BlockNumber,
-    /// The oldest generation still pinned by any reader, regardless of the lag cap. `None` when no
-    /// generation is pinned.
+    /// The oldest generation still pinned by a reader or the snapshot history, regardless of the
+    /// lag cap. `None` when no generation is pinned.
     pub(in crate::state) oldest_pinned: Option<BlockNumber>,
     /// The time since the oldest pinned generation was superseded. `None` when that generation is
-    /// still the latest generation, or when no generation is pinned. In steady state the value is
-    /// `None` or much smaller than one block interval. A value that grows across blocks means a
-    /// slow or leaked reader pins an old generation.
+    /// still the latest generation, or when no generation is pinned. The retained snapshot history
+    /// normally keeps this value around the duration of its publication window. Readers can keep
+    /// older generations alive after they leave that window.
     pub(in crate::state) oldest_superseded_for: Option<Duration>,
 }
 
