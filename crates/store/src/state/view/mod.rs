@@ -32,9 +32,7 @@ mod state_witnesses;
 pub use state_witnesses::StateWitnesses;
 mod sync;
 
-mod transaction_inputs;
 mod transaction_logs;
-pub use transaction_inputs::TransactionInputs;
 
 // STATE VIEW
 // ================================================================================================
