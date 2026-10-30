@@ -13,13 +13,13 @@
 #
 # Assumes these binaries are on $PATH (install with `make install-node`,
 # `make install-validator`, `make install-ntx-builder`,
-# `make install-remote-prover`, `make install-benchmark`, `make install-usdcx-genesis`):
+# `make install-remote-prover`, `make install-benchmark`, `make install-genesis`):
 #   - miden-node
 #   - miden-validator
 #   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
-#   - miden-usdcx-genesis
+#   - miden-genesis
 #
 # Usage:
 #   Export MIDEN_VALIDATOR_STORAGE_KEY_FILE with the path to a completed bundle first.
@@ -104,7 +104,7 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark miden-usdcx-genesis)
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark miden-genesis)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
@@ -126,10 +126,10 @@ say "creating the native USDCx faucet and funding account"
 mkdir "$DATA/usdcx"
 (
     cd "$DATA/usdcx"
-    DISTRIBUTOR_OUTPUT="$(miden-usdcx-genesis new-distributor)"
+    DISTRIBUTOR_OUTPUT="$(miden-genesis new-distributor)"
     printf '%s\n' "$DISTRIBUTOR_OUTPUT"
     DISTRIBUTOR_ID="$(printf '%s\n' "$DISTRIBUTOR_OUTPUT" | sed -n 's/^  hex: *//p')"
-    [ -n "$DISTRIBUTOR_ID" ] || die "USDCx genesis did not report the distributor account ID"
+    [ -n "$DISTRIBUTOR_ID" ] || die "genesis did not report the distributor account ID"
 
     # Benchmark accounts have no native assets to pay transaction fees.
     cat > config.json <<EOF
@@ -145,12 +145,12 @@ mkdir "$DATA/usdcx"
   }
 }
 EOF
-    miden-usdcx-genesis faucet
-    miden-usdcx-genesis prefund
+    miden-genesis faucet
+    miden-genesis prefund
 ) > "$LOGS/bootstrap-usdcx.log" 2>&1
 
 say "building genesis block"
-miden-validator genesis \
+miden-genesis build \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
     --native-faucet            "$DATA/usdcx/usdcx-faucet.mac" \

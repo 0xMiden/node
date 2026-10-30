@@ -126,7 +126,7 @@ jobs:
                 "network-monitor",
                 "funding-service",
                 "node-tps-benchmark",
-                "usdcx-genesis",
+                "genesis",
                 "note-transport"
               ]
             '
@@ -342,7 +342,7 @@ jobs:
             network-monitor.tags=${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ env.IMAGE_TAG }}
             funding-service.tags=${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ env.IMAGE_TAG }}
             node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ env.IMAGE_TAG }}
-            usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ env.IMAGE_TAG }}
+            genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-genesis:${{ env.IMAGE_TAG }}
 
   kache-summary:
     name: Summarize Kache cache
@@ -409,7 +409,7 @@ jobs:
             ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: >-
             ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.tag }}
-          MIDEN_USDCX_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.tag }}
+          MIDEN_GENESIS_IMAGE: ${{ env.REGISTRY_PREFIX }}/miden-genesis:${{ needs.preflight.outputs.tag }}
         with:
           compose-file: docker-compose.yml
           mode: dry-run
@@ -511,8 +511,8 @@ jobs:
             ${{ env.REGISTRY_PREFIX }}/miden-network-monitor:${{ needs.preflight.outputs.immutable_tag }}
           MIDEN_FUNDING_SERVICE_IMAGE: >-
             ${{ env.REGISTRY_PREFIX }}/miden-funding-service:${{ needs.preflight.outputs.immutable_tag }}
-          MIDEN_USDCX_GENESIS_IMAGE: >-
-            ${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ needs.preflight.outputs.immutable_tag }}
+          MIDEN_GENESIS_IMAGE: >-
+            ${{ env.REGISTRY_PREFIX }}/miden-genesis:${{ needs.preflight.outputs.immutable_tag }}
         with:
           compose-file: docker-compose.yml
           mode: publish

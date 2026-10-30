@@ -8,7 +8,7 @@ group "validate" {
     "network-monitor",
     "funding-service",
     "node-tps-benchmark",
-    "usdcx-genesis",
+    "genesis",
   ]
 }
 
@@ -88,10 +88,10 @@ target "node-tps-benchmark" {
   }
 }
 
-target "usdcx-genesis" {
+target "genesis" {
   inherits = ["common"]
   target   = "runtime-tool"
   args = {
-    BIN = "miden-usdcx-genesis"
+    BIN = "miden-genesis"
   }
 }

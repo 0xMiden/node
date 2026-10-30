@@ -61,6 +61,7 @@ docker run --rm ghcr.io/0xmiden/<component>:<release-tag> <component> --help
 - `miden-remote-prover`
 - `miden-network-monitor`
 - `miden-funding-service`
+- `miden-genesis`
 
 You can also build images locally from a repository checkout:
 

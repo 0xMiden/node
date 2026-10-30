@@ -4539,6 +4539,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "miden-genesis"
+version = "0.18.1"
+dependencies = [
+ "anyhow",
+ "assert_matches",
+ "clap",
+ "fs-err",
+ "hex",
+ "miden-node-persistence",
+ "miden-node-store",
+ "miden-node-utils",
+ "miden-objects",
+ "miden-protocol",
+ "miden-standards",
+ "miden-testing",
+ "miden-usdcx",
+ "rand 0.10.3",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "miden-large-account-benchmark"
 version = "0.18.1"
 dependencies = [
@@ -5464,27 +5489,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "miden-usdcx-genesis"
-version = "0.18.1"
-dependencies = [
- "anyhow",
- "assert_matches",
- "clap",
- "fs-err",
- "hex",
- "miden-objects",
- "miden-protocol",
- "miden-standards",
- "miden-usdcx",
- "rand 0.10.3",
- "rstest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "miden-utils-core-derive"
 version = "0.36.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5559,7 +5563,6 @@ dependencies = [
  "miden-node-store",
  "miden-node-tracing",
  "miden-node-utils",
- "miden-objects",
  "miden-protocol",
  "miden-testing",
  "miden-tx",

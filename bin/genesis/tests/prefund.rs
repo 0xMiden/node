@@ -4,6 +4,7 @@
 mod common;
 
 use assert_matches::assert_matches;
+use miden_genesis::accounts::{PrefundError, prefund_distributor};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{AccountBuilder, AccountType};
@@ -12,7 +13,6 @@ use miden_protocol::{Felt, ONE};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::FungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
-use miden_usdcx_genesis::accounts::{PrefundError, prefund_distributor};
 
 use crate::common::{DISTRIBUTOR_SEED, Fixture, TOKEN_SUPPLY, fresh_distributor, genesis_faucet};
 
@@ -95,7 +95,7 @@ fn prefund_refuses_a_distributor_without_a_key() {
 fn prefund_refuses_a_faucet_with_no_supply() {
     let mut fixture = Fixture::new();
     fixture.json["faucet"]["token_supply"] = serde_json::Value::from(0u64);
-    let faucet = miden_usdcx_genesis::accounts::build_faucet(&fixture.config())
+    let faucet = miden_genesis::accounts::build_faucet(&fixture.config())
         .expect("a zero-supply faucet builds");
 
     let err = prefund_distributor(&faucet, &fresh_distributor())
