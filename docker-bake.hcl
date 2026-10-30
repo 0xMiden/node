@@ -1,6 +1,5 @@
 group "validate" {
   targets = [
-    "build-report",
     "node",
     "validator",
     "note-transport",
@@ -16,12 +15,6 @@ group "validate" {
 target "common" {
   context    = "."
   dockerfile = "Dockerfile"
-}
-
-target "build-report" {
-  inherits = ["common"]
-  target   = "build-report"
-  output   = ["type=local,dest=./kache-report"]
 }
 
 target "node" {

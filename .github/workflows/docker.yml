@@ -204,26 +204,17 @@ jobs:
     name: Validate Docker images (${{ matrix.platform }})
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'dry-run' }}
-    # Forks use a fresh local builder on a native GitHub-hosted runner.
+    # Each architecture compiles natively; forks use GitHub-hosted runners.
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository) &&
-        'warp-ubuntu-latest-x64-8x' || matrix.runner
+        matrix.warp_runner || matrix.runner
       }}
     timeout-minutes: 120
-    concurrency:
-      # Fork builds do not share the remote builder's concurrency queue.
-      group: >-
-        ${{ format('docker-build-{0}-{1}',
-          (github.event_name != 'pull_request' ||
-          github.event.pull_request.head.repo.full_name == github.repository) &&
-          vars.WARPBUILD_DOCKER_BUILDER_PROFILE || github.run_id, matrix.architecture) }}
-      cancel-in-progress: false
-      queue: max
     permissions:
       contents: read
-      # WarpBuild uses OIDC to authenticate its remote builder.
+      # Trusted builds use OIDC for the S3 compiler cache.
       id-token: write
     strategy:
       fail-fast: false
@@ -232,9 +223,11 @@ jobs:
           - platform: linux/amd64
             architecture: amd64
             runner: ubuntu-24.04
+            warp_runner: warp-ubuntu-latest-x64-8x
           - platform: linux/arm64
             architecture: arm64
             runner: ubuntu-24.04-arm
+            warp_runner: warp-ubuntu-latest-arm64-8x
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
@@ -245,14 +238,22 @@ jobs:
       - uses: $/.github/actions/cleanup-runner
         if: env.USE_WARP != 'true'
 
-      - name: Set up local Docker builder
-        if: env.USE_WARP != 'true'
+      - name: Build release binaries
+        id: binaries
+        uses: $/.github/actions/build-docker-binaries
+        with:
+          architecture: ${{ matrix.architecture }}
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+
+      - name: Set up Docker builder
         uses: docker/setup-buildx-action@v4.4.1
         with:
           cache-binary: false
 
-      - name: Validate Docker images locally
-        if: env.USE_WARP != 'true'
+      - name: Validate Docker images
         uses: docker/bake-action@v7.5.0
         with:
           source: .
@@ -260,47 +261,19 @@ jobs:
           targets: validate
           push: false
           pull: true
-          no-cache: true
           set: |
+            *.contexts.builder=${{ steps.binaries.outputs.context }}
             *.platform=${{ matrix.platform }}
             *.args.CREATED=${{ needs.preflight.outputs.created }}
             *.args.VERSION=${{ needs.preflight.outputs.tag }}
             *.args.COMMIT=${{ needs.preflight.outputs.commit }}
-
-      - name: Validate Docker images
-        if: env.USE_WARP == 'true'
-        uses: WarpBuilds/bake-action@v7.0.0
-        with:
-          source: .
-          files: ./docker-bake.hcl
-          targets: validate
-          push: false
-          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
-          pull: true
-          set: |
-            *.platform=${{ matrix.platform }}
-            *.args.CREATED=${{ needs.preflight.outputs.created }}
-            *.args.VERSION=${{ needs.preflight.outputs.tag }}
-            *.args.COMMIT=${{ needs.preflight.outputs.commit }}
-
-      - name: Upload Kache cache report
-        if: env.USE_WARP == 'true'
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: kache-report-${{ matrix.architecture }}
-          path: kache-report/kache-report.md
-          if-no-files-found: error
-          retention-days: 1
 
   stage-images:
     name: Stage Docker images (${{ matrix.platform }})
     needs: preflight
     if: ${{ needs.preflight.outputs.mode == 'stage' || needs.preflight.outputs.mode == 'publish' }}
-    runs-on: warp-ubuntu-latest-x64-8x
-    concurrency:
-      group: docker-build-${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}-${{ matrix.architecture }}
-      cancel-in-progress: false
-      queue: max
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
     permissions:
       attestations: write
       contents: read
@@ -314,14 +287,31 @@ jobs:
         include:
           - platform: linux/amd64
             architecture: amd64
+            runner: warp-ubuntu-latest-x64-8x
           - platform: linux/arm64
             architecture: arm64
+            runner: warp-ubuntu-latest-arm64-8x
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7.0.1
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
+
+      - name: Build release binaries
+        id: binaries
+        uses: $/.github/actions/build-docker-binaries
+        with:
+          architecture: ${{ matrix.architecture }}
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
+          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+
+      - name: Set up Docker builder
+        uses: docker/setup-buildx-action@v4.4.1
+        with:
+          cache-binary: false
 
       - name: Log in to the Container registry
         uses: docker/login-action@v4.6.0
@@ -331,15 +321,15 @@ jobs:
           password: ${{ github.token }}
 
       - name: Build and stage Docker images
-        uses: WarpBuilds/bake-action@v7.0.0
+        uses: docker/bake-action@v7.5.0
         with:
           source: .
           files: ./docker-bake.hcl
           targets: validate
           push: true
-          profile-name: ${{ vars.WARPBUILD_DOCKER_BUILDER_PROFILE }}
           pull: true
           set: |
+            *.contexts.builder=${{ steps.binaries.outputs.context }}
             *.platform=${{ matrix.platform }}
             *.args.CREATED=${{ needs.preflight.outputs.created }}
             *.args.VERSION=${{ needs.preflight.outputs.tag }}
@@ -356,8 +346,10 @@ jobs:
 
   kache-summary:
     name: Summarize Kache cache
-    needs: validate-images
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: [validate-images, stage-images]
+    if: >-
+      ${{ !cancelled() &&
+          (needs.validate-images.result == 'success' || needs.stage-images.result == 'success') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -383,7 +375,7 @@ jobs:
             for architecture in amd64 arm64; do
               echo "<details>"
               printf '<summary><code>linux/%s</code></summary>\n\n' "${architecture}"
-              cat "${RUNNER_TEMP}/kache-reports/${architecture}/kache-report.md"
+              cat "${RUNNER_TEMP}/kache-reports/${architecture}/report.md"
               echo
               echo "</details>"
               echo

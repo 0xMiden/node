@@ -2,6 +2,7 @@ self-hosted-runner:
   labels:
     - Linux-ARM64-Runner
     - warp-ubuntu-latest-x64-8x
+    - warp-ubuntu-latest-arm64-8x
 # actionlint 1.7.12 predates self-repository references. Zizmor parses these
 # references, and gh actions-lock verifies their dependency coverage.
 paths:
