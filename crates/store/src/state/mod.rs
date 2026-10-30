@@ -21,7 +21,7 @@ pub use lifecycle::LoadedState;
 use miden_protocol::block::BlockNumber;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 use tokio::sync::watch;
-use view::StateSnapshot;
+pub(crate) use view::StateSnapshot;
 pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
 pub use writer::{BlockWriter, ProofWriter, WriterTask};
 
@@ -37,9 +37,9 @@ use crate::proven_tip::ProvenTipWriter;
 /// Mutations go through the [`BlockWriter`] and [`ProofWriter`] capabilities returned by
 /// [`LoadedState::start`]; every holder of this type can only query and subscribe.
 ///
-/// All tree and database reads go through a request-scoped [`StateView`] obtained from
-/// [`State::view`]; this type itself only exposes chain-tip queries, subscriptions, and
-/// block-store access.
+/// Caller-composed reads use [`State::read`] to acquire matching database and tree snapshots.
+/// Endpoints awaiting migration use [`State::view`]. This type also exposes chain-tip queries,
+/// subscriptions, and block-store access.
 pub struct State {
     /// Root directory containing the store's on-disk data.
     data_directory: PathBuf,
@@ -72,4 +72,26 @@ pub struct State {
     /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a proof
     /// that has been evicted, it falls back to loading from the block store.
     pub(crate) proof_cache: ProofCache,
+}
+
+impl State {
+    /// Runs caller-owned read logic against matching database and tree snapshots.
+    ///
+    /// The closure runs on a blocking worker and releases its read resources before this method
+    /// returns. Acquisition retries mismatched generations for up to 500 milliseconds.
+    /// Other asynchronous work belongs outside the closure.
+    pub async fn read<R, E, F>(&self, read: F) -> Result<R, E>
+    where
+        F: FnOnce(crate::read::ReadView<'_>) -> Result<R, E> + Send + 'static,
+        R: Send + 'static,
+        E: From<crate::DatabaseError> + Send + 'static,
+    {
+        crate::read::acquire::read(
+            self.db.reader(),
+            Arc::clone(&self.latest_snapshot),
+            self.subscribe_committed_tip(),
+            read,
+        )
+        .await
+    }
 }

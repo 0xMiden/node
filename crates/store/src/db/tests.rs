@@ -263,11 +263,12 @@ fn get_note_sync_multi(
     db.read(move |tx| query.page(tx, &block_from))
 }
 
-fn select_block_header_by_block_num(
-    db: &TestDb,
-    maybe_block_num: Option<BlockNumber>,
-) -> Result<Option<BlockHeader>> {
-    db.read(move |tx| queries::select_block_header_by_block_num(tx, maybe_block_num))
+fn select_block_header(db: &TestDb, block_num: BlockNumber) -> Result<Option<BlockHeader>> {
+    db.read(move |tx| queries::select_block_header(tx, block_num))
+}
+
+fn select_chain_tip(db: &TestDb) -> Result<Option<BlockHeader>> {
+    db.read(queries::select_chain_tip)
 }
 
 fn select_block_header_and_signatures_by_block_num(
@@ -956,10 +957,10 @@ fn db_block_header() {
     let db = &TestDb::new();
     // test querying empty table
     let block_number = 1;
-    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
+    let res = select_block_header(db, block_number.into()).unwrap();
     assert!(res.is_none());
 
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert!(res.is_none());
 
     let block_header = BlockHeader::new(
@@ -985,15 +986,15 @@ fn db_block_header() {
 
     // test fetch unknown block header
     let block_number = 1;
-    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
+    let res = select_block_header(db, block_number.into()).unwrap();
     assert!(res.is_none());
 
     // test fetch block header by block number
-    let res = select_block_header_by_block_num(db, Some(block_header.block_num())).unwrap();
+    let res = select_block_header(db, block_header.block_num()).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     // test fetch latest block header
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     let block_header2 = BlockHeader::new(
@@ -1015,7 +1016,7 @@ fn db_block_header() {
         BlockSignatures::new(vec![SigningKey::new().sign(block_header2.commitment())]).unwrap();
     insert_block_header(db, &block_header2, &dummy_signature).unwrap();
 
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert_eq!(res.unwrap(), block_header2);
 
     let res = select_block_headers(db, vec![block_header.block_num(), block_header2.block_num()])
@@ -2842,7 +2843,7 @@ fn db_roundtrip_block_header() {
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
-    let retrieved = select_block_header_by_block_num(db, Some(block_header.block_num()))
+    let retrieved = select_block_header(db, block_header.block_num())
         .unwrap()
         .expect("Block header should exist");
 
