@@ -11,9 +11,8 @@ committed block it picks the network accounts that have pending notes and spawns
 account, up to a configured concurrency limit. Each attempt selects viable notes, constructs a transaction, proves it,
 and submits the proven transaction back through the upstream node's RPC API.
 
-The builder can use a remote transaction prover through `miden-remote-prover`, or fall back to in-process proving where
-appropriate for local development. It also exposes an internal gRPC API that the node RPC component can use for
-network-note status queries.
+The builder proves transactions through a remote transaction prover served by `miden-remote-prover`. It also exposes an
+internal gRPC API that the node RPC component can use for network-note status queries.
 
 ## Operation
 
