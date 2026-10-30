@@ -10,14 +10,14 @@ use miden_standards::account::fees::FeePolicyManager;
 use miden_usdcx::account::xreserve::XReserveFaucetExtension;
 use miden_usdcx::xreserve::encoding::DepositNonce;
 
-use crate::common::{NoncesFixture, TOKEN_SUPPLY, genesis_faucet};
+use crate::common::{TOKEN_SUPPLY, genesis_faucet, used_nonces};
 
 /// Every listed nonce carries the consumed marker afterwards, and nothing else about the faucet
 /// changes: id, genesis form, recorded supply, and the fee-asset rebinding.
 #[test]
 fn record_nonces_marks_every_nonce_and_changes_nothing_else() {
     let faucet = genesis_faucet();
-    let nonces = NoncesFixture::new().parse().expect("the nonces fixture parses").used_nonces;
+    let nonces = used_nonces();
     assert_eq!(nonces.len(), 2, "the fixture exercises several nonces");
 
     let recorded = record_nonces(&faucet, &nonces).expect("recording must succeed");

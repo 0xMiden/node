@@ -132,20 +132,11 @@ mkdir "$DATA/usdcx"
     [ -n "$DISTRIBUTOR_ID" ] || die "genesis did not report the distributor account ID"
 
     # Benchmark accounts have no native assets to pay transaction fees.
-    cat > config.json <<EOF
-{
-  "accounts": { "owner": "$DISTRIBUTOR_ID" },
-  "faucet": {
-    "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
-    "token_supply": 1000000000000000,
-    "domain": 10007,
-    "min_burn_amount": 1,
-    "verification_base_fee": 0,
-    "attesters": []
-  }
-}
-EOF
-    miden-genesis faucet
+    miden-genesis faucet \
+        --owner "${DISTRIBUTOR_ID}" \
+        --token-supply 1000000000000000 \
+        --min-burn-amount 1 \
+        --verification-base-fee 0
     miden-genesis prefund
 ) > "$LOGS/bootstrap-usdcx.log" 2>&1
 

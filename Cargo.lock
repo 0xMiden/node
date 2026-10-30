@@ -4557,8 +4557,6 @@ dependencies = [
  "miden-usdcx",
  "rand 0.10.3",
  "rstest",
- "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.21",
 ]

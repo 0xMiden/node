@@ -8,13 +8,19 @@ use miden_genesis::accounts::{PrefundError, prefund_distributor};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{AccountBuilder, AccountType};
-use miden_protocol::asset::AssetId;
+use miden_protocol::asset::{AssetAmount, AssetId};
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::FungibleFaucet;
 use miden_standards::account::wallets::BasicWallet;
 
-use crate::common::{DISTRIBUTOR_SEED, Fixture, TOKEN_SUPPLY, fresh_distributor, genesis_faucet};
+use crate::common::{
+    DISTRIBUTOR_SEED,
+    TOKEN_SUPPLY,
+    dev_config,
+    fresh_distributor,
+    genesis_faucet,
+};
 
 /// The prefunded distributor keeps its id and keys, holds the faucet's whole recorded supply, and
 /// is in genesis form (nonce one, no seed).
@@ -93,10 +99,10 @@ fn prefund_refuses_a_distributor_without_a_key() {
 /// A faucet recording no supply has nothing to distribute.
 #[test]
 fn prefund_refuses_a_faucet_with_no_supply() {
-    let mut fixture = Fixture::new();
-    fixture.json["faucet"]["token_supply"] = serde_json::Value::from(0u64);
-    let faucet = miden_genesis::accounts::build_faucet(&fixture.config())
-        .expect("a zero-supply faucet builds");
+    let mut config = dev_config();
+    config.faucet.token_supply = AssetAmount::ZERO;
+    let faucet =
+        miden_genesis::accounts::build_faucet(&config).expect("a zero-supply faucet builds");
 
     let err = prefund_distributor(&faucet, &fresh_distributor())
         .expect_err("a zero supply must be refused");

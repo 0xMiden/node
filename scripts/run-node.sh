@@ -164,27 +164,11 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
       exit 1
     fi
 
-    cat > config.json <<EOF
-    {
-        "accounts": {
-        "owner": "${DISTRIBUTOR_ID}",
-        "attest_admins": [],
-        "pausers": [],
-        "unpausers": [],
-        "blocklist_managers": []
-        },
-        "faucet": {
-        "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
-        "token_supply": 1000000000000000,
-        "domain": 10007,
-        "min_burn_amount": 1,
-        "verification_base_fee": 7,
-        "attesters": []
-        }
-    }
-EOF
-
-    "$GENESIS_BINARY" faucet
+    "$GENESIS_BINARY" faucet \
+        --owner "${DISTRIBUTOR_ID}" \
+        --token-supply 1000000000000000 \
+        --min-burn-amount 1 \
+        --verification-base-fee 7
     "$GENESIS_BINARY" prefund
 
     # Callers such as large-account-harness.sh may supply their own seeded accounts.
