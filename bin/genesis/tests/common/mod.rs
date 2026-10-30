@@ -1,16 +1,18 @@
-//! Shared test fixtures: the dev config JSON (mutable, so tests can inject malformed values), the
-//! nonces JSON, and the accounts the commands take as inputs.
+//! Shared test fixtures: the dev faucet inputs (mutable, so tests can vary them), the fixture
+//! nonces, and the accounts the commands take as inputs.
 
 // Each test binary compiles its own copy of this module and exercises a different subset of it.
 #![allow(dead_code)]
 
 use miden_genesis::accounts::{build_faucet, new_distributor_with};
-use miden_genesis::config::{ConfigError, GenesisToolConfig, Role, UsedNoncesFile};
+use miden_genesis::config::{FaucetConfig, GenesisToolConfig, Role, RoleAccounts};
 use miden_objects::account_file::AccountFile;
-use miden_protocol::account::Account;
 use miden_protocol::account::auth::AuthSecretKey;
+use miden_protocol::account::{Account, AccountId};
+use miden_protocol::asset::AssetAmount;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
+use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
 
 /// The dev faucet seed (`0x07` repeated).
 pub const FAUCET_SEED: [u8; 32] = [7; 32];
@@ -39,7 +41,7 @@ pub const ATTESTER_KEY_BYTES: [[u8; 33]; 2] = [
 /// Two fixture deposit nonces, the `record-nonces` input.
 pub const USED_NONCE_BYTES: [[u8; 32]; 2] = [[0x55; 32], [0x66; 32]];
 
-/// The `0x`-prefixed hex string of `bytes` — the config's byte encoding.
+/// The `0x`-prefixed hex string of `bytes`, the flags' byte encoding.
 pub fn to_hex(bytes: &[u8]) -> String {
     format!("0x{}", hex::encode(bytes))
 }
@@ -63,69 +65,40 @@ pub fn role_id_hex(role: Role) -> &'static str {
     }
 }
 
-/// A materialized dev fixture: the config JSON, mutable so tests can inject malformed values.
-pub struct Fixture {
-    pub json: serde_json::Value,
+/// The fixed dev role id of `role`, decoded.
+pub fn role_id(role: Role) -> AccountId {
+    AccountId::from_hex(role_id_hex(role)).expect("the fixture ids are valid hex")
 }
 
-impl Fixture {
-    /// Assembles the dev config.
-    pub fn new() -> Self {
-        let mut accounts = serde_json::Map::new();
-        for role in Role::ALL {
-            let value = if role == Role::Owner {
-                serde_json::Value::from(role_id_hex(role))
-            } else {
-                serde_json::Value::from(vec![role_id_hex(role)])
-            };
-            accounts.insert(role.as_str().to_string(), value);
-        }
-        let json = serde_json::json!({
-            "accounts": accounts,
-            "faucet": {
-                "seed": to_hex(&FAUCET_SEED),
-                "token_supply": TOKEN_SUPPLY,
-                "domain": 7,
-                "verification_base_fee": 500,
-                "attesters": [to_hex(&ATTESTER_KEY_BYTES[0]), to_hex(&ATTESTER_KEY_BYTES[1])],
-            },
-        });
-        Self { json }
-    }
-
-    /// Parses the (possibly mutated) config JSON.
-    pub fn parse(&self) -> Result<GenesisToolConfig, ConfigError> {
-        GenesisToolConfig::from_json(&self.json.to_string())
-    }
-
-    /// Parses the config JSON, expecting it to be valid.
-    pub fn config(&self) -> GenesisToolConfig {
-        self.parse().expect("the fixture config must parse")
+/// The dev faucet inputs: one holder per role, both attesters, no min burn amount.
+pub fn dev_config() -> GenesisToolConfig {
+    GenesisToolConfig {
+        accounts: RoleAccounts {
+            owner: role_id(Role::Owner),
+            attest_admins: vec![role_id(Role::AttestAdmin)],
+            pausers: vec![role_id(Role::Pauser)],
+            unpausers: vec![role_id(Role::Unpauser)],
+            blocklist_managers: vec![role_id(Role::BlocklistManager)],
+        },
+        faucet: FaucetConfig {
+            seed: FAUCET_SEED,
+            token_supply: AssetAmount::new(TOKEN_SUPPLY).expect("the dev supply is in range"),
+            domain: CircleDomain::new(7),
+            min_burn_amount: None,
+            verification_base_fee: 500,
+            attesters: attester_keys(),
+        },
     }
 }
 
-/// The nonces JSON listing both fixture nonces, mutable so tests can inject malformed values.
-pub struct NoncesFixture {
-    pub json: serde_json::Value,
+/// Both fixture nonces, decoded.
+pub fn used_nonces() -> Vec<DepositNonce> {
+    USED_NONCE_BYTES.map(DepositNonce::new).to_vec()
 }
 
-impl NoncesFixture {
-    pub fn new() -> Self {
-        let json = serde_json::json!({
-            "used_nonces": [to_hex(&USED_NONCE_BYTES[0]), to_hex(&USED_NONCE_BYTES[1])],
-        });
-        Self { json }
-    }
-
-    /// Parses the (possibly mutated) nonces JSON.
-    pub fn parse(&self) -> Result<UsedNoncesFile, ConfigError> {
-        UsedNoncesFile::from_json(&self.json.to_string())
-    }
-}
-
-/// The genesis faucet built from the dev config.
+/// The genesis faucet built from the dev inputs.
 pub fn genesis_faucet() -> Account {
-    build_faucet(&Fixture::new().config()).expect("the dev fixture must build")
+    build_faucet(&dev_config()).expect("the dev fixture must build")
 }
 
 /// A fresh (undeployed) distributor with an ECDSA key, deterministic in its seed.
