@@ -537,24 +537,6 @@ impl Db {
             .await
     }
 
-    /// Returns the requested note IDs that the database contains at or before `up_to_block`.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
-    pub async fn select_existing_note_ids(
-        &self,
-        note_ids: Vec<NoteId>,
-        up_to_block: ScopedBlockNum,
-    ) -> Result<HashSet<NoteId>> {
-        self.reader
-            .read("existing note IDs", move |tx| {
-                queries::select_existing_note_ids(tx, note_ids.as_slice(), *up_to_block)
-            })
-            .await
-    }
-
     /// Loads inclusion proofs for notes matching the given note commitments that were committed at
     /// or before `up_to_block`.
     #[miden_instrument(

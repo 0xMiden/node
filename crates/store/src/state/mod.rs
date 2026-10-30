@@ -23,7 +23,7 @@ pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
 pub(crate) use snapshots::RecentSnapshots;
 use tokio::sync::watch;
 pub(crate) use view::StateSnapshot;
-pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
+pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses};
 pub use writer::{BlockWriter, ProofWriter, WriterTask};
 
 use crate::blocks::BlockStore;
