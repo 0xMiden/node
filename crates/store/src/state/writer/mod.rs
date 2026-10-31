@@ -17,13 +17,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_tracing::{ErrorReport, miden_instrument};
+use miden_node_tracing::{ErrorReport, instrument_v2};
 use miden_protocol::block::SignedBlock;
 use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::{mpsc, oneshot};
 pub(in crate::state) use worker::WriteWorker;
 
-use crate::COMPONENT;
 use crate::blocks::BlockStore;
 use crate::errors::ApplyBlockError;
 
@@ -132,10 +131,7 @@ impl BlockWriter {
     /// time.
     /// Readers are unaffected while a block is being applied: they keep reading from the previous
     /// in-memory snapshot until the writer atomically publishes the new one.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     pub async fn apply_block(
         &mut self,
         signed_block: SignedBlock,

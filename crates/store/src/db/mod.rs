@@ -9,7 +9,7 @@ use anyhow::Context;
 use futures::{Stream, TryStreamExt};
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_tracing::{info, miden_instrument, warn};
+use miden_node_tracing::{info, instrument_v2, warn};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamLimiter,
@@ -219,8 +219,7 @@ impl From<NoteRecord> for NoteSyncRecord {
 
 impl Db {
     /// Creates a new database and inserts the genesis block.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "store.database.bootstrap",
         fields(path = database_filepath),
         err,
@@ -244,9 +243,7 @@ impl Db {
     }
 
     /// Open a connection to the DB after verifying that it is at the latest schema version.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn load(database_filepath: PathBuf) -> Result<Self, DatabaseError> {
         Self::load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size())
             .await
@@ -254,9 +251,7 @@ impl Db {
 
     /// Open a connection to the DB with a specific pool size after verifying that it is at the
     /// latest schema version.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn load_with_pool_size(
         database_filepath: PathBuf,
         connection_pool_size: NonZeroUsize,
@@ -282,11 +277,7 @@ impl Db {
     }
 
     /// Selects a protocol configuration by its commitment.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_protocol_config_by_commitment(
         &self,
         commitment: Word,
@@ -311,20 +302,14 @@ impl Db {
     }
 
     /// Applies all pending migrations to an existing DB.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
     }
 
     /// Reads the page of `query` that starts at `next`.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub(crate) async fn page<Q: Paginated>(
         &self,
         query: Q,
@@ -370,11 +355,7 @@ impl Db {
     /// Search for a [`BlockHeader`] from the database by its `block_num`.
     ///
     /// When `block_number` is [None], the latest block header is returned.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_block_header_by_block_num(
         &self,
         maybe_block_number: Option<ScopedBlockNum>,
@@ -400,11 +381,7 @@ impl Db {
 
     /// Search for a [`BlockHeader`] and its [`BlockSignatures`] from the database by its
     /// `block_num`.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_block_header_and_signatures_by_block_num(
         &self,
         block_number: ScopedBlockNum,
@@ -417,11 +394,7 @@ impl Db {
     }
 
     /// Loads multiple block headers from the DB.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_block_headers(
         &self,
         blocks: impl Iterator<Item = ScopedBlockNum> + Send + 'static,
@@ -434,11 +407,7 @@ impl Db {
     }
 
     /// Loads all the block headers from the DB.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
         self.reader
             .read("all block headers", queries::select_all_block_header_commitments)
@@ -446,11 +415,7 @@ impl Db {
     }
 
     /// Loads public account details from the DB.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_account(&self, id: AccountId) -> Result<AccountInfo> {
         self.reader
             .read("Get account details", move |tx| queries::select_account(tx, id))
@@ -458,11 +423,7 @@ impl Db {
     }
 
     /// Returns the subset of the provided account IDs that classify as network accounts.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn filter_network_accounts(
         &self,
         account_ids: Vec<AccountId>,
@@ -477,9 +438,7 @@ impl Db {
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn select_account_code_by_commitment(
         &self,
         code_commitment: Word,
@@ -502,9 +461,7 @@ impl Db {
     ///
     /// Returns both in a single query to avoid querying the database twice.
     /// Returns `None` if the account doesn't exist at that block.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn select_account_header_with_storage_header_at_block(
         &self,
         account_id: AccountId,
@@ -521,11 +478,7 @@ impl Db {
 
     /// Loads all the [`miden_protocol::note::Note`]s matching a certain [`NoteId`] from the
     /// database.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.reader
             .read("note by id", move |tx| queries::select_notes_by_id(tx, note_ids.as_slice()))
@@ -533,11 +486,7 @@ impl Db {
     }
 
     /// Returns the requested note IDs that the database contains at or before `up_to_block`.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_existing_note_ids(
         &self,
         note_ids: Vec<NoteId>,
@@ -552,11 +501,7 @@ impl Db {
 
     /// Loads inclusion proofs for notes matching the given note commitments that were committed at
     /// or before `up_to_block`.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn select_note_inclusion_proofs(
         &self,
         note_commitments: BTreeSet<Word>,
@@ -588,10 +533,7 @@ impl Db {
         clippy::too_many_arguments,
         reason = "the arguments are the block and the state that the writer precomputed for it"
     )]
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument_v2(err)]
     pub(crate) async fn apply_block(
         &self,
         signed_block: SignedBlock,
@@ -670,9 +612,7 @@ impl Db {
     /// Returns:
     ///     - `::LimitExceeded` when too many entries are present
     ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub(crate) async fn reconstruct_storage_map_from_db(
         &self,
         account_id: AccountId,
@@ -731,9 +671,7 @@ impl Db {
     ///
     /// Used as fallback when the `AccountStateForest` vault-key cache misses (historical or evicted
     /// queries). Returns the latest asset for each vault key at or before `block_num`.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn select_vault_at_block(
         &self,
         account_id: AccountId,

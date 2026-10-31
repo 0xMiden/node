@@ -1,22 +1,18 @@
 use std::path::Path;
 
 use anyhow::Context;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, instrument_v2};
 
 use crate::blocks::BlockStore;
 use crate::db::Db;
 use crate::genesis::GenesisBlock;
 use crate::state::State;
-use crate::{COMPONENT, DataDirectory, LOG_TARGET};
+use crate::{DataDirectory, LOG_TARGET};
 
 impl State {
     /// Bootstraps the store state, creating the database state and inserting the genesis block
     /// data.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "store.bootstrap",
-        err,
-    )]
+    #[instrument_v2(name = "store.bootstrap", err)]
     pub async fn bootstrap(genesis: GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {

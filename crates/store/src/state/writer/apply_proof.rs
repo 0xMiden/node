@@ -1,9 +1,8 @@
 use anyhow::{Context, ensure};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::vm::ExecutionProof;
 
-use crate::COMPONENT;
 use crate::state::{ProofNotification, ProofWriter};
 
 impl ProofWriter {
@@ -13,8 +12,7 @@ impl ProofWriter {
     ///
     /// - If proofs are not applied in strict ascending order (exactly one block past the proven tip)
     /// - If the proof's corresponding block was not already committed
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         err,
         fields(
             block.number = block_num
