@@ -1,0 +1,43 @@
+error[E0080]: evaluation panicked: tracing field `tx_id` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:5:9
+  |
+5 |         miden_node_tracing::info_v2!("test.event", tx_id = "0x1234");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::__miden_assert_field_name::<&str>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:5:9
+  |
+5 |         miden_node_tracing::info_v2!("test.event", tx_id = "0x1234");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_node_tracing::info_v2` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn main::__miden_assert_field_name::<&str>`
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:5:9
+  |
+5 |         miden_node_tracing::info_v2!("test.event", tx_id = "0x1234");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_node_tracing::info_v2` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0080]: evaluation panicked: tracing field `block.number` is not allowed for this attribute type
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:6:9
+  |
+6 |         miden_node_tracing::debug_v2!("test.event", block.number = "invalid");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ evaluation of `main::__miden_assert_field_name::<&str>::{constant#0}` failed here
+
+note: erroneous constant encountered
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:6:9
+  |
+6 |         miden_node_tracing::debug_v2!("test.event", block.number = "invalid");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_node_tracing::debug_v2` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+note: the above error was encountered while instantiating `fn main::__miden_assert_field_name::<&str>`
+ --> tests/ui/tracing_macros/invalid_scoped_events.rs:6:9
+  |
+6 |         miden_node_tracing::debug_v2!("test.event", block.number = "invalid");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the macro `miden_node_tracing::debug_v2` (in Nightly builds, run with -Z macro-backtrace for more info)

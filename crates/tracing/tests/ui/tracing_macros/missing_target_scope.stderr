@@ -1,4 +1,4 @@
-error: cannot find macro `__miden_instrument_v2_with_scoped_target` in this scope
+error: cannot find macro `__miden_instrument_v2_requires_target_scope_or_explicit_target` in this scope
  --> tests/ui/tracing_macros/missing_target_scope.rs:1:1
   |
 1 | #[miden_node_tracing::instrument_v2]

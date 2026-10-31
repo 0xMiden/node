@@ -4921,6 +4921,7 @@ dependencies = [
  "thread-priority",
  "tokio",
  "toml",
+ "tracing-subscriber",
 ]
 
 [[package]]

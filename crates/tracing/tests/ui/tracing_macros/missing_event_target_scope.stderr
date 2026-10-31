@@ -1,0 +1,7 @@
+error: cannot find macro `__miden_event_v2_requires_target_scope_or_explicit_target` in this scope
+ --> tests/ui/tracing_macros/missing_event_target_scope.rs:2:5
+  |
+2 |     miden_node_tracing::info_v2!("test.event");
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `miden_node_tracing::info_v2` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -1,0 +1,16 @@
+error: expected a static event name string literal
+ --> tests/ui/tracing_macros/invalid_scoped_event_errors.rs:5:39
+  |
+5 |         miden_node_tracing::error_v2!("test.event");
+  |                                       ^^^^^^^^^^^^
+
+error[E0599]: the method `as_dyn_error` exists for type `u32`, but its trait bounds were not satisfied
+ --> tests/ui/tracing_macros/invalid_scoped_event_errors.rs:6:9
+  |
+6 |         miden_node_tracing::warn_v2!(42_u32, "test.event");
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: the following trait bounds were not satisfied:
+          `u32: std::error::Error`
+          which is required by `u32: miden_node_tracing::__private::AsDynError`
+  = note: this error originates in the macro `miden_node_tracing::warn_v2` (in Nightly builds, run with -Z macro-backtrace for more info)
