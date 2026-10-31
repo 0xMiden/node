@@ -1,11 +1,10 @@
 use miden_node_proto::generated as proto;
 use miden_node_store::StateSyncError;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug_v2, instrument_v2};
 use miden_protocol::block::BlockNumber;
 
 use super::RpcService;
 use super::error_codes::{SyncChainMmrErrorCode, internal_error, log_internal_error};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
@@ -20,8 +19,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "sync_chain_mmr",
         fields(
             current_client_block_height = request.current_client_block_height,
@@ -34,7 +32,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug!(target: LOG_TARGET, "Syncing chain MMR");
+        debug_v2!("Syncing chain MMR");
 
         let current_client_block_height = BlockNumber::from(request.current_client_block_height);
 

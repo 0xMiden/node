@@ -1,9 +1,8 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug_v2, instrument_v2};
 use miden_protocol::block::BlockNumber;
 
-use super::{COMPONENT, RpcService};
-use crate::LOG_TARGET;
+use super::RpcService;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcService {
@@ -22,8 +21,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcSe
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "get_block_header_by_number",
         fields(
             block.number = request.block_num(),
@@ -36,8 +34,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcSe
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug!(
-            target: LOG_TARGET,
+        debug_v2!(
             "Getting block header by number",
             block.number = request.block_num(),
             request.include_mmr_proof = request.include_mmr_proof.unwrap_or_default()

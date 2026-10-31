@@ -27,6 +27,7 @@ fn request_span(layer: &GrpcTraceLayer, status: &tonic::Status, status_in: Statu
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
     let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("off,miden::rpc::server=info"))
         .with(tracing_opentelemetry::OpenTelemetryLayer::new(provider.tracer("test")));
     let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
     tracing::subscriber::with_default(subscriber, || {

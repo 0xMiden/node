@@ -1,8 +1,7 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug_v2, instrument_v2};
 
 use super::{RPC_LIMITS, RpcService};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetLimits for RpcService {
@@ -17,17 +16,14 @@ impl proto::server::miden_node_v1_node_service::GetLimits for RpcService {
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "get_limits",
-    )]
+    #[instrument_v2(name = "get_limits")]
     async fn handle(
         &self,
         _input: Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug!(target: LOG_TARGET, "Getting limits");
+        debug_v2!("Getting limits");
 
         Ok(RPC_LIMITS.clone())
     }
