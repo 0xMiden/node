@@ -93,6 +93,7 @@ runs:
             print(f"download_endpoint = {json.dumps(endpoint)}")
         PYTHON
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
+        echo "KACHE_CI_BUNDLES=true" >> "${GITHUB_ENV}"
         echo "config=${config}" >> "${GITHUB_OUTPUT}"
 
     - name: Authenticate to the Rust cache
@@ -107,34 +108,35 @@ runs:
     # Installs the CloudFront client and engine in the runner's tool cache.
     #
     # The upstream action reuses this verified installation for setup and cleanup.
-    # Remove this step once an official release includes CloudFront downloads
-    # and the prefetch cancellation fix.
+    # Bundle warmup and publication use its daemon-start and manifest-save hooks.
+    # Remove this step once an official release includes CloudFront downloads,
+    # the prefetch cancellation fix, and automatic CI bundles.
     - name: Install patched kache
       id: install
       if: steps.cache.outputs.remote == 'true'
       shell: bash
       env:
-        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-cloudfront.1
+        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-bundles.1
       run: |
         case "${RUNNER_OS}/${RUNNER_ARCH}" in
           Linux/X64)
             target=x86_64-unknown-linux-gnu
             architecture=x64
-            checksum=2676165f54f2ea8eadb350cc1e886772287d676132cddce6704979fa1ba12159
+            checksum=7eab90b7961e2fca197500bb04e8e94193ef866fd1e969f4bdff88c3ae8be434
             ;;
           Linux/ARM64)
             target=aarch64-unknown-linux-gnu
             architecture=arm64
-            checksum=7fb9c979619cd2825a8547bad6decad120fa297a10864ea4673fda909c69b1ba
+            checksum=d298ea14adb757f6dc0c16543f0cffab7afad57ef52337765512ef28e9bf9f44
             ;;
           *) echo "Unsupported runner: ${RUNNER_OS}/${RUNNER_ARCH}" >&2; exit 1 ;;
         esac
         archive="$(mktemp "${RUNNER_TEMP}/kache-trial.XXXXXX")"
         curl --fail --location --silent --show-error --retry 3 \
-          "${TRIAL_RELEASE}/kache-v2.0.0-rc.2-miden.1-${target}.tar.gz" \
+          "${TRIAL_RELEASE}/kache-v2.0.0-rc.2-miden.2-${target}.tar.gz" \
           --output "${archive}"
         printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check --status
-        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.1/${architecture}"
+        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.2/${architecture}"
         mkdir -p "${tool_dir}"
         tar -xzf "${archive}" -C "${tool_dir}" kache kache-engine
         "${tool_dir}/kache" --version
@@ -146,7 +148,7 @@ runs:
       if: steps.cache.outputs.remote == 'true' && inputs.prepare-only != 'true'
       uses: kunobi-ninja/kache-action@v1
       with:
-        version: v2.0.0-rc.2-miden.1
+        version: v2.0.0-rc.2-miden.2
         s3-bucket: ${{ inputs.s3-bucket }}
         s3-region: ${{ inputs.s3-region }}
         s3-prefix: protected-branch
