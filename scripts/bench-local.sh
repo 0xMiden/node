@@ -134,6 +134,7 @@ mkdir "$DATA/usdcx"
     # Benchmark accounts have no native assets to pay transaction fees.
     miden-genesis faucet \
         --owner "${DISTRIBUTOR_ID}" \
+        --seed 0x55534443582d4641554345540000000000000000000000000000000000000000 \
         --token-supply 1000000000000000 \
         --min-burn-amount 1 \
         --verification-base-fee 0

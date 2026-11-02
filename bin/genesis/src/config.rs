@@ -7,10 +7,6 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
 
-/// The default faucet seed: the ASCII of `USDCX-FAUCET` zero-padded to 32 bytes.
-pub const DEFAULT_FAUCET_SEED: &str =
-    "0x55534443582d4641554345540000000000000000000000000000000000000000";
-
 // ROLES
 // ================================================================================================
 
@@ -122,7 +118,7 @@ impl RoleAccounts {
 pub struct FaucetConfig {
     /// The faucet's 32-byte account seed as hex. It feeds the faucet id, so fix it before the
     /// faucet runs.
-    #[arg(long, default_value = DEFAULT_FAUCET_SEED, value_parser = parse_seed)]
+    #[arg(long, value_parser = parse_seed)]
     pub seed: [u8; 32],
     /// The initial supply in base units (six decimals), recorded as issued and handed to the
     /// distributor by `prefund`. It feeds the faucet id.

@@ -4,7 +4,7 @@ mod common;
 
 use clap::Parser;
 use miden_genesis::cli::{Cli, Command};
-use miden_genesis::config::{DEFAULT_FAUCET_SEED, GenesisToolConfig, Role};
+use miden_genesis::config::{GenesisToolConfig, Role};
 use miden_protocol::address::NetworkId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
@@ -108,16 +108,18 @@ fn the_dev_flags_round_trip() {
     }
 }
 
-/// The seed and the domain default to the launch values; the operational roles, the attesters and
-/// the min burn amount default to none.
+/// The domain defaults to the Miden domain; the operational roles, the attesters and the min burn
+/// amount default to none.
 #[test]
-fn only_the_owner_supply_and_fee_are_required() {
+fn only_the_owner_seed_supply_and_fee_are_required() {
     let config = parse_faucet(
         &[
             "miden-genesis",
             "faucet",
             "--owner",
             role_id_hex(Role::Owner),
+            "--seed",
+            &to_hex(&FAUCET_SEED),
             "--token-supply",
             "100000000",
             "--verification-base-fee",
@@ -126,7 +128,6 @@ fn only_the_owner_supply_and_fee_are_required() {
         .map(str::to_string),
     )
     .expect("the minimal flags must parse");
-    assert_eq!(to_hex(&config.faucet.seed), DEFAULT_FAUCET_SEED);
     assert_eq!(config.faucet.domain, CircleDomain::MIDEN);
     assert!(config.faucet.min_burn_amount.is_none());
     assert!(config.faucet.attesters.is_empty());
@@ -134,7 +135,7 @@ fn only_the_owner_supply_and_fee_are_required() {
         assert!(config.accounts.get(role).is_empty(), "{} defaults to no holder", role.as_str());
     }
 
-    for flag in ["--owner", "--token-supply", "--verification-base-fee"] {
+    for flag in ["--owner", "--seed", "--token-supply", "--verification-base-fee"] {
         let mut args = dev_faucet_args();
         remove_flag(&mut args, flag);
         let err = parse_faucet(&args).expect_err("the flag must be required");

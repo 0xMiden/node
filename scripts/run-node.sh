@@ -166,6 +166,7 @@ if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
 
     "$GENESIS_BINARY" faucet \
         --owner "${DISTRIBUTOR_ID}" \
+        --seed 0x55534443582d4641554345540000000000000000000000000000000000000000 \
         --token-supply 1000000000000000 \
         --min-burn-amount 1 \
         --verification-base-fee 7

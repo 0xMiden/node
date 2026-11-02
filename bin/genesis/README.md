@@ -32,7 +32,7 @@ re-run needs the old output moved away first. Run the commands in launch order:
 
 ```sh
 miden-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-poseidon2]
-miden-genesis faucet --owner <distributor-id> --token-supply <base-units> --verification-base-fee <fee> [...]
+miden-genesis faucet --owner <distributor-id> --seed <hex> --token-supply <base-units> --verification-base-fee <fee> [...]
 miden-genesis prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
 miden-genesis record-nonces --nonce <hex> [--nonce <hex> ...] [--faucet usdcx-faucet.mac]
 miden-genesis build --genesis-block-directory <dir> --accounts-directory <dir> \
@@ -73,9 +73,9 @@ sees Circle deposits, step 4 can be skipped and `build` takes `usdcx-faucet.mac`
 | Flag                      | Required | Meaning                                                                                                      |
 | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------ |
 | `--owner`                 | yes      | The single `ADMIN` holder's account id, hex or bech32: the distributor printed by `new-distributor`.         |
+| `--seed`                  | yes      | The faucet's 32-byte account seed as hex. It is public; the repo's scripts use `USDCX-FAUCET` in ASCII.      |
 | `--token-supply`          | yes      | The initial supply in base units (6 decimals, so `100000000` is 100 USDC), the amount deposited with Circle. |
 | `--verification-base-fee` | yes      | Baked into the faucet's fee schedule. Must equal the `--verification-base-fee` passed to `build`.            |
-| `--seed`                  | no       | The faucet's 32-byte account seed as hex. Defaults to the ASCII of `USDCX-FAUCET` zero-padded to 32 bytes.   |
 | `--domain`                | no       | The Circle domain id. Defaults to 10007, the Miden domain.                                                   |
 | `--min-burn-amount`       | no       | The smallest amount a burn may redeem, in base units.                                                        |
 | `--attester`              | no       | A deposit attester to allowlist, as the hex of its 33-byte compressed SEC1 key (`02` or `03` then x).        |

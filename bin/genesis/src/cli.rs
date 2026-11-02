@@ -293,6 +293,8 @@ mod tests {
                 "faucet",
                 "--owner",
                 "0x3cd7940c4946bad179675b1d7d8059",
+                "--seed",
+                &"07".repeat(32),
                 "--token-supply",
                 "100000000",
                 "--verification-base-fee",

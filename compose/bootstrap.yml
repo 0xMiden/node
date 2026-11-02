@@ -94,6 +94,7 @@ services:
         echo "Creating the native USDCx faucet and prefunding the distributor..."
         miden-genesis faucet \
           --owner "$${DISTRIBUTOR_ID}" \
+          --seed 0x55534443582d4641554345540000000000000000000000000000000000000000 \
           --token-supply "$${MIDEN_USDCX_INITIAL_SUPPLY}" \
           --min-burn-amount 1 \
           --verification-base-fee 7
