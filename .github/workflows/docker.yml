@@ -314,7 +314,7 @@ jobs:
           cache-binary: false
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -436,7 +436,7 @@ jobs:
       packages: write
     steps:
       - name: Log in to the Container registry
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -489,7 +489,7 @@ jobs:
           persist-credentials: false
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
