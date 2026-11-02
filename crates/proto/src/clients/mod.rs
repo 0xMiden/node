@@ -25,6 +25,12 @@
 //! # }
 //! ```
 
+macro_rules! tracing_target {
+    () => {
+        "miden::rpc::client"
+    };
+}
+
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
@@ -133,10 +139,7 @@ impl tonic::service::Interceptor for Interceptor {
 #[cfg(test)]
 mod tests {
     mod message_size;
-    miden_node_tracing::target_scope! {
-        "miden::test::caller";
-        mod tracing_targets;
-    }
+    mod tracing_targets;
     use super::*;
 
     #[test]

@@ -6,7 +6,6 @@
 //! The epoch is derived from the 16 most significant bits of the block number (i.e.,
 //! `block_num >> 16`), and both the epoch and block number are formatted as zero-padded
 //! hexadecimal strings.
-
 use std::io::ErrorKind;
 use std::ops::Not;
 use std::path::{Path, PathBuf};

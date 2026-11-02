@@ -1,3 +1,9 @@
+macro_rules! tracing_target {
+    () => {
+        "miden::rpc::server"
+    };
+}
+
 use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::sync::Arc;

@@ -1,3 +1,9 @@
+macro_rules! tracing_target {
+    () => {
+        "miden::rpc::client"
+    };
+}
+
 use std::num::NonZeroU64;
 use std::time::Duration;
 

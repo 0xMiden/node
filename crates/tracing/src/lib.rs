@@ -23,6 +23,8 @@ pub use logging::{
     setup_tracing,
     setup_tracing_with_config,
 };
+#[doc(hidden)]
+pub use miden_node_tracing_macro::__with_tracing_target;
 pub use miden_node_tracing_macro::{
     debug,
     debug_v2,
@@ -34,7 +36,6 @@ pub use miden_node_tracing_macro::{
     instrument_v2,
     miden_instrument,
     miden_span_record,
-    target_scope,
     trace,
     trace_v2,
     warn,

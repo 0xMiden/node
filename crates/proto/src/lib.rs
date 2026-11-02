@@ -1,7 +1,5 @@
-miden_node_tracing::target_scope! {
-    "miden::rpc::client";
-    pub mod clients;
-}
+pub mod clients;
+
 pub mod domain;
 pub mod errors;
 

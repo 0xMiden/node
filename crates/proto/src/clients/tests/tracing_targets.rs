@@ -1,3 +1,9 @@
+macro_rules! tracing_target {
+    () => {
+        "miden::test::caller"
+    };
+}
+
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 

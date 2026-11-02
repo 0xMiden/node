@@ -20,8 +20,5 @@ help: the trait `RecordAttribute` is not implemented for `UnapprovedAttribute`
             [T; N]
           and $N others
 note: required by a bound in `miden_node_tracing::record_attribute`
- --> src/attribute.rs
-  |
-  | pub fn record_attribute<T: RecordAttribute + ?Sized>(value: &T) -> impl Value + '_ {
-  |                            ^^^^^^^^^^^^^^^ required by this bound in `record_attribute`
+ --> ./src/attribute.rs:250:0
   = note: this error originates in the macro `miden_span_record` (in Nightly builds, run with -Z macro-backtrace for more info)

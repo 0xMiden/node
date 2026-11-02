@@ -1,0 +1,13 @@
+error[E0308]: mismatched types
+ --> tests/ui/tracing_macros/invalid_target_type.rs:3:9
+  |
+3 |         42_u32
+  |         ^^^^^^ expected `&str`, found `u32`
+...
+7 | #[miden_node_tracing::instrument_v2]
+  | ------------------------------------
+  | |
+  | expected because of the type of the constant
+  | in this attribute macro expansion
+  |
+  = note: this error originates in the macro `tracing_target` which comes from the expansion of the attribute macro `::miden_node_tracing::__with_tracing_target` (in Nightly builds, run with -Z macro-backtrace for more info)

@@ -7,32 +7,32 @@ It is part of the [Miden node](https://github.com/0xMiden/node#readme) repositor
 
 ## Scoped targets
 
-Use `target_scope!` to give `#[instrument_v2]` functions, v2 events, and enabled checks a shared diagnostic target
-without repeating it at each call site. Wrap a module's items in a scope containing a target string followed by a
-semicolon. A `mod.rs` can contain just the scope, child module declarations, and re-exports:
+Define a handwritten `tracing_target!` macro to give `#[instrument_v2]` functions, v2 events, and enabled checks a
+shared diagnostic target without repeating it at each call site. Place the declaration before instrumented items and
+child module declarations. Keep modules as ordinary Rust declarations so rustfmt can discover their files:
 
 ```rust
 // store/src/storage/mod.rs
-miden_node_tracing::target_scope! {
-    "miden::storage";
-
-    pub mod sqlite;
-    pub mod rocksdb;
-    pub mod files;
-    mod maintenance;
+macro_rules! tracing_target {
+    () => { "miden::storage" };
 }
+
+pub mod sqlite;
+pub mod rocksdb;
+pub mod files;
+mod maintenance;
 ```
 
-Child modules inherit the target, including modules in separate files. A child can override it with its own scope:
+Child modules inherit the target, including modules in separate files. A child can override it with its own declaration:
 
 ```rust
 // store/src/storage/sqlite/mod.rs
-miden_node_tracing::target_scope! {
-    "miden::storage::sqlite";
-
-    mod queries;
-    mod migrations;
+macro_rules! tracing_target {
+    () => { "miden::storage::sqlite" };
 }
+
+mod queries;
+mod migrations;
 ```
 
 Functions in `queries.rs` and `migrations.rs` use the SQLite target without imports or repeated declarations:
@@ -48,9 +48,10 @@ fn load_account() -> Result<(), std::io::Error> {
 ```
 
 The RocksDB and file modules can similarly select their own targets. The maintenance module inherits `miden::storage`.
-Nested scopes do not change the target of parent or sibling modules. Keep instrumented items and child module
-declarations inside the scope so the target helper and its uses share the enclosing macro expansion. Generic functions
-use the target at their definition, regardless of where they are instantiated.
+Child overrides do not change the target of parent or sibling modules. Use one declaration per module. Write the
+`macro_rules!` definition directly: generating it through another macro can cause ambiguous-name errors when a child
+overrides its parent. The macro must expand to a constant expression of type `&'static str`. Generic functions use the
+target at their definition, regardless of where they are instantiated.
 
 Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
 also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s
@@ -80,9 +81,9 @@ same target as scoped spans and events. It also accepts optional field names, su
 fields can still treat an individual span or event differently. If an event overrides its target, use that same override
 in its enabled check.
 
-If the compiler reports a missing macro whose name ends in `requires_target_scope_or_explicit_target`, wrap the
-enclosing module declarations or items in `target_scope!`, or supply an explicit target. For instrumentation, use
-`#[instrument_v2(target = "miden::storage")]`; for an event, use `info_v2!(target: "miden::storage", "account.loaded")`.
+If the compiler reports a missing `tracing_target` macro, define it before the affected items or their ancestor module
+declarations, or supply an explicit target. For instrumentation, use `#[instrument_v2(target = "miden::storage")]`; for
+an event, use `info_v2!(target: "miden::storage", "account.loaded")`.
 
 ## Error events
 

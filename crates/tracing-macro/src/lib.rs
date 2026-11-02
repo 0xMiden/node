@@ -24,61 +24,9 @@ use syn::{
 
 mod instrument;
 
-/// Sets the default target for v2 instrumentation, events, and enabled checks on enclosed items.
-///
-/// Supply a string literal followed by a semicolon and the module items. Child modules inherit
-/// the target, including modules in separate files, and can use their own scope to override it.
-/// Explicit targets take precedence. Existing instrumentation and event macros retain their own
-/// target defaults.
-#[proc_macro]
-pub fn target_scope(input: TokenStream) -> TokenStream {
-    let TargetScope { target, items } = parse_macro_input!(input as TargetScope);
-    // Keep the helper and its users in one expansion so child scopes can shadow parent helpers. The
-    // helper names explain the remedy when Rust reports a missing scope during name resolution.
-    quote! {
-        #[allow(unused_macros)]
-        macro_rules! __miden_instrument_v2_requires_target_scope_or_explicit_target {
-            ([$($args:tt)*] $($item:tt)*) => {
-                #[::miden_node_tracing::miden_instrument(target = #target, $($args)*)]
-                $($item)*
-            };
-        }
-
-        #[allow(unused_macros)]
-        macro_rules! __miden_event_v2_requires_target_scope_or_explicit_target {
-            ([$level:ident] $($args:tt)*) => {
-                ::miden_node_tracing::__private::$level!(target: #target, $($args)*)
-            };
-        }
-
-        #[allow(unused_macros)]
-        macro_rules! __miden_enabled_v2_requires_target_scope_or_explicit_target {
-            ($($args:tt)*) => {
-                ::miden_node_tracing::enabled!(target: #target, $($args)*)
-            };
-        }
-
-        #items
-    }
-    .into()
-}
-
-struct TargetScope {
-    target: LitStr,
-    items: TokenStream2,
-}
-
-impl Parse for TargetScope {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let target = input.parse()?;
-        input.parse::<Token![;]>()?;
-        Ok(Self { target, items: input.parse()? })
-    }
-}
-
 /// Instruments a function using canonical tracing attributes and a scoped target.
 ///
-/// Uses the target from an enclosing `target_scope!` in this module or an ancestor module, unless
+/// Uses the target from a lexically visible `tracing_target!` in this module or an ancestor module, unless
 /// an explicit `target` argument is supplied. All other options and field and error conventions are
 /// the same as `miden_instrument`. An explicit target can be used without a scope.
 #[proc_macro_attribute]
@@ -95,14 +43,46 @@ pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
             #item
         }
     } else {
+        // Constants use item-name resolution, so hygiene alone cannot prevent collisions. Choose a
+        // name absent from both the function and its instrumentation arguments.
+        let mut name = "__MIDEN_TRACING_TARGET".to_owned();
+        while contains_ident(item.clone(), &name) || contains_ident(attr.clone(), &name) {
+            name.push('_');
+        }
+        let target = Ident::new(&name, proc_macro2::Span::mixed_site());
         quote! {
-            __miden_instrument_v2_requires_target_scope_or_explicit_target! {
-                [#attr]
-                #item
-            }
+            #[::miden_node_tracing::miden_instrument(target = #target, #attr)]
+            #[::miden_node_tracing::__with_tracing_target(#target)]
+            #item
         }
     }
     .into()
+}
+
+fn contains_ident(tokens: TokenStream2, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == name,
+        TokenTree::Group(group) => contains_ident(group.stream(), name),
+        _ => false,
+    })
+}
+
+/// Binds the lexical target after upstream instrumentation has generated its function body.
+///
+/// The upstream attribute accepts only literals or identifiers for targets. Inserting this
+/// constant after expansion makes it visible to both generated spans and automatic error events.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn __with_tracing_target(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let target = parse_macro_input!(attr as Ident);
+    let mut function = parse_macro_input!(item as ItemFn);
+    function.block.stmts.insert(
+        0,
+        syn::parse_quote! {
+            const #target: &str = tracing_target!();
+        },
+    );
+    quote!(#function).into()
 }
 
 /// Instruments a function using canonical tracing attributes.
@@ -294,55 +274,55 @@ pub fn error(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true, false)
 }
 
-/// Emits a trace-level event using the enclosing `target_scope!` target.
+/// Emits a trace-level event using the lexically visible `tracing_target!` target.
 ///
 /// Accepts the same arguments as [`trace!`]. An explicit `target:` overrides the scope and can be
-/// used without one. Otherwise, an enclosing scope is required.
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 #[proc_macro]
 pub fn trace_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "trace", false, true)
 }
 
-/// Emits a debug-level event using the enclosing `target_scope!` target.
+/// Emits a debug-level event using the lexically visible `tracing_target!` target.
 ///
 /// Accepts the same arguments as [`debug!`]. An explicit `target:` overrides the scope and can be
-/// used without one. Otherwise, an enclosing scope is required.
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 #[proc_macro]
 pub fn debug_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "debug", false, true)
 }
 
-/// Emits an info-level event using the enclosing `target_scope!` target.
+/// Emits an info-level event using the lexically visible `tracing_target!` target.
 ///
 /// Accepts the same arguments as [`info!`]. An explicit `target:` overrides the scope and can be
-/// used without one. Otherwise, an enclosing scope is required.
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 #[proc_macro]
 pub fn info_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "info", false, true)
 }
 
-/// Emits a warning-level event using the enclosing `target_scope!` target.
+/// Emits a warning-level event using the lexically visible `tracing_target!` target.
 ///
 /// Accepts the same arguments as [`warn!`]. An explicit `target:` overrides the scope and can be
-/// used without one. Otherwise, an enclosing scope is required.
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 #[proc_macro]
 pub fn warn_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "warn", false, true)
 }
 
-/// Emits an error-level event with a typed error using the enclosing `target_scope!` target.
+/// Emits an error-level event with a typed error using the lexically visible `tracing_target!` target.
 ///
 /// Accepts the same arguments as [`error!`], including its required error argument. An explicit
-/// `target:` overrides the scope and can be used without one. Otherwise, a scope is required.
+/// `target:` overrides the scope and can be used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 #[proc_macro]
 pub fn error_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true, true)
 }
 
-/// Checks subscriber interest at a level using the enclosing `target_scope!` target.
+/// Checks subscriber interest at a level using the lexically visible `tracing_target!` target.
 ///
 /// Accepts a level followed by optional field names, just like `tracing::enabled!`. A leading
-/// `target:` overrides the scope and can be used without one. Otherwise, a scope is required.
+/// `target:` overrides the scope and can be used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
 /// This is an interest hint, not a guarantee that a particular span or event will be recorded.
 #[proc_macro]
 pub fn enabled_v2(input: TokenStream) -> TokenStream {
@@ -354,7 +334,7 @@ pub fn enabled_v2(input: TokenStream) -> TokenStream {
     if explicit_target {
         quote! { ::miden_node_tracing::enabled!(#input) }
     } else {
-        quote! { __miden_enabled_v2_requires_target_scope_or_explicit_target!(#input) }
+        quote! { ::miden_node_tracing::enabled!(target: tracing_target!(), #input) }
     }
     .into()
 }
@@ -517,7 +497,7 @@ impl Event {
             #(, #fields)*
         };
         let event = if scoped_target && self.target.is_none() {
-            quote! { __miden_event_v2_requires_target_scope_or_explicit_target! { [#level] #args } }
+            quote! { ::miden_node_tracing::__private::#level!(target: tracing_target!(), #args) }
         } else {
             quote! { ::miden_node_tracing::__private::#level!(#args) }
         };
