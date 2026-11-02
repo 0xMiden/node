@@ -7,8 +7,8 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request as ProofRequestVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
+use miden_node_tracing::miden_instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, Span, miden_instrument, miden_span_record, warn};
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
 use miden_tx::LocalTransactionProver;
 use url::Url;
@@ -23,7 +23,7 @@ use crate::COMPONENT;
 pub enum Prover {
     /// Proves in this process.
     Local(LocalProver),
-    /// Proves through a remote prover, and falls back to local proving on failure.
+    /// Proves through a remote prover only.
     Remote(Box<RemoteProver>),
 }
 
@@ -33,7 +33,7 @@ impl Prover {
         Self::Local(LocalProver)
     }
 
-    /// Builds a prover which uses the remote prover at `url`, with local proving as a fallback.
+    /// Builds a prover which uses the remote prover at `url`.
     pub fn remote(url: Url, timeout: Duration, max_decoding_message_size: usize) -> Result<Self> {
         Ok(Self::Remote(Box::new(RemoteProver::new(
             url,
@@ -49,17 +49,13 @@ impl Prover {
         fields(
             transaction.id = executed_tx.id(),
             prover.kind = if matches!(self, Self::Local(_)) { "local" } else { "remote" },
-            prover.fallback,
         ),
         err,
     )]
     pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
         match self {
-            Self::Local(prover) => {
-                miden_span_record!(prover.fallback = false #[nonstandard]);
-                prover.prove(executed_tx).await
-            },
-            Self::Remote(prover) => prover.prove(executed_tx).await,
+            Self::Local(prover) => prover.prove(executed_tx).await,
+            Self::Remote(prover) => prover.prove(&executed_tx).await,
         }
     }
 }
@@ -96,11 +92,10 @@ impl LocalProver {
 // REMOTE PROVER
 // ================================================================================================
 
-/// Proves transactions through the remote prover service, with local proving as a fallback.
+/// Proves transactions through the remote prover service.
 #[derive(Clone)]
 pub struct RemoteProver {
     client: RemoteProverClient,
-    fallback: LocalProver,
 }
 
 impl RemoteProver {
@@ -117,7 +112,7 @@ impl RemoteProver {
             .with_otel_context_injection()
             .connect_lazy::<RemoteProverClient>();
 
-        Ok(Self { client, fallback: LocalProver })
+        Ok(Self { client })
     }
 
     /// Proves one transaction on the remote prover.
@@ -129,7 +124,7 @@ impl RemoteProver {
         ),
         err,
     )]
-    async fn prove_remotely(&self, executed_tx: &ExecutedTransaction) -> Result<ProvenTransaction> {
+    pub async fn prove(&self, executed_tx: &ExecutedTransaction) -> Result<ProvenTransaction> {
         let request = tonic::Request::new(ProveRequest {
             request: Some(ProofRequestVariant::Transaction(executed_tx.tx_inputs().into())),
         });
@@ -148,26 +143,5 @@ impl RemoteProver {
             .context("failed to decode the response of the remote transaction prover")?
             .build_unchecked()
             .context("failed to build the response of the remote transaction prover")
-    }
-
-    /// Proves one executed transaction, falling back to local proving.
-    pub async fn prove(&self, executed_tx: ExecutedTransaction) -> Result<ProvenTransaction> {
-        match self.prove_remotely(&executed_tx).await {
-            Ok(proven_tx) => {
-                Span::current().record("prover.fallback", false);
-                Ok(proven_tx)
-            },
-            Err(err) => {
-                Span::current().record("prover.fallback", true);
-                warn!(
-                    &err,
-                    target: COMPONENT,
-                    "Remote proving failed, proving locally instead"
-                );
-                self.fallback.prove(executed_tx).await.with_context(|| {
-                    format!("local proving after a remote prover failure: {}", err.as_report())
-                })
-            },
-        }
     }
 }
