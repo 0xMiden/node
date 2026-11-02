@@ -29,23 +29,23 @@ verify the resulting roots before using the state.
 
 ## Network transaction builder
 
-The builder maintains an `AccountTree`, chain MMR, and LRU of complete small accounts, updated from each block. The tree
-needs only account IDs and commitments. Cached accounts need their full contents to recompute roots from block patches;
-headers alone cannot do this for arbitrary updates.
+### Migration
 
-1. Spawn an execution task with reference block N, its chain MMR, an account witness generated locally, and the cached
-   account if available.
-2. On a cache miss, the task fetches `GetAccountInfos` and `SyncAccount` at N. Fetch missing code by commitment. These
-   requests run in the task while the main thread continues processing blocks.
-3. For large accounts, use headers to initialize a partial account and fetch vault/storage witnesses as execution
-   discovers missing entries. Foreign accounts use the same API, with an account witness from the local tree at N or
-   `GetAccountWitness` if that tree version is unavailable.
-4. Before returning the committed account copy to the LRU, use `SyncAccount` and `GetAccountInfos` to catch it up from N
-   to the cache's current height. If the cache advances during the fetch, continue catching up asynchronously before
-   insertion. Accounts that have grown above the limit stay outside the complete-account cache.
+Execution tasks request account information and missing code through `GetAccountInfos` and `GetAccountCode`, account
+witnesses through `GetAccountWitness`, and vault/storage proofs lazily through the two entry-witness methods. All state
+reads use the task's reference block. This is the migration baseline; it requires no new account caches or local account
+tree.
 
-Keep the transaction's speculative output separate from committed state. Only committed updates enter the cache. Code
-and lazy proofs can be cached separately and reused while their corresponding commitments or roots are unchanged.
+### Optimizations
+
+1. **Small-account LRU.** Load complete accounts with `SyncAccount` and maintain them from the block stream. Pass a task
+   the cached account and chain MMR at its reference block. Cache misses fetch asynchronously. Before returning a
+   committed account copy to the LRU, catch it up with `SyncAccount`; speculative transaction output stays separate.
+2. **Local account tree.** Maintain an `AccountTree` from the block stream to generate account witnesses locally.
+   Initialization, persistence across restarts, and access to older tree versions for running tasks need a design.
+3. **Large-account LRU.** Caching frequently accessed accounts, such as the USDCx faucet and AggLayer account, could
+   reduce lazy RPC reads. This needs more thought, particularly how tasks retain a consistent view without cloning large
+   accounts on every block.
 
 ## Clients and monitors
 
