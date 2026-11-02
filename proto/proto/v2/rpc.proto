@@ -18,7 +18,10 @@ import "google/protobuf/empty.proto";
 // All block-specific account requests select an explicit block. A zero block number selects
 // genesis; an omitted required block is invalid. Account reads never implicitly select latest.
 service NodeService {
-    // Misc methods (unchanged).
+    // UNCHANGED FROM V1
+    // ----------------------------------------------------------------------------------------
+
+    // Node status and registration.
     rpc Status(StatusRequest) returns (StatusResponse) {}
     rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
     rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
@@ -26,44 +29,52 @@ service NodeService {
     rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
     rpc IsInvitationCodeValid(IsInvitationCodeValidRequest) returns (IsInvitationCodeValidResponse) {}
 
-    // Basic request/response (unchanged)
+    // Block, note, and chain reads.
     rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
     rpc GetBlockHeaderByNumber(GetBlockHeaderByNumberRequest) returns (GetBlockHeaderByNumberResponse) {}
     rpc GetNotesById(GetNotesByIdRequest) returns (GetNotesByIdResponse) {}
     rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
+
+    // Transaction submission.
     rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
     rpc SubmitProvenTx(SubmitProvenTxRequest) returns (SubmitProvenTxResponse) {}
     rpc SubmitProvenTxBatch(SubmitProvenTxBatchRequest) returns (SubmitProvenTxBatchResponse) {}
 
-    // Block & proof streams (unchanged)
+    // Block and proof subscriptions.
     rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
-    // Public account and storage headers, conditionally returned per account. No code or witnesses.
+    // NEW METHODS
+    // ----------------------------------------------------------------------------------------
+
+    // Account information and execution witnesses.
+
+    // Public account and storage headers, conditionally returned per account.
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
-    // Immutable code addressed by its commitment, independently of account state synchronization.
+    // Immutable code addressed by its commitment.
     rpc GetAccountCode(GetAccountCodeRequest) returns (GetAccountCodeResponse) {}
-    // Inclusion or non-inclusion at the requested block, including for private accounts.
+    // Account inclusion or non-inclusion at the requested block, including private accounts.
     rpc GetAccountWitness(GetAccountWitnessRequest) returns (GetAccountWitnessResponse) {}
-    // Batched inclusion and non-inclusion proofs against the target vault root.
+    // Batched asset inclusion and non-inclusion proofs against the target vault root.
     rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
-    // Batched inclusion and non-inclusion proofs, grouped by storage map.
+    // Batched key inclusion and non-inclusion proofs, grouped by storage map.
     rpc GetAccountStorageWitnesses(GetAccountStorageWitnessesRequest) returns (GetAccountStorageWitnessesResponse) {}
 
-    // Complete account state sync
+    // Complete account synchronization.
 
-    // - Complete small-account contents, as a snapshot or delta. No code, headers, or witnesses.
+    // Small-account contents as a snapshot or delta. No headers, code, or witnesses.
     rpc SyncAccount(SyncAccountRequest) returns (SyncAccountResponse) {}
-    // - Large account state sync [streaming] (new)
+    // Streams vault updates for accounts of any size at a fixed target.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (stream SyncAccountVaultResponse) {}
+    // Streams storage-map updates for accounts of any size at a fixed target.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (stream SyncAccountStorageMapsResponse) {}
 
-    // Sync chain state [streaming] (new)
+    // Streaming discovery and transaction lookup.
     rpc SyncNullifiers(SyncNullifiersRequest) returns (stream SyncNullifiersResponse) {}
     rpc SyncNotes(SyncNotesRequest) returns (stream SyncNotesResponse) {}
     rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
     rpc SyncTransactions(SyncTransactionsRequest) returns (stream SyncTransactionsResponse) {}
-    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
     rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
 }
 
