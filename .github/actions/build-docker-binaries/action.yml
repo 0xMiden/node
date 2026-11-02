@@ -49,13 +49,16 @@ runs:
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/run.sh"
 
-    - name: Upload compiler cache report
+    - name: Summarize compiler cache
       if: always()
-      uses: actions/upload-artifact@v7.0.2
-      with:
-        name: kache-report-${{ inputs.architecture }}
-        path: |
-          ${{ runner.temp }}/docker-binaries/report.md
-          ${{ runner.temp }}/docker-binaries/report.json
-        if-no-files-found: warn
-        retention-days: 1
+      shell: bash
+      env:
+        ARCHITECTURE: ${{ inputs.architecture }}
+      run: |
+        report="${RUNNER_TEMP}/docker-binaries/report.md"
+        if [[ -f "${report}" ]]; then
+          {
+            printf '### Docker compiler cache (%s)\n\n' "${ARCHITECTURE}"
+            cat "${report}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+        fi

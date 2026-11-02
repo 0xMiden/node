@@ -17,7 +17,6 @@ finish() {
             kache sync --push || echo "::warning::Failed to upload compiler cache artifacts"
         fi
         kache stats --full --format github --output /output/report.md || true
-        kache stats --full --format json --output /output/report.json || true
         kache daemon stop || true
     else
         printf 'S3 compiler cache is disabled for this build.\n' > /output/report.md

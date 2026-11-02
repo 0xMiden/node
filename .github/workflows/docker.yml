@@ -344,45 +344,6 @@ jobs:
             node-tps-benchmark.tags=${{ env.REGISTRY_PREFIX }}/miden-node-tps-benchmark:${{ env.IMAGE_TAG }}
             usdcx-genesis.tags=${{ env.REGISTRY_PREFIX }}/miden-usdcx-genesis:${{ env.IMAGE_TAG }}
 
-  kache-summary:
-    name: Summarize Kache cache
-    needs: [validate-images, stage-images]
-    if: >-
-      ${{ !cancelled() &&
-          (needs.validate-images.result == 'success' || needs.stage-images.result == 'success') }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - name: Download amd64 Kache cache report
-        uses: actions/download-artifact@v8.0.2
-        with:
-          name: kache-report-amd64
-          path: ${{ runner.temp }}/kache-reports/amd64
-
-      - name: Download arm64 Kache cache report
-        uses: actions/download-artifact@v8.0.2
-        with:
-          name: kache-report-arm64
-          path: ${{ runner.temp }}/kache-reports/arm64
-
-      - name: Add Kache cache summary
-        run: |
-          {
-            echo "<details>"
-            echo "<summary>Docker Kache stats</summary>"
-            echo
-            for architecture in amd64 arm64; do
-              echo "<details>"
-              printf '<summary><code>linux/%s</code></summary>\n\n' "${architecture}"
-              cat "${RUNNER_TEMP}/kache-reports/${architecture}/report.md"
-              echo
-              echo "</details>"
-              echo
-            done
-            echo "</details>"
-          } >> "${GITHUB_STEP_SUMMARY}"
-
   dry-run-compose:
     name: Dry-run docker compose publishing
     needs: preflight
