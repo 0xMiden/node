@@ -9,6 +9,13 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt as _};
 use tracing_subscriber::registry::LookupSpan;
 
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "tracing_macros::targets::database" => "miden::storage::sqlite",
+    "tracing_macros::targets::rocksdb" => "miden::storage::rocksdb",
+    "tracing_macros::targets::files" => "miden::storage::files",
+}
+
 mod targets;
 
 #[derive(Clone, Default)]

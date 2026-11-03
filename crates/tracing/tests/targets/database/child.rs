@@ -76,7 +76,7 @@ pub fn parented_events(parent: &tracing::Span) {
     );
 }
 
-#[allow(non_snake_case)]
+#[expect(non_snake_case)]
 #[miden_node_tracing::instrument_v2]
 pub fn helper_name_collision(__MIDEN_TRACING_TARGET: u32) -> u32 {
     __MIDEN_TRACING_TARGET

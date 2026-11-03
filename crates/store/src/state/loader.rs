@@ -5,12 +5,6 @@
 //! SQLite and persisted. Consistency checks detect divergence between `RocksDB` and SQLite after
 //! loading.
 
-macro_rules! tracing_target {
-    () => {
-        "miden::storage::rocksdb"
-    };
-}
-
 use std::num::NonZeroUsize;
 use std::path::Path;
 use std::pin::pin;

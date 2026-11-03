@@ -1,11 +1,5 @@
 //! Historical tracking for `AccountTree` via mutation overlays
 
-macro_rules! tracing_target {
-    () => {
-        "miden::storage::rocksdb"
-    };
-}
-
 use std::collections::{BTreeMap, HashMap};
 
 use miden_crypto::merkle::smt::RocksDbStorage;
