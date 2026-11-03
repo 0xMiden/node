@@ -9,7 +9,7 @@ use anyhow::Context;
 use futures::{Stream, TryStreamExt};
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_tracing::{info, instrument_v2, warn};
+use miden_node_tracing::{info_v2, instrument_v2, warn_v2};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
     QueryParamLimiter,
@@ -49,7 +49,6 @@ pub use crate::db::queries::{
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
 use crate::state::ScopedBlockNum;
-use crate::{COMPONENT, LOG_TARGET};
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
     2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
@@ -260,8 +259,7 @@ impl Db {
 
         let (writer, reader) =
             miden_node_db::sqlite::open_with_pool_size(&database_filepath, connection_pool_size)?;
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "Connected to the database",
             path = database_filepath,
             db.sqlite.connection_pool_size = connection_pool_size.get()
@@ -590,9 +588,8 @@ impl Db {
             match result {
                 Ok(note_ids) => resolved_note_ids.extend(note_ids),
                 Err(err) => {
-                    warn!(
+                    warn_v2!(
                         &err,
-                        target: COMPONENT,
                         "Failed to resolve consumed note IDs for lifecycle events",
                         note.nullifier.count = count
                     );

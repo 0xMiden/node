@@ -157,7 +157,7 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn trace(input: TokenStream) -> TokenStream {
-    expand_event(input, "trace", false)
+    expand_event(input, "trace", false, false)
 }
 
 /// Emits a debug-level event.
@@ -186,7 +186,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn debug(input: TokenStream) -> TokenStream {
-    expand_event(input, "debug", false)
+    expand_event(input, "debug", false, false)
 }
 
 /// Emits an info-level event.
@@ -216,7 +216,7 @@ pub fn debug(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn info(input: TokenStream) -> TokenStream {
-    expand_event(input, "info", false)
+    expand_event(input, "info", false, false)
 }
 
 /// Emits a warning-level event.
@@ -245,7 +245,7 @@ pub fn info(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn warn(input: TokenStream) -> TokenStream {
-    expand_event(input, "warn", false)
+    expand_event(input, "warn", false, false)
 }
 
 /// Emits an error-level event with a typed error.
@@ -271,10 +271,80 @@ pub fn warn(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro]
 pub fn error(input: TokenStream) -> TokenStream {
-    expand_event(input, "error", true)
+    expand_event(input, "error", true, false)
 }
 
-fn expand_event(input: TokenStream, level: &str, error_required: bool) -> TokenStream {
+/// Emits a trace-level event using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as [`trace!`]. An explicit `target:` overrides the scope and can be
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+#[proc_macro]
+pub fn trace_v2(input: TokenStream) -> TokenStream {
+    expand_event(input, "trace", false, true)
+}
+
+/// Emits a debug-level event using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as [`debug!`]. An explicit `target:` overrides the scope and can be
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+#[proc_macro]
+pub fn debug_v2(input: TokenStream) -> TokenStream {
+    expand_event(input, "debug", false, true)
+}
+
+/// Emits an info-level event using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as [`info!`]. An explicit `target:` overrides the scope and can be
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+#[proc_macro]
+pub fn info_v2(input: TokenStream) -> TokenStream {
+    expand_event(input, "info", false, true)
+}
+
+/// Emits a warning-level event using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as [`warn!`]. An explicit `target:` overrides the scope and can be
+/// used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+#[proc_macro]
+pub fn warn_v2(input: TokenStream) -> TokenStream {
+    expand_event(input, "warn", false, true)
+}
+
+/// Emits an error-level event with a typed error using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as [`error!`], including its required error argument. An explicit
+/// `target:` overrides the scope and can be used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+#[proc_macro]
+pub fn error_v2(input: TokenStream) -> TokenStream {
+    expand_event(input, "error", true, true)
+}
+
+/// Checks subscriber interest at a level using the lexically visible `tracing_target!` target.
+///
+/// Accepts a level followed by optional field names, just like `tracing::enabled!`. A leading
+/// `target:` overrides the scope and can be used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+/// This is an interest hint, not a guarantee that a particular span or event will be recorded.
+#[proc_macro]
+pub fn enabled_v2(input: TokenStream) -> TokenStream {
+    let input = TokenStream2::from(input);
+    let mut tokens = input.clone().into_iter();
+    let explicit_target = matches!(tokens.next(), Some(TokenTree::Ident(name)) if name == "target")
+        && matches!(tokens.next(), Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+
+    if explicit_target {
+        quote! { ::miden_node_tracing::enabled!(#input) }
+    } else {
+        quote! { ::miden_node_tracing::enabled!(target: tracing_target!(), #input) }
+    }
+    .into()
+}
+
+fn expand_event(
+    input: TokenStream,
+    level: &str,
+    error_required: bool,
+    scoped_target: bool,
+) -> TokenStream {
     let event = if error_required {
         syn::parse::<ErrorEvent>(input).map(|event| event.0)
     } else {
@@ -285,7 +355,9 @@ fn expand_event(input: TokenStream, level: &str, error_required: bool) -> TokenS
         Err(error) => return error.into_compile_error().into(),
     };
 
-    event.tokens(&Ident::new(level, proc_macro2::Span::call_site())).into()
+    event
+        .tokens(&Ident::new(level, proc_macro2::Span::call_site()), scoped_target)
+        .into()
 }
 
 struct ErrorEvent(Event);
@@ -404,7 +476,7 @@ impl Event {
         }
     }
 
-    fn tokens(&self, level: &Ident) -> TokenStream2 {
+    fn tokens(&self, level: &Ident, scoped_target: bool) -> TokenStream2 {
         let target = self.target.as_ref().map(|target| quote! { target: #target, });
         let parent = self.parent.as_ref().map(|parent| quote! { parent: #parent, });
         let name = &self.name;
@@ -417,16 +489,22 @@ impl Event {
             }
         });
         let fields = self.fields.iter().map(RecordField::instrument_tokens);
+        let args = quote! {
+            #target
+            #parent
+            message = #name
+            #error
+            #(, #fields)*
+        };
+        let event = if scoped_target && self.target.is_none() {
+            quote! { ::miden_node_tracing::__private::#level!(target: tracing_target!(), #args) }
+        } else {
+            quote! { ::miden_node_tracing::__private::#level!(#args) }
+        };
 
         quote! {{
             #error_import
-            ::miden_node_tracing::__private::#level!(
-                #target
-                #parent
-                message = #name
-                #error
-                #(, #fields)*
-            )
+            #event
         }}
     }
 }
