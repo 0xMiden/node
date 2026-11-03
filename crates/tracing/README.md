@@ -7,49 +7,31 @@ It is part of the [Miden node](https://github.com/0xMiden/node#readme) repositor
 
 ## Scoped targets
 
-Use `target_scope!` to give `#[instrument_v2]` functions a shared diagnostic target without repeating it on each
-function. Wrap a module's items in a scope containing a target string followed by a semicolon. A `mod.rs` can contain
-just the scope, child module declarations, and re-exports:
+Use `declare_targets!` once at the crate root, before child module declarations, to give `#[instrument_v2]` functions a
+shared diagnostic target without repeating it at each call site:
 
 ```rust
-// store/src/storage/mod.rs
-miden_node_tracing::target_scope! {
-    "miden::storage";
-
-    pub mod sqlite;
-    pub mod rocksdb;
-    pub mod files;
-    mod maintenance;
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "miden_node_store::db" => "miden::storage::sqlite",
+    "miden_node_store::accounts" => "miden::storage::rocksdb",
+    "miden_node_store::blocks" => "miden::storage::files",
 }
+
+mod accounts;
+mod blocks;
+mod db;
 ```
 
-Child modules inherit the target, including modules in separate files. A child can override it with its own scope:
+The most specific matching module prefix wins, regardless of rule order. Rules match complete module names and their
+descendants: `miden_node_store::db` includes `db::queries`, but not `db_backup`. Modules outside the configured subtrees
+use the default target. Resolution happens at compile time; generic functions use the module where they are defined.
+Update the map when moving or renaming a configured module.
 
-```rust
-// store/src/storage/sqlite/mod.rs
-miden_node_tracing::target_scope! {
-    "miden::storage::sqlite";
-
-    mod queries;
-    mod migrations;
-}
-```
-
-Functions in `queries.rs` and `migrations.rs` use the SQLite target without imports or repeated declarations:
-
-```rust
-// store/src/storage/sqlite/queries.rs
-#[miden_node_tracing::instrument_v2(err)]
-fn load_account() -> Result<(), std::io::Error> {
-    // Perform the database operation.
-    Ok(())
-}
-```
-
-The RocksDB and file modules can similarly select their own targets. The maintenance module inherits `miden::storage`.
-Nested scopes do not change the target of parent or sibling modules. Keep instrumented items and child module
-declarations inside the scope so the target helper and its uses share the enclosing macro expansion. Generic functions
-use the target at their definition, regardless of where they are instantiated.
+The declaration generates an inventory of compiled callsites in test builds and a test requiring every mapping rule to
+win for at least one callsite. Registration uses the inventory re-exported by this crate, so callers need no extra
+dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
+compiled into the test binary.
 
 Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
 also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s

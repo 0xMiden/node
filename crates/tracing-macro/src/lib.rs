@@ -24,46 +24,9 @@ use syn::{
 
 mod instrument;
 
-/// Sets the default target for `#[instrument_v2]` on enclosed items and their child modules.
-///
-/// Supply a string literal followed by a semicolon and the module items. Child modules inherit
-/// the target, including modules in separate files, and can use their own scope to override it.
-/// Explicit `target` arguments take precedence. Existing instrumentation and event macros retain
-/// their own target defaults.
-#[proc_macro]
-pub fn target_scope(input: TokenStream) -> TokenStream {
-    let TargetScope { target, items } = parse_macro_input!(input as TargetScope);
-    // Keep the helper and its users in one expansion so child scopes can shadow parent helpers.
-    quote! {
-        #[allow(unused_macros)]
-        macro_rules! __miden_instrument_v2_with_scoped_target {
-            ([$($args:tt)*] $($item:tt)*) => {
-                #[::miden_node_tracing::miden_instrument(target = #target, $($args)*)]
-                $($item)*
-            };
-        }
-
-        #items
-    }
-    .into()
-}
-
-struct TargetScope {
-    target: LitStr,
-    items: TokenStream2,
-}
-
-impl Parse for TargetScope {
-    fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let target = input.parse()?;
-        input.parse::<Token![;]>()?;
-        Ok(Self { target, items: input.parse()? })
-    }
-}
-
 /// Instruments a function using canonical tracing attributes and a scoped target.
 ///
-/// Uses the target from an enclosing `target_scope!` in this module or an ancestor module, unless
+/// Uses the target from a lexically visible `tracing_target!` in this module or an ancestor module, unless
 /// an explicit `target` argument is supplied. All other options and field and error conventions are
 /// the same as `miden_instrument`. An explicit target can be used without a scope.
 #[proc_macro_attribute]
@@ -80,14 +43,46 @@ pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
             #item
         }
     } else {
+        // Constants use item-name resolution, so hygiene alone cannot prevent collisions. Choose a
+        // name absent from both the function and its instrumentation arguments.
+        let mut name = "__MIDEN_TRACING_TARGET".to_owned();
+        while contains_ident(item.clone(), &name) || contains_ident(attr.clone(), &name) {
+            name.push('_');
+        }
+        let target = Ident::new(&name, proc_macro2::Span::mixed_site());
         quote! {
-            __miden_instrument_v2_with_scoped_target! {
-                [#attr]
-                #item
-            }
+            #[::miden_node_tracing::miden_instrument(target = #target, #attr)]
+            #[::miden_node_tracing::__with_tracing_target(#target)]
+            #item
         }
     }
     .into()
+}
+
+fn contains_ident(tokens: TokenStream2, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == name,
+        TokenTree::Group(group) => contains_ident(group.stream(), name),
+        _ => false,
+    })
+}
+
+/// Binds the lexical target after upstream instrumentation has generated its function body.
+///
+/// The upstream attribute accepts only literals or identifiers for targets. Inserting this
+/// constant after expansion makes it visible to both generated spans and automatic error events.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn __with_tracing_target(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let target = parse_macro_input!(attr as Ident);
+    let mut function = parse_macro_input!(item as ItemFn);
+    function.block.stmts.insert(
+        0,
+        syn::parse_quote! {
+            const #target: &str = tracing_target!();
+        },
+    );
+    quote!(#function).into()
 }
 
 /// Instruments a function using canonical tracing attributes.

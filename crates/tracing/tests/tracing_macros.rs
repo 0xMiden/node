@@ -9,6 +9,13 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt as _};
 use tracing_subscriber::registry::LookupSpan;
 
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "tracing_macros::targets::database" => "miden::storage::sqlite",
+    "tracing_macros::targets::rocksdb" => "miden::storage::rocksdb",
+    "tracing_macros::targets::files" => "miden::storage::files",
+}
+
 mod targets;
 
 #[derive(Clone, Default)]
@@ -474,6 +481,7 @@ fn scoped_instrumentation_supports_methods_and_futures() {
     tracing::subscriber::with_default(subscriber, || {
         use targets::database::child::Backend as _;
 
+        assert_eq!(targets::database::child::helper_name_collision(42), 42);
         let backend = targets::database::child::Database;
         assert_eq!(backend.load(42), 42);
         assert_eq!(backend.target(), "miden::storage::sqlite");
@@ -484,7 +492,7 @@ fn scoped_instrumentation_supports_methods_and_futures() {
     });
 
     let spans = spans.0.lock().unwrap();
-    assert_eq!(spans.len(), 4);
+    assert_eq!(spans.len(), 5);
     for span in spans.iter() {
         assert_eq!(span.target, "miden::storage::sqlite");
     }
@@ -522,5 +530,5 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_optional_error_type.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_exception_message.rs");
     tests.compile_fail("tests/ui/tracing_macros/missing_target_scope.rs");
-    tests.compile_fail("tests/ui/tracing_macros/nonliteral_target_scope.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_target_type.rs");
 }
