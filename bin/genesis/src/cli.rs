@@ -29,6 +29,9 @@ use crate::output::{
     write_signing_key,
 };
 
+#[cfg(test)]
+mod tests;
+
 // CLI
 // ================================================================================================
 
@@ -195,115 +198,4 @@ fn run_record_nonces(faucet_path: &Path, nonces: &[DepositNonce]) -> Result<()> 
     );
     println!("written to {GENESIS_FAUCET_MAC_FILE}");
     Ok(())
-}
-
-// TESTS
-// ================================================================================================
-
-#[cfg(test)]
-mod tests {
-    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-    use miden_protocol::utils::serde::{Deserializable, Serializable};
-
-    use super::*;
-
-    const BASE_BUILD_ARGS: [&str; 14] = [
-        "miden-genesis",
-        "build",
-        "--genesis-block-directory",
-        "/tmp/genesis",
-        "--accounts-directory",
-        "/tmp/accounts",
-        "--native-faucet",
-        "/tmp/native-faucet.mac",
-        "--funding-account",
-        "/tmp/funding-account.mac",
-        "--verification-base-fee",
-        "7",
-        "--timestamp",
-        "1717344256",
-    ];
-
-    fn parse_build(extra: &[&str]) -> Result<Cli, clap::Error> {
-        Cli::try_parse_from(BASE_BUILD_ARGS.iter().copied().chain(extra.iter().copied()))
-    }
-
-    #[test]
-    fn build_validator_keys_parse_from_repeated_flags() {
-        let keys = [7u8, 8].map(|seed| {
-            SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
-        });
-        let hex_keys = keys.clone().map(|key| hex::encode(key.public_key().to_bytes()));
-        let cli = parse_build(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
-            .expect("build with explicit validator keys must parse");
-        let Command::Build(command) = cli.command else {
-            panic!("expected the build command");
-        };
-        assert_eq!(command.validator_keys, keys.map(|key| key.public_key()).to_vec());
-    }
-
-    #[test]
-    fn build_requires_an_explicit_validator_set() {
-        let Err(error) = parse_build(&[]) else {
-            panic!("build without an explicit validator set must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-
-        let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        parse_build(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
-            .expect("additional accounts with an explicit validator set must parse");
-    }
-
-    #[test]
-    fn build_requires_explicit_accounts_fee_and_timestamp() {
-        let key = SigningKey::new();
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        for flag in
-            ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"]
-        {
-            let position = BASE_BUILD_ARGS.iter().position(|value| *value == flag).unwrap();
-            let args = BASE_BUILD_ARGS
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != position && *index != position + 1)
-                .map(|(_, value)| *value)
-                .chain(["--validator.key", key_hex.as_str()]);
-            let Err(error) = Cli::try_parse_from(args) else {
-                panic!("build must require {flag}");
-            };
-            assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
-        }
-    }
-
-    #[test]
-    fn build_rejects_an_invalid_validator_key() {
-        let Err(error) = parse_build(&["--validator.key", "not-hex"]) else {
-            panic!("an invalid validator key must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-    }
-
-    #[test]
-    fn account_commands_parse_with_defaults() {
-        for args in [
-            vec!["miden-genesis", "new-distributor"],
-            vec![
-                "miden-genesis",
-                "faucet",
-                "--owner",
-                "0x3cd7940c4946bad179675b1d7d8059",
-                "--seed",
-                &"07".repeat(32),
-                "--token-supply",
-                "100000000",
-                "--verification-base-fee",
-                "7",
-            ],
-            vec!["miden-genesis", "prefund"],
-            vec!["miden-genesis", "record-nonces", "--nonce", &"55".repeat(32)],
-        ] {
-            Cli::try_parse_from(args).expect("account command must parse with its required flags");
-        }
-    }
 }

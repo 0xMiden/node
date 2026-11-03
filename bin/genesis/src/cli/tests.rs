@@ -1,15 +1,13 @@
-//! Acceptance and rejection of the `faucet` and `record-nonces` flags.
+//! Acceptance and rejection of the command-line flags.
 
-mod common;
-
-use clap::Parser;
-use miden_genesis::cli::{Cli, Command};
-use miden_genesis::config::{GenesisToolConfig, Role};
 use miden_protocol::address::NetworkId;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
+use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_usdcx::xreserve::encoding::CircleDomain;
 
-use crate::common::{
+use super::*;
+use crate::config::Role;
+use crate::test_utils::{
     ATTESTER_KEY_BYTES,
     FAUCET_SEED,
     TOKEN_SUPPLY,
@@ -19,6 +17,122 @@ use crate::common::{
     role_id_hex,
     to_hex,
 };
+
+/// Asserts a rejection whose message names the actual cause, so the test cannot pass on an
+/// unrelated error.
+fn assert_error_contains(err: &clap::Error, needle: &str) {
+    assert!(
+        err.to_string().contains(needle),
+        "the error must name the cause `{needle}`, got: {err}",
+    );
+}
+
+// BUILD
+// ================================================================================================
+
+const BASE_BUILD_ARGS: [&str; 14] = [
+    "miden-genesis",
+    "build",
+    "--genesis-block-directory",
+    "/tmp/genesis",
+    "--accounts-directory",
+    "/tmp/accounts",
+    "--native-faucet",
+    "/tmp/native-faucet.mac",
+    "--funding-account",
+    "/tmp/funding-account.mac",
+    "--verification-base-fee",
+    "7",
+    "--timestamp",
+    "1717344256",
+];
+
+fn parse_build(extra: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(BASE_BUILD_ARGS.iter().copied().chain(extra.iter().copied()))
+}
+
+#[test]
+fn build_validator_keys_parse_from_repeated_flags() {
+    let keys = [7u8, 8].map(|seed| {
+        SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
+    });
+    let hex_keys = keys.clone().map(|key| hex::encode(key.public_key().to_bytes()));
+    let cli = parse_build(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
+        .expect("build with explicit validator keys must parse");
+    let Command::Build(command) = cli.command else {
+        panic!("expected the build command");
+    };
+    assert_eq!(command.validator_keys, keys.map(|key| key.public_key()).to_vec());
+}
+
+#[test]
+fn build_requires_an_explicit_validator_set() {
+    let Err(error) = parse_build(&[]) else {
+        panic!("build without an explicit validator set must be rejected");
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+
+    let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
+    let key_hex = hex::encode(key.public_key().to_bytes());
+    parse_build(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
+        .expect("additional accounts with an explicit validator set must parse");
+}
+
+#[test]
+fn build_requires_explicit_accounts_fee_and_timestamp() {
+    let key = SigningKey::new();
+    let key_hex = hex::encode(key.public_key().to_bytes());
+    for flag in ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"] {
+        let position = BASE_BUILD_ARGS.iter().position(|value| *value == flag).unwrap();
+        let args = BASE_BUILD_ARGS
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != position && *index != position + 1)
+            .map(|(_, value)| *value)
+            .chain(["--validator.key", key_hex.as_str()]);
+        let Err(error) = Cli::try_parse_from(args) else {
+            panic!("build must require {flag}");
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
+    }
+}
+
+#[test]
+fn build_rejects_an_invalid_validator_key() {
+    let Err(error) = parse_build(&["--validator.key", "not-hex"]) else {
+        panic!("an invalid validator key must be rejected");
+    };
+    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+}
+
+// ACCOUNT COMMANDS
+// ================================================================================================
+
+#[test]
+fn account_commands_parse_with_defaults() {
+    for args in [
+        vec!["miden-genesis", "new-distributor"],
+        vec![
+            "miden-genesis",
+            "faucet",
+            "--owner",
+            "0x3cd7940c4946bad179675b1d7d8059",
+            "--seed",
+            &"07".repeat(32),
+            "--token-supply",
+            "100000000",
+            "--verification-base-fee",
+            "7",
+        ],
+        vec!["miden-genesis", "prefund"],
+        vec!["miden-genesis", "record-nonces", "--nonce", &"55".repeat(32)],
+    ] {
+        Cli::try_parse_from(args).expect("account command must parse with its required flags");
+    }
+}
+
+// FAUCET
+// ================================================================================================
 
 /// The `faucet` flags of the dev fixture: one holder per role, both attesters.
 fn dev_faucet_args() -> Vec<String> {
@@ -71,18 +185,6 @@ fn remove_flag(args: &mut Vec<String>, flag: &str) {
     let position = args.iter().position(|arg| arg == flag).expect("the flag is present");
     args.drain(position..position + 2);
 }
-
-/// Asserts a rejection whose message names the actual cause, so the test cannot pass on an
-/// unrelated error.
-fn assert_error_contains(err: &clap::Error, needle: &str) {
-    assert!(
-        err.to_string().contains(needle),
-        "the error must name the cause `{needle}`, got: {err}",
-    );
-}
-
-// FAUCET
-// ================================================================================================
 
 /// The dev flags parse, and the typed inputs reflect them.
 #[test]

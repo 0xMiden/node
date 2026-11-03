@@ -1,11 +1,6 @@
-//! Shared test fixtures: the dev faucet inputs (mutable, so tests can vary them), the fixture
-//! nonces, and the accounts the commands take as inputs.
+//! Shared test fixtures: the dev faucet inputs, the fixture nonces, and the accounts the commands
+//! take as inputs.
 
-// Each test binary compiles its own copy of this module and exercises a different subset of it.
-#![allow(dead_code)]
-
-use miden_genesis::accounts::{build_faucet, new_distributor_with};
-use miden_genesis::config::{FaucetConfig, GenesisToolConfig, Role, RoleAccounts};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
@@ -13,6 +8,9 @@ use miden_protocol::asset::AssetAmount;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
 use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
+
+use crate::accounts::{build_faucet, new_distributor_with};
+use crate::config::{FaucetConfig, GenesisToolConfig, Role, RoleAccounts};
 
 /// The dev faucet seed (`0x07` repeated).
 pub const FAUCET_SEED: [u8; 32] = [7; 32];
@@ -70,24 +68,26 @@ pub fn role_id(role: Role) -> AccountId {
     AccountId::from_hex(role_id_hex(role)).expect("the fixture ids are valid hex")
 }
 
-/// The dev faucet inputs: one holder per role, both attesters, no min burn amount.
-pub fn dev_config() -> GenesisToolConfig {
-    GenesisToolConfig {
-        accounts: RoleAccounts {
-            owner: role_id(Role::Owner),
-            attest_admins: vec![role_id(Role::AttestAdmin)],
-            pausers: vec![role_id(Role::Pauser)],
-            unpausers: vec![role_id(Role::Unpauser)],
-            blocklist_managers: vec![role_id(Role::BlocklistManager)],
-        },
-        faucet: FaucetConfig {
-            seed: FAUCET_SEED,
-            token_supply: AssetAmount::new(TOKEN_SUPPLY).expect("the dev supply is in range"),
-            domain: CircleDomain::new(7),
-            min_burn_amount: None,
-            verification_base_fee: 500,
-            attesters: attester_keys(),
-        },
+impl GenesisToolConfig {
+    /// The dev faucet inputs: one holder per role, both attesters, no min burn amount.
+    pub fn dev() -> Self {
+        Self {
+            accounts: RoleAccounts {
+                owner: role_id(Role::Owner),
+                attest_admins: vec![role_id(Role::AttestAdmin)],
+                pausers: vec![role_id(Role::Pauser)],
+                unpausers: vec![role_id(Role::Unpauser)],
+                blocklist_managers: vec![role_id(Role::BlocklistManager)],
+            },
+            faucet: FaucetConfig {
+                seed: FAUCET_SEED,
+                token_supply: AssetAmount::new(TOKEN_SUPPLY).expect("the dev supply is in range"),
+                domain: CircleDomain::new(7),
+                min_burn_amount: None,
+                verification_base_fee: 500,
+                attesters: attester_keys(),
+            },
+        }
     }
 }
 
@@ -98,7 +98,7 @@ pub fn used_nonces() -> Vec<DepositNonce> {
 
 /// The genesis faucet built from the dev inputs.
 pub fn genesis_faucet() -> Account {
-    build_faucet(&dev_config()).expect("the dev fixture must build")
+    build_faucet(&GenesisToolConfig::dev()).expect("the dev fixture must build")
 }
 
 /// A fresh (undeployed) distributor with an ECDSA key, deterministic in its seed.

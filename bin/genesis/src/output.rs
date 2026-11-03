@@ -17,6 +17,9 @@ use miden_usdcx::xreserve::encoding::EthEmbeddedAccountId;
 
 use crate::config::{GenesisToolConfig, Role};
 
+#[cfg(test)]
+mod tests;
+
 /// The fresh distributor `new-distributor` writes and `prefund` reads.
 pub const DISTRIBUTOR_MAC_FILE: &str = "distributor.mac";
 

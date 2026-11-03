@@ -1,12 +1,13 @@
-//! The `build` command: the genesis block it writes and the directories it refuses.
+//! The genesis block `build` writes and the directories it refuses.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use miden_genesis::build::BuildCommand;
 use miden_node_utils::genesis::read_genesis_block;
-use miden_objects::account_file::AccountFile;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
+use miden_protocol::asset::AssetId;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_testing::{Auth, MockChainBuilder};
+
+use super::*;
 
 /// Writes a native faucet and a funding wallet under `root` and returns a command that builds the
 /// genesis block from them into `root/genesis` and `root/accounts`.
@@ -32,7 +33,7 @@ fn command(root: &Path, validator_keys: Vec<PublicKey>) -> anyhow::Result<BuildC
 }
 
 fn genesis_file(root: &Path) -> PathBuf {
-    root.join("genesis").join("genesis.dat")
+    root.join("genesis").join(GENESIS_BLOCK_FILE_NAME)
 }
 
 #[test]
@@ -60,11 +61,7 @@ fn build_imports_required_accounts_and_exports_additional_wallets() -> anyhow::R
     }));
     let extra = AccountFile::read(root.path().join("accounts/extra.mac"))?;
     assert_eq!(
-        extra
-            .account()
-            .vault()
-            .get_balance(miden_protocol::asset::AssetId::new_fungible(native_id))?
-            .as_u64(),
+        extra.account().vault().get_balance(AssetId::new_fungible(native_id))?.as_u64(),
         40
     );
     assert_eq!(extra.auth_secret_keys().len(), 1);

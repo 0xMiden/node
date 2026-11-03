@@ -11,6 +11,9 @@ use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Deserializable;
 
+#[cfg(test)]
+mod tests;
+
 /// Name of the genesis block file written to the genesis block directory.
 pub const GENESIS_BLOCK_FILE_NAME: &str = "genesis.dat";
 
