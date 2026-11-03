@@ -268,7 +268,7 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
         vec![waiting.clone()]
     );
     assert!(database.start_attempt(attempt.clone()).await.is_err());
-    assert!(database.release_attempt(transaction(2)).await.is_err());
+    assert!(database.release_attempt(transaction(2), None).await.is_err());
 
     database
         .writer
@@ -323,7 +323,7 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
     attempt.transaction_id = transaction(2);
     attempt.note_ids = vec![waiting.note.id()];
     database.start_attempt(attempt.clone()).await.unwrap();
-    database.release_attempt(attempt.transaction_id).await.unwrap();
+    database.release_attempt(attempt.transaction_id, None).await.unwrap();
     assert!(database.active_attempt().await.unwrap().is_none());
     assert_eq!(database.pending_requests(3.try_into().unwrap()).await.unwrap(), vec![waiting]);
 
@@ -499,4 +499,275 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
     assert_eq!(attempt.expiration_block, BlockNumber::from(20));
     assert_eq!(attempt.note_ids, vec![note(1).note().id()]);
     assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
+}
+
+// DEPOSIT CHECKPOINT
+// ================================================================================================
+
+fn deposit(seed: u32) -> UsdcxP2Id {
+    note_for(identity().funding_account_id, 1_000, seed)
+}
+
+/// The checkpoint's cursor and its deposits keyed by nullifier.
+fn checkpoint_contents(
+    checkpoint: DepositCheckpoint,
+) -> (BlockNumber, std::collections::HashMap<Nullifier, Note>) {
+    (
+        checkpoint.next_sync,
+        checkpoint
+            .deposits
+            .into_iter()
+            .map(|deposit| (deposit.nullifier(), deposit.into_note()))
+            .collect(),
+    )
+}
+
+fn deposits_of(deposits: &[&UsdcxP2Id]) -> std::collections::HashMap<Nullifier, Note> {
+    deposits
+        .iter()
+        .map(|deposit| (deposit.nullifier(), deposit.note().clone()))
+        .collect()
+}
+
+async fn save(database: &FundingDatabase, next_sync: u32, deposits: &[&UsdcxP2Id]) {
+    database
+        .save_deposit_checkpoint(DepositCheckpoint {
+            next_sync: next_sync.into(),
+            deposits: deposits.iter().map(|deposit| (*deposit).clone()).collect(),
+        })
+        .await
+        .unwrap();
+}
+
+async fn reopen(dir: &tempfile::TempDir) -> FundingDatabase {
+    FundingDatabase::open_and_verify(
+        &dir.path().join("funding.sqlite3"),
+        identity().genesis_commitment,
+        identity().fee_asset_id,
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_new_database_resumes_deposit_discovery_from_genesis() {
+    let (_dir, database) = database().await;
+    assert_eq!(database.deposit_checkpoint().await.unwrap(), DepositCheckpoint::default());
+}
+
+#[tokio::test]
+async fn migrating_a_database_keeps_its_requests_and_resumes_deposit_discovery_from_genesis() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("funding.sqlite3");
+    migrator().unwrap().create_database(&path).unwrap().migrate_to(1).unwrap();
+    let request = note(1);
+    let (writer, _reader) = miden_node_db::sqlite::open(&path).unwrap();
+    let (note_id, target, amount, serial_number) = (
+        request.note().id(),
+        request.target(),
+        request.amount(),
+        request.note().recipient().serial_num(),
+    );
+    writer
+        .write("populate a version 1 database", move |tx| {
+            queries::insert_database_identity(tx, &identity())?;
+            queries::insert_request(tx, note_id, target, amount, serial_number, UNIX_EPOCH)
+        })
+        .await
+        .unwrap();
+    drop(writer);
+
+    assert!(
+        FundingDatabase::open_and_verify(
+            &path,
+            identity().genesis_commitment,
+            identity().fee_asset_id
+        )
+        .await
+        .is_err()
+    );
+    FundingDatabase::migrate(&path).unwrap();
+    let database = reopen(&dir).await;
+    assert_eq!(database.deposit_checkpoint().await.unwrap(), DepositCheckpoint::default());
+    assert_eq!(
+        database
+            .pending_requests(NonZeroUsize::new(10).unwrap())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|stored| stored.note)
+            .collect::<Vec<_>>(),
+        vec![request.into_note()]
+    );
+}
+
+#[tokio::test]
+async fn a_saved_deposit_checkpoint_reopens_with_its_cursor_and_notes() {
+    let (dir, database) = database().await;
+    let (first, second) = (deposit(1), deposit(2));
+    save(&database, 13, &[&first, &second]).await;
+    drop(database);
+
+    let database = reopen(&dir).await;
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (13.into(), deposits_of(&[&first, &second]))
+    );
+
+    save(&database, 20, &[&second]).await;
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (20.into(), deposits_of(&[&second]))
+    );
+}
+
+#[tokio::test]
+async fn a_deposit_checkpoint_cannot_move_backwards_or_hold_another_accounts_note() {
+    let (_dir, database) = database().await;
+    let kept = deposit(1);
+    save(&database, 20, &[&kept]).await;
+
+    let earlier = DepositCheckpoint { next_sync: 19.into(), deposits: vec![] };
+    assert!(database.save_deposit_checkpoint(earlier).await.is_err());
+    let foreign = DepositCheckpoint {
+        next_sync: 21.into(),
+        deposits: vec![note(2)],
+    };
+    assert!(database.save_deposit_checkpoint(foreign).await.is_err());
+
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (20.into(), deposits_of(&[&kept]))
+    );
+}
+
+#[tokio::test]
+async fn delivery_removes_the_consumed_deposit_together_with_the_attempt() {
+    let (_dir, database) = database().await;
+    let request = store_request(&database, 1).await;
+    let (consumed, other) = (deposit(1), deposit(2));
+    save(&database, 11, &[&consumed, &other]).await;
+    let attempt = TransactionAttempt {
+        transaction_id: transaction(1),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifier: Some(consumed.nullifier()),
+        note_ids: vec![request.note.id()],
+    };
+    database.start_attempt(attempt.clone()).await.unwrap();
+
+    database
+        .writer
+        .write("reject deposit deletion", |tx| {
+            tx.execute(
+                "CREATE TRIGGER reject_deposit_delete BEFORE DELETE ON deposits
+             BEGIN SELECT RAISE(FAIL, 'write failed'); END",
+                &[],
+            )?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+    assert!(
+        database
+            .record_delivery(attempt.note_ids.clone(), transaction(1), 15.into())
+            .await
+            .is_err()
+    );
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+    assert_eq!(database.request(request.note.id()).await.unwrap(), Some(request.clone()));
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (11.into(), deposits_of(&[&consumed, &other]))
+    );
+    database
+        .writer
+        .write("restore deposit deletion", |tx| {
+            tx.execute("DROP TRIGGER reject_deposit_delete", &[])?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+
+    database
+        .record_delivery(attempt.note_ids.clone(), transaction(1), 15.into())
+        .await
+        .unwrap();
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (11.into(), deposits_of(&[&other]))
+    );
+
+    let payout = store_request(&database, 2).await;
+    database
+        .start_attempt(TransactionAttempt {
+            transaction_id: transaction(2),
+            deposit_nullifier: None,
+            note_ids: vec![payout.note.id()],
+            ..attempt
+        })
+        .await
+        .unwrap();
+    database
+        .record_delivery(vec![payout.note.id()], transaction(2), 15.into())
+        .await
+        .unwrap();
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (11.into(), deposits_of(&[&other]))
+    );
+}
+
+#[tokio::test]
+async fn releasing_an_attempt_keeps_its_deposit_unless_the_node_rejected_it() {
+    let (_dir, database) = database().await;
+    let selected = deposit(1);
+    save(&database, 11, &[&selected]).await;
+    let attempt = TransactionAttempt {
+        transaction_id: transaction(1),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifier: Some(selected.nullifier()),
+        note_ids: vec![],
+    };
+
+    database.start_attempt(attempt.clone()).await.unwrap();
+    database.release_attempt(attempt.transaction_id, None).await.unwrap();
+    assert_eq!(
+        checkpoint_contents(database.deposit_checkpoint().await.unwrap()),
+        (11.into(), deposits_of(&[&selected]))
+    );
+
+    database.start_attempt(attempt.clone()).await.unwrap();
+    database
+        .release_attempt(attempt.transaction_id, Some(selected.nullifier()))
+        .await
+        .unwrap();
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(database.deposit_checkpoint().await.unwrap().deposits, vec![]);
+}
+
+#[tokio::test]
+async fn a_stored_deposit_the_account_cannot_consume_is_reported() {
+    let (_dir, database) = database().await;
+    let request = store_request(&database, 1).await;
+    let foreign = note(2).into_note();
+    database
+        .writer
+        .write("store a foreign note as a deposit", move |tx| {
+            tx.execute(
+                "INSERT INTO deposits (nullifier, note) VALUES (?1, ?2)",
+                &[&foreign.nullifier(), &foreign],
+            )?;
+            Ok::<_, DatabaseError>(())
+        })
+        .await
+        .unwrap();
+
+    assert!(database.deposit_checkpoint().await.is_err());
+    assert_eq!(
+        database.pending_requests(NonZeroUsize::new(10).unwrap()).await.unwrap(),
+        vec![request]
+    );
 }

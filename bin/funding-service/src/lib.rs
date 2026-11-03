@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::UsdcxFaucet;
-use miden_node_tracing::{info, miden_instrument, miden_span_record};
+use miden_node_tracing::{info, miden_instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -241,12 +241,28 @@ impl FundingServiceConfig {
             .await
             .context("failed to read the chain state from the node")?;
         let chain_tip = initial_header.block_num();
+        // Deposit discovery resumes where the last run stopped instead of scanning from genesis.
+        let checkpoint = database
+            .deposit_checkpoint()
+            .await
+            .context("failed to read the deposit checkpoint")?;
+        let checkpoint_block = checkpoint.next_sync;
+        let checkpoint_deposits = checkpoint.deposits.len();
+        if checkpoint_block > chain_tip + 1 {
+            warn!(
+                target: LOG_TARGET,
+                "The node's chain tip is behind the deposit checkpoint",
+                block.number = chain_tip,
+                deposit.checkpoint.block = checkpoint_block #[nonstandard]
+            );
+        }
         let wallet = FundingWallet::load_at(
             &mut node.rpc_client(),
             database.identity().funding_account_id,
             secret_key,
             fee_asset_id,
             chain_tip,
+            checkpoint,
         )
         .await
         .context("failed to load the public funding account from the node")?;
@@ -281,6 +297,8 @@ impl FundingServiceConfig {
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),
             genesis.commitment = node.genesis_commitment(),
+            deposit.checkpoint.block = checkpoint_block #[nonstandard],
+            deposit.count = checkpoint_deposits,
             funding_service.max_amount = self.max_amount,
             funding_service.max_notes_per_tx = self.max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = self.tx_expiration_delta.get(),

@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use anyhow::{Context, ensure};
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::{AssetId, FungibleAsset};
@@ -85,6 +86,17 @@ pub struct TransactionAttempt {
     /// The nullifier of the deposit consumed by the transaction, if any.
     pub deposit_nullifier: Option<Nullifier>,
     pub note_ids: Vec<NoteId>,
+}
+
+/// Where deposit discovery resumes and the deposits found before that block.
+///
+/// The deposits are the ones discovered before `next_sync`, not seen spent before it, and not yet
+/// consumed or discarded by the service. The default scans from genesis.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DepositCheckpoint {
+    /// The first block the next deposit scan reads.
+    pub next_sync: BlockNumber,
+    pub deposits: Vec<UsdcxP2Id>,
 }
 
 /// File-backed storage for funding requests, with serialized durable writes.
@@ -245,22 +257,33 @@ impl FundingDatabase {
     }
 
     /// Removes a rejected or expired transaction so its requests can be retried.
-    pub async fn release_attempt(&self, transaction_id: TransactionId) -> anyhow::Result<()> {
+    ///
+    /// `discarded_deposit` names a deposit the node rejected, which is removed in the same
+    /// transaction. The deposit of an expired transaction is still unspent and stays stored.
+    pub async fn release_attempt(
+        &self,
+        transaction_id: TransactionId,
+        discarded_deposit: Option<Nullifier>,
+    ) -> anyhow::Result<()> {
         self.writer
             .write("release funding transaction attempt", move |tx| {
                 if let Some(attempt) = queries::select_attempt(tx)? {
                     ensure!(attempt.transaction_id == transaction_id, "another attempt is active");
                     queries::delete_attempt(tx, transaction_id)?;
                 }
+                if let Some(nullifier) = discarded_deposit {
+                    queries::delete_deposit(tx, nullifier)?;
+                }
                 Ok(())
             })
             .await
     }
 
-    /// Records delivery of the requests and removes the attempt.
+    /// Records delivery of the requests and removes the attempt and the deposit it consumed.
     ///
-    /// The caller must check that the transaction committed on chain. Both updates share a database
-    /// transaction so a restart cannot leave delivered requests waiting to be retried.
+    /// The caller must check that the transaction committed on chain. The updates share a database
+    /// transaction so a restart cannot leave delivered requests waiting to be retried, or reload the
+    /// consumed deposit as unspent.
     pub async fn record_delivery(
         &self,
         notes: Vec<NoteId>,
@@ -300,8 +323,58 @@ impl FundingDatabase {
                         confirmed_at,
                     )?;
                 }
-                if attempt.is_some() {
+                if let Some(attempt) = attempt {
+                    if let Some(nullifier) = attempt.deposit_nullifier {
+                        queries::delete_deposit(tx, nullifier)?;
+                    }
                     queries::delete_attempt(tx, transaction_id)?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// Returns where deposit discovery resumes and the deposits found before that block.
+    pub async fn deposit_checkpoint(&self) -> anyhow::Result<DepositCheckpoint> {
+        let identity = self.identity;
+        self.reader
+            .read("read deposit checkpoint", move |tx| {
+                let next_sync = queries::select_deposit_sync(tx)?
+                    .context("the deposit sync cursor is missing")?;
+                let deposits = queries::select_deposits(tx, identity)?;
+                Ok(DepositCheckpoint { next_sync, deposits })
+            })
+            .await
+    }
+
+    /// Replaces the stored deposits and moves the deposit scan cursor in one transaction.
+    ///
+    /// `deposits` must be every deposit found before `next_sync` which is not known to be spent.
+    /// The cursor cannot move backwards, because the stored deposits only describe the chain up to
+    /// the stored cursor.
+    pub async fn save_deposit_checkpoint(
+        &self,
+        checkpoint: DepositCheckpoint,
+    ) -> anyhow::Result<()> {
+        let funding_account_id = self.identity.funding_account_id;
+        self.writer
+            .write("save deposit checkpoint", move |tx| {
+                let stored = queries::select_deposit_sync(tx)?
+                    .context("the deposit sync cursor is missing")?;
+                ensure!(
+                    checkpoint.next_sync >= stored,
+                    "the deposit checkpoint cannot move from block {stored} back to block {}",
+                    checkpoint.next_sync,
+                );
+                queries::update_deposit_sync(tx, checkpoint.next_sync)?;
+                queries::delete_deposits(tx)?;
+                for deposit in &checkpoint.deposits {
+                    ensure!(
+                        deposit.target() == funding_account_id,
+                        "the deposit {} targets another account",
+                        deposit.note().id(),
+                    );
+                    queries::insert_deposit(tx, deposit.note())?;
                 }
                 Ok(())
             })

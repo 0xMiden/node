@@ -33,6 +33,7 @@ use miden_protocol::note::Nullifier;
 use miden_standards::account::auth::AuthSingleSig;
 
 use crate::COMPONENT;
+use crate::db::DepositCheckpoint;
 mod deposits;
 #[cfg(test)]
 mod tests;
@@ -59,12 +60,15 @@ pub struct WalletUpdate {
 
 impl FundingWallet {
     /// Loads the public account at a reference block and checks its signing key.
+    ///
+    /// Deposit discovery resumes from `checkpoint`, whose deposits the wallet holds immediately.
     pub async fn load_at(
         rpc_client: &mut RpcClient,
         account_id: AccountId,
         secret_key: AuthSecretKey,
         fee_asset_id: AssetId,
         block_num: BlockNumber,
+        checkpoint: DepositCheckpoint,
     ) -> Result<Self> {
         anyhow::ensure!(
             account_id.account_type() == AccountType::Public,
@@ -87,17 +91,32 @@ impl FundingWallet {
                 && scheme_id == Word::from([secret_key.auth_scheme().as_u8(), 0, 0, 0]),
             "the signing key does not match the funding account"
         );
-        Ok(Self::new(account, secret_key, fee_asset_id))
+        Ok(Self::with_checkpoint(account, secret_key, fee_asset_id, checkpoint))
     }
 
     /// Creates a wallet whose deposit history has not yet been synchronized.
+    #[cfg(test)]
     pub(crate) fn new(account: Account, secret_key: AuthSecretKey, fee_asset_id: AssetId) -> Self {
+        Self::with_checkpoint(account, secret_key, fee_asset_id, DepositCheckpoint::default())
+    }
+
+    /// Creates a wallet whose deposit discovery resumes from `checkpoint`.
+    fn with_checkpoint(
+        account: Account,
+        secret_key: AuthSecretKey,
+        fee_asset_id: AssetId,
+        checkpoint: DepositCheckpoint,
+    ) -> Self {
         Self {
             account: Arc::new(account),
             secret_key,
             fee_asset_id,
-            next_sync: BlockNumber::GENESIS,
-            deposits: HashMap::new(),
+            next_sync: checkpoint.next_sync,
+            deposits: checkpoint
+                .deposits
+                .into_iter()
+                .map(|deposit| (deposit.nullifier(), deposit))
+                .collect(),
         }
     }
 
@@ -112,6 +131,19 @@ impl FundingWallet {
     /// The unspent deposits discovered through the wallet's reference block.
     pub fn deposits(&self) -> &HashMap<Nullifier, UsdcxP2Id> {
         &self.deposits
+    }
+
+    /// The first block the next deposit scan reads.
+    pub fn next_sync(&self) -> BlockNumber {
+        self.next_sync
+    }
+
+    /// The deposit scan progress and unspent deposits, in the form the database stores.
+    pub fn checkpoint(&self) -> DepositCheckpoint {
+        DepositCheckpoint {
+            next_sync: self.next_sync,
+            deposits: self.deposits.values().cloned().collect(),
+        }
     }
 
     /// Removes a consumed or rejected deposit from the wallet.

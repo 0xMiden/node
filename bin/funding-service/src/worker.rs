@@ -16,7 +16,7 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::BlockHeader;
+use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -88,16 +88,22 @@ pub struct Funder {
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
+    /// The deposit scan cursor the database last acknowledged.
+    persisted_sync: BlockNumber,
 }
 
 impl Funder {
     /// Creates a worker for the given funding account.
+    ///
+    /// The wallet must be loaded from the database's deposit checkpoint.
     pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
+        let persisted_sync = setup.wallet.next_sync();
         Self {
             node,
             prover,
             setup,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
+            persisted_sync,
         }
     }
 
@@ -237,7 +243,7 @@ impl Funder {
         let outcome = match self.node.submit(&transaction, &transaction_inputs).await {
             Ok(outcome) => outcome,
             Err(err) => {
-                self.setup.database.release_attempt(transaction_id).await?;
+                self.setup.database.release_attempt(transaction_id, None).await?;
                 return Err(err);
             },
         };
@@ -290,13 +296,13 @@ impl Funder {
             },
             Some(SubmissionOutcome::Rejected(status)) => {
                 Span::current().set_error(&status);
-                self.setup.database.release_attempt(transaction_id).await?;
                 // With one writer and controlled outputs, a state conflict identifies the single
                 // selected deposit as invalid. Keep the payouts for the next attempt.
-                if status.code() == tonic::Code::InvalidArgument
-                    && status.details() == [2]
-                    && let Some(nullifier) = deposit_nullifier
-                {
+                let discarded = deposit_nullifier.filter(|_| {
+                    status.code() == tonic::Code::InvalidArgument && status.details() == [2]
+                });
+                self.setup.database.release_attempt(transaction_id, discarded).await?;
+                if let Some(nullifier) = discarded {
                     self.setup.wallet.remove_deposit(nullifier);
                     warn!(
                         &status,
@@ -359,6 +365,7 @@ impl Funder {
                         tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
                     info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
+                    // The delivery record already removed the consumed deposit from the database.
                     if let Some(nullifier) = deposit_nullifier {
                         self.setup.wallet.remove_deposit(nullifier);
                     }
@@ -366,7 +373,8 @@ impl Funder {
                     break Resolution::Committed;
                 },
                 Ok(TransactionStatus::Expired) => {
-                    self.setup.database.release_attempt(transaction_id).await?;
+                    // The deposit of an expired transaction is still unspent, so it stays stored.
+                    self.setup.database.release_attempt(transaction_id, None).await?;
                     warn!(
                         target: LOG_TARGET,
                         "A funding transaction expired; its notes remain queued",
@@ -391,6 +399,9 @@ impl Funder {
     }
 
     /// Reads the funding account and chain state at the current reference block.
+    ///
+    /// The deposit checkpoint is saved here, before a transaction is selected, so the database
+    /// holds every deposit a recorded attempt can consume.
     #[miden_instrument(
         target = COMPONENT,
         name = "funding.read_chain_state",
@@ -411,6 +422,17 @@ impl Funder {
             .wallet
             .apply(update)
             .context("failed to apply the funding wallet update")?;
+
+        // Comparing with the acknowledged cursor retries a failed save on the next poll, even when
+        // the chain tip has not moved.
+        if self.setup.wallet.next_sync() != self.persisted_sync {
+            self.setup
+                .database
+                .save_deposit_checkpoint(self.setup.wallet.checkpoint())
+                .await
+                .context("failed to persist the deposit checkpoint")?;
+            self.persisted_sync = self.setup.wallet.next_sync();
+        }
 
         Ok(ChainState { reference_header, blockchain })
     }

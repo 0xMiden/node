@@ -7,7 +7,7 @@ use opentelemetry::trace::Status;
 use tokio::time::Instant;
 
 use super::*;
-use crate::db::DatabaseIdentity;
+use crate::db::{DatabaseIdentity, DepositCheckpoint};
 use crate::lifecycle::DATABASE_FILENAME;
 use crate::node::tests::{TestChain, TestServer};
 use crate::test_utils::Fixture;
@@ -98,7 +98,8 @@ impl Funder {
     }
 }
 
-/// Populates the wallet through its normal synchronization path.
+/// Populates the wallet through its normal synchronization path and saves its deposit checkpoint,
+/// as a worker started from that checkpoint would hold it.
 async fn with_deposits(
     mut setup: FunderSetup,
     mut chain: TestChain,
@@ -117,7 +118,55 @@ async fn with_deposits(
     let server = TestServer::start(chain).await;
     let update = setup.wallet.sync_to(&mut server.node.rpc_client(), tip).await.unwrap();
     setup.wallet.apply(update).unwrap();
+    setup.database.save_deposit_checkpoint(setup.wallet.checkpoint()).await.unwrap();
     (Funder::new(server.node.clone(), Prover::local(), setup), server)
+}
+
+/// The deposits the database holds, keyed by nullifier.
+async fn stored_deposits(database: &FundingDatabase) -> HashMap<Nullifier, Note> {
+    database
+        .deposit_checkpoint()
+        .await
+        .unwrap()
+        .deposits
+        .into_iter()
+        .map(|deposit| (deposit.nullifier(), deposit.into_note()))
+        .collect()
+}
+
+/// Serves a chain at its genesis block which holds `notes`, and returns the funding wallet whose
+/// account the node serves.
+async fn genesis_server(
+    balance: u64,
+    base_fee: u32,
+    notes: &[Note],
+) -> (FundingWallet, TestServer) {
+    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
+    use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
+
+    let fixture = Fixture::new(balance, base_fee).unwrap();
+    let chain = fixture.chain.lock().await;
+    let header = chain.genesis_block_header().clone();
+    let witness = chain
+        .account_witnesses([fixture.funder.id()])
+        .remove(&fixture.funder.id())
+        .unwrap();
+    drop(chain);
+    let mut rpc_chain = TestChain::new(0);
+    rpc_chain.account = Some((fixture.funder, witness));
+    rpc_chain.chain_mmr = Some(SyncChainMmrResponse {
+        block_header: Some(header.into()),
+        mmr_delta: Some(
+            MmrDelta {
+                forest: Forest::new(0).unwrap(),
+                data: Vec::new(),
+            }
+            .into(),
+        ),
+        ..Default::default()
+    });
+    rpc_chain.notes = notes.iter().cloned().map(|note| (0, note)).collect();
+    (fixture.wallet, TestServer::start(rpc_chain).await)
 }
 
 #[tokio::test]
@@ -200,7 +249,11 @@ async fn state_conflict_discards_only_the_selected_deposit() {
             .iter()
             .map(|(key, deposit)| (*key, deposit.note().clone()))
             .collect::<HashMap<_, _>>(),
-        &HashMap::from([(unselected.nullifier(), unselected)])
+        &HashMap::from([(unselected.nullifier(), unselected.clone())])
+    );
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(unselected.nullifier(), unselected)])
     );
     assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
     let span = telemetry.span("funding.resolve_attempt");
@@ -333,18 +386,12 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
                 assert_eq!(delivery.transaction_id, transaction_id);
                 assert_eq!(delivery.committed_in_block, BlockNumber::from(19));
                 assert!(funder.setup.wallet.deposits().is_empty());
+                assert!(stored_deposits(&funder.setup.database).await.is_empty());
                 assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([waiting]));
             } else {
-                assert_eq!(
-                    &funder
-                        .setup
-                        .wallet
-                        .deposits()
-                        .iter()
-                        .map(|(key, deposit)| (*key, deposit.note().clone()))
-                        .collect::<HashMap<_, _>>(),
-                    &HashMap::from([(deposit.nullifier(), deposit)])
-                );
+                let expected = HashMap::from([(deposit.nullifier(), deposit)]);
+                assert_eq!(wallet_deposits(&funder), expected);
+                assert_eq!(stored_deposits(&funder.setup.database).await, expected);
                 assert_eq!(
                     funder.pending_requests().await.unwrap(),
                     VecDeque::from([payout, waiting])
@@ -356,33 +403,9 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
 
 #[tokio::test]
 async fn admission_uses_the_reference_blocks_fee() {
-    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
-    use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
-
-    let fixture = Fixture::new(1_000, 100).unwrap();
-    let chain = fixture.chain.lock().await;
-    let header = chain.genesis_block_header().clone();
-    let witness = chain
-        .account_witnesses([fixture.funder.id()])
-        .remove(&fixture.funder.id())
-        .unwrap();
-    drop(chain);
-    let mut rpc_chain = TestChain::new(0);
-    rpc_chain.account = Some((fixture.funder, witness));
-    rpc_chain.chain_mmr = Some(SyncChainMmrResponse {
-        block_header: Some(header.into()),
-        mmr_delta: Some(
-            MmrDelta {
-                forest: Forest::new(0).unwrap(),
-                data: Vec::new(),
-            }
-            .into(),
-        ),
-        ..Default::default()
-    });
-    let server = TestServer::start(rpc_chain).await;
+    let (wallet, server) = genesis_server(1_000, 100, &[]).await;
     let (_directory, mut setup) = FunderSetup::fixture().await;
-    setup.wallet = fixture.wallet;
+    setup.wallet = wallet;
     let payout = setup.payout(1);
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
     funder
@@ -688,4 +711,114 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
             event.attributes.iter().any(|attr| attr.key.as_str() == "exception.message")
         }));
     }
+}
+
+// DEPOSIT CHECKPOINT
+// ================================================================================================
+
+/// Rebuilds the worker as startup does: from a reopened database and a wallet loaded from its
+/// deposit checkpoint.
+async fn restart(
+    funder: Funder,
+    directory: &tempfile::TempDir,
+    server: &TestServer,
+) -> (Funder, DepositCheckpoint) {
+    let mut setup = funder.setup;
+    let identity = setup.database.identity();
+    setup.database = Arc::new(
+        FundingDatabase::open_and_verify(
+            &directory.path().join(DATABASE_FILENAME),
+            identity.genesis_commitment,
+            identity.fee_asset_id,
+        )
+        .await
+        .unwrap(),
+    );
+    let checkpoint = setup.database.deposit_checkpoint().await.unwrap();
+    setup.wallet = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        identity.funding_account_id,
+        setup.wallet.secret_key().clone(),
+        setup.fee_asset_id,
+        BlockNumber::GENESIS,
+        checkpoint.clone(),
+    )
+    .await
+    .unwrap();
+    (Funder::new(server.node.clone(), Prover::local(), setup), checkpoint)
+}
+
+fn wallet_deposits(funder: &Funder) -> HashMap<Nullifier, Note> {
+    funder
+        .setup
+        .wallet
+        .deposits()
+        .iter()
+        .map(|(nullifier, deposit)| (*nullifier, deposit.note().clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_restarted_worker_resumes_deposit_discovery_from_the_saved_checkpoint() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+
+    funder.read_chain_state().await.unwrap();
+    let expected = HashMap::from([(deposit.nullifier(), deposit)]);
+    assert_eq!(wallet_deposits(&funder), expected);
+
+    // A note at a block the checkpoint already covers is only found by a scan from genesis.
+    let unscanned = funder.setup.deposit(2);
+    server.chain.lock().unwrap().notes.push((0, unscanned));
+    let (mut restarted, checkpoint) = restart(funder, &directory, &server).await;
+    assert_eq!(checkpoint.next_sync, BlockNumber::from(1));
+    assert_eq!(wallet_deposits(&restarted), expected);
+
+    restarted.read_chain_state().await.unwrap();
+    assert_eq!(wallet_deposits(&restarted), expected);
+    assert_eq!(stored_deposits(&restarted.setup.database).await, expected);
+}
+
+#[tokio::test]
+async fn a_checkpoint_which_could_not_be_saved_is_saved_on_the_next_sync() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    let (writer, _reader) =
+        miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
+    let set_trigger = async |sql: &'static str| {
+        writer
+            .write("change checkpoint trigger", move |tx| {
+                tx.execute(sql, &[])?;
+                Ok::<_, miden_node_db::DatabaseError>(())
+            })
+            .await
+            .unwrap();
+    };
+
+    set_trigger(
+        "CREATE TRIGGER reject_checkpoint BEFORE UPDATE ON deposit_sync
+         BEGIN SELECT RAISE(FAIL, 'write failed'); END",
+    )
+    .await;
+    assert!(funder.read_chain_state().await.is_err());
+    assert_eq!(
+        funder.setup.database.deposit_checkpoint().await.unwrap(),
+        DepositCheckpoint::default()
+    );
+
+    // The chain tip has not moved, so only the unsaved checkpoint prompts the next write.
+    set_trigger("DROP TRIGGER reject_checkpoint").await;
+    funder.read_chain_state().await.unwrap();
+    let checkpoint = funder.setup.database.deposit_checkpoint().await.unwrap();
+    assert_eq!(checkpoint.next_sync, BlockNumber::from(1));
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(deposit.nullifier(), deposit)])
+    );
 }

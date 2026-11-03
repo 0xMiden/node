@@ -44,6 +44,7 @@ async fn loads_public_state_from_the_node_with_only_an_id_and_key(
         secret_key.clone(),
         fee_asset_id(),
         12.into(),
+        DepositCheckpoint::default(),
     )
     .await?;
 
@@ -69,6 +70,7 @@ async fn rejects_an_unrelated_signing_key(#[case] scheme: AuthScheme) {
         wrong_key,
         fee_asset_id(),
         12.into(),
+        DepositCheckpoint::default(),
     )
     .await
     .err()
@@ -94,6 +96,7 @@ async fn rejects_a_key_with_the_wrong_signature_scheme() {
         key,
         fee_asset_id(),
         12.into(),
+        DepositCheckpoint::default(),
     )
     .await
     .err()
@@ -112,6 +115,7 @@ async fn rejects_a_private_account() {
         secret_key,
         fee_asset_id(),
         12.into(),
+        DepositCheckpoint::default(),
     )
     .await
     .err()
@@ -387,5 +391,104 @@ async fn sync_loads_code_updates() -> Result<()> {
     let update = wallet.sync_to(&mut rpc, block + 1).await?;
     wallet.apply(update)?;
     assert_eq!(wallet.account().as_ref(), &updated);
+    Ok(())
+}
+
+// DEPOSIT CHECKPOINT
+// ================================================================================================
+
+/// Builds a native-asset deposit for `account`.
+fn deposit_for(account: &Account, serial: u32) -> UsdcxP2Id {
+    let note: Note = miden_standards::note::P2idNote::builder()
+        .sender(FungibleAsset::mock_issuer())
+        .target(account.id())
+        .asset(FungibleAsset::new(FungibleAsset::mock_issuer(), 1_000).unwrap())
+        .note_type(miden_protocol::note::NoteType::Public)
+        .serial_number(Word::from([serial; 4]))
+        .build()
+        .unwrap()
+        .into();
+    UsdcxP2Id::from_note(note, fee_asset_id()).unwrap()
+}
+
+/// Loads a public wallet from `server` at `block`, resuming deposit discovery from `checkpoint`.
+async fn restored_wallet(
+    server: &TestServer,
+    account: &Account,
+    secret_key: AuthSecretKey,
+    block: u32,
+    checkpoint: DepositCheckpoint,
+) -> Result<FundingWallet> {
+    serve_account(server, account.clone())?;
+    FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        account.id(),
+        secret_key,
+        fee_asset_id(),
+        block.into(),
+        checkpoint,
+    )
+    .await
+}
+
+fn deposit_notes(wallet: &FundingWallet) -> HashMap<Nullifier, Note> {
+    wallet
+        .deposits()
+        .iter()
+        .map(|(nullifier, deposit)| (*nullifier, deposit.note().clone()))
+        .collect()
+}
+
+fn notes_of(deposits: &[&UsdcxP2Id]) -> HashMap<Nullifier, Note> {
+    deposits
+        .iter()
+        .map(|deposit| (deposit.nullifier(), deposit.note().clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_restored_wallet_holds_its_checkpoint_and_resumes_discovery_after_it() -> Result<()> {
+    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let restored = deposit_for(&account, 1);
+    let before_checkpoint = deposit_for(&account, 2);
+    let after_checkpoint = deposit_for(&account, 3);
+    let mut chain = TestChain::new(15);
+    chain.notes = vec![
+        (3, before_checkpoint.clone().into_note()),
+        (12, after_checkpoint.clone().into_note()),
+    ];
+    let server = TestServer::start(chain).await;
+    let checkpoint = DepositCheckpoint {
+        next_sync: 11.into(),
+        deposits: vec![restored.clone()],
+    };
+    let mut wallet = restored_wallet(&server, &account, secret_key, 15, checkpoint).await?;
+    assert_eq!(deposit_notes(&wallet), notes_of(&[&restored]));
+    assert_eq!(wallet.checkpoint().next_sync, BlockNumber::from(11));
+
+    let update = wallet.sync_to(&mut server.node.rpc_client(), 15.into()).await?;
+    wallet.apply(update)?;
+    // The deposit before the checkpoint is not rediscovered, because the scan resumes at it.
+    assert_eq!(deposit_notes(&wallet), notes_of(&[&restored, &after_checkpoint]));
+    assert_eq!(wallet.checkpoint().next_sync, BlockNumber::from(16));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_restored_deposit_spent_after_the_checkpoint_is_discarded() -> Result<()> {
+    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let restored = deposit_for(&account, 1);
+    let mut chain = TestChain::new(15);
+    chain.spent = vec![(12, restored.nullifier())];
+    let server = TestServer::start(chain).await;
+    let checkpoint = DepositCheckpoint {
+        next_sync: 11.into(),
+        deposits: vec![restored],
+    };
+    let mut wallet = restored_wallet(&server, &account, secret_key, 15, checkpoint).await?;
+
+    let update = wallet.sync_to(&mut server.node.rpc_client(), 15.into()).await?;
+    wallet.apply(update)?;
+    assert!(wallet.deposits().is_empty());
     Ok(())
 }
