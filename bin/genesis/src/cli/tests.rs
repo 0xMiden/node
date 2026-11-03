@@ -232,7 +232,7 @@ fn only_the_owner_seed_supply_and_fee_are_required() {
     .expect("the minimal flags must parse");
     assert_eq!(config.faucet.domain, CircleDomain::MIDEN);
     assert!(config.faucet.min_burn_amount.is_none());
-    assert!(config.faucet.attesters.is_empty());
+    assert_eq!(config.faucet.attesters, [] as [PublicKey; 0]);
     for role in Role::ALL.into_iter().filter(|role| *role != Role::Owner) {
         assert!(config.accounts.get(role).is_empty(), "{} defaults to no holder", role.as_str());
     }
