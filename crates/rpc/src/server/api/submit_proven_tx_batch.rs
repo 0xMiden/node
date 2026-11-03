@@ -134,7 +134,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcServi
                 )
                 .await
             },
-            RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
+            RpcBackend::FullNode { source_rpc, pre_auth: None } => {
                 // Unauthenticated transactions: forward the request to the source verbatim.
                 let mut forwarded_request = Request::new(request);
                 if let Some(accept) = original_accept_header {

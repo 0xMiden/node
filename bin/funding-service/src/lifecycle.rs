@@ -83,12 +83,12 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(database.identity(), identity);
-        assert!(
+        assert_eq!(
             database
                 .pending_requests(std::num::NonZeroUsize::new(1).unwrap())
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            []
         );
         drop(database);
 

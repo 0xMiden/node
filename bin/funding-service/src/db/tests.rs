@@ -403,7 +403,7 @@ async fn invalid_funding_requests_are_not_stored() {
     for (target, amount) in [(other, 0), (other, u64::MAX), (identity.funding_account_id, 1_000)] {
         assert!(database.store_request(target, amount, Word::from([1u32; 4])).await.is_err());
     }
-    assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+    assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
 }
 
 #[tokio::test]
@@ -498,5 +498,5 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
     assert_eq!(attempt.reference_block, BlockNumber::from(10));
     assert_eq!(attempt.expiration_block, BlockNumber::from(20));
     assert_eq!(attempt.note_ids, vec![note(1).note().id()]);
-    assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+    assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
 }

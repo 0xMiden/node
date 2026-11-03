@@ -165,7 +165,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
                 )
                 .await
             },
-            RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
+            RpcBackend::FullNode { source_rpc, pre_auth: None } => {
                 // Check nullifiers and expiration against the local store before forwarding so that
                 // provably-invalid transactions are rejected at the edge rather than consuming
                 // sequencer resources.

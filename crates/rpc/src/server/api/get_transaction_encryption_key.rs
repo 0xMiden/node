@@ -45,7 +45,7 @@ impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for 
         let validator = match &self.backend {
             RpcBackend::Sequencer { validators, .. } => validators.random(),
             RpcBackend::FullNode { pre_auth: Some(pre_auth), .. } => pre_auth.validators().random(),
-            RpcBackend::FullNode { source_rpc, pre_auth: None, .. } => {
+            RpcBackend::FullNode { source_rpc, pre_auth: None } => {
                 return source_rpc
                     .as_ref()
                     .clone()

@@ -94,7 +94,7 @@ end";
 
         assert_eq!(partitioned_notes.allowed.len(), 1);
         assert_eq!(partitioned_notes.allowed[0].as_note().nullifier(), note.as_note().nullifier());
-        assert!(partitioned_notes.rejected.is_empty());
+        assert_eq!(partitioned_notes.rejected, []);
     }
 
     #[test]
@@ -112,7 +112,7 @@ end";
         let partitioned_notes = partition_by_allowlist(&account, vec![rejected_note.clone()])
             .expect("allowlist should load");
 
-        assert!(partitioned_notes.allowed.is_empty());
+        assert_eq!(partitioned_notes.allowed, []);
         assert_eq!(
             partitioned_notes.rejected,
             vec![(rejected_note.as_note().nullifier(), rejected_root)]

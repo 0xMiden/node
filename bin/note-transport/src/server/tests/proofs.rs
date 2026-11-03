@@ -302,7 +302,7 @@ async fn rejects_invalid_proof_requests_without_storage() {
     for request in requests {
         let error = SendNoteWithProof::full(&server, Request::new(request)).await.unwrap_err();
         assert_eq!(error.code(), tonic::Code::InvalidArgument);
-        assert!(fetched(&server).await.notes.is_empty());
+        assert_eq!(fetched(&server).await.notes, []);
     }
     upstream.abort();
 }
@@ -352,7 +352,7 @@ async fn lookup_failures_never_store_notes() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), code, "{error}");
-        assert!(fetched(&server).await.notes.is_empty());
+        assert_eq!(fetched(&server).await.notes, []);
         upstream.abort();
     }
 }
@@ -415,7 +415,7 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     .unwrap();
     let error = client.send_note_with_proof(request).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
-    assert!(
+    assert_eq!(
         client
             .fetch_notes(FetchNotesRequest {
                 tags: vec![7],
@@ -425,8 +425,8 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
             .await
             .unwrap()
             .into_inner()
-            .notes
-            .is_empty()
+            .notes,
+        []
     );
     drop(client);
     shutdown.cancel();
@@ -448,7 +448,7 @@ async fn verified_submission_obeys_size_and_storage_limits() {
             .await
             .unwrap_err();
         assert_eq!(error.code(), tonic::Code::ResourceExhausted);
-        assert!(fetched(&server).await.notes.is_empty());
+        assert_eq!(fetched(&server).await.notes, []);
     }
     upstream.abort();
 }

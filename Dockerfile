@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=1.99.1
 ARG DEBIAN_RELEASE=trixie
 ARG BIN
 ARG PORT

@@ -162,6 +162,6 @@ pub(crate) mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+        assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
     }
 }

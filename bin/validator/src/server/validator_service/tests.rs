@@ -1505,7 +1505,7 @@ async fn encryption_key_available_during_backup() {
     // `call_get_transaction_encryption_key` panics on rejection, so completing proves availability
     // during the backup.
     let response = tv.call_get_transaction_encryption_key().await;
-    assert!(!response.public_key.is_empty());
+    assert_ne!(response.public_key, [] as [u8; 0]);
 
     drop(stream);
 }

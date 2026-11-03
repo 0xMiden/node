@@ -194,7 +194,7 @@ mod tests {
         let got = r
             .query("SELECT id FROM items WHERE id = ?1", &[&404i64], |row| row.get::<i64>(0))
             .unwrap();
-        assert!(got.is_empty());
+        assert_eq!(got, [] as [i64; 0]);
     }
 
     // Regression guard for the cacheable IN-list idiom: the rarray form must run through `query`

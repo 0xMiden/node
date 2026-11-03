@@ -150,7 +150,7 @@ async fn migration_preserves_transaction_links_and_replacement_cascades() {
         .await
         .unwrap();
     assert_eq!(db.load_block(1.into()).await.unwrap(), Some(replacement));
-    assert!(db.list_validated_transactions(params).await.unwrap().transactions.is_empty());
+    assert_eq!(db.list_validated_transactions(params).await.unwrap().transactions, []);
     assert_eq!(db.load_private_record(transaction_id).await.unwrap(), Some(record));
 }
 
