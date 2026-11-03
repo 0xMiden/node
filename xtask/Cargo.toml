@@ -3,7 +3,7 @@ edition      = "2024"
 license      = "MIT"
 name         = "xtask"
 publish      = false
-rust-version = "1.98.1"
+rust-version = "1.99.1"
 version      = "0.1.0"
 
 [workspace]
@@ -24,7 +24,7 @@ pedantic = { level = "warn", priority = -1 }
 
 allow_attributes            = "deny"
 cast_possible_truncation    = "allow"
-collapsible-if              = "allow"
+collapsible_if              = "allow"
 ignored_unit_patterns       = "allow"
 large_types_passed_by_value = "allow"
 missing_errors_doc          = "allow"

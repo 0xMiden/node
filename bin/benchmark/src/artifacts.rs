@@ -123,8 +123,8 @@ mod tests {
         let input_path = dir.path().join("mint_tx_inputs.bin");
         write_transactions(&tx_path, &[]).unwrap();
         write_inputs(&input_path, &[]).unwrap();
-        assert!(read_transactions(&tx_path).unwrap().is_empty());
-        assert!(read_inputs(&input_path).unwrap().is_empty());
+        assert_eq!(read_transactions(&tx_path).unwrap(), []);
+        assert_eq!(read_inputs(&input_path).unwrap(), []);
     }
 
     #[test]

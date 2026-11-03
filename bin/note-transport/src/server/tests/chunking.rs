@@ -142,6 +142,6 @@ async fn removed_tags_need_no_reset_and_newer_irrelevant_notes_do_not_repeat() {
     assert_eq!(notes, vec![wanted]);
     assert_eq!(next.sequence, 4);
     let (empty, resolved) = drain_chunk(&server, vec![7], Some(next), None).await;
-    assert!(empty.is_empty());
+    assert_eq!(empty, []);
     assert_eq!(resolved, next);
 }

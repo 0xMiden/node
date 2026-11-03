@@ -36,7 +36,7 @@ homepage     = "https://miden.xyz"
 license      = "MIT"
 readme       = "README.md"
 repository   = "https://github.com/0xMiden/node"
-rust-version = "1.98.1"
+rust-version = "1.99.1"
 version      = "0.18.2"
 
 # Optimize the cryptography for faster tests involving account creation.
@@ -166,7 +166,7 @@ pedantic = { level = "warn", priority = -1 }
 
 allow_attributes            = "deny"
 cast_possible_truncation    = "allow" # Overly many instances especially regarding indices.
-collapsible-if              = "allow" # Too new to enforce.
+collapsible_if              = "allow" # Too new to enforce.
 ignored_unit_patterns       = "allow" # Stylistic choice.
 large_types_passed_by_value = "allow" # Triggered by BlockHeader being Copy + 334 bytes.
 missing_errors_doc          = "allow" # TODO: fixup and enable this.

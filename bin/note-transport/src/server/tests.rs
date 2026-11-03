@@ -142,7 +142,7 @@ async fn send_fetch_preserves_inclusion_block() {
     )
     .await
     .unwrap();
-    assert!(empty.notes.is_empty());
+    assert_eq!(empty.notes, []);
     assert_eq!(empty.cursor, page.cursor);
 }
 
@@ -314,7 +314,7 @@ async fn capacity_failure_does_not_store_the_note() {
     )
     .await
     .unwrap();
-    assert!(page.notes.is_empty());
+    assert_eq!(page.notes, []);
 }
 
 async fn grpc_web_request(
@@ -564,7 +564,7 @@ async fn large_pages_fit_default_grpc_client_and_resume_without_gaps() {
         .into_inner();
     assert_eq!(first.sync_to.unwrap().sequence, 400);
     assert!(first.has_more);
-    assert!(!first.notes.is_empty());
+    assert_ne!(first.notes, []);
     let second = client
         .fetch_notes(FetchNotesRequest {
             tags: vec![77],
@@ -648,7 +648,7 @@ async fn cursor_survives_reopening_database() {
     )
     .await
     .unwrap();
-    assert!(empty.notes.is_empty());
+    assert_eq!(empty.notes, []);
     assert_eq!(empty.cursor, first.cursor);
     let next = note(2, 7);
     SendNoteWithProof::full(&server, Request::new(proof_request(&server, next.clone(), 42)))
@@ -748,7 +748,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
             )
             .await
             .unwrap();
-            assert!(initial.notes.is_empty());
+            assert_eq!(initial.notes, []);
             assert!(!initial.has_more);
             assert_eq!(initial.cursor, Some(FetchNotesCursor { nonce, sequence: 0 }));
             let response = FetchNotesResponse::decode(initial.encode_to_vec().as_slice()).unwrap();
@@ -760,7 +760,7 @@ async fn empty_pages_and_nonce_extremes_roundtrip() {
             let request = FetchNotesRequest::decode(request.encode_to_vec().as_slice()).unwrap();
             let next = FetchNotes::full(&server, Request::new(request)).await.unwrap();
             assert_eq!(next.cursor, initial.cursor);
-            assert!(next.notes.is_empty());
+            assert_eq!(next.notes, []);
             let error = FetchNotes::full(
                 &server,
                 Request::new(FetchNotesRequest {

@@ -500,7 +500,7 @@ async fn block_proof_is_canonical_execution_proof() {
         other => panic!("expected block proof response, got {other:?}"),
     };
 
-    assert!(!proof.to_bytes().is_empty());
+    assert_ne!(proof.to_bytes(), [] as [u8; 0]);
 
     server.abort();
 }

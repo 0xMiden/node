@@ -257,7 +257,7 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
         })
         .await
         .unwrap();
-    assert!(page.transactions.is_empty());
+    assert_eq!(page.transactions, []);
     assert!(db.load_private_record(transaction_id).await.unwrap().is_some());
     // Seed an expired backlog to exercise the cleanup used during startup.
     db.writer

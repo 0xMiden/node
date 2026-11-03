@@ -36,7 +36,7 @@ async fn returns_target_without_changing_page_cursor_semantics() {
     assert_eq!(target.nonce, page.cursor.unwrap().nonce);
     assert!(!page.has_more);
     let empty = fetch(&server, vec![99], page.cursor, Some(target)).await.unwrap();
-    assert!(empty.notes.is_empty());
+    assert_eq!(empty.notes, []);
     assert_eq!(empty.cursor, page.cursor);
     assert_eq!(empty.sync_to, Some(target));
     assert!(!empty.has_more);
@@ -62,7 +62,7 @@ async fn empty_ranges_and_nonce_extremes_return_explicit_targets() {
             let page = fetch(&server, tags.clone(), None, None).await.unwrap();
             assert_eq!(page.cursor, Some(zero));
             assert_eq!(page.sync_to, Some(zero));
-            assert!(page.notes.is_empty());
+            assert_eq!(page.notes, []);
             assert!(!page.has_more);
             let equal = fetch(&server, tags, Some(zero), Some(zero)).await.unwrap();
             assert_eq!(equal, page);
@@ -128,7 +128,7 @@ async fn rejects_malformed_and_future_ranges() {
     let error = fetch(&server, vec![7; 129], None, Some(head)).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     let equal = fetch(&server, vec![7], Some(head), Some(head)).await.unwrap();
-    assert!(equal.notes.is_empty());
+    assert_eq!(equal.notes, []);
     assert_eq!(equal.cursor, Some(head));
     assert_eq!(equal.sync_to, Some(head));
     assert!(!equal.has_more);

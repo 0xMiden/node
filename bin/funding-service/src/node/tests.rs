@@ -509,7 +509,7 @@ pub(crate) async fn large_faucet_server(fixture: &crate::test_utils::Fixture) ->
         .filter(|slot| matches!(slot.content(), StorageSlotContent::Map(_)))
         .map(|slot| slot.name().clone())
         .collect();
-    assert!(!maps.is_empty());
+    assert_ne!(maps, []);
     for slot in maps {
         for index in 0..=AccountStorageMapDetails::MAX_RETURN_ENTRIES {
             let key = StorageMapKey::from_array([u32::try_from(index).unwrap(), 123, 456, 789]);

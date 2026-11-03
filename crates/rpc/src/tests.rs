@@ -2382,7 +2382,7 @@ async fn sync_chain_mmr_returns_delta() {
 
     let mmr_delta = response.mmr_delta.expect("mmr_delta should exist");
     assert_eq!(mmr_delta.forest, 0);
-    assert!(mmr_delta.update_data.is_empty());
+    assert_eq!(mmr_delta.update_data, []);
     let config: ProtocolConfig = response
         .protocol_config
         .expect("genesis config")

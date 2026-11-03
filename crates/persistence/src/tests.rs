@@ -135,10 +135,9 @@ fn empty_collections_roundtrip() {
     let assets = NoteAssets::new(vec![]).unwrap();
     let restored: NoteAssets = crate::decode(&crate::encode(&assets)).unwrap();
     assert_eq!(restored, assets);
-    assert!(
-        crate::decode::<Vec<NoteHeader>>(&crate::encode(&Vec::<NoteHeader>::new()))
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        crate::decode::<Vec<NoteHeader>>(&crate::encode(&Vec::<NoteHeader>::new())).unwrap(),
+        []
     );
 }
 
