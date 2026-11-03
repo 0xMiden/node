@@ -9,7 +9,7 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
-use miden_node_tracing::{debug, info_span, miden_instrument, miden_span_record};
+use miden_node_tracing::{debug_v2, info_span, instrument_v2, miden_span_record};
 use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
@@ -19,7 +19,6 @@ use tonic::Status;
 
 use super::error_codes::GetAccountErrorCode;
 use super::{RpcService, check};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
@@ -36,10 +35,7 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
         Ok(output.into())
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "get_account",
-    )]
+    #[instrument_v2(name = "get_account")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -47,8 +43,7 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         miden_span_record!(account.id = request.account_id, block.number = request.block_num);
-        debug!(
-            target: LOG_TARGET,
+        debug_v2!(
             "Getting account",
             account.id = request.account_id,
             block.number = request.block_num
@@ -56,7 +51,8 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
 
         // Bound requested proofs before forwarding to the store.
         if let Some(details) = &request.details {
-            let _span = info_span!(target: COMPONENT, "validate_account_details").entered();
+            let _span =
+                info_span!(target: "miden::rpc::server", "validate_account_details").entered();
             validate_storage_request(&details.storage_request)?;
             if let AccountVaultRequest::Assets(ids) = &details.vault_request {
                 check::<QueryParamVaultAssetLimit>(ids.len())?;

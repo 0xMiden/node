@@ -3,12 +3,11 @@ use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, error, miden_instrument};
+use miden_node_tracing::{debug_v2, error_v2, instrument_v2};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
-use super::super::{COMPONENT, RpcService};
+use super::super::RpcService;
 use super::stream::SubscriptionStream;
-use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService {
@@ -28,8 +27,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         Ok(event)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "block_subscription",
         fields(
             block.from = input,
@@ -41,7 +39,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        debug!(target: LOG_TARGET, "Subscribing to blocks");
+        debug_v2!("Subscribing to blocks");
 
         let stream = SubscriptionStream::blocks(self, input)?;
         let state = Arc::clone(&self.state);
@@ -53,12 +51,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
                 };
                 let block =
                     miden_node_persistence::decode::<SignedBlock>(&event.data).map_err(|err| {
-                        error!(
-                            err,
-                            target: LOG_TARGET,
-                            "Failed to decode stored block",
-                            block.number = event.block
-                        );
+                        error_v2!(err, "Failed to decode stored block", block.number = event.block);
                         tonic::Status::internal(format!(
                             "Failed to decode stored block {}.",
                             event.block
