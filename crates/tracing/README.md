@@ -28,8 +28,8 @@ descendants: `miden_node_store::db` includes `db::queries`, but not `db_backup`.
 use the default target. Resolution happens at compile time; generic functions use the module where they are defined.
 Update the map when moving or renaming a configured module.
 
-The declaration generates an inventory of compiled callsites in test builds and a test requiring every mapping rule to
-win for at least one callsite. Registration uses the inventory re-exported by this crate, so callers need no extra
+The declaration generates an inventory of compiled call sites in test builds and a test requiring every mapping rule to
+win for at least one call site. Registration uses the inventory re-exported by this crate, so callers need no extra
 dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
 compiled into the test binary.
 
