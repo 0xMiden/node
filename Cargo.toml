@@ -175,6 +175,7 @@ module_name_repetitions     = "allow" # Many triggers, and is a stylistic choice
 must_use_candidate          = "allow" # This marks many fn's which isn't helpful.
 needless_for_each           = "allow" # Context dependent if that's useful.
 should_panic_without_expect = "allow" # We don't care about the specific panic message.
+unnecessary_rest_pattern    = "warn"
 # End of pedantic lints.
 
 # Configure `cargo-typos`
