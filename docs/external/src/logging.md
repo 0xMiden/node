@@ -131,8 +131,8 @@ curl --fail-with-body "${ADMIN_URL}/admin/tracing/targets"
 ```
 
 The response is a JSON object with a sorted, unique `targets` array. It includes targets declared by components linked
-into this build, even if their code has not run yet. Explicit callsite overrides, older instrumentation, and third-party
-targets may also be used in expressions even when they do not appear in this list.
+into this build, even if their code has not run yet. Explicit call site overrides, older instrumentation, and
+third-party targets may also be used in expressions even when they do not appear in this list.
 
 Fetch and save the current filters before changing them:
 
