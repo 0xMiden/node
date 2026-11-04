@@ -35,13 +35,26 @@ type ReloadFilter = std::sync::Arc<dyn FilterControl>;
 /// Reads and replaces an output's active filter through its reload handle.
 #[cfg(feature = "admin-api")]
 pub(crate) trait FilterControl: Send + Sync {
-    fn reload(&self, filter: EnvFilter) -> Result<(), tracing_subscriber::reload::Error>;
+    fn reload(
+        &self,
+        filter: EnvFilter,
+        output: &str,
+    ) -> Result<(), tracing_subscriber::reload::Error>;
     fn current(&self) -> Result<String, tracing_subscriber::reload::Error>;
 }
 
 #[cfg(feature = "admin-api")]
 impl<S: Subscriber> FilterControl for tracing_subscriber::reload::Handle<EnvFilter, S> {
-    fn reload(&self, filter: EnvFilter) -> Result<(), tracing_subscriber::reload::Error> {
+    fn reload(
+        &self,
+        filter: EnvFilter,
+        output: &str,
+    ) -> Result<(), tracing_subscriber::reload::Error> {
+        crate::info!(
+            "Setting tracing filter",
+            tracing.filter = filter.to_string(),
+            tracing.output = output
+        );
         tracing_subscriber::reload::Handle::reload(self, filter)
     }
 

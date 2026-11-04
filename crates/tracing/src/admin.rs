@@ -86,7 +86,7 @@ async fn set_stdout_filter(
 ) -> Result<StatusCode, ApiError> {
     let controls = controls.ok_or_else(controls_unavailable)?;
     let filter = parse_filter(&request.filter)?;
-    controls.stdout.reload(filter).map_err(|_| reload_failed())?;
+    controls.stdout.reload(filter, "stdout").map_err(|_| reload_failed())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -97,7 +97,7 @@ async fn set_otel_filter(
     let controls = controls.ok_or_else(controls_unavailable)?;
     let control = controls.otel.ok_or_else(otel_disabled)?;
     let filter = parse_filter(&request.filter)?;
-    control.reload(filter).map_err(|_| reload_failed())?;
+    control.reload(filter, "otel").map_err(|_| reload_failed())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
