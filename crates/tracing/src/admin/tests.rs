@@ -6,6 +6,7 @@ use axum::http::{Request, StatusCode};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 use tracing::Subscriber;
+use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
@@ -109,28 +110,34 @@ async fn get_returns_the_active_filter_for_each_output() {
 #[tokio::test]
 async fn filters_change_independently_and_reenable_existing_callsites() {
     let (app, dispatch, stdout, otel) = setup(true);
-    emit(&dispatch);
-    assert!(stdout.0.lock().unwrap().is_empty());
-    assert!(otel.0.lock().unwrap().is_empty());
+    // Reloading rebuilds callsite interest using the current dispatcher when only one subscriber is
+    // registered, so keep this subscriber active during requests as well as emissions.
+    async {
+        emit(&dispatch);
+        assert!(stdout.0.lock().unwrap().is_empty());
+        assert!(otel.0.lock().unwrap().is_empty());
 
-    assert_eq!(put(&app, "stdout", "off,admin_test=info").await, StatusCode::NO_CONTENT);
-    emit(&dispatch);
-    assert_eq!(*stdout.0.lock().unwrap(), ["span", "event"]);
-    assert!(otel.0.lock().unwrap().is_empty());
+        assert_eq!(put(&app, "stdout", "off,admin_test=info").await, StatusCode::NO_CONTENT);
+        emit(&dispatch);
+        assert_eq!(*stdout.0.lock().unwrap(), ["span", "event"]);
+        assert!(otel.0.lock().unwrap().is_empty());
 
-    assert_eq!(put(&app, "stdout", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
-    emit(&dispatch);
-    assert_eq!(*stdout.0.lock().unwrap(), ["span", "event", "span", "event"]);
+        assert_eq!(put(&app, "stdout", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
+        emit(&dispatch);
+        assert_eq!(*stdout.0.lock().unwrap(), ["span", "event", "span", "event"]);
 
-    assert_eq!(put(&app, "otel", "off,admin_test=info").await, StatusCode::NO_CONTENT);
-    assert_eq!(put(&app, "stdout", "off").await, StatusCode::NO_CONTENT);
-    emit(&dispatch);
-    assert_eq!(*stdout.0.lock().unwrap(), ["span", "event", "span", "event"]);
-    assert_eq!(*otel.0.lock().unwrap(), ["span", "event"]);
+        assert_eq!(put(&app, "otel", "off,admin_test=info").await, StatusCode::NO_CONTENT);
+        assert_eq!(put(&app, "stdout", "off").await, StatusCode::NO_CONTENT);
+        emit(&dispatch);
+        assert_eq!(*stdout.0.lock().unwrap(), ["span", "event", "span", "event"]);
+        assert_eq!(*otel.0.lock().unwrap(), ["span", "event"]);
 
-    assert_eq!(put(&app, "otel", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
-    emit(&dispatch);
-    assert_eq!(*otel.0.lock().unwrap(), ["span", "event", "span", "event"]);
+        assert_eq!(put(&app, "otel", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
+        emit(&dispatch);
+        assert_eq!(*otel.0.lock().unwrap(), ["span", "event", "span", "event"]);
+    }
+    .with_subscriber(dispatch.clone())
+    .await;
 }
 
 #[tokio::test]
