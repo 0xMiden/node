@@ -108,6 +108,62 @@ miden-node full ...
 If neither Miden-specific filter is set, `RUST_LOG` configures both outputs. See
 [Monitoring](/network-operator/monitoring) for exporter and resource configuration.
 
+## Change filters while the service is running
+
+The sequencer and validator administration APIs can replace either tracing filter without restarting the service. Use
+this to collect more detail during an investigation, then restore your usual filter when finished. Updates affect only
+the process receiving the request and last until its next restart.
+
+Enable the private listener as described in
+[Sequencer administration](/network-operator/sequencer#allowlist-administration) or
+[Validator administration](/network-operator/validator#administration-api). Use the authenticated administration
+endpoint provided by your deployment; the listener itself does not authenticate requests. Set `ADMIN_URL` to that
+endpoint, for example:
+
+```bash
+ADMIN_URL=http://127.0.0.1:50100
+```
+
+List the available declared targets before choosing a filter:
+
+```bash
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/targets"
+```
+
+The response is a JSON object with a sorted, unique `targets` array. It includes targets declared by components linked
+into this build, even if their code has not run yet. Explicit callsite overrides, older instrumentation, and third-party
+targets may also be used in expressions even when they do not appear in this list.
+
+Replace the stdout filter with a complete expression:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/stdout-filter" \
+  -H 'Content-Type: application/json' \
+  --data '{"filter":"info,miden::storage::sqlite=debug"}'
+```
+
+Replace the OpenTelemetry filter independently:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
+  -H 'Content-Type: application/json' \
+  --data '{"filter":"info,miden::storage=debug"}'
+```
+
+A successful update returns `204 No Content`. Subsequent instrumentation uses the new filter; spans already created or
+previously filtered out are not reconstructed. Changing a filter does not flush the exporter or change its endpoint.
+Verify the expected new activity in stdout or your tracing backend. Coordinate updates with other operators: each
+successful request replaces the selected output's entire expression.
+
+An invalid expression returns `400` and leaves the previous filter active. Correct the expression and retry. The
+OpenTelemetry setter returns `409` if exporting was disabled at startup; configure an exporter and restart before
+changing its filter. A `503` means tracing controls are unavailable, and a `500` means the filter could not be updated.
+These handler errors return JSON with an `error` message. Correct request-shape errors, such as a missing `filter`
+field, before retrying.
+
+Restore the usual expression with another `PUT` after the investigation. To retain a filter across restarts, also update
+the service's environment configuration. Environment variables are read only during startup.
+
 ## Troubleshooting filters
 
 Start with a narrow target instead of enabling `trace` globally:
@@ -123,4 +179,5 @@ MIDEN_STDOUT_FILTER='info,user::miden-block-producer=debug' miden-node sequencer
 MIDEN_STDOUT_FILTER='info,miden::storage=debug' miden-node full ...
 ```
 
-Filters are read only during process startup. Restart the service after changing an environment variable.
+Restart the service after changing a filter environment variable, or use the administration API to update the running
+process.

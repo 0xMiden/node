@@ -5,6 +5,13 @@ layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
+## Administration API
+
+Enable the `admin-api` feature and merge `miden_node_tracing::admin::router()` into a private administration router
+after calling `setup_tracing`. It provides independent stdout and OpenTelemetry filter updates and declared target
+listing. The caller must provide external authentication and network isolation. See
+[Logging](../../docs/external/src/logging.md) for the HTTP contract and operating procedure.
+
 ## Scoped targets
 
 Use `declare_targets!` once at the crate root, before child module declarations, to give `#[instrument_v2]`, v2 events,

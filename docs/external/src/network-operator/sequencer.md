@@ -78,6 +78,9 @@ authentication and authorization externally, and prevent direct access to this l
 network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
 access. Do not expose it through the public RPC ingress.
 
+This listener also supports
+[changing tracing filters and listing declared targets](/logging#change-filters-while-the-service-is-running).
+
 | Method | Path                                               | Request body                                | Result                                                                                                        |
 | ------ | -------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
 | `PUT`  | `/admin/allowlist/invitations/{invitation_digest}` | `{}` or `{"account_id":"<hex-account-id>"}` | `201` for a new invitation, `204` for an existing invitation. The optional account ID binds it to an account. |

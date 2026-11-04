@@ -10,7 +10,9 @@ use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::{Filter, SubscriberExt};
+#[cfg(any(not(feature = "admin-api"), feature = "testing"))]
+use tracing_subscriber::layer::Filter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
 use crate::{ErrorSpanExt, error};
@@ -24,6 +26,29 @@ static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 /// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
 const DEFAULT_STDOUT_FILTER: &str =
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
+#[cfg(feature = "admin-api")]
+pub(crate) static FILTER_CONTROLS: OnceLock<FilterControls> = OnceLock::new();
+
+#[cfg(feature = "admin-api")]
+type ReloadFilter = std::sync::Arc<
+    dyn Fn(EnvFilter) -> Result<(), tracing_subscriber::reload::Error> + Send + Sync,
+>;
+
+/// Independent controls for the process's configured tracing outputs.
+#[cfg(feature = "admin-api")]
+#[derive(Clone)]
+pub(crate) struct FilterControls {
+    pub(crate) stdout: ReloadFilter,
+    pub(crate) otel: Option<ReloadFilter>,
+}
+
+#[cfg(feature = "admin-api")]
+pub(crate) fn reloadable_filter<S: Subscriber>(
+    expression: &str,
+) -> anyhow::Result<(tracing_subscriber::reload::Layer<EnvFilter, S>, ReloadFilter)> {
+    let (filter, handle) = tracing_subscriber::reload::Layer::new(EnvFilter::from_str(expression)?);
+    Ok((filter, std::sync::Arc::new(move |filter| handle.reload(filter))))
+}
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
@@ -141,6 +166,7 @@ fn filter_env_or_default(var: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_owned())
 }
 
+#[cfg(any(not(feature = "admin-api"), feature = "testing"))]
 fn filter_from_string<S>(
     filter: &str,
 ) -> anyhow::Result<Box<dyn Filter<S> + Send + Sync + 'static>> {
@@ -219,10 +245,27 @@ pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option
         OpenTelemetryLayer::new(provider.tracer("tracing-otel-subscriber")).boxed()
     });
 
+    #[cfg(feature = "admin-api")]
+    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter)?;
+    #[cfg(not(feature = "admin-api"))]
+    let stdout_filter = filter_from_string(&stdout_filter)?;
+    #[cfg(feature = "admin-api")]
+    let (otel_filter, otel_reload) = reloadable_filter(&otel_filter)?;
+    #[cfg(not(feature = "admin-api"))]
+    let otel_filter = filter_from_string(&otel_filter)?;
+
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(filter_from_string(&stdout_filter)?))
-        .with(otel_layer.with_filter(filter_from_string(&otel_filter)?));
+        .with(stdout_layer().with_filter(stdout_filter))
+        .with(otel_layer.with_filter(otel_filter));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
+
+    #[cfg(feature = "admin-api")]
+    FILTER_CONTROLS
+        .set(FilterControls {
+            stdout: stdout_reload,
+            otel: tracer_provider.as_ref().map(|_| otel_reload),
+        })
+        .map_err(|_| anyhow::anyhow!("tracing filter controls already initialized"))?;
 
     // Register panic hook now that tracing is initialized. This chains with the default panic hook
     // to preserve backtrace printing.

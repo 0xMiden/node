@@ -7,6 +7,8 @@ crate::declare_targets! {
     "miden_node_tracing::grpc" => "miden::rpc::server",
 }
 
+#[cfg(feature = "admin-api")]
+pub mod admin;
 mod attribute;
 pub mod grpc;
 mod instrument;
