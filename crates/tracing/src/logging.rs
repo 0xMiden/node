@@ -30,9 +30,25 @@ const DEFAULT_STDOUT_FILTER: &str =
 pub(crate) static FILTER_CONTROLS: OnceLock<FilterControls> = OnceLock::new();
 
 #[cfg(feature = "admin-api")]
-type ReloadFilter = std::sync::Arc<
-    dyn Fn(EnvFilter) -> Result<(), tracing_subscriber::reload::Error> + Send + Sync,
->;
+type ReloadFilter = std::sync::Arc<dyn FilterControl>;
+
+/// Reads and replaces an output's active filter through its reload handle.
+#[cfg(feature = "admin-api")]
+pub(crate) trait FilterControl: Send + Sync {
+    fn reload(&self, filter: EnvFilter) -> Result<(), tracing_subscriber::reload::Error>;
+    fn current(&self) -> Result<String, tracing_subscriber::reload::Error>;
+}
+
+#[cfg(feature = "admin-api")]
+impl<S: Subscriber> FilterControl for tracing_subscriber::reload::Handle<EnvFilter, S> {
+    fn reload(&self, filter: EnvFilter) -> Result<(), tracing_subscriber::reload::Error> {
+        tracing_subscriber::reload::Handle::reload(self, filter)
+    }
+
+    fn current(&self) -> Result<String, tracing_subscriber::reload::Error> {
+        self.with_current(ToString::to_string)
+    }
+}
 
 /// Independent controls for the process's configured tracing outputs.
 #[cfg(feature = "admin-api")]
@@ -47,7 +63,7 @@ pub(crate) fn reloadable_filter<S: Subscriber>(
     expression: &str,
 ) -> anyhow::Result<(tracing_subscriber::reload::Layer<EnvFilter, S>, ReloadFilter)> {
     let (filter, handle) = tracing_subscriber::reload::Layer::new(EnvFilter::from_str(expression)?);
-    Ok((filter, std::sync::Arc::new(move |filter| handle.reload(filter))))
+    Ok((filter, std::sync::Arc::new(handle)))
 }
 
 /// Default OpenTelemetry resource attributes for this process.

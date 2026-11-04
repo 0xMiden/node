@@ -60,6 +60,52 @@ async fn put(app: &Router, output: &str, filter: &str) -> StatusCode {
         .status()
 }
 
+async fn get(app: &Router, output: &str) -> (StatusCode, Value) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::get(format!("/admin/tracing/{output}-filter"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn get_returns_the_active_filter_for_each_output() {
+    let (app, _dispatch, ..) = setup(true);
+    for output in ["stdout", "otel"] {
+        assert_eq!(get(&app, output).await, (StatusCode::OK, json!({"filter": "off"})));
+    }
+
+    assert_eq!(put(&app, "stdout", "admin_test=info").await, StatusCode::NO_CONTENT);
+    assert_eq!(
+        get(&app, "stdout").await,
+        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+    );
+    assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "off"})));
+
+    assert_eq!(put(&app, "stdout", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        get(&app, "stdout").await,
+        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+    );
+
+    assert_eq!(put(&app, "otel", "warn").await, StatusCode::NO_CONTENT);
+    assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "warn"})));
+    assert_eq!(put(&app, "otel", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
+    assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "warn"})));
+    assert_eq!(
+        get(&app, "stdout").await,
+        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+    );
+}
+
 #[tokio::test]
 async fn filters_change_independently_and_reenable_existing_callsites() {
     let (app, dispatch, stdout, otel) = setup(true);
@@ -128,6 +174,7 @@ async fn disabled_exporter_cannot_be_enabled_by_changing_its_filter() {
     let (app, _dispatch, ..) = setup(false);
     assert_eq!(put(&app, "otel", "debug").await, StatusCode::CONFLICT);
     assert_eq!(put(&app, "stdout", "info").await, StatusCode::NO_CONTENT);
+    assert_eq!(get(&app, "otel").await.0, StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -135,6 +182,8 @@ async fn unavailable_controls_return_service_unavailable() {
     let app = router_with_controls(None);
     assert_eq!(put(&app, "stdout", "debug").await, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(put(&app, "otel", "debug").await, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(get(&app, "stdout").await.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(get(&app, "otel").await.0, StatusCode::SERVICE_UNAVAILABLE);
 }
 
 #[tokio::test]
@@ -143,6 +192,8 @@ async fn failed_reload_returns_an_error() {
     drop(dispatch);
     assert_eq!(put(&app, "stdout", "debug").await, StatusCode::INTERNAL_SERVER_ERROR);
     assert_eq!(put(&app, "otel", "debug").await, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(get(&app, "stdout").await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(get(&app, "otel").await.0, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]

@@ -3,26 +3,26 @@
 use axum::extract::State;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::Response;
-use axum::routing::{get, put};
+use axum::routing::get;
 use axum::{Json, Router, middleware};
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::EnvFilter;
 
-use crate::logging::{FILTER_CONTROLS, FilterControls};
+use crate::logging::{FILTER_CONTROLS, FilterControl, FilterControls};
 
 /// Returns tracing routes for a private, externally authenticated administration listener.
 ///
-/// Call after [`crate::setup_tracing`] to enable filter updates. Changes replace the selected
+/// Call after [`crate::setup_tracing`] to enable filter reads and updates. Changes replace the selected
 /// output's filter until process restart. An OpenTelemetry exporter must be enabled at startup
-/// before its filter can be updated. Target listing is available without tracing initialization.
+/// before its filter can be read or updated. Target listing is available without tracing initialization.
 pub fn router() -> Router {
     router_with_controls(FILTER_CONTROLS.get().cloned())
 }
 
 fn router_with_controls(controls: Option<FilterControls>) -> Router {
     Router::new()
-        .route("/admin/tracing/stdout-filter", put(set_stdout_filter))
-        .route("/admin/tracing/otel-filter", put(set_otel_filter))
+        .route("/admin/tracing/stdout-filter", get(get_stdout_filter).put(set_stdout_filter))
+        .route("/admin/tracing/otel-filter", get(get_otel_filter).put(set_otel_filter))
         .route("/admin/tracing/targets", get(targets))
         .layer(middleware::map_response(no_store))
         .with_state(controls)
@@ -49,13 +49,44 @@ fn controls_unavailable() -> ApiError {
     error(StatusCode::SERVICE_UNAVAILABLE, "tracing filter controls are not initialized")
 }
 
+#[derive(Serialize)]
+struct FilterResponse {
+    filter: String,
+}
+
+async fn get_stdout_filter(
+    State(controls): State<Option<FilterControls>>,
+) -> Result<Json<FilterResponse>, ApiError> {
+    let controls = controls.ok_or_else(controls_unavailable)?;
+    read_filter(controls.stdout.as_ref())
+}
+
+async fn get_otel_filter(
+    State(controls): State<Option<FilterControls>>,
+) -> Result<Json<FilterResponse>, ApiError> {
+    let controls = controls.ok_or_else(controls_unavailable)?;
+    let control = controls.otel.ok_or_else(otel_disabled)?;
+    read_filter(control.as_ref())
+}
+
+fn read_filter(control: &dyn FilterControl) -> Result<Json<FilterResponse>, ApiError> {
+    let filter = control
+        .current()
+        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "failed to read tracing filter"))?;
+    Ok(Json(FilterResponse { filter }))
+}
+
+fn otel_disabled() -> ApiError {
+    error(StatusCode::CONFLICT, "OpenTelemetry exporting was disabled at startup")
+}
+
 async fn set_stdout_filter(
     State(controls): State<Option<FilterControls>>,
     Json(request): Json<FilterRequest>,
 ) -> Result<StatusCode, ApiError> {
     let controls = controls.ok_or_else(controls_unavailable)?;
     let filter = parse_filter(&request.filter)?;
-    (controls.stdout)(filter).map_err(|_| reload_failed())?;
+    controls.stdout.reload(filter).map_err(|_| reload_failed())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -64,11 +95,9 @@ async fn set_otel_filter(
     Json(request): Json<FilterRequest>,
 ) -> Result<StatusCode, ApiError> {
     let controls = controls.ok_or_else(controls_unavailable)?;
-    let reload = controls.otel.ok_or_else(|| {
-        error(StatusCode::CONFLICT, "OpenTelemetry exporting was disabled at startup")
-    })?;
+    let control = controls.otel.ok_or_else(otel_disabled)?;
     let filter = parse_filter(&request.filter)?;
-    reload(filter).map_err(|_| reload_failed())?;
+    control.reload(filter).map_err(|_| reload_failed())?;
     Ok(StatusCode::NO_CONTENT)
 }
 

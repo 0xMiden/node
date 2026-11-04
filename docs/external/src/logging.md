@@ -134,6 +134,16 @@ The response is a JSON object with a sorted, unique `targets` array. It includes
 into this build, even if their code has not run yet. Explicit callsite overrides, older instrumentation, and third-party
 targets may also be used in expressions even when they do not appear in this list.
 
+Fetch and save the current filters before changing them:
+
+```bash
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter"
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter"
+```
+
+Each successful `GET` returns `200` with `{"filter":"<expression>"}`. The expression represents the active filter;
+directive ordering and formatting may differ from the original input without changing its meaning.
+
 Replace the stdout filter with a complete expression:
 
 ```bash
@@ -156,10 +166,10 @@ Verify the expected new activity in stdout or your tracing backend. Coordinate u
 successful request replaces the selected output's entire expression.
 
 An invalid expression returns `400` and leaves the previous filter active. Correct the expression and retry. The
-OpenTelemetry setter returns `409` if exporting was disabled at startup; configure an exporter and restart before
-changing its filter. A `503` means tracing controls are unavailable, and a `500` means the filter could not be updated.
-These handler errors return JSON with an `error` message. Correct request-shape errors, such as a missing `filter`
-field, before retrying.
+OpenTelemetry endpoints return `409` if exporting was disabled at startup; configure an exporter and restart before
+reading or changing its filter. A `503` means tracing controls are unavailable, and a `500` means the filter could not
+be read or updated. These handler errors return JSON with an `error` message. Correct request-shape errors, such as a
+missing `filter` field, before retrying.
 
 Restore the usual expression with another `PUT` after the investigation. To retain a filter across restarts, also update
 the service's environment configuration. Environment variables are read only during startup.
