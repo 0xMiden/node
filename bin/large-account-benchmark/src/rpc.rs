@@ -26,7 +26,6 @@ use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::ProvenTransaction;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::sync::Mutex;
 use url::Url;
 
@@ -57,10 +56,7 @@ impl SubmissionClient {
         let trusted_keys = validator_signing_public_keys
             .iter()
             .map(|encoded| {
-                let bytes = hex::decode(encoded).with_context(|| {
-                    format!("validator signing public key {encoded} is not hex")
-                })?;
-                ValidatorPublicKey::read_from_bytes(&bytes).with_context(|| {
+                ValidatorPublicKey::from_hex(encoded).with_context(|| {
                     format!("validator signing public key {encoded} is not a valid K256 key")
                 })
             })

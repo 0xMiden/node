@@ -1,4 +1,5 @@
 use anyhow::Context;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::Deserializable;
 use miden_validator::{DataDirectory, PrivateRecordId};
@@ -39,14 +40,9 @@ fn parse_record_id(
     encoded_validator_id: &str,
 ) -> anyhow::Result<PrivateRecordId> {
     let transaction_id = parse_transaction_id(encoded_transaction_id)?;
-    let validator_id =
-        hex::decode(encoded_validator_id).context("validator id is not valid hex")?;
-    let actual = validator_id.len();
-    let validator_id = validator_id
-        .try_into()
-        .map_err(|_: Vec<u8>| anyhow::anyhow!("validator id has {actual} bytes, expected 33"))?;
-    PrivateRecordId::from_parts(transaction_id, validator_id)
-        .context("validator id is not a canonical signing public key")
+    let validator_public_key = PublicKey::from_hex(encoded_validator_id)
+        .context("validator id is not a valid signing public key")?;
+    Ok(PrivateRecordId::new(transaction_id, &validator_public_key))
 }
 
 /// Parses one canonical transaction identifier.

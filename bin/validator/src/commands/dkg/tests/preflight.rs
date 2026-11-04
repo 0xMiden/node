@@ -38,7 +38,7 @@ impl ParticipateOptions {
             bind_address: Some("127.0.0.1:0".parse().unwrap()),
             peers: peers
                 .into_iter()
-                .flat_map(|(key, id)| [hex::encode(key.to_bytes()), format!("{id}@127.0.0.1:9")])
+                .flat_map(|(key, id)| [key.to_string(), format!("{id}@127.0.0.1:9")])
                 .collect(),
             timeout: Duration::from_secs(30),
             threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
@@ -114,7 +114,7 @@ async fn ceremony_succeeds_without_public_infrastructure() -> TestResult {
             let peer = (local + offset) % 3;
             args.extend([
                 "--peer".to_owned(),
-                hex::encode(signing_keys[peer].public_key().to_bytes()),
+                signing_keys[peer].public_key().to_string(),
                 format!("{}@{}", endpoints[peer].1, sockets[peer].local_addr()?),
             ]);
         }
@@ -159,7 +159,7 @@ async fn peer_socket_is_required_without_public_relay(
     );
     options.enable_public_relay = enable_public_relay;
     options.peers = vec![
-        hex::encode(signing_keys[1].public_key().to_bytes()),
+        signing_keys[1].public_key().to_string(),
         IrohSecretKey::generate().public().to_string(),
     ];
 

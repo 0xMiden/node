@@ -9,7 +9,6 @@ use miden_node_utils::fs::ensure_empty_directory;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_protocol::utils::serde::Deserializable;
 
 #[cfg(test)]
 mod tests;
@@ -51,15 +50,16 @@ pub struct BuildCommand {
     /// Genesis timestamp in seconds since the Unix epoch.
     #[arg(long, env = ENV_TIMESTAMP)]
     pub timestamp: u32,
-    /// Hex-encoded public keys of all genesis validators. Repeat the flag for each validator. The
-    /// environment variable accepts a comma-separated list.
+    /// `0x`-prefixed hex public keys of all genesis validators, as printed by `miden-validator
+    /// pubkey`. Repeat the flag for each validator. The environment variable accepts a
+    /// comma-separated list.
     #[arg(
         long = "validator.key",
         env = ENV_VALIDATOR_KEYS,
         value_name = "VALIDATOR_PUBLIC_KEY",
         value_delimiter = ',',
         required = true,
-        value_parser = parse_validator_public_key
+        value_parser = PublicKey::from_hex
     )]
     pub validator_keys: Vec<PublicKey>,
 }
@@ -153,10 +153,4 @@ impl BuildCommand {
 
         Ok(())
     }
-}
-
-/// Parses a hex-encoded validator public key CLI argument.
-fn parse_validator_public_key(hex_key: &str) -> Result<PublicKey, String> {
-    let bytes = hex::decode(hex_key).map_err(|err| err.to_string())?;
-    PublicKey::read_from_bytes(&bytes).map_err(|err| err.to_string())
 }

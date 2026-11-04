@@ -56,7 +56,7 @@ fn build_validator_keys_parse_from_repeated_flags() {
     let keys = [7u8, 8].map(|seed| {
         SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
     });
-    let hex_keys = keys.clone().map(|key| hex::encode(key.public_key().to_bytes()));
+    let hex_keys = keys.clone().map(|key| key.public_key().to_string());
     let cli = parse_build(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
         .expect("build with explicit validator keys must parse");
     let Command::Build(command) = cli.command else {
@@ -73,7 +73,7 @@ fn build_requires_an_explicit_validator_set() {
     assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
 
     let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
-    let key_hex = hex::encode(key.public_key().to_bytes());
+    let key_hex = key.public_key().to_string();
     parse_build(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
         .expect("additional accounts with an explicit validator set must parse");
 }
@@ -81,7 +81,7 @@ fn build_requires_an_explicit_validator_set() {
 #[test]
 fn build_requires_explicit_accounts_fee_and_timestamp() {
     let key = SigningKey::new();
-    let key_hex = hex::encode(key.public_key().to_bytes());
+    let key_hex = key.public_key().to_string();
     for flag in ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"] {
         let position = BASE_BUILD_ARGS.iter().position(|value| *value == flag).unwrap();
         let args = BASE_BUILD_ARGS
@@ -97,12 +97,18 @@ fn build_requires_explicit_accounts_fee_and_timestamp() {
     }
 }
 
+/// A validator key must be the `0x`-prefixed hex of a valid public key, so a bare hex encoding of a
+/// valid key is rejected as well.
 #[test]
 fn build_rejects_an_invalid_validator_key() {
-    let Err(error) = parse_build(&["--validator.key", "not-hex"]) else {
-        panic!("an invalid validator key must be rejected");
-    };
-    assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
+    let unprefixed = hex::encode(key.public_key().to_bytes());
+    for bad_key in ["not-hex", unprefixed.as_str()] {
+        let Err(error) = parse_build(&["--validator.key", bad_key]) else {
+            panic!("an invalid validator key must be rejected: {bad_key}");
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation, "{bad_key}");
+    }
 }
 
 // ACCOUNT COMMANDS
@@ -284,15 +290,17 @@ fn a_malformed_account_id_is_rejected() {
     }
 }
 
-/// An attester key that is not a valid 33-byte compressed secp256k1 point is rejected, with a wrong
-/// length named: a 20-byte value, a truncated key, and a key with an invalid SEC1 tag byte.
+/// An attester key that is not the `0x`-prefixed hex of a valid SEC1 secp256k1 point is rejected,
+/// naming the cause: a 20-byte value, a truncated key, a key with an invalid SEC1 tag byte, non-hex
+/// digits, and a missing prefix.
 #[test]
 fn a_malformed_attester_key_is_rejected() {
     for (bad_key, cause) in [
-        (to_hex(&[0xfcu8; 20]), "expected 33 bytes, got 20"),
-        (to_hex(&[2u8; 32]), "expected 33 bytes, got 32"),
-        (to_hex(&[5u8; 33]), "Invalid public key"),
-        ("0xzz".to_string(), "Invalid character"),
+        (to_hex(&[0xfcu8; 20]), "got 40"),
+        (to_hex(&[2u8; 32]), "got 64"),
+        (to_hex(&[5u8; 33]), "unsupported ECDSA public key tag byte 0x05"),
+        (format!("0x{}", "zz".repeat(33)), "must contain only characters"),
+        (hex::encode(ATTESTER_KEY_BYTES[0]), "must use a 0x-prefixed"),
     ] {
         let mut args = dev_faucet_args();
         set_flag(&mut args, "--attester", &bad_key);

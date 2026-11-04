@@ -78,7 +78,7 @@ sees Circle deposits, step 4 can be skipped and `build` takes `usdcx-faucet.mac`
 | `--verification-base-fee` | yes      | Baked into the faucet's fee schedule. Must equal the `--verification-base-fee` passed to `build`.            |
 | `--domain`                | no       | The Circle domain id. Defaults to 10007, the Miden domain.                                                   |
 | `--min-burn-amount`       | no       | The smallest amount a burn may redeem, in base units.                                                        |
-| `--attester`              | no       | A deposit attester to allowlist, as the hex of its 33-byte compressed SEC1 key (`02` or `03` then x).        |
+| `--attester`              | no       | A deposit attester to allowlist, as the `0x`-prefixed hex of its compressed or uncompressed SEC1 key.        |
 | `--attest-admin`          | no       | An `ATTEST_ADMIN` holder's account id.                                                                       |
 | `--pauser`                | no       | A `DOM_PAUSER` holder's account id.                                                                          |
 | `--unpauser`              | no       | A `DOM_UNPAUSER` holder's account id.                                                                        |
@@ -86,10 +86,10 @@ sees Circle deposits, step 4 can be skipped and `build` takes `usdcx-faucet.mac`
 
 The list flags (`--attester` and the four operational roles) take repeated flags or comma-separated values, and every
 listed holder is seeded as a member of its role. A role with no holder is populated later through the standard
-role-action note, and an empty attester list is seeded later through `set_attester` notes. Every byte-string value takes
-an optional `0x` prefix. The seed and the supply both feed the faucet id, so they must be final before `faucet` runs;
-the supply cap is not configurable and is set to the maximum asset amount. The tool cannot check that the fee matches
-the one later passed to `build`.
+role-action note, and an empty attester list is seeded later through `set_attester` notes. Attester keys require a `0x`
+prefix; every other byte-string value takes an optional one. The seed and the supply both feed the faucet id, so they
+must be final before `faucet` runs; the supply cap is not configurable and is set to the maximum asset amount. The tool
+cannot check that the fee matches the one later passed to `build`.
 
 ## Build the genesis block
 
@@ -110,16 +110,16 @@ miden-genesis build \
   --validator.key <validator-3-public-key-hex>
 ```
 
-| Flag                        | Environment variable                  | Meaning                                                                                                      |
-| --------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `--genesis-block-directory` |                                       | Directory that receives `genesis.dat`. Must not exist or be empty.                                           |
-| `--accounts-directory`      |                                       | Directory that receives the generated account files. Must not exist or be empty.                             |
-| `--native-faucet`           | `MIDEN_GENESIS_NATIVE_FAUCET`         | The faucet written by `record-nonces` (or `faucet`). Its asset is the network's fee asset.                   |
-| `--funding-account`         | `MIDEN_GENESIS_FUNDING_ACCOUNT`       | The prefunded distributor written by `prefund`. Must be public.                                              |
-| `--verification-base-fee`   | `MIDEN_GENESIS_VERIFICATION_BASE_FEE` | Base fee in base units of the native asset. Must equal the faucet config's `verification_base_fee`.          |
-| `--timestamp`               | `MIDEN_GENESIS_TIMESTAMP`             | Genesis timestamp in seconds since the Unix epoch.                                                           |
-| `--validator.key`           | `MIDEN_GENESIS_VALIDATOR_KEYS`        | Hex-encoded validator public key; repeat per validator. The variable takes a comma-separated list. Required. |
-| `--accounts-config`         | `MIDEN_GENESIS_ACCOUNTS_CONFIG`       | Optional TOML file with additional accounts.                                                                 |
+| Flag                        | Environment variable                  | Meaning                                                                                              |
+| --------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `--genesis-block-directory` |                                       | Directory that receives `genesis.dat`. Must not exist or be empty.                                   |
+| `--accounts-directory`      |                                       | Directory that receives the generated account files. Must not exist or be empty.                     |
+| `--native-faucet`           | `MIDEN_GENESIS_NATIVE_FAUCET`         | The faucet written by `record-nonces` (or `faucet`). Its asset is the network's fee asset.           |
+| `--funding-account`         | `MIDEN_GENESIS_FUNDING_ACCOUNT`       | The prefunded distributor written by `prefund`. Must be public.                                      |
+| `--verification-base-fee`   | `MIDEN_GENESIS_VERIFICATION_BASE_FEE` | Base fee in base units of the native asset. Must equal the faucet config's `verification_base_fee`.  |
+| `--timestamp`               | `MIDEN_GENESIS_TIMESTAMP`             | Genesis timestamp in seconds since the Unix epoch.                                                   |
+| `--validator.key`           | `MIDEN_GENESIS_VALIDATOR_KEYS`        | `0x`-prefixed validator public key; repeat per validator. The variable is comma-separated. Required. |
+| `--accounts-config`         | `MIDEN_GENESIS_ACCOUNTS_CONFIG`       | Optional TOML file with additional accounts.                                                         |
 
 Both account files are taken as they are and must already have nonzero nonces, which is why `prefund` and
 `record-nonces` emit the genesis form. Genesis does not need their signing keys; `distributor.genesis.mac` carries the
