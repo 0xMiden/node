@@ -244,7 +244,7 @@ mod tests {
         let requests =
             expand_account_storage_request(AccountStorageRequest::None, &storage_header());
 
-        assert!(requests.is_empty());
+        assert_eq!(requests, []);
     }
 
     #[test]

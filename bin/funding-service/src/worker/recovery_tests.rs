@@ -643,7 +643,7 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
     ));
     let stored = database.request(payout.note().id()).await.unwrap().unwrap();
     assert_eq!(stored.delivery.unwrap().committed_in_block, BlockNumber::from(19));
-    assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+    assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
     assert!(database.active_attempt().await.unwrap().is_none());
 }
 

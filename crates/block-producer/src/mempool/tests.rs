@@ -455,7 +455,7 @@ fn proven_batch_id_resolves_to_selected_batch_id() {
 
         // A late proof must not restore a reverted batch.
         uut.commit_batch(proof);
-        assert!(uut.select_block().batches.is_empty());
+        assert_eq!(uut.select_block().batches, []);
         assert!(uut.select_any_batch().is_some());
     }
 }
@@ -477,7 +477,7 @@ fn late_fee_free_proof_does_not_match_a_shorter_selection() {
     let shorter = uut.select_any_batch().unwrap();
     assert_eq!(shorter.transactions(), &[Arc::clone(&txs[0])]);
     uut.commit_batch(proof);
-    assert!(uut.select_block().batches.is_empty());
+    assert_eq!(uut.select_block().batches, []);
 }
 
 // BLOCK FAILED TESTS

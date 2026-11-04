@@ -883,7 +883,7 @@ No release-note-worthy changes.
         let previous = migration_tree(&["crates/store/src/db/migrations/005_active.sql"]);
         let current = migration_tree(&["crates/store/src/db/migrations/retired/005_active.sql"]);
 
-        assert!(database_migration_updates_from_trees(&previous, &current).is_empty());
+        assert_eq!(database_migration_updates_from_trees(&previous, &current), []);
     }
 
     fn lockfile(protocol_version: &str) -> String {

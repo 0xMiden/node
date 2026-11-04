@@ -24,7 +24,7 @@ if [[ "${CACHE_ENABLED}" == true ]]; then
         --mount "type=bind,src=${CACHE_BINARY},dst=/usr/local/bin/kache,readonly"
         --mount "type=bind,src=${CACHE_BINARY%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
         --mount "type=bind,src=${CACHE_CONFIG},dst=/run/remote.toml,readonly"
-        -e CACHE_WRITABLE
+        -e CACHE_WRITABLE -e KACHE_CI_BUNDLES
         -e GITHUB_ACTIONS -e GITHUB_EVENT_NAME -e GITHUB_REF_TYPE -e GITHUB_REF_PROTECTED
         -e KACHE_MANIFEST_KEY="node-docker-${ARCHITECTURE}"
         -e KACHE_NAMESPACE="node-docker-${ARCHITECTURE}"

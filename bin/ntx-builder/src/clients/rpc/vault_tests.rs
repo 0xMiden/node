@@ -273,7 +273,7 @@ async fn witnesses_for_large_vault_are_fetched_in_bounded_batches() {
         .get_vault_asset_witnesses(account.id(), account.vault().root(), BTreeSet::new(), 7.into())
         .await
         .unwrap();
-    assert!(empty.is_empty());
+    assert_eq!(empty, []);
     assert_eq!(requests.lock().unwrap().len(), 2);
 }
 

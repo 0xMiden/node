@@ -293,7 +293,7 @@ mod tests {
 
         let proto_record = note_sync_record_to_proto(record);
         let metadata = proto_record.metadata.unwrap();
-        assert!(metadata.attachments.is_empty());
+        assert_eq!(metadata.attachments, []);
         assert_eq!(metadata.version, proto::note::NoteVersion::V1 as i32);
     }
 

@@ -385,8 +385,10 @@ mod tests {
         Ok(())
     }
 
+    /// A remote prover failure fails the proof instead of proving in process, and the failure is
+    /// exported under the transaction that was being proven.
     #[tokio::test]
-    async fn remote_prover_failure_exports_fallback_under_the_same_transaction() -> Result<()> {
+    async fn remote_prover_failure_fails_the_proof() -> Result<()> {
         use miden_node_tracing::Instrument as _;
         use opentelemetry::trace::Status;
 
@@ -398,41 +400,30 @@ mod tests {
         let mut rng = RandomCoin::new(Word::from([19_u32; 4]));
         let notes = funding_notes(&fixture, &targets(&fixture)?[..1], &mut rng)?;
         let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
+        // The test node does not serve the prover API, so every remote proof fails.
         let server = TestServer::start(TestChain::new(0)).await;
         let prover = Prover::remote(
             server.url.clone(),
             std::time::Duration::from_secs(5),
             miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE,
         )?;
-        let (telemetry, _guard) = Telemetry::capture();
-        let transaction = Box::pin(
-            async {
-                let executed = execute(inputs, Vec::new(), notes, &mut rng).await?;
-                Box::pin(prover.prove(executed)).await
-            }
-            .instrument(miden_node_tracing::info_span!("test_transaction")),
-        )
-        .await?;
+        let executed = execute(inputs, Vec::new(), notes, &mut rng).await?;
+        let transaction_id = executed.id();
 
+        let (telemetry, _guard) = Telemetry::capture();
+        let result = Box::pin(prover.prove(executed))
+            .instrument(miden_node_tracing::info_span!("test_transaction"))
+            .await;
+
+        assert!(result.is_err(), "a remote prover failure must not be proven in process");
         let root = telemetry.span("test_transaction");
-        let execution = telemetry.span("funding.execute");
         let proving = telemetry.span("funding.prove");
         let remote = telemetry.span("funding.prove.remote");
-        let local = telemetry.span("funding.prove.local");
-        assert_eq!(execution.parent_span_id, root.span_context.span_id());
         assert_eq!(proving.parent_span_id, root.span_context.span_id());
         assert_eq!(remote.parent_span_id, proving.span_context.span_id());
-        assert_eq!(local.parent_span_id, proving.span_context.span_id());
         assert!(matches!(remote.status, Status::Error { .. }));
-        assert!(!matches!(local.status, Status::Error { .. }));
-        assert!(!matches!(proving.status, Status::Error { .. }));
-        assert_eq!(attribute(&proving, "prover.fallback"), Some(true.into()));
-        assert_eq!(
-            attribute(&proving, "transaction.id"),
-            Some(transaction.id().to_string().into())
-        );
-        assert!(remote.end_time <= local.start_time);
-        assert!(local.end_time <= proving.end_time);
+        assert!(matches!(proving.status, Status::Error { .. }));
+        assert_eq!(attribute(&proving, "transaction.id"), Some(transaction_id.to_string().into()));
         Ok(())
     }
 

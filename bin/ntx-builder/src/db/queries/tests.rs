@@ -114,12 +114,12 @@ async fn available_notes_excludes_consumed_notes() {
         .await
         .unwrap();
 
-    assert!(
+    assert_eq!(
         db.available_notes(account_id, BlockNumber::from(1000), 30)
             .await
             .unwrap()
-            .eligible
-            .is_empty()
+            .eligible,
+        []
     );
 }
 

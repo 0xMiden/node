@@ -872,7 +872,7 @@ mod tests {
         assert_eq!(unvalidated, vec![ids[0], ids[2]]);
 
         // An empty request must not error and must return nothing.
-        assert!(db.find_unvalidated_transactions(vec![]).await.unwrap().is_empty());
+        assert_eq!(db.find_unvalidated_transactions(vec![]).await.unwrap(), []);
     }
 
     #[tokio::test]
@@ -962,7 +962,7 @@ mod tests {
             limit: 10,
             include_records: false,
         };
-        assert!(db.list_validated_transactions(params).await.unwrap().transactions.is_empty());
+        assert_eq!(db.list_validated_transactions(params).await.unwrap().transactions, []);
         // They remain reachable by transaction id.
         assert!(db.load_private_record(transaction_ids[0]).await.unwrap().is_some());
     }

@@ -264,13 +264,7 @@ mod tests {
             serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
             serde_json::json!({ "error": "internal error" }),
         );
-        assert!(
-            database
-                .pending_requests(NonZeroUsize::new(1).unwrap())
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert_eq!(database.pending_requests(NonZeroUsize::new(1).unwrap()).await.unwrap(), []);
     }
 
     #[tokio::test]
@@ -332,7 +326,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+        assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
     }
 
     /// A note which targets the funding account would return to it as a deposit, so the request
@@ -358,6 +352,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(database.pending_requests(1.try_into().unwrap()).await.unwrap().is_empty());
+        assert_eq!(database.pending_requests(1.try_into().unwrap()).await.unwrap(), []);
     }
 }

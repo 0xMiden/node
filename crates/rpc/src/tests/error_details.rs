@@ -6,7 +6,7 @@ use super::*;
 fn assert_client_error(status: &Status, detail: u8) {
     assert_eq!(status.code(), Code::InvalidArgument, "{status}");
     assert_eq!(status.details(), &[detail], "{status}");
-    assert!(!status.message().is_empty());
+    assert_ne!(status.message(), "");
 }
 
 #[tokio::test]

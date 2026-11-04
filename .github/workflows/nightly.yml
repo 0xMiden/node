@@ -28,7 +28,7 @@ jobs:
       - uses: $/.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup install beta && rustup default beta
-      - uses: taiki-e/install-action@v2.87.29
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: nextest@0.9.122
       - name: Run tests
@@ -52,7 +52,7 @@ jobs:
       - name: Install rust
         run: rustup toolchain install --no-self-update
       - name: Install cargo-hack
-        uses: taiki-e/install-action@v2.87.29
+        uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-hack@0.6.45
       - name: Check all feature combinations

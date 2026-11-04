@@ -646,7 +646,7 @@ mod tests {
         let proposed = Box::pin(job.get_batch_inputs(selected)).await?;
         assert_eq!(proposed.id(), selected_id);
         assert_eq!(proposed.transactions().len(), 1);
-        assert!(proposed.output_notes().is_empty());
+        assert_eq!(proposed.output_notes(), []);
         Ok(())
     }
 
