@@ -33,6 +33,11 @@ win for at least one call site. Registration uses the inventory re-exported by t
 dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
 compiled into the test binary.
 
+`miden_node_tracing::declared_targets()` returns the default and override targets declared by linked crates, sorted and
+deduplicated. This list is available at startup without executing instrumented code or enabling tracing output. It
+includes only declarations enabled for the build; explicit callsite overrides, legacy instrumentation, and dependency
+targets are not included unless they also appear in a declaration.
+
 Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
 also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s
 canonical fields, inferred fields from `miden_span_record!`, and typed error reporting. Function arguments are always

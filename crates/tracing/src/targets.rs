@@ -1,9 +1,9 @@
 /// Declares a crate's default tracing target and module-specific overrides.
 ///
 /// Invoke once at the crate root before child module declarations. Configuration expressions
-/// retain the caller's scope, and the generated helper resolves targets at compile time. Test
-/// builds collect callsites through the tracing crate's inventory and check that every rule is
-/// used for the enabled features.
+/// retain the caller's scope, and the generated helper resolves targets at compile time and
+/// registers the map for [`declared_targets`]. Test builds collect callsites through the tracing
+/// crate's inventory and check that every rule is used for the enabled features.
 #[macro_export]
 #[expect(
     clippy::crate_in_macro_def,
@@ -20,8 +20,11 @@ macro_rules! declare_targets {
 
         #[doc(hidden)]
         mod __miden_tracing_targets {
-            #[cfg(test)]
             use super::__MIDEN_TRACING_TARGETS as TARGETS;
+
+            $crate::__private::inventory::submit! {
+                $crate::__private::DeclaredTargetMap(&TARGETS)
+            }
 
             #[cfg(test)]
             pub(super) struct Callsite {
@@ -57,6 +60,28 @@ macro_rules! declare_targets {
             }};
         }
     };
+}
+
+/// A target map registered by a linked crate's declaration.
+#[doc(hidden)]
+pub struct DeclaredTargetMap(pub &'static TargetMap);
+
+inventory::collect!(DeclaredTargetMap);
+
+/// Returns the sorted, unique default and override targets declared by linked crates.
+///
+/// Targets are available without executing instrumented code or enabling tracing output. Only
+/// declarations enabled for this build are included; explicit callsite overrides and targets
+/// from other instrumentation are included only if they also appear in a declaration.
+pub fn declared_targets() -> Vec<&'static str> {
+    let mut targets = Vec::new();
+    for DeclaredTargetMap(map) in inventory::iter::<DeclaredTargetMap> {
+        targets.push(map.default);
+        targets.extend(map.rules.iter().map(|(_, target)| *target));
+    }
+    targets.sort_unstable();
+    targets.dedup();
+    targets
 }
 
 /// Maps Rust module subtrees to diagnostic tracing targets.
