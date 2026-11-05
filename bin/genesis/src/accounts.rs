@@ -29,6 +29,9 @@ use rand::rngs::SysRng;
 
 use crate::config::GenesisToolConfig;
 
+#[cfg(test)]
+mod tests;
+
 // FAUCET
 // ================================================================================================
 

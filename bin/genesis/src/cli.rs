@@ -1,33 +1,36 @@
 //! The command-line interface: the five commands in launch order and their handlers.
 //!
-//! Every account command reads and writes the current directory under the well-known file names
-//! (each input can be pointed elsewhere) and never overwrites an existing file. The `build`
-//! command takes explicit directories and account files.
+//! Every account command writes the current directory under the well-known file names, reads its
+//! account inputs from there (each can be pointed elsewhere) and never overwrites an existing
+//! file. The faucet parameters and the deposit nonces are flags. The `build` command takes
+//! explicit directories and account files.
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthScheme;
+use miden_usdcx::xreserve::encoding::DepositNonce;
 
 use crate::accounts::{build_faucet, new_distributor, prefund_distributor, record_nonces};
 use crate::build::BuildCommand;
-use crate::config::{GenesisToolConfig, UsedNoncesFile};
+use crate::config::{GenesisToolConfig, parse_deposit_nonce};
 use crate::output::{
-    CONFIG_FILE,
     DISTRIBUTOR_MAC_FILE,
     DISTRIBUTOR_SECRET_FILE,
     FAUCET_MAC_FILE,
     GENESIS_DISTRIBUTOR_MAC_FILE,
     GENESIS_FAUCET_MAC_FILE,
-    NONCES_FILE,
     read_account_file,
     render_ids,
     render_listing,
     write_account_file,
     write_signing_key,
 };
+
+#[cfg(test)]
+mod tests;
 
 // CLI
 // ================================================================================================
@@ -50,12 +53,11 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = AuthSchemeArg::EcdsaK256Keccak)]
         auth_scheme: AuthSchemeArg,
     },
-    /// Builds the genesis faucet from the config's faucet parameters and role-account ids and
-    /// writes it as usdcx-faucet.mac (nonce one, no seed).
+    /// Builds the genesis faucet from the faucet parameters and role-account ids and writes it as
+    /// usdcx-faucet.mac (nonce one, no seed).
     Faucet {
-        /// The JSON config (a filled copy of the crate's config.template.json).
-        #[arg(long, default_value = CONFIG_FILE)]
-        config: PathBuf,
+        #[command(flatten)]
+        config: GenesisToolConfig,
     },
     /// Gives the distributor the faucet's whole recorded token supply and writes it, key included,
     /// as the genesis-ready distributor.genesis.mac (nonce one, no seed).
@@ -67,15 +69,22 @@ pub enum Command {
         #[arg(long, default_value = DISTRIBUTOR_MAC_FILE)]
         distributor: PathBuf,
     },
-    /// Records the Circle deposit nonces in the JSON file as consumed and writes the result as the
+    /// Records the given Circle deposit nonces as consumed and writes the result as the
     /// genesis-ready usdcx-faucet.genesis.mac.
     RecordNonces {
         /// The faucet file written by `faucet`.
         #[arg(long, default_value = FAUCET_MAC_FILE)]
         faucet: PathBuf,
-        /// The nonces JSON (see the crate README for the schema).
-        #[arg(long, default_value = NONCES_FILE)]
-        nonces: PathBuf,
+        /// A consumed deposit nonce as the hex of its 32 bytes; repeat per nonce or separate with
+        /// commas. Recording a nonce twice is a no-op.
+        #[arg(
+            long = "nonce",
+            value_name = "NONCE",
+            required = true,
+            value_delimiter = ',',
+            value_parser = parse_deposit_nonce
+        )]
+        nonces: Vec<DepositNonce>,
     },
     /// Builds the genesis block from the required accounts and optional additional accounts.
     ///
@@ -138,12 +147,10 @@ fn run_new_distributor(scheme: AuthScheme) -> Result<()> {
     Ok(())
 }
 
-fn run_faucet(config_path: &Path) -> Result<()> {
-    let config = GenesisToolConfig::load(config_path)
-        .with_context(|| format!("loading the config from {}", config_path.display()))?;
-    let faucet = build_faucet(&config).context("building the genesis faucet")?;
+fn run_faucet(config: &GenesisToolConfig) -> Result<()> {
+    let faucet = build_faucet(config).context("building the genesis faucet")?;
     write_account_file(&AccountFile::new(faucet.clone(), Vec::new()), Path::new(FAUCET_MAC_FILE))?;
-    print!("{}", render_listing(&faucet, &config));
+    print!("{}", render_listing(&faucet, config));
     println!("written to {FAUCET_MAC_FILE}");
     Ok(())
 }
@@ -175,16 +182,9 @@ fn run_prefund(faucet_path: &Path, distributor_path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_record_nonces(faucet_path: &Path, nonces_path: &Path) -> Result<()> {
+fn run_record_nonces(faucet_path: &Path, nonces: &[DepositNonce]) -> Result<()> {
     let (faucet, _) = read_account_file(faucet_path)?.into_parts();
-    let nonces = UsedNoncesFile::load(nonces_path)
-        .with_context(|| format!("loading the nonces from {}", nonces_path.display()))?
-        .used_nonces;
-    if nonces.is_empty() {
-        bail!("{} lists no nonces", nonces_path.display());
-    }
-
-    let recorded = record_nonces(&faucet, &nonces).context("recording the consumed nonces")?;
+    let recorded = record_nonces(&faucet, nonces).context("recording the consumed nonces")?;
     write_account_file(
         &AccountFile::new(recorded.clone(), Vec::new()),
         Path::new(GENESIS_FAUCET_MAC_FILE),
@@ -198,104 +198,4 @@ fn run_record_nonces(faucet_path: &Path, nonces_path: &Path) -> Result<()> {
     );
     println!("written to {GENESIS_FAUCET_MAC_FILE}");
     Ok(())
-}
-
-// TESTS
-// ================================================================================================
-
-#[cfg(test)]
-mod tests {
-    use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-    use miden_protocol::utils::serde::{Deserializable, Serializable};
-
-    use super::*;
-
-    const BASE_BUILD_ARGS: [&str; 14] = [
-        "miden-genesis",
-        "build",
-        "--genesis-block-directory",
-        "/tmp/genesis",
-        "--accounts-directory",
-        "/tmp/accounts",
-        "--native-faucet",
-        "/tmp/native-faucet.mac",
-        "--funding-account",
-        "/tmp/funding-account.mac",
-        "--verification-base-fee",
-        "7",
-        "--timestamp",
-        "1717344256",
-    ];
-
-    fn parse_build(extra: &[&str]) -> Result<Cli, clap::Error> {
-        Cli::try_parse_from(BASE_BUILD_ARGS.iter().copied().chain(extra.iter().copied()))
-    }
-
-    #[test]
-    fn build_validator_keys_parse_from_repeated_flags() {
-        let keys = [7u8, 8].map(|seed| {
-            SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
-        });
-        let hex_keys = keys.clone().map(|key| hex::encode(key.public_key().to_bytes()));
-        let cli = parse_build(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
-            .expect("build with explicit validator keys must parse");
-        let Command::Build(command) = cli.command else {
-            panic!("expected the build command");
-        };
-        assert_eq!(command.validator_keys, keys.map(|key| key.public_key()).to_vec());
-    }
-
-    #[test]
-    fn build_requires_an_explicit_validator_set() {
-        let Err(error) = parse_build(&[]) else {
-            panic!("build without an explicit validator set must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-
-        let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        parse_build(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
-            .expect("additional accounts with an explicit validator set must parse");
-    }
-
-    #[test]
-    fn build_requires_explicit_accounts_fee_and_timestamp() {
-        let key = SigningKey::new();
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        for flag in
-            ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"]
-        {
-            let position = BASE_BUILD_ARGS.iter().position(|value| *value == flag).unwrap();
-            let args = BASE_BUILD_ARGS
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != position && *index != position + 1)
-                .map(|(_, value)| *value)
-                .chain(["--validator.key", key_hex.as_str()]);
-            let Err(error) = Cli::try_parse_from(args) else {
-                panic!("build must require {flag}");
-            };
-            assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
-        }
-    }
-
-    #[test]
-    fn build_rejects_an_invalid_validator_key() {
-        let Err(error) = parse_build(&["--validator.key", "not-hex"]) else {
-            panic!("an invalid validator key must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-    }
-
-    #[test]
-    fn account_commands_parse_with_defaults() {
-        for args in [
-            vec!["miden-genesis", "new-distributor"],
-            vec!["miden-genesis", "faucet"],
-            vec!["miden-genesis", "prefund"],
-            vec!["miden-genesis", "record-nonces"],
-        ] {
-            Cli::try_parse_from(args).expect("account command must parse without flags");
-        }
-    }
 }
