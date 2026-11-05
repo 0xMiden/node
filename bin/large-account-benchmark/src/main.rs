@@ -81,7 +81,7 @@ struct VerifyArgs {
     #[arg(long, env = "MIDEN_LARGE_ACCOUNT_BENCH_RPC_URL", value_name = "URL")]
     rpc_url: Url,
 
-    /// Hex-encoded public keys of the validators trusted to attest the node's transaction
+    /// `0x`-prefixed hex public keys of the validators trusted to attest the node's transaction
     /// encryption key.
     #[arg(
         long = "validator-signing-public-key",

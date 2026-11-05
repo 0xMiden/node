@@ -1,5 +1,4 @@
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-use miden_protocol::utils::serde::Serializable;
 
 use super::*;
 
@@ -35,7 +34,7 @@ fn bootstrap_requires_exactly_one_genesis_source() {
 
 #[test]
 fn start_requires_a_data_directory_and_migrate_runs_without_node_arguments() {
-    let key = hex::encode(SigningKey::new().public_key().to_bytes());
+    let key = SigningKey::new().public_key().to_string();
     let args = [
         "miden-funding-service",
         "start",

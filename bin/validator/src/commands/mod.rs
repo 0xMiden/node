@@ -16,7 +16,7 @@ use clap::Parser;
 use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::{
@@ -90,7 +90,8 @@ pub struct PrivateRecordExportOptions {
     #[arg(long, value_name = "TRANSACTION_ID")]
     transaction_id: String,
 
-    /// Hex-encoded signing public key of the validator that produced the record.
+    /// `0x`-prefixed signing public key of the validator that produced the record, as printed by
+    /// `pubkey`.
     #[arg(long, value_name = "VALIDATOR_ID")]
     validator_id: String,
 
@@ -124,7 +125,7 @@ pub enum ValidatorCommand {
         genesis_block_file: PathBuf,
     },
 
-    /// Prints the hex-encoded public key for the configured validator signing key.
+    /// Prints the `0x`-prefixed hex public key for the configured validator signing key.
     ///
     /// Every validator operator runs this and sends the printed key to whoever runs
     /// `miden-genesis build`, which commits the full set to the genesis header via its
@@ -137,9 +138,9 @@ pub enum ValidatorCommand {
     /// Generates a validator signing key-pair and a shared transaction encryption key.
     ///
     /// Prints hex-encoded key material to stdout: the signing secret key (`start
-    /// --signing-key.hex`), its public key (`miden-genesis build --validator.key`), and a
-    /// transaction encryption key (`start --encryption-key.hex`), which must be shared by every
-    /// validator in the set.
+    /// --signing-key.hex`), its `0x`-prefixed public key (`miden-genesis build --validator.key`),
+    /// and a transaction encryption key (`start --encryption-key.hex`), which must be shared by
+    /// every validator in the set.
     ///
     /// Intended for local networks; production deployments should prefer KMS-backed keys
     /// (`--signing-key.kms-id`, `--encryption-key.kms-ciphertext`).
@@ -224,14 +225,14 @@ impl ValidatorCommand {
             },
             Self::Pubkey { signing_key } => {
                 let signer = signing_key.into_signer().await?;
-                println!("{}", hex::encode(signer.public_key().to_bytes()));
+                println!("{}", signer.public_key());
                 Ok(())
             },
             Self::Keygen => {
                 let signing_key = SigningKey::new();
                 let encryption_key = KeyExchangeKey::new();
                 println!("signing-key: {}", hex::encode(signing_key.to_bytes()));
-                println!("validator-key: {}", hex::encode(signing_key.public_key().to_bytes()));
+                println!("validator-key: {}", signing_key.public_key());
                 println!("encryption-key: {}", hex::encode(encryption_key.to_bytes()));
                 Ok(())
             },
@@ -307,12 +308,6 @@ impl ValidatorCommand {
             | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
-}
-
-/// Parses a hex-encoded validator public key CLI argument.
-fn parse_validator_public_key(hex_key: &str) -> Result<PublicKey, String> {
-    let bytes = hex::decode(hex_key).map_err(|err| err.to_string())?;
-    PublicKey::read_from_bytes(&bytes).map_err(|err| err.to_string())
 }
 
 /// Configuration for the shared transaction encryption key.
@@ -1009,7 +1004,7 @@ mod tests {
         store_private_record(&writer, target.clone()).await;
         let target_file = directory.path().join("target-record.bin");
         let encoded_transaction_id = hex::encode(transaction_id.to_bytes());
-        let encoded_validator_id = hex::encode(target.record_id().validator_id());
+        let encoded_validator_id = format!("0x{}", hex::encode(target.record_id().validator_id()));
         export_record_file(
             directory.path(),
             &encoded_transaction_id,
@@ -1071,7 +1066,7 @@ mod tests {
         let wrong_setup = test_operator_keys(9, 7).remove(0);
         assert_issue_error(&target_file, &first_output, &wrong_setup, "setup does not match");
 
-        let missing_validator_id = hex::encode(validator_signers[0].public_key().to_bytes());
+        let missing_validator_id = validator_signers[0].public_key().to_string();
         let error = export_private_record::export(PrivateRecordExportOptions {
             data_directory: directory.path().to_path_buf(),
             transaction_id: encoded_transaction_id,

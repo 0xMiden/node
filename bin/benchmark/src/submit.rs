@@ -23,7 +23,7 @@ use miden_node_proto::domain::encryption::TransactionInputsSealer;
 use miden_node_proto::generated as proto;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::utils::serde::Serializable;
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -65,11 +65,8 @@ pub(crate) async fn run(
     let consume_ids: Vec<TransactionId> = consume_txs.iter().map(ProvenTransaction::id).collect();
 
     println!("Connecting to {rpc_url} ({connections} connection(s))...");
-    let trusted_validator_signing_key = ValidatorPublicKey::read_from_bytes(
-        &hex::decode(validator_signing_public_key)
-            .expect("validator signing public key must be a hex-encoded K256 public key"),
-    )
-    .expect("validator signing public key must be a valid K256 public key");
+    let trusted_validator_signing_key = ValidatorPublicKey::from_hex(&validator_signing_public_key)
+        .expect("validator signing public key must be a 0x-prefixed hex K256 public key");
     let (pool, sealer) = create_genesis_aware_rpc_client_pool(
         &rpc_url,
         Duration::from_secs(30),

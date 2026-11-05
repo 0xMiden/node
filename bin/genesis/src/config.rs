@@ -4,7 +4,6 @@
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetAmount;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_protocol::utils::serde::Deserializable;
 use miden_usdcx::xreserve::encoding::{CircleDomain, DepositNonce};
 
 // ROLES
@@ -134,10 +133,15 @@ pub struct FaucetConfig {
     /// `--verification-base-fee` passed to `build`.
     #[arg(long)]
     pub verification_base_fee: u32,
-    /// A deposit attester to allowlist, as the hex of its 33-byte compressed SEC1 public key;
-    /// repeat per attester or separate with commas. None means the allowlist is seeded later
-    /// through `set_attester` notes.
-    #[arg(long = "attester", value_name = "KEY", value_delimiter = ',', value_parser = parse_attester)]
+    /// A deposit attester to allowlist, as the `0x`-prefixed hex of its compressed or uncompressed
+    /// SEC1 public key; repeat per attester or separate with commas. None means the allowlist is
+    /// seeded later through `set_attester` notes.
+    #[arg(
+        long = "attester",
+        value_name = "KEY",
+        value_delimiter = ',',
+        value_parser = PublicKey::from_hex
+    )]
     pub attesters: Vec<PublicKey>,
 }
 
@@ -158,11 +162,6 @@ pub fn parse_asset_amount(text: &str) -> Result<AssetAmount, String> {
 /// Parses the faucet seed from its 32-byte hex form.
 pub fn parse_seed(text: &str) -> Result<[u8; 32], String> {
     parse_hex_array::<32>(text)
-}
-
-/// Parses an attester key from the hex of its 33-byte compressed SEC1 form.
-pub fn parse_attester(text: &str) -> Result<PublicKey, String> {
-    PublicKey::read_from_bytes(&parse_hex_array::<33>(text)?).map_err(|err| err.to_string())
 }
 
 /// Parses a deposit nonce from the hex of its 32 bytes.
