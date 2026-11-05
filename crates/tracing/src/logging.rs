@@ -21,8 +21,9 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Stdout defaults for operator events, storage diagnostics, and prover noise suppression.
-const DEFAULT_STDOUT_FILTER: &str = "info,user=debug,miden::storage=debug,miden_prover=warn";
+/// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
+const DEFAULT_STDOUT_FILTER: &str =
+    "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
@@ -165,7 +166,7 @@ impl Drop for OtelGuard {
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
 /// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
-/// built-in defaults for operator and storage diagnostics.
+/// built-in defaults for operator, storage, and RPC server diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace,miden_prover=warn`.
 ///
@@ -421,6 +422,27 @@ mod tests {
                 ("miden::storage::sqlite", tracing::Level::DEBUG),
                 ("other_dependency", tracing::Level::INFO),
                 ("miden_prover", tracing::Level::WARN),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_stdout_preserves_rpc_server_debug_without_enabling_client_debug() {
+        let events = default_stdout_events(|| {
+            tracing::debug!(target: "miden::rpc::server", "request debug");
+            tracing::debug!(target: "miden::rpc::server::subscription", "subscription debug");
+            tracing::trace!(target: "miden::rpc::server", "request trace");
+            tracing::debug!(target: "miden::rpc::client", "connection retry debug");
+            tracing::info!(target: "miden::rpc::client", "connection status");
+            tracing::debug!(target: "miden::other", "unrelated debug");
+        });
+
+        assert_eq!(
+            events,
+            [
+                ("miden::rpc::server", tracing::Level::DEBUG),
+                ("miden::rpc::server::subscription", tracing::Level::DEBUG),
+                ("miden::rpc::client", tracing::Level::INFO),
             ]
         );
     }
