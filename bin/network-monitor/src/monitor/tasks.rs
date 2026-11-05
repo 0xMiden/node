@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, watch};
 use crate::LOG_TARGET;
 use crate::agglayer::AgglayerService;
 use crate::config::MonitorConfig;
-use crate::counter::{CounterTrackingService, IncrementService, LatencyState, TrackedAccounts};
+use crate::counter::{CounterTrackingService, IncrementService, LatencyState};
 use crate::deploy::{
     TransactionSubmissionClient,
     UnsupportedChainError,
@@ -24,7 +24,7 @@ use crate::deploy::{
 use crate::explorer::ExplorerService;
 use crate::faucet::FaucetService;
 use crate::frontend::{ServerState, serve};
-use crate::funding::funding_client_from_config;
+use crate::funding::{FundingWait, funding_client_from_config};
 use crate::funding_service::FundingService;
 use crate::note_transport::NoteTransportService;
 use crate::registration::RegistrationPool;
@@ -250,10 +250,11 @@ fn ntx_seed_status(name: &str, details: ServiceDetails) -> ServiceStatus {
 ///
 /// Deployment is retried forever with exponential backoff, publishing an unhealthy status on both
 /// channels after each failed attempt, so a network that is down at startup degrades the cards
-/// instead of aborting the monitor. The exception is an [`UnsupportedChainError`], which cannot
-/// resolve by retrying and ends this supervised task; [`Tasks::handle_failure`] treats that as
-/// fatal. An unreadable or invalid registration file leaves both channels unhealthy without
-/// ending this task. Once bootstrapped, both services run on separate tasks with the same semantics.
+/// instead of aborting the monitor. While the counter's funding note has not committed, both
+/// channels report the wait. The exception is an [`UnsupportedChainError`], which cannot resolve
+/// by retrying and ends this supervised task; [`Tasks::handle_failure`] treats that as fatal. An
+/// unreadable or invalid registration file leaves both channels unhealthy without ending this
+/// task. Once bootstrapped, both services run on separate tasks with the same semantics.
 async fn run_ntx(
     config: MonitorConfig,
     increment_tx: watch::Sender<ServiceStatus>,
@@ -294,10 +295,21 @@ async fn run_ntx(
         },
     };
 
+    let publish_waiting = |wait: &FundingWait| {
+        increment_tx.send_replace(wait.status(
+            IncrementService::NAME,
+            ServiceDetails::NtxIncrement(IncrementDetails::default()),
+        ));
+        tracking_tx.send_replace(wait.status(
+            CounterTrackingService::NAME,
+            ServiceDetails::NtxTracking(CounterTrackingDetails::default()),
+        ));
+    };
+
     let registration = Mutex::new(registration);
     let result = (|| async {
         let mut pool = registration.lock().await;
-        Box::pin(bootstrap_ntx(&config, &mut pool)).await
+        Box::pin(bootstrap_ntx(&config, &mut pool, &publish_waiting)).await
     })
     .retry(backoff)
     .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
@@ -312,7 +324,7 @@ async fn run_ntx(
     })
     .await;
 
-    let (mut increment_svc, tracking_svc) = match result {
+    let (increment_svc, tracking_svc) = match result {
         Ok(services) => services,
         Err(err) => {
             error!(
@@ -328,7 +340,6 @@ async fn run_ntx(
     // Run the services on their own tasks (a shared task would serialize the increment service's
     // local proving with the tracking polls). The first one to finish ends this supervised task;
     // the JoinSet aborts the other on drop.
-    increment_svc.registration = registration.into_inner();
     let mut services = tokio::task::JoinSet::new();
     services.spawn(increment_svc.run(increment_tx));
     services.spawn(tracking_svc.run(tracking_tx));
@@ -337,13 +348,13 @@ async fn run_ntx(
 
 /// One bootstrap attempt: prepare and deploy accounts, then build both services.
 ///
-/// Prepares an in-memory wallet/counter pair, deploys the counter to the network, and hands
-/// the same counter account to both services via a [`watch::channel`]. The increment service
-/// publishes new counters on the channel when it regenerates accounts after persistent failures;
-/// the tracking service observes the channel to switch over.
+/// Prepares an in-memory wallet/counter pair and deploys the counter to the network. The increment
+/// service drives the pair and the tracking service observes it; both keep it for the monitor's
+/// lifetime.
 async fn bootstrap_ntx(
     config: &MonitorConfig,
     registration: &mut Option<RegistrationPool>,
+    on_wait: &(impl Fn(&FundingWait) + Sync),
 ) -> Result<(IncrementService, CounterTrackingService)> {
     let prover = LocalTransactionProver::default();
     let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
@@ -362,14 +373,11 @@ async fn bootstrap_ntx(
         funding.as_ref(),
         config.wallet_funding_amount,
         registration.as_mut(),
+        on_wait,
     ))
     .await?;
 
-    let (accounts_tx, accounts_rx) = watch::channel(TrackedAccounts {
-        wallet: accounts.wallet.clone(),
-        counter: accounts.counter.clone(),
-    });
-
+    let (wallet, counter) = (accounts.wallet.clone(), accounts.counter.clone());
     let latency_state = Arc::new(Mutex::new(LatencyState::default()));
 
     let increment_svc = IncrementService::new(
@@ -377,12 +385,11 @@ async fn bootstrap_ntx(
         accounts,
         prover,
         submission_client,
-        accounts_tx,
         latency_state.clone(),
         funding,
     )?;
     let tracking_svc =
-        CounterTrackingService::new(config.clone(), accounts_rx, latency_state).await?;
+        CounterTrackingService::new(config.clone(), wallet, counter, latency_state).await?;
 
     Ok((increment_svc, tracking_svc))
 }

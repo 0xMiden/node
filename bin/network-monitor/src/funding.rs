@@ -2,25 +2,31 @@
 //!
 //! Fees are withdrawn from the executing account's vault, so on a fee-charging chain the
 //! monitor's fresh accounts need the fee asset before they can transact. This module requests a
-//! P2ID note which holds the fee asset and returns it for consumption as an unauthenticated input
-//! note.
+//! P2ID note which holds the fee asset, tracks it until it commits on chain, and returns it for
+//! consumption as an unauthenticated input note.
 //!
 //! The funding service is the only source of the fee asset. The chain's faucet is not used for
 //! fees, because a network does not always run a public faucet. The monitor still talks to the
 //! faucet for its faucet checks, which is what [`FaucetClient`] is for.
 
+use std::fmt;
+use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use miden_node_tracing::info;
+use miden_node_proto::clients::RpcClient;
+use miden_node_proto::generated::miden::node::v1::GetNotesByIdRequest;
+use miden_node_proto::generated::note::NoteId as ProtoNoteId;
+use miden_node_tracing::{info, warn};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
-use miden_protocol::note::Note;
+use miden_protocol::note::{Note, NoteId};
 use miden_protocol::utils::serde::Deserializable;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tokio::time::Instant;
 use url::Url;
 
 use crate::LOG_TARGET;
@@ -31,6 +37,7 @@ use crate::faucet::{
     fetch_faucet_metadata,
     request_tokens,
 };
+use crate::status::{ServiceDetails, ServiceStatus};
 
 /// Upper bound on the fee formula's cycle multiplier: the kernel charges `verification_base_fee *
 /// (ilog2(total_cycles) + 1)` with cycles capped at `2^29`.
@@ -47,6 +54,16 @@ const WALLET_TOPUP_THRESHOLD_DIVISOR: u64 = 10;
 /// small: the counter allowlists P2ID at zero price, so third parties can drain this buffer with
 /// dust notes, but increments keep working since sponsorships are collected before fees.
 const COUNTER_FUNDING_TXS: u64 = 2;
+
+/// Interval between checks for whether a funding note has committed.
+const FUNDING_NOTE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Time a funding note may stay uncommitted before the wait is reported as unhealthy.
+///
+/// Waiting continues past this point. The funding service delivers every request it accepts, so a
+/// long wait means the service is falling behind, and requesting another note would only add to
+/// its backlog.
+const FUNDING_WAIT_UNHEALTHY_AFTER: Duration = Duration::from_mins(5);
 
 /// Hard upper bound on one transaction's fee under the given base fee.
 pub fn max_fee_per_transaction(verification_base_fee: u32) -> u64 {
@@ -236,6 +253,146 @@ impl FeeFunder {
     }
 }
 
+// FUNDING NOTE COMMITMENT
+// ================================================================================================
+
+/// Looks up whether notes have committed on chain.
+pub(crate) trait NoteCommitments {
+    /// Reports whether the note with the given ID is committed.
+    fn is_committed(&mut self, note_id: NoteId) -> impl Future<Output = Result<bool>> + Send;
+}
+
+impl NoteCommitments for RpcClient {
+    async fn is_committed(&mut self, note_id: NoteId) -> Result<bool> {
+        let requested = ProtoNoteId::from(note_id.as_word());
+        let response = self
+            .get_notes_by_id(GetNotesByIdRequest { note_ids: vec![requested.clone()] })
+            .await
+            .context("failed to look up the funding note at the node")?
+            .into_inner();
+
+        // The node returns only committed notes, each with its inclusion proof.
+        Ok(response.notes.iter().any(|committed| {
+            committed.inclusion_proof.as_ref().and_then(|proof| proof.note_id.as_ref())
+                == Some(&requested)
+        }))
+    }
+}
+
+/// A funding note requested from the funding service, which may not have committed yet.
+///
+/// The service accepts a request before it submits the transaction which creates the note, and a
+/// saturated service can take a long time to do so. Transactions consume the note only after it
+/// has committed, so a slow funding service surfaces as a wait instead of rejected transactions.
+#[derive(Clone, Debug)]
+pub struct PendingFunding {
+    note: UsdcxP2Id,
+    requested_at: Instant,
+}
+
+impl PendingFunding {
+    pub fn new(note: UsdcxP2Id) -> Self {
+        Self { note, requested_at: Instant::now() }
+    }
+
+    /// Waits until the note has committed and returns it, reporting each unsuccessful check to
+    /// `on_wait`.
+    ///
+    /// A failed lookup is reported and retried rather than returned. The service delivers every
+    /// request it accepts, so abandoning the wait would only request the same funding again.
+    pub(crate) async fn wait_until_committed(
+        self,
+        notes: &mut impl NoteCommitments,
+        on_wait: &(impl Fn(&FundingWait) + Sync),
+    ) -> UsdcxP2Id {
+        while let Err(wait) = self.check_committed(notes).await {
+            on_wait(&wait);
+            tokio::time::sleep(FUNDING_NOTE_POLL_INTERVAL).await;
+        }
+        self.note
+    }
+
+    /// Returns the note for the account's next transaction once it has committed.
+    ///
+    /// Until then, a transaction the account `can_pay` from its balance goes ahead without the
+    /// note, and any other transaction must wait, as the returned [`FundingWait`] describes.
+    pub(crate) async fn next_transaction_note(
+        &self,
+        notes: &mut impl NoteCommitments,
+        can_pay: bool,
+    ) -> Result<Option<UsdcxP2Id>, FundingWait> {
+        match self.check_committed(notes).await {
+            Ok(()) => Ok(Some(self.note.clone())),
+            Err(_) if can_pay => Ok(None),
+            Err(wait) => Err(wait),
+        }
+    }
+
+    /// Checks once whether the note has committed, returning the wait while it has not.
+    async fn check_committed(&self, notes: &mut impl NoteCommitments) -> Result<(), FundingWait> {
+        let note_id = self.note.note().id();
+        let last_error = match notes.is_committed(note_id).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => None,
+            Err(err) => {
+                warn!(
+                    &err,
+                    target: LOG_TARGET,
+                    "Failed to check whether the funding note has committed",
+                    note.id = note_id
+                );
+                Some(format!("{err:#}"))
+            },
+        };
+
+        Err(FundingWait {
+            note_id,
+            elapsed: self.requested_at.elapsed(),
+            last_error,
+        })
+    }
+}
+
+/// A wait for a funding note to commit, reported as the waiting service's status.
+#[derive(Clone, Debug)]
+pub struct FundingWait {
+    note_id: NoteId,
+    elapsed: Duration,
+    last_error: Option<String>,
+}
+
+impl FundingWait {
+    /// Builds the status of a service which waits for this note.
+    ///
+    /// A wait is reported as unknown at first and as unhealthy once it exceeds
+    /// [`FUNDING_WAIT_UNHEALTHY_AFTER`].
+    pub fn status(&self, name: &str, details: ServiceDetails) -> ServiceStatus {
+        if self.elapsed >= FUNDING_WAIT_UNHEALTHY_AFTER {
+            return ServiceStatus::unhealthy(name, self, details);
+        }
+
+        let mut status = ServiceStatus::unknown(name, details);
+        status.error = Some(self.to_string());
+        status
+    }
+}
+
+impl fmt::Display for FundingWait {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let elapsed = Duration::from_secs(self.elapsed.as_secs());
+        write!(
+            f,
+            "waiting for funding note {} from the funding service (requested {} ago)",
+            self.note_id,
+            humantime::format_duration(elapsed)
+        )?;
+        if let Some(err) = &self.last_error {
+            write!(f, "; the last check failed: {err}")?;
+        }
+        Ok(())
+    }
+}
+
 // TESTS
 // ================================================================================================
 
@@ -257,6 +414,7 @@ mod tests {
     use tokio::sync::watch;
 
     use super::*;
+    use crate::status::Status;
 
     /// Parses a monitor configuration which holds the given arguments and nothing else of interest.
     fn config_with(arguments: &[&str]) -> MonitorConfig {
@@ -353,5 +511,128 @@ mod tests {
             assert!(error.to_string().contains(expected_error), "unexpected error: {error:#}");
         }
         server.abort();
+    }
+
+    // FUNDING NOTE COMMITMENT
+    // --------------------------------------------------------------------------------------------
+
+    /// Builds a pending funding note as the funding service returns it.
+    fn pending_funding() -> PendingFunding {
+        let fee_faucet_id = FungibleAsset::mock_issuer();
+        let target: AccountId = ACCOUNT_ID_SENDER.try_into().unwrap();
+        let note: Note = P2idNote::builder()
+            .sender(fee_faucet_id)
+            .target(target)
+            .serial_number(Word::from([7u32; 4]))
+            .note_type(NoteType::Public)
+            .asset(FungibleAsset::new(fee_faucet_id, 100).unwrap())
+            .build()
+            .unwrap()
+            .into();
+        PendingFunding::new(
+            UsdcxP2Id::from_note(note, AssetId::new_fungible(fee_faucet_id)).unwrap(),
+        )
+    }
+
+    /// A node which gives scripted answers to note lookups, repeating its last answer once the
+    /// script runs out. `None` stands for a failed lookup.
+    struct ScriptedNode {
+        answers: Vec<Option<bool>>,
+        lookups: usize,
+    }
+
+    impl ScriptedNode {
+        fn new(answers: impl Into<Vec<Option<bool>>>) -> Self {
+            Self { answers: answers.into(), lookups: 0 }
+        }
+    }
+
+    impl NoteCommitments for ScriptedNode {
+        fn is_committed(&mut self, _note_id: NoteId) -> impl Future<Output = Result<bool>> + Send {
+            let answer = self.answers[self.lookups.min(self.answers.len() - 1)];
+            self.lookups += 1;
+            std::future::ready(answer.ok_or_else(|| anyhow::anyhow!("the node is unavailable")))
+        }
+    }
+
+    fn increment_details() -> ServiceDetails {
+        ServiceDetails::NtxIncrement(crate::status::IncrementDetails::default())
+    }
+
+    /// A transaction which needs the funding note waits for it to commit, and a transaction the
+    /// balance covers goes ahead without it.
+    #[tokio::test]
+    async fn transactions_consume_a_funding_note_only_after_it_commits() {
+        let pending = pending_funding();
+        let note_id = pending.note.note().id();
+        let mut rpc = ScriptedNode::new([Some(false), Some(false), Some(true)]);
+
+        let wait = pending
+            .next_transaction_note(&mut rpc, false)
+            .await
+            .expect_err("a transaction which needs the note must wait");
+        assert!(wait.to_string().contains(&note_id.to_string()), "unexpected wait: {wait}");
+
+        let note = pending.next_transaction_note(&mut rpc, true).await.unwrap();
+        assert!(note.is_none(), "an uncommitted note must not be consumed");
+
+        let note = pending.next_transaction_note(&mut rpc, false).await.unwrap();
+        assert_eq!(note.map(|note| note.note().id()), Some(note_id));
+    }
+
+    /// A failed lookup holds back only the transactions which need the note, and the wait reports
+    /// the failure.
+    #[tokio::test]
+    async fn a_failed_lookup_is_reported_while_waiting() {
+        let pending = pending_funding();
+        let mut rpc = ScriptedNode::new([None]);
+
+        let wait = pending
+            .next_transaction_note(&mut rpc, false)
+            .await
+            .expect_err("a transaction which needs the note must wait");
+        assert!(wait.to_string().contains("the node is unavailable"), "unexpected wait: {wait}");
+
+        let note = pending.next_transaction_note(&mut rpc, true).await.unwrap();
+        assert!(note.is_none(), "a transaction the balance covers must go ahead");
+    }
+
+    /// Waiting reports every unsuccessful check, including failed lookups, and ends once the note
+    /// commits.
+    #[tokio::test(start_paused = true)]
+    async fn waiting_ends_once_the_note_commits() {
+        let pending = pending_funding();
+        let note_id = pending.note.note().id();
+        let mut rpc = ScriptedNode::new([None, Some(false), Some(true)]);
+        let reports = std::sync::Mutex::new(Vec::new());
+        let on_wait = |wait: &FundingWait| reports.lock().unwrap().push(wait.to_string());
+
+        let note = pending.wait_until_committed(&mut rpc, &on_wait).await;
+
+        assert_eq!(note.note().id(), note_id);
+        let reports = reports.into_inner().unwrap();
+        assert_eq!(reports.len(), 2, "unexpected reports: {reports:?}");
+        assert!(
+            reports[0].contains("the node is unavailable"),
+            "unexpected reports: {reports:?}"
+        );
+    }
+
+    /// A wait is reported as unknown at first and as unhealthy once it has lasted too long.
+    #[tokio::test(start_paused = true)]
+    async fn a_long_wait_is_reported_as_unhealthy() {
+        let pending = pending_funding();
+        let mut rpc = ScriptedNode::new([Some(false)]);
+
+        let wait = pending.next_transaction_note(&mut rpc, false).await.unwrap_err();
+        let status = wait.status("Local Transactions", increment_details());
+        assert_eq!(status.status, Status::Unknown);
+        assert!(status.error.unwrap().contains("waiting for funding note"));
+
+        tokio::time::advance(FUNDING_WAIT_UNHEALTHY_AFTER).await;
+        let wait = pending.next_transaction_note(&mut rpc, false).await.unwrap_err();
+        let status = wait.status("Local Transactions", increment_details());
+        assert_eq!(status.status, Status::Unhealthy);
+        assert!(status.error.unwrap().contains("waiting for funding note"));
     }
 }
