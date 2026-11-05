@@ -141,8 +141,9 @@ curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter"
 curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter"
 ```
 
-Each successful `GET` returns `200` with `{"filter":"<expression>"}`. The expression represents the active filter;
-directive ordering and formatting may differ from the original input without changing its meaning.
+Each successful `GET` returns `200` with `{"filter":"<expression>"}`. It preserves the last successfully applied
+expression exactly, including the startup expression, so it can be saved and restored without changing field-value
+matching.
 
 Replace the stdout filter with a complete expression:
 

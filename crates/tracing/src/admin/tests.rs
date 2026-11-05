@@ -27,10 +27,18 @@ impl<S: Subscriber> Layer<S> for Recorded {
 }
 
 fn setup(otel_enabled: bool) -> (Router, tracing::Dispatch, Recorded, Recorded) {
+    setup_with_filters(otel_enabled, "off", "off")
+}
+
+fn setup_with_filters(
+    otel_enabled: bool,
+    stdout_expression: &str,
+    otel_expression: &str,
+) -> (Router, tracing::Dispatch, Recorded, Recorded) {
     let stdout = Recorded::default();
     let otel = Recorded::default();
-    let (stdout_filter, stdout_reload) = reloadable_filter("off").unwrap();
-    let (otel_filter, otel_reload) = reloadable_filter("off").unwrap();
+    let (stdout_filter, stdout_reload) = reloadable_filter(stdout_expression).unwrap();
+    let (otel_filter, otel_reload) = reloadable_filter(otel_expression).unwrap();
     let subscriber = Registry::default()
         .with(stdout.clone().with_filter(stdout_filter))
         .with(otel.clone().with_filter(otel_filter));
@@ -75,6 +83,48 @@ async fn get(app: &Router, output: &str) -> (StatusCode, Value) {
     let status = response.status();
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&body).unwrap())
+}
+
+#[tokio::test]
+async fn saved_filters_preserve_float_value_matching_when_restored() {
+    let expression = "off,[scope{value=1.0}]=info";
+    let (app, dispatch, stdout, otel) = setup_with_filters(true, expression, expression);
+    async {
+        let emit_float = || {
+            let span = tracing::info_span!("scope", value = 1.0_f64);
+            let _entered = span.enter();
+            tracing::info!("float event");
+        };
+        emit_float();
+        for recorded in [&stdout, &otel] {
+            assert_eq!(
+                recorded.0.lock().unwrap().iter().filter(|kind| **kind == "event").count(),
+                1
+            );
+        }
+
+        for output in ["stdout", "otel"] {
+            let (status, saved) = get(&app, output).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(saved, json!({"filter": expression}));
+            assert_eq!(put(&app, output, "off").await, StatusCode::NO_CONTENT);
+            assert_eq!(
+                put(&app, output, saved["filter"].as_str().unwrap()).await,
+                StatusCode::NO_CONTENT
+            );
+            assert_eq!(get(&app, output).await.1, saved);
+        }
+
+        emit_float();
+        for recorded in [&stdout, &otel] {
+            assert_eq!(
+                recorded.0.lock().unwrap().iter().filter(|kind| **kind == "event").count(),
+                2
+            );
+        }
+    }
+    .with_subscriber(dispatch)
+    .await;
 }
 
 #[tokio::test]

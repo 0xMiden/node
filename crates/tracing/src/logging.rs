@@ -35,31 +35,42 @@ type ReloadFilter = std::sync::Arc<dyn FilterControl>;
 /// Reads and replaces an output's active filter through its reload handle.
 #[cfg(feature = "admin-api")]
 pub(crate) trait FilterControl: Send + Sync {
-    fn reload(
-        &self,
-        filter: EnvFilter,
-        output: &str,
-    ) -> Result<(), tracing_subscriber::reload::Error>;
-    fn current(&self) -> Result<String, tracing_subscriber::reload::Error>;
+    fn reload(&self, filter: EnvFilter, expression: String, output: &str) -> anyhow::Result<()>;
+    fn current(&self) -> anyhow::Result<String>;
+}
+
+/// Keeps the applied expression intact because formatting an `EnvFilter` can change value types.
+#[cfg(feature = "admin-api")]
+struct ReloadControl<S> {
+    handle: tracing_subscriber::reload::Handle<EnvFilter, S>,
+    expression: std::sync::Mutex<String>,
 }
 
 #[cfg(feature = "admin-api")]
-impl<S: Subscriber> FilterControl for tracing_subscriber::reload::Handle<EnvFilter, S> {
-    fn reload(
-        &self,
-        filter: EnvFilter,
-        output: &str,
-    ) -> Result<(), tracing_subscriber::reload::Error> {
+impl<S: Subscriber> FilterControl for ReloadControl<S> {
+    fn reload(&self, filter: EnvFilter, expression: String, output: &str) -> anyhow::Result<()> {
         crate::info!(
             "Setting tracing filter",
-            tracing.filter = filter.to_string(),
+            tracing.filter = expression.as_str(),
             tracing.output = output
         );
-        tracing_subscriber::reload::Handle::reload(self, filter)
+        // Serialize updates and reads so the returned expression describes the active filter.
+        let mut current = self
+            .expression
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tracing filter expression lock is poisoned"))?;
+        self.handle.reload(filter)?;
+        *current = expression;
+        Ok(())
     }
 
-    fn current(&self) -> Result<String, tracing_subscriber::reload::Error> {
-        self.with_current(ToString::to_string)
+    fn current(&self) -> anyhow::Result<String> {
+        let expression = self
+            .expression
+            .lock()
+            .map_err(|_| anyhow::anyhow!("tracing filter expression lock is poisoned"))?;
+        self.handle.with_current(|_| ())?;
+        Ok(expression.clone())
     }
 }
 
@@ -76,7 +87,13 @@ pub(crate) fn reloadable_filter<S: Subscriber>(
     expression: &str,
 ) -> anyhow::Result<(tracing_subscriber::reload::Layer<EnvFilter, S>, ReloadFilter)> {
     let (filter, handle) = tracing_subscriber::reload::Layer::new(EnvFilter::from_str(expression)?);
-    Ok((filter, std::sync::Arc::new(handle)))
+    Ok((
+        filter,
+        std::sync::Arc::new(ReloadControl {
+            handle,
+            expression: std::sync::Mutex::new(expression.to_owned()),
+        }),
+    ))
 }
 
 /// Default OpenTelemetry resource attributes for this process.
