@@ -72,8 +72,10 @@ pub(crate) use select_all_block_header_commitments::select_all_block_header_comm
 mod select_block_header_and_signatures_by_block_num;
 pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
 
-mod select_block_header_by_block_num;
-pub(crate) use select_block_header_by_block_num::select_block_header_by_block_num;
+mod select_chain_tip;
+pub(crate) use select_chain_tip::select_chain_tip;
+
+pub(crate) use crate::read::select_block_header;
 
 mod select_block_headers;
 pub(crate) use select_block_headers::select_block_headers;

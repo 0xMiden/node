@@ -171,7 +171,7 @@ impl State {
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
         // consistency check also pins the chain MMR to this header.
         let latest_block_num = db
-            .select_block_header_by_block_num(None)
+            .select_chain_tip()
             .await?
             .ok_or(StateInitializationError::GenesisBlockMissing)?
             .block_num();
@@ -432,5 +432,41 @@ mod tests {
         let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();
 
         assert_eq!(protocol_config, Some(test_protocol_config()));
+    }
+}
+
+#[cfg(test)]
+mod read_acquisition_tests {
+    use std::time::Duration;
+
+    use miden_protocol::block::BlockNumber;
+
+    use crate::DatabaseError;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_waits_for_tree_publication_and_invokes_the_caller_once() {
+        let (_directory, state, mut writer) = crate::read::tests::state().await;
+        let old = state.latest_snapshot.load_full();
+        let block = crate::read::tests::next_block(&state).await;
+        writer.apply_block(block, None).await.unwrap();
+        // Recreate the commit/publication gap while retaining both real tree generations.
+        let published = state.latest_snapshot.swap(old);
+        state.committed_tip_tx.send_replace(BlockNumber::GENESIS);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_calls = std::sync::Arc::clone(&calls);
+        let read = state.read(move |view| -> Result<(), DatabaseError> {
+            observed_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(view.snapshot.block_num, BlockNumber::from(1));
+            let header = view.tx.select_block_header(view.snapshot.block_num)?.unwrap();
+            assert_eq!(view.snapshot.blockchain.as_mmr().get(1).unwrap(), header.commitment());
+            Ok(())
+        });
+        tokio::pin!(read);
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut read).await.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        state.latest_snapshot.store(published);
+        state.committed_tip_tx.send_replace(1.into());
+        tokio::time::timeout(Duration::from_secs(5), read).await.unwrap().unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

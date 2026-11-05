@@ -450,11 +450,8 @@ impl WriteWorker {
         let block_num = header.block_num();
 
         // Validate that the applied block is the next block in sequence.
-        let prev_block = self
-            .db
-            .select_block_header_by_block_num(None)
-            .await?
-            .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
+        let prev_block =
+            self.db.select_chain_tip().await?.ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
         let expected_block_num = prev_block.block_num().child();
         if block_num != expected_block_num {
             return Err(InvalidBlockError::NewBlockInvalidBlockNum {
@@ -905,9 +902,7 @@ mod tests {
         assert_eq!(
             state
                 .db
-                .select_block_header_by_block_num(Some(
-                    crate::state::ScopedBlockNum::new_unchecked(1.into()),
-                ))
+                .select_block_header(crate::state::ScopedBlockNum::new_unchecked(1.into()))
                 .await
                 .unwrap(),
             None

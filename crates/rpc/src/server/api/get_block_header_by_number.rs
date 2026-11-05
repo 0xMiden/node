@@ -1,4 +1,5 @@
 use miden_node_proto::generated as proto;
+use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_tracing::{debug, miden_instrument};
 use miden_protocol::block::BlockNumber;
 
@@ -43,22 +44,39 @@ impl proto::server::miden_node_v1_node_service::GetBlockHeaderByNumber for RpcSe
             request.include_mmr_proof = request.include_mmr_proof.unwrap_or_default()
         );
 
-        let block_num = request.block_num.map(BlockNumber::from);
-        let view = self.state.view();
-        let (block_header, mmr_proof) = view
-            .get_block_header(block_num, request.include_mmr_proof.unwrap_or(false))
+        let (block_header, mmr_proof, protocol_config) = self
+            .state
+            .read(move |view| {
+                let block_num =
+                    request.block_num.map_or(view.snapshot.block_num, BlockNumber::from);
+                if block_num > view.snapshot.block_num {
+                    return Ok::<_, GetBlockHeaderError>((None, None, None));
+                }
+                let Some(header) = view.tx.select_block_header(block_num)? else {
+                    return Ok((None, None, None));
+                };
+                let proof = if request.include_mmr_proof.unwrap_or(false) {
+                    Some(view.snapshot.blockchain.open(block_num)?)
+                } else {
+                    None
+                };
+                let config = if request.include_protocol_config.unwrap_or(false) {
+                    let commitment = header.protocol_config_commitment();
+                    Some(
+                        view.tx
+                            .select_protocol_config(commitment)?
+                            .ok_or(DatabaseError::ProtocolConfigNotFound(commitment))?,
+                    )
+                } else {
+                    None
+                };
+                Ok((Some(header), proof, config))
+            })
             .await
             .map_err(super::get_block_header_error_to_status)?;
 
-        let protocol_config = match block_header.as_ref() {
-            Some(header) if request.include_protocol_config.unwrap_or(false) => {
-                Some(super::load_protocol_config(&view, header).await?.into())
-            },
-            _ => None,
-        };
-
         Ok(proto::miden::node::v1::GetBlockHeaderByNumberResponse {
-            protocol_config,
+            protocol_config: protocol_config.map(Into::into),
             block_header: block_header.map(Into::into),
             chain_length: mmr_proof.as_ref().map(|p| p.forest().num_leaves() as u32),
             mmr_path: mmr_proof.map(|p| Into::into(p.merkle_path())),

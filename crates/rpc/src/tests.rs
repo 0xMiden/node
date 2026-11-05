@@ -2815,3 +2815,47 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
     assert_beyond_tip(&status, "sync_transactions");
     assert_eq!(status.details(), &[5]);
 }
+
+#[tokio::test]
+async fn block_header_reads_latest_and_explicit_with_optional_proof() {
+    use miden_protocol::block::BlockNumber;
+
+    let (mut client, _, _store, _server) = start_rpc().await;
+    for block_num in [None, Some(0)] {
+        for include_mmr_proof in [None, Some(false), Some(true)] {
+            let response = client
+                .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
+                    block_num,
+                    include_mmr_proof,
+                    include_protocol_config: None,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let header = response
+                .block_header
+                .unwrap()
+                .decode_fields()
+                .unwrap()
+                .build_unchecked()
+                .unwrap();
+            assert_eq!(header.block_num(), BlockNumber::GENESIS);
+            assert_eq!(response.mmr_path.is_some(), include_mmr_proof == Some(true));
+            assert_eq!(response.chain_length, (include_mmr_proof == Some(true)).then_some(1));
+            assert!(response.protocol_config.is_none());
+        }
+    }
+    let response = client
+        .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
+            block_num: Some(1),
+            include_mmr_proof: Some(true),
+            include_protocol_config: Some(true),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.block_header.is_none());
+    assert!(response.mmr_path.is_none());
+    assert!(response.chain_length.is_none());
+    assert!(response.protocol_config.is_none());
+}

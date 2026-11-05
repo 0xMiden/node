@@ -275,6 +275,11 @@ impl Db {
         Ok(Self { writer, reader })
     }
 
+    /// Reader pool used to acquire one transaction for a caller-composed read.
+    pub(crate) fn reader(&self) -> &DbReader {
+        &self.reader
+    }
+
     /// The write handle, for tests that need to seed or corrupt rows no production method writes.
     #[cfg(test)]
     pub(crate) fn writer(&self) -> &DbWriter {
@@ -367,33 +372,33 @@ impl Db {
         })
     }
 
-    /// Search for a [`BlockHeader`] from the database by its `block_num`.
-    ///
-    /// When `block_number` is [None], the latest block header is returned.
+    /// Returns the header stored at the given block number.
     #[miden_instrument(
         level = "debug",
         target = COMPONENT,
         err(level = "debug"),
     )]
-    pub async fn select_block_header_by_block_num(
+    pub async fn select_block_header(
         &self,
-        maybe_block_number: Option<ScopedBlockNum>,
+        block_number: ScopedBlockNum,
     ) -> Result<Option<BlockHeader>> {
         self.reader
-            .read("block headers by block number", move |tx| {
-                queries::select_block_header_by_block_num(
-                    tx,
-                    maybe_block_number.map(|block_number| *block_number),
-                )
+            .read("block header by block number", move |tx| {
+                queries::select_block_header(tx, *block_number)
             })
             .await
+    }
+
+    /// Returns the latest stored block header for acquisition, startup, and writer validation.
+    pub(crate) async fn select_chain_tip(&self) -> Result<Option<BlockHeader>> {
+        self.reader.read("chain tip", queries::select_chain_tip).await
     }
 
     /// Selects the genesis block header for state initialization.
     pub(crate) async fn select_genesis_block_header(&self) -> Result<Option<BlockHeader>> {
         self.reader
             .read("genesis block header", |tx| {
-                queries::select_block_header_by_block_num(tx, Some(BlockNumber::GENESIS))
+                queries::select_block_header(tx, BlockNumber::GENESIS)
             })
             .await
     }

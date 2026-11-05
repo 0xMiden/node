@@ -10,6 +10,7 @@ mod db;
 mod errors;
 pub mod genesis;
 mod proven_tip;
+pub mod read;
 pub mod state;
 
 pub use accounts::{
