@@ -21,6 +21,9 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
+/// Stdout defaults for operator events, storage diagnostics, and prover noise suppression.
+const DEFAULT_STDOUT_FILTER: &str = "info,user=debug,miden::storage=debug,miden_prover=warn";
+
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
 pub struct ResourceConfig {
@@ -116,10 +119,7 @@ impl TracingConfig {
     pub fn from_env(open_telemetry: OpenTelemetry) -> Self {
         Self {
             open_telemetry,
-            stdout_filter: filter_env_or_default(
-                "MIDEN_STDOUT_FILTER",
-                "info,user=debug,miden_prover=warn",
-            ),
+            stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", DEFAULT_STDOUT_FILTER),
             otel_filter: filter_env_or_default(
                 "MIDEN_OTEL_FILTER",
                 "info,axum::rejection=trace,miden_prover=warn",
@@ -164,7 +164,8 @@ impl Drop for OtelGuard {
 
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
-/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `info,user=debug,miden_prover=warn`.
+/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
+/// built-in defaults for operator and storage diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace,miden_prover=warn`.
 ///
@@ -370,9 +371,59 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use opentelemetry::Key;
 
     use super::*;
+
+    struct RecordedTargets(Arc<Mutex<Vec<(&'static str, tracing::Level)>>>);
+
+    impl<S: Subscriber> Layer<S> for RecordedTargets {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let metadata = event.metadata();
+            self.0.lock().unwrap().push((metadata.target(), *metadata.level()));
+        }
+    }
+
+    fn default_stdout_events(emit: impl FnOnce()) -> Vec<(&'static str, tracing::Level)> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(
+            RecordedTargets(Arc::clone(&events))
+                .with_filter(EnvFilter::try_new(DEFAULT_STDOUT_FILTER).unwrap()),
+        );
+        tracing::subscriber::with_default(subscriber, emit);
+        events.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn default_stdout_preserves_storage_and_operator_debug_events() {
+        let events = default_stdout_events(|| {
+            tracing::debug!(target: "user::miden-node", "operator debug");
+            tracing::debug!(target: "miden::storage", "storage lifecycle");
+            tracing::debug!(target: "miden::storage::sqlite", "database debug");
+            tracing::trace!(target: "miden::storage", "storage trace");
+            tracing::debug!(target: "other_dependency", "dependency debug");
+            tracing::info!(target: "other_dependency", "dependency info");
+            tracing::info!(target: "miden_prover", "prover info");
+            tracing::warn!(target: "miden_prover", "prover warning");
+        });
+
+        assert_eq!(
+            events,
+            [
+                ("user::miden-node", tracing::Level::DEBUG),
+                ("miden::storage", tracing::Level::DEBUG),
+                ("miden::storage::sqlite", tracing::Level::DEBUG),
+                ("other_dependency", tracing::Level::INFO),
+                ("miden_prover", tracing::Level::WARN),
+            ]
+        );
+    }
 
     #[test]
     fn resource_uses_configured_defaults() {
