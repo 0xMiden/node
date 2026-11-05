@@ -7,12 +7,11 @@ mod block_lifecycle;
 mod bootstrap;
 mod disk_monitor;
 mod lifecycle;
+mod loader;
 mod replica;
 mod tip;
 mod view;
 mod writer;
-
-mod loader;
 
 use std::path::PathBuf;
 use std::sync::Arc;
