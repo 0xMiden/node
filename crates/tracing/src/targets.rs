@@ -1,8 +1,9 @@
 /// Declares a crate's default tracing target and module-specific overrides.
 ///
-/// Invoke once at the crate root before child module declarations. The generated helper resolves
-/// targets at compile time. Test builds collect callsites through the tracing crate's inventory
-/// and check that every rule is used for the enabled features.
+/// Invoke once at the crate root before child module declarations. Configuration expressions
+/// retain the caller's scope, and the generated helper resolves targets at compile time. Test
+/// builds collect callsites through the tracing crate's inventory and check that every rule is
+/// used for the enabled features.
 #[macro_export]
 #[expect(
     clippy::crate_in_macro_def,
@@ -10,12 +11,17 @@
 )]
 macro_rules! declare_targets {
     (default: $default:expr, $($(#[$attr:meta])* $module:literal => $target:expr),* $(,)?) => {
+        // Evaluate configuration alongside the declaration so caller names and macros keep scope.
+        #[doc(hidden)]
+        const __MIDEN_TRACING_TARGETS: $crate::TargetMap = $crate::TargetMap::new(
+            $default,
+            &[$($(#[$attr])* ($module, $target)),*],
+        );
+
         #[doc(hidden)]
         mod __miden_tracing_targets {
-            pub(super) const TARGETS: $crate::TargetMap = $crate::TargetMap::new(
-                $default,
-                &[$($(#[$attr])* ($module, $target)),*],
-            );
+            #[cfg(test)]
+            use super::__MIDEN_TRACING_TARGETS as TARGETS;
 
             #[cfg(test)]
             pub(super) struct Callsite {
@@ -47,7 +53,7 @@ macro_rules! declare_targets {
                     crate::__miden_tracing_targets::Callsite { module: module_path!() }
                 }
 
-                crate::__miden_tracing_targets::TARGETS.resolve(module_path!())
+                crate::__MIDEN_TRACING_TARGETS.resolve(module_path!())
             }};
         }
     };
