@@ -1,11 +1,8 @@
 use std::num::NonZeroU32;
 
 use miden_node_proto::domain::sequencer::TransactionInputs;
-use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
+use miden_node_store::State;
 use miden_node_tracing::{debug, miden_instrument};
-use miden_protocol::Word;
-use miden_protocol::account::AccountId;
-use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
@@ -37,60 +34,55 @@ pub async fn get_tx_inputs(
     proven_tx: &ProvenTransaction,
 ) -> Result<TransactionInputs, MempoolSubmissionError> {
     let nullifiers = proven_tx.nullifiers().collect::<Vec<_>>();
-    let unauthenticated_note_ids = proven_tx.unauthenticated_notes().map(NoteHeader::id).collect();
+    let unauthenticated_note_ids =
+        proven_tx.unauthenticated_notes().map(NoteHeader::id).collect::<Vec<_>>();
 
-    let (current_block_height, store_inputs) = state
-        .with_view(async |view| {
-            view.get_transaction_inputs(
-                proven_tx.account_id(),
-                &nullifiers,
-                unauthenticated_note_ids,
-            )
-            .await
-            .map(|inputs| (view.tip(), inputs))
-            .map_err(MempoolSubmissionError::StoreStateReadFailed)
+    let account_id = proven_tx.account_id();
+    let creates_account = proven_tx.account_update().initial_state_commitment().is_empty();
+    let tx_inputs = state
+        .read(move |view| -> Result<_, MempoolSubmissionError> {
+            let commitment = view.snapshot.account_tree.get_latest_commitment(account_id);
+            // An empty commitment means this account ID is not registered on-chain, so the
+            // transaction would create it. Account ID prefixes must be unique across registered
+            // accounts; a collision rejects the transaction regardless of its nullifiers or notes.
+            if commitment.is_empty()
+                && view
+                    .snapshot
+                    .account_tree
+                    .contains_account_id_prefix_in_latest(account_id.prefix())
+            {
+                debug_assert!(
+                    creates_account,
+                    "account id prefix uniqueness should not be validated unless transaction creates a new account"
+                );
+                return Err(MempoolSubmissionError::AuthenticationFailed(
+                    StateConflict::AccountIdPrefixAlreadyExists(account_id),
+                ));
+            }
+
+            let nullifiers = nullifiers
+                .into_iter()
+                .map(|nullifier| {
+                    let block_num = view.snapshot.nullifier_tree.get_block_num(&nullifier);
+                    (nullifier, block_num.and_then(|number| NonZeroU32::new(number.as_u32())))
+                })
+                .collect();
+            let found_unauthenticated_notes =
+                view.tx.select_existing_note_ids(&unauthenticated_note_ids)?;
+
+            Ok(TransactionInputs {
+                account_id,
+                account_commitment: (!commitment.is_empty()).then_some(commitment),
+                nullifiers,
+                found_unauthenticated_notes,
+                current_block_height: view.snapshot.block_num,
+            })
         })
         .await?;
 
-    if !store_inputs.new_account_id_prefix_is_unique.unwrap_or(true) {
-        debug_assert!(
-            proven_tx.account_update().initial_state_commitment().is_empty(),
-            "account id prefix uniqueness should not be validated unless transaction creates a new account"
-        );
-        return Err(MempoolSubmissionError::AuthenticationFailed(
-            StateConflict::AccountIdPrefixAlreadyExists(proven_tx.account_id()),
-        ));
-    }
-
-    let tx_inputs = from_store_inputs(proven_tx.account_id(), store_inputs, *current_block_height);
-
     debug!(target: LOG_TARGET, "Transaction inputs loaded");
-
     Ok(tx_inputs)
 }
 
-fn from_store_inputs(
-    account_id: AccountId,
-    inputs: StoreTransactionInputs,
-    current_block_height: BlockNumber,
-) -> TransactionInputs {
-    let account_commitment = if inputs.account_commitment == Word::empty() {
-        None
-    } else {
-        Some(inputs.account_commitment)
-    };
-
-    let nullifiers = inputs
-        .nullifiers
-        .into_iter()
-        .map(|nullifier| (nullifier.nullifier, NonZeroU32::new(nullifier.block_num.as_u32())))
-        .collect();
-
-    TransactionInputs {
-        account_id,
-        account_commitment,
-        nullifiers,
-        found_unauthenticated_notes: inputs.found_unauthenticated_notes,
-        current_block_height,
-    }
-}
+#[cfg(test)]
+mod tests;
