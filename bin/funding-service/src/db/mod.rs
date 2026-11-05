@@ -88,14 +88,16 @@ pub struct TransactionAttempt {
     pub note_ids: Vec<NoteId>,
 }
 
-/// Where deposit discovery resumes and the deposits found before that block.
+/// A snapshot of deposit discovery progress and the remaining deposits. The default starts
+/// discovery at genesis with no deposits.
 ///
-/// The deposits are the ones discovered before `next_sync`, not seen spent before it, and not yet
-/// consumed or discarded by the service. The default scans from genesis.
+/// Deposits were discovered before `next_sync` and have no known spend before that block. Deposits
+/// consumed or discarded by the service are excluded.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DepositCheckpoint {
-    /// The first block the next deposit scan reads.
+    /// The first block to include in the next deposit scan.
     pub next_sync: BlockNumber,
+    /// Discovered deposits that have not been spent, consumed, or discarded as of this checkpoint.
     pub deposits: Vec<UsdcxP2Id>,
 }
 
@@ -256,10 +258,11 @@ impl FundingDatabase {
         Ok(self.reader.read("read active funding attempt", queries::select_attempt).await?)
     }
 
-    /// Removes a rejected or expired transaction so its requests can be retried.
+    /// Removes a rejected or expired transaction attempt so its requests can be retried. Also
+    /// removes `discarded_deposit`, if supplied, in the same database transaction.
     ///
-    /// `discarded_deposit` names a deposit the node rejected, which is removed in the same
-    /// transaction. The deposit of an expired transaction is still unspent and stays stored.
+    /// Supply a deposit only when the node rejected it. Expiration leaves the deposit unspent, so
+    /// it remains available for a later attempt.
     pub async fn release_attempt(
         &self,
         transaction_id: TransactionId,
@@ -281,9 +284,8 @@ impl FundingDatabase {
 
     /// Records delivery of the requests and removes the attempt and the deposit it consumed.
     ///
-    /// The caller must check that the transaction committed on chain. The updates share a database
-    /// transaction so a restart cannot leave delivered requests waiting to be retried, or reload the
-    /// consumed deposit as unspent.
+    /// The caller must verify that the transaction committed on chain. A single database transaction
+    /// prevents a restart from retrying delivered requests or restoring the consumed deposit.
     pub async fn record_delivery(
         &self,
         notes: Vec<NoteId>,
@@ -334,7 +336,7 @@ impl FundingDatabase {
             .await
     }
 
-    /// Returns where deposit discovery resumes and the deposits found before that block.
+    /// Loads the deposit scan cursor and remaining deposits as a consistent checkpoint.
     pub async fn deposit_checkpoint(&self) -> anyhow::Result<DepositCheckpoint> {
         let identity = self.identity;
         self.reader
@@ -347,11 +349,11 @@ impl FundingDatabase {
             .await
     }
 
-    /// Replaces the stored deposits and moves the deposit scan cursor in one transaction.
+    /// Saves the deposit scan cursor and replaces the stored deposits in one database transaction.
     ///
-    /// `deposits` must be every deposit found before `next_sync` which is not known to be spent.
-    /// The cursor cannot move backwards, because the stored deposits only describe the chain up to
-    /// the stored cursor.
+    /// The caller must include all deposits discovered before `checkpoint.next_sync` that remain
+    /// unspent and have not been discarded. Earlier cursors are rejected because discovery cannot
+    /// safely resume from a checkpoint whose deposits reflect a later chain state.
     pub async fn save_deposit_checkpoint(
         &self,
         checkpoint: DepositCheckpoint,

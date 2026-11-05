@@ -98,8 +98,9 @@ impl Funder {
     }
 }
 
-/// Populates the wallet through its normal synchronization path and saves its deposit checkpoint,
-/// as a worker started from that checkpoint would hold it.
+/// Synchronizes the wallet and saves its deposit checkpoint before creating the worker.
+///
+/// The matching wallet and database state satisfy the worker's startup requirement.
 async fn with_deposits(
     mut setup: FunderSetup,
     mut chain: TestChain,
@@ -122,7 +123,7 @@ async fn with_deposits(
     (Funder::new(server.node.clone(), Prover::local(), setup), server)
 }
 
-/// The deposits the database holds, keyed by nullifier.
+/// Loads stored deposits keyed by nullifier for order-independent comparison.
 async fn stored_deposits(database: &FundingDatabase) -> HashMap<Nullifier, Note> {
     database
         .deposit_checkpoint()
@@ -134,8 +135,7 @@ async fn stored_deposits(database: &FundingDatabase) -> HashMap<Nullifier, Note>
         .collect()
 }
 
-/// Serves a chain at its genesis block which holds `notes`, and returns the funding wallet whose
-/// account the node serves.
+/// Creates a test server with `notes` at genesis and returns its matching funding wallet.
 async fn genesis_server(
     balance: u64,
     base_fee: u32,
@@ -716,8 +716,7 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
 // DEPOSIT CHECKPOINT
 // ================================================================================================
 
-/// Rebuilds the worker as startup does: from a reopened database and a wallet loaded from its
-/// deposit checkpoint.
+/// Recreates the worker from a reopened database and a wallet restored from its saved checkpoint.
 async fn restart(
     funder: Funder,
     directory: &tempfile::TempDir,
@@ -770,7 +769,7 @@ async fn a_restarted_worker_resumes_deposit_discovery_from_the_saved_checkpoint(
     let expected = HashMap::from([(deposit.nullifier(), deposit)]);
     assert_eq!(wallet_deposits(&funder), expected);
 
-    // A note at a block the checkpoint already covers is only found by a scan from genesis.
+    // This note lies before the saved cursor and must not be discovered after restart.
     let unscanned = funder.setup.deposit(2);
     server.chain.lock().unwrap().notes.push((0, unscanned));
     let (mut restarted, checkpoint) = restart(funder, &directory, &server).await;
@@ -812,7 +811,7 @@ async fn a_checkpoint_which_could_not_be_saved_is_saved_on_the_next_sync() {
         DepositCheckpoint::default()
     );
 
-    // The chain tip has not moved, so only the unsaved checkpoint prompts the next write.
+    // An unchanged chain tip must not prevent a failed checkpoint save from being retried.
     set_trigger("DROP TRIGGER reject_checkpoint").await;
     funder.read_chain_state().await.unwrap();
     let checkpoint = funder.setup.database.deposit_checkpoint().await.unwrap();

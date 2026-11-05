@@ -89,8 +89,8 @@ fn read_request(row: &Row<'_>, identity: DatabaseIdentity) -> Result<StoredReque
 
 /// Reads a stored deposit and checks that the funding account can consume it.
 ///
-/// Only deposits which passed this check are stored, so a failure means the row is corrupt. It is
-/// reported instead of skipped, because a skipped deposit would strand its assets.
+/// Stored deposits must target the funding account and hold only the native asset. Invalid rows
+/// produce an error because silently skipping a deposit would strand its assets.
 fn read_deposit(row: &Row<'_>, identity: DatabaseIdentity) -> Result<UsdcxP2Id, DatabaseError> {
     let note: Note = row.get(0)?;
     UsdcxP2Id::from_note(note, identity.fee_asset_id)

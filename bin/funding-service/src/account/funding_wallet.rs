@@ -59,9 +59,10 @@ pub struct WalletUpdate {
 }
 
 impl FundingWallet {
-    /// Loads the public account at a reference block and checks its signing key.
+    /// Loads the public account at a reference block, verifies its signing key, and restores the
+    /// deposit checkpoint.
     ///
-    /// Deposit discovery resumes from `checkpoint`, whose deposits the wallet holds immediately.
+    /// The wallet starts with the checkpoint's deposits and resumes discovery at its next scan block.
     pub async fn load_at(
         rpc_client: &mut RpcClient,
         account_id: AccountId,
@@ -100,7 +101,7 @@ impl FundingWallet {
         Self::with_checkpoint(account, secret_key, fee_asset_id, DepositCheckpoint::default())
     }
 
-    /// Creates a wallet whose deposit discovery resumes from `checkpoint`.
+    /// Creates a wallet with the deposits and scan cursor from `checkpoint`.
     fn with_checkpoint(
         account: Account,
         secret_key: AuthSecretKey,
@@ -133,12 +134,12 @@ impl FundingWallet {
         &self.deposits
     }
 
-    /// The first block the next deposit scan reads.
+    /// Returns the first block to include in the next deposit scan.
     pub fn next_sync(&self) -> BlockNumber {
         self.next_sync
     }
 
-    /// The deposit scan progress and unspent deposits, in the form the database stores.
+    /// Returns a checkpoint of the deposit scan cursor and the wallet's unspent deposits.
     pub fn checkpoint(&self) -> DepositCheckpoint {
         DepositCheckpoint {
             next_sync: self.next_sync,

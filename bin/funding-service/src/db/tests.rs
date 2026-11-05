@@ -508,7 +508,7 @@ fn deposit(seed: u32) -> UsdcxP2Id {
     note_for(identity().funding_account_id, 1_000, seed)
 }
 
-/// The checkpoint's cursor and its deposits keyed by nullifier.
+/// Returns the checkpoint cursor and deposits keyed by nullifier for order-independent comparison.
 fn checkpoint_contents(
     checkpoint: DepositCheckpoint,
 ) -> (BlockNumber, std::collections::HashMap<Nullifier, Note>) {

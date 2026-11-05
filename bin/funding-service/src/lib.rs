@@ -241,7 +241,7 @@ impl FundingServiceConfig {
             .await
             .context("failed to read the chain state from the node")?;
         let chain_tip = initial_header.block_num();
-        // Deposit discovery resumes where the last run stopped instead of scanning from genesis.
+        // Restore deposit discovery from the last saved checkpoint.
         let checkpoint = database
             .deposit_checkpoint()
             .await

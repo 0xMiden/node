@@ -88,14 +88,15 @@ pub struct Funder {
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
-    /// The deposit scan cursor the database last acknowledged.
+    /// The deposit scan cursor from the last successfully saved checkpoint.
     persisted_sync: BlockNumber,
 }
 
 impl Funder {
     /// Creates a worker for the given funding account.
     ///
-    /// The wallet must be loaded from the database's deposit checkpoint.
+    /// The wallet must match the database's deposit checkpoint because its cursor is treated as
+    /// already persisted.
     pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
         let persisted_sync = setup.wallet.next_sync();
         Self {
@@ -296,8 +297,10 @@ impl Funder {
             },
             Some(SubmissionOutcome::Rejected(status)) => {
                 Span::current().set_error(&status);
-                // With one writer and controlled outputs, a state conflict identifies the single
-                // selected deposit as invalid. Keep the payouts for the next attempt.
+                // Discard the deposit on a state conflict and retain the payouts for retry.
+                //
+                // With one account writer and service-controlled outputs, the conflict identifies
+                // the transaction's only deposit as invalid.
                 let discarded = deposit_nullifier.filter(|_| {
                     status.code() == tonic::Code::InvalidArgument && status.details() == [2]
                 });
@@ -365,7 +368,7 @@ impl Funder {
                         tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
                     info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
-                    // The delivery record already removed the consumed deposit from the database.
+                    // Remove the consumed deposit from memory after delivery is durably recorded.
                     if let Some(nullifier) = deposit_nullifier {
                         self.setup.wallet.remove_deposit(nullifier);
                     }
@@ -373,7 +376,7 @@ impl Funder {
                     break Resolution::Committed;
                 },
                 Ok(TransactionStatus::Expired) => {
-                    // The deposit of an expired transaction is still unspent, so it stays stored.
+                    // Retain the deposit for retry because expiration does not spend it.
                     self.setup.database.release_attempt(transaction_id, None).await?;
                     warn!(
                         target: LOG_TARGET,
@@ -398,10 +401,11 @@ impl Funder {
         Ok(resolution)
     }
 
-    /// Reads the funding account and chain state at the current reference block.
+    /// Synchronizes the funding wallet to the current reference block, saves its deposit checkpoint,
+    /// and returns the chain state.
     ///
-    /// The deposit checkpoint is saved here, before a transaction is selected, so the database
-    /// holds every deposit a recorded attempt can consume.
+    /// Saving before transaction selection ensures that every deposit used by a recorded attempt
+    /// can be recovered from the database.
     #[miden_instrument(
         target = COMPONENT,
         name = "funding.read_chain_state",
@@ -423,8 +427,10 @@ impl Funder {
             .apply(update)
             .context("failed to apply the funding wallet update")?;
 
-        // Comparing with the acknowledged cursor retries a failed save on the next poll, even when
-        // the chain tip has not moved.
+        // Save any checkpoint ahead of the last successful database write.
+        //
+        // The wallet can advance before a save fails. Tracking the persisted cursor separately
+        // ensures the next poll retries the save even if the chain tip is unchanged.
         if self.setup.wallet.next_sync() != self.persisted_sync {
             self.setup
                 .database

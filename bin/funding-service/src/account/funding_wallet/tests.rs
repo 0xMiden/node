@@ -468,7 +468,7 @@ async fn a_restored_wallet_holds_its_checkpoint_and_resumes_discovery_after_it()
 
     let update = wallet.sync_to(&mut server.node.rpc_client(), 15.into()).await?;
     wallet.apply(update)?;
-    // The deposit before the checkpoint is not rediscovered, because the scan resumes at it.
+    // Resuming at the checkpoint excludes deposits from earlier blocks.
     assert_eq!(deposit_notes(&wallet), notes_of(&[&restored, &after_checkpoint]));
     assert_eq!(wallet.checkpoint().next_sync, BlockNumber::from(16));
     Ok(())
