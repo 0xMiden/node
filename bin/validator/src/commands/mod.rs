@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use base64::Engine;
 use clap::Parser;
-use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_tracing::{OpenTelemetry, info_v2};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -255,19 +255,20 @@ impl ValidatorCommand {
             } => {
                 let address = listen;
                 let operator_key = storage_key.load()?;
-                info!(
-                    target: miden_validator::LOG_TARGET,
+                info_v2!(
                     "Starting validator",
                     service.name = "miden-validator",
                     service.version = env!("CARGO_PKG_VERSION"),
                     validator.listen = address.to_string(),
-                    validator.admin_listen = admin.listen.map_or_else(
-                        || "disabled".to_owned(),
-                        |address| address.to_string(),
-                    ),
+                    validator.admin_listen = admin
+                        .listen
+                        .map_or_else(|| "disabled".to_owned(), |address| address.to_string(),),
                     data.directory = data_directory.as_path(),
-                    validator.signer =
-                        if signing_key.signing_key_kms_id.is_some() { "kms" } else { "local" },
+                    validator.signer = if signing_key.signing_key_kms_id.is_some() {
+                        "kms"
+                    } else {
+                        "local"
+                    },
                     db.sqlite.connection_pool_size = sqlite_connection_pool_size.get(),
                     validator.proving_input_retention_blocks = proving_input_retention_blocks.get()
                 );

@@ -4,10 +4,15 @@
 //! (the service state, the routing table, hex parsing, and the error type) live here and in
 //! [`error`].
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::Context as _;
 use axum::Router;
 use axum::routing::{get, post};
+use miden_node_tracing::info_v2;
+use miden_node_utils::shutdown::CancellationToken;
+use tokio::net::TcpListener;
 
 use crate::GoldenOperatorKey;
 use crate::db::ValidatorDbReader;
@@ -21,6 +26,45 @@ mod error;
 mod get_transaction;
 mod issue_decryption_share;
 mod list_transactions;
+
+/// Serves the private validator administration API on a network-isolated listener.
+pub struct ValidatorAdminServer {
+    /// Address of the private administration listener.
+    pub address: SocketAddr,
+    /// Golden key material used to issue this validator's decryption shares.
+    pub operator_key: GoldenOperatorKey,
+    /// Read handle to the shared validator database. Administration routes cannot mutate stored
+    /// validator records through this handle.
+    pub reader: ValidatorDbReader,
+}
+
+impl ValidatorAdminServer {
+    /// Serves the private validator administration API.
+    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let listener =
+            TcpListener::bind(self.address).await.context("failed to bind admin address")?;
+        self.serve_on(listener, shutdown).await
+    }
+
+    async fn serve_on(
+        self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
+        let endpoint =
+            listener.local_addr().context("failed to read validator admin listen address")?;
+        info_v2!(
+            "Validator admin server ready",
+            service.name = "miden-validator-admin",
+            validator.admin_listen = endpoint.to_string()
+        );
+
+        axum::serve(listener, router(self.operator_key, self.reader))
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await
+            .context("failed to serve validator admin API")
+    }
+}
 
 const LIST_TRANSACTIONS_PATH: &str = "/admin/v1/transactions";
 const GET_TRANSACTION_PATH: &str = "/admin/v1/transactions/{transaction_id}";

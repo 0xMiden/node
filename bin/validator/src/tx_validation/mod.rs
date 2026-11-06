@@ -2,7 +2,7 @@ mod data_store;
 
 pub use data_store::TransactionInputsDataStore;
 use miden_node_tracing::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
-use miden_node_tracing::{Instrument, info_span, miden_instrument};
+use miden_node_tracing::{Instrument, info_span_v2, instrument_v2};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::errors::TransactionVerifierError;
 use miden_protocol::transaction::{
@@ -14,8 +14,6 @@ use miden_protocol::transaction::{
 };
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError};
-
-use crate::COMPONENT;
 
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
@@ -42,7 +40,7 @@ pub enum TransactionValidationError {
 /// Returns the effects of the re-executed transaction. The effects hold the account state
 /// commitments, the account patch, the input and output notes, the reference block and the
 /// expiration block.
-#[miden_instrument(target = COMPONENT)]
+#[instrument_v2]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,
@@ -52,7 +50,7 @@ pub async fn validate_transaction(
     let proven_tx_clone = proven_tx.clone();
     let _verification_outcome = spawn_blocking_in_span(
         move || TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&proven_tx_clone),
-        info_span!("verify"),
+        info_span_v2!("verify"),
     )
     .await
     .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))?;
@@ -62,7 +60,7 @@ pub async fn validate_transaction(
 
     // VM execution may not yield; run it on a dedicated blocking thread.
     let (account, block_header, _, input_notes, tx_args) = tx_inputs.into_parts();
-    let execute_span = info_span!("execute").or_current();
+    let execute_span = info_span_v2!("execute").or_current();
     let executed_tx = spawn_blocking_in_current_span(move || {
         let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
             TransactionExecutor::new(&data_store);
