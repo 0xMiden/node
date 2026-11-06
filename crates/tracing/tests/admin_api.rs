@@ -1,5 +1,3 @@
-#![cfg(feature = "admin-api")]
-
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode};
 use miden_node_tracing::{OpenTelemetry, TracingConfig, setup_tracing_with_config};

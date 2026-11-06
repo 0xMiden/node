@@ -45,7 +45,7 @@ miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }
-miden-node-tracing     = { features = ["admin-api"], workspace = true }
+miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }

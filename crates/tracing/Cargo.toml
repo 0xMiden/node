@@ -18,13 +18,12 @@ workspace = true
 doctest = false
 
 [features]
-admin-api = ["dep:axum", "dep:serde"]
 # Enables tracing setup backed by OpenTelemetry's test exporter.
 testing = ["opentelemetry_sdk/testing"]
 
 [dependencies]
 anyhow = { workspace = true }
-axum = { optional = true, workspace = true }
+axum = { workspace = true }
 bytes = { version = "1.10" }
 http = { workspace = true }
 http-body-util = { version = "0.1" }
@@ -39,7 +38,7 @@ opentelemetry-otlp = { default-features = false, features = [
   "trace",
 ], version = "0.32" }
 opentelemetry_sdk = { features = ["rt-tokio"], version = "0.32.1" }
-serde = { optional = true, workspace = true }
+serde = { workspace = true }
 tokio = { features = ["rt"], workspace = true }
 tonic = { default-features = true, workspace = true }
 tower-http = { features = ["catch-panic"], workspace = true }
