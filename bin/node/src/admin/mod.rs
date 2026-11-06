@@ -73,8 +73,9 @@ fn router(allowlist: Arc<AccountAllowlist>, funding: Option<FundingClient>) -> R
             get(invitation_status).put(put_invitation),
         )
         .route("/admin/allowlist/accounts/{account_id}", get(account_status).put(put_account))
-        .layer(middleware::map_response(no_store))
         .with_state(AdminState { allowlist, funding })
+        .merge(miden_node_tracing::admin::router())
+        .layer(middleware::map_response(no_store))
 }
 
 async fn no_store(mut response: Response) -> Response {

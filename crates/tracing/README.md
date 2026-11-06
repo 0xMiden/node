@@ -5,6 +5,13 @@ layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
+## Administration API
+
+Merge `miden_node_tracing::admin::router()` into a private administration router after calling `setup_tracing`. It
+provides independent stdout and OpenTelemetry filter updates and declared target listing. The caller must provide
+external authentication and network isolation. See [Logging](../../docs/external/src/logging.md) for the HTTP contract
+and operating procedure.
+
 ## Scoped targets
 
 Use `declare_targets!` once at the crate root, before child module declarations, to give `#[instrument_v2]`, v2 events,
@@ -32,6 +39,11 @@ The declaration generates an inventory of compiled call sites in test builds and
 win for at least one call site. Registration uses the inventory re-exported by this crate, so callers need no extra
 dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
 compiled into the test binary.
+
+`miden_node_tracing::declared_targets()` returns the default and override targets declared by linked crates, sorted and
+deduplicated. This list is available at startup without executing instrumented code or enabling tracing output. It
+includes only declarations enabled for the build; explicit call site overrides, legacy instrumentation, and dependency
+targets are not included unless they also appear in a declaration.
 
 Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
 also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s

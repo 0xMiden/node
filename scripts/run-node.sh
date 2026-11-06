@@ -58,6 +58,7 @@ RPC_PORT=57291
 FULL_NODE_1_RPC_PORT=57292
 FULL_NODE_2_RPC_PORT=57293
 REMOTE_PROVER_PORT=50051
+SEQUENCER_ADMIN_PORT=51000
 
 PIDS=()
 
@@ -74,7 +75,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 kill_ports() {
-    local ports=("$VALIDATOR_1_PORT" "$VALIDATOR_2_PORT" "$SEQUENCER_INTERNAL_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT" "$REMOTE_PROVER_PORT")
+    local ports=("$VALIDATOR_1_PORT" "$VALIDATOR_2_PORT" "$SEQUENCER_INTERNAL_PORT" "$NTX_BUILDER_PORT" "$RPC_PORT" "$REMOTE_PROVER_PORT" "$SEQUENCER_ADMIN_PORT")
 
     if [[ "$ENABLE_FULL_NODES" == "true" ]]; then
         ports+=("$FULL_NODE_1_RPC_PORT" "$FULL_NODE_2_RPC_PORT")
@@ -276,6 +277,7 @@ OTEL_RESOURCE_ATTRIBUTES="$(node_resource_attributes sequencer)" \
     "$NODE_BINARY" sequencer \
     --rpc.listen "0.0.0.0:$RPC_PORT" \
     --rpc.network-tx-auth-header-value "$NETWORK_TX_AUTH" \
+    --admin.listen "127.0.0.1:$SEQUENCER_ADMIN_PORT" \
     --data-directory "$NODE_DIR" \
     --validator.url "http://127.0.0.1:$VALIDATOR_1_PORT" \
     --validator.url "http://127.0.0.1:$VALIDATOR_2_PORT" \

@@ -23,6 +23,7 @@ testing = ["opentelemetry_sdk/testing"]
 
 [dependencies]
 anyhow = { workspace = true }
+axum = { workspace = true }
 bytes = { version = "1.10" }
 http = { workspace = true }
 http-body-util = { version = "0.1" }
@@ -37,6 +38,7 @@ opentelemetry-otlp = { default-features = false, features = [
   "trace",
 ], version = "0.32" }
 opentelemetry_sdk = { features = ["rt-tokio"], version = "0.32.1" }
+serde = { workspace = true }
 tokio = { features = ["rt"], workspace = true }
 tonic = { default-features = true, workspace = true }
 tower-http = { features = ["catch-panic"], workspace = true }
@@ -48,7 +50,9 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 opentelemetry_sdk = { features = ["testing"], version = "0.32.1" }
+serde_json        = { workspace = true }
 thiserror         = { workspace = true }
+tokio             = { features = ["macros", "rt"], workspace = true }
 tower             = { features = ["util"], workspace = true }
 trybuild          = { workspace = true }
 

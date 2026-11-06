@@ -7,7 +7,9 @@ crate::declare_targets! {
     "miden_node_tracing::grpc" => "miden::rpc::server",
 }
 
+pub mod admin;
 mod attribute;
+mod filter_control;
 pub mod grpc;
 mod instrument;
 mod logging;
@@ -53,7 +55,7 @@ pub use miden_node_tracing_macro::{
     warn_v2,
 };
 pub use span_ext::ErrorSpanExt;
-pub use targets::TargetMap;
+pub use targets::{TargetMap, declared_targets};
 // Used directly by applications and by expansions of `tracing::instrument`.
 pub use tracing::{Instrument, Level, Span, Value, enabled, field, info_span};
 /// Upstream `tracing` exports required by generated macro code.
@@ -80,6 +82,7 @@ pub mod __private {
     };
 
     pub use crate::instrument::AsDynError;
+    pub use crate::targets::DeclaredTargetMap;
 }
 
 /// Extends errors with a stable string representation of their source chain.

@@ -1,3 +1,4 @@
+#[cfg(feature = "testing")]
 use std::str::FromStr;
 use std::sync::OnceLock;
 
@@ -10,9 +11,12 @@ use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::{Filter, SubscriberExt};
+#[cfg(feature = "testing")]
+use tracing_subscriber::layer::Filter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+use crate::filter_control::{FILTER_CONTROLS, FilterControls, FilterOutput, reloadable_filter};
 use crate::{ErrorSpanExt, error};
 
 /// Global tracer provider for flushing traces on panic.
@@ -141,6 +145,7 @@ fn filter_env_or_default(var: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_owned())
 }
 
+#[cfg(feature = "testing")]
 fn filter_from_string<S>(
     filter: &str,
 ) -> anyhow::Result<Box<dyn Filter<S> + Send + Sync + 'static>> {
@@ -219,10 +224,20 @@ pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option
         OpenTelemetryLayer::new(provider.tracer("tracing-otel-subscriber")).boxed()
     });
 
+    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter, FilterOutput::Stdout)?;
+    let (otel_filter, otel_reload) = reloadable_filter(&otel_filter, FilterOutput::OpenTelemetry)?;
+
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(filter_from_string(&stdout_filter)?))
-        .with(otel_layer.with_filter(filter_from_string(&otel_filter)?));
+        .with(stdout_layer().with_filter(stdout_filter))
+        .with(otel_layer.with_filter(otel_filter));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
+
+    FILTER_CONTROLS
+        .set(FilterControls {
+            stdout: stdout_reload,
+            otel: tracer_provider.as_ref().map(|_| otel_reload),
+        })
+        .map_err(|_| anyhow::anyhow!("tracing filter controls already initialized"))?;
 
     // Register panic hook now that tracing is initialized. This chains with the default panic hook
     // to preserve backtrace printing.

@@ -30,8 +30,7 @@ const ISSUE_SHARE_PATH: &str = "/admin/v1/decryption-share";
 #[derive(Clone)]
 struct ValidatorAdminService {
     operator_key: Arc<GoldenOperatorKey>,
-    /// Read-only handle for record retrieval and recovery; administration never mutates validator
-    /// state.
+    /// Read-only handle for retrieving validator records and recovering their contents.
     reader: ValidatorDbReader,
 }
 
@@ -54,6 +53,7 @@ pub(super) fn router(operator_key: GoldenOperatorKey, reader: ValidatorDbReader)
         .route(ISSUE_SHARE_PATH, post(issue_decryption_share::issue_decryption_share))
         .route(DECRYPT_TRANSACTION_PATH, post(decrypt_transaction::decrypt_transaction))
         .with_state(ValidatorAdminService::new(operator_key, reader))
+        .merge(miden_node_tracing::admin::router())
 }
 
 fn decode_hex(field: &str, value: &str) -> Result<Vec<u8>, ApiError> {

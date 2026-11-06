@@ -108,6 +108,82 @@ miden-node full ...
 If neither Miden-specific filter is set, `RUST_LOG` configures both outputs. See
 [Monitoring](/network-operator/monitoring) for exporter and resource configuration.
 
+## Change filters while the service is running
+
+The sequencer and validator administration APIs can replace either tracing filter without restarting the service. Use
+this to collect more detail during an investigation, then restore your usual filter when finished. Updates affect only
+the process receiving the request and last until its next restart.
+
+Enable the private listener as described in
+[Sequencer administration](/network-operator/sequencer#allowlist-administration) or
+[Validator administration](/network-operator/validator#administration-api). Use the authenticated administration
+endpoint provided by your deployment; the listener itself does not authenticate requests. Set `ADMIN_URL` to that
+endpoint, for example:
+
+```bash
+ADMIN_URL=http://127.0.0.1:50100
+```
+
+List tracing targets to help choose which part of the service to investigate:
+
+```bash
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/targets"
+```
+
+The response contains a `targets` array of names you can use in filter expressions, such as `miden::storage::sqlite`.
+The list contains Miden's declared targets. Filters also accept targets absent from this list, including those used by
+external dependencies.
+
+Each update replaces the entire filter for one output. Save the current filter so you can restore it after the
+investigation:
+
+```bash
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter" --output stdout-filter.json
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter" --output otel-filter.json
+```
+
+Check that each request succeeds before proceeding. The saved JSON contains the active filter in the form
+`{"filter":"<expression>"}` and can be sent back unchanged to restore it. If you only need stdout logs, skip the
+OpenTelemetry request; it fails if exporting was disabled when the service started.
+
+Replace the stdout filter with a complete expression:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/stdout-filter" \
+  -H 'Content-Type: application/json' \
+  --data '{"filter":"info,miden::storage::sqlite=debug"}'
+```
+
+Replace the OpenTelemetry filter independently:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
+  -H 'Content-Type: application/json' \
+  --data '{"filter":"info,miden::storage=debug"}'
+```
+
+A successful update returns `204 No Content`. Check stdout or your tracing backend for the expected detail from new
+activity. Increasing verbosity does not recover earlier logs or traces. Updating the OpenTelemetry filter does not
+enable exporting or change where traces are sent.
+
+An invalid expression returns `400` and leaves the previous filter active. Correct the expression and retry. The
+OpenTelemetry endpoints return `409` if exporting was disabled at startup; configure an exporter and restart before
+reading or changing its filter. A `503` means tracing controls are unavailable, and a `500` means the filter could not
+be read or updated. These handler errors return JSON with an `error` message. Correct request-shape errors, such as a
+missing `filter` field, before retrying.
+
+After the investigation, restore each filter you changed using its saved file:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/stdout-filter" \
+  -H 'Content-Type: application/json' --data-binary @stdout-filter.json
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
+  -H 'Content-Type: application/json' --data-binary @otel-filter.json
+```
+
+To retain a filter across restarts, update the service's environment configuration. Environment variables are read only
+during startup.
+
 ## Troubleshooting filters
 
 Start with a narrow target instead of enabling `trace` globally:
@@ -123,4 +199,5 @@ MIDEN_STDOUT_FILTER='info,user::miden-block-producer=debug' miden-node sequencer
 MIDEN_STDOUT_FILTER='info,miden::storage=debug' miden-node full ...
 ```
 
-Filters are read only during process startup. Restart the service after changing an environment variable.
+Restart the service after changing a filter environment variable, or use the administration API to update the running
+process.
