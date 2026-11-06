@@ -68,10 +68,8 @@ pub struct SequencerCommand {
     )]
     pub internal: Option<SocketAddr>,
 
-    /// IP address and port for the private administration API (for example, 127.0.0.1:50100).
-    /// Require external authentication and network isolation.
-    #[arg(long = "admin.listen", env = "MIDEN_NODE_ADMIN_LISTEN", value_name = "IP:PORT")]
-    pub admin_listen: Option<SocketAddr>,
+    #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
 
     /// Allow unrestricted account creation. Use only on development networks.
     #[arg(long, env = "MIDEN_NODE_DISABLE_ACCOUNT_ALLOWLIST")]
@@ -143,7 +141,7 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         tasks.spawn("store block writer", join_store_writer(writer_task));
-        if let Some(address) = self.admin_listen {
+        if let Some(address) = self.admin.listen {
             let shutdown = shutdown.clone();
             tasks.spawn("sequencer admin API", async move {
                 AdminServer::bind(address, allowlist, funding).await?.serve(shutdown).await
@@ -339,6 +337,9 @@ impl SequencerExternalServiceOptions {
 #[derive(clap::Args, Clone, Debug)]
 pub struct FullNodeCommand {
     #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
+
+    #[command(flatten)]
     pub runtime: RuntimeOptions,
 
     #[command(flatten)]
@@ -379,6 +380,10 @@ struct PreAuthComponents {
 
 impl FullNodeCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        self.admin.run(shutdown.clone(), self.run(shutdown)).await
+    }
+
+    async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
         let runtime = self.runtime.runtime_config(&self.store);
         let source_rpc = self

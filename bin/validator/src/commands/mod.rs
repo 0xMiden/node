@@ -31,7 +31,6 @@ use zeroize::Zeroizing;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_VALIDATOR_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_VALIDATOR_LISTEN";
-const ENV_ADMIN_LISTEN: &str = "MIDEN_VALIDATOR_ADMIN_LISTEN";
 const ENV_SIGNING_KEY: &str = "MIDEN_VALIDATOR_SIGNING_KEY";
 const ENV_SIGNING_KEY_KMS_ID: &str = "MIDEN_VALIDATOR_SIGNING_KEY_KMS_ID";
 const ENV_ENCRYPTION_KEY: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY";
@@ -164,9 +163,8 @@ pub enum ValidatorCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: std::net::SocketAddr,
 
-        /// IP address and port for the private administration API (for example, 127.0.0.1:50102).
-        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "IP:PORT")]
-        admin_listen: Option<std::net::SocketAddr>,
+        #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
 
         #[command(flatten)]
         grpc_options: GrpcOptions,
@@ -246,7 +244,7 @@ impl ValidatorCommand {
             Self::Privacy(options) => options.handle(shutdown).await,
             Self::Start {
                 listen,
-                admin_listen,
+                admin,
                 grpc_options,
                 signing_key,
                 data_directory,
@@ -263,7 +261,7 @@ impl ValidatorCommand {
                     service.name = "miden-validator",
                     service.version = env!("CARGO_PKG_VERSION"),
                     validator.listen = address.to_string(),
-                    validator.admin_listen = admin_listen.map_or_else(
+                    validator.admin_listen = admin.listen.map_or_else(
                         || "disabled".to_owned(),
                         |address| address.to_string(),
                     ),
@@ -283,7 +281,7 @@ impl ValidatorCommand {
 
                 start::start(
                     address,
-                    admin_listen,
+                    admin.listen,
                     grpc_options,
                     start::ValidatorKeys { signer, decrypter, operator_key },
                     start::ValidatorDatabaseOptions {
@@ -637,19 +635,19 @@ mod tests {
     fn admin_listener_is_opt_in() {
         let command =
             parse_start(&ENCRYPTION_KEY_ARGS).expect("start without an admin listener must parse");
-        let ValidatorCommand::Start { admin_listen, .. } = command else {
+        let ValidatorCommand::Start { admin, .. } = command else {
             panic!("expected the start command");
         };
-        assert_eq!(admin_listen, None);
+        assert_eq!(admin.listen, None);
 
         let command = parse_start(
             &[ENCRYPTION_KEY_ARGS.as_slice(), &["--admin.listen", "127.0.0.1:50102"]].concat(),
         )
         .expect("start with an admin listener must parse");
-        let ValidatorCommand::Start { admin_listen, .. } = command else {
+        let ValidatorCommand::Start { admin, .. } = command else {
             panic!("expected the start command");
         };
-        assert_eq!(admin_listen, Some("127.0.0.1:50102".parse().unwrap()));
+        assert_eq!(admin.listen, Some("127.0.0.1:50102".parse().unwrap()));
     }
 
     #[test]

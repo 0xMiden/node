@@ -29,6 +29,8 @@ const DEFAULT_WALLET_FUNDING_AMOUNT: NonZeroU64 = NonZeroU64::new(1_000_000).unw
 #[derive(Debug, Clone, Parser)]
 pub struct MonitorConfig {
     #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
+    #[command(flatten)]
     pub grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// The URL of the RPC service.
     #[arg(
