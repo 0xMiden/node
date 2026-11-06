@@ -71,4 +71,5 @@ wired to the RPC; in distributed mode operators must pass the NTB's address to t
 Currently the only endpoint is `GetNetworkNoteStatus(note_id)` which returns the lifecycle status
 of a network note (pending, processed, or discarded), along with the latest execution error,
 attempt count, and block number of the last attempt. This is useful for debugging notes that fail
-to be consumed.
+to be consumed. The response also lists the `FEE_SPONSORSHIP` notes bound to the note, with their
+fee asset, reclaim height, the block that consumed them, and their latest execution error.

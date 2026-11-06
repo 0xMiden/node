@@ -24,6 +24,7 @@ use crate::selection::{
     log_deferred_notes,
     log_oversized_notes,
     select_candidate,
+    sponsorship_failures,
 };
 use crate::{LOG_TARGET, NoteError, execute};
 
@@ -130,6 +131,9 @@ pub struct NoteUpdates {
     /// Notes whose attempt counter must be incremented, keyed by the nullifier the failure is
     /// recorded under.
     pub failed: Vec<(Nullifier, NoteError)>,
+    /// Failed `FEE_SPONSORSHIP` notes, keyed by the nullifier of each sponsorship. Only the latest
+    /// error is recorded for them. Their attempts are charged through [`Self::failed`].
+    pub failed_sponsorships: Vec<(Nullifier, NoteError)>,
     /// Notes that can never be consumed and must be marked permanently unconsumable.
     pub discarded: Vec<Nullifier>,
     /// Corrected eligibility blocks for notes whose stored block is earlier than the exact rule
@@ -319,6 +323,7 @@ impl NetworkTransactionContext {
                 failed_notes,
                 deferred_notes,
                 oversized_notes,
+                dropped_sponsorships,
                 fetched_scripts,
             }) => {
                 info!(
@@ -341,6 +346,11 @@ impl NetworkTransactionContext {
 
                 let mut to_penalize = failed_notes;
                 to_penalize.extend(oversized_sponsorships);
+                // A dropped sponsorship records its own error, but its feature note is not charged.
+                notes.failed_sponsorships = sponsorship_failures(
+                    to_penalize.iter().chain(&dropped_sponsorships),
+                    &sponsor_to_feature,
+                );
                 notes.failed.extend(attribute_failed_notes(to_penalize, &sponsor_to_feature));
                 notes.discarded = log_oversized_notes(oversized_features);
 
@@ -355,8 +365,12 @@ impl NetworkTransactionContext {
                     note.ids = note_ids.as_slice()
                 );
 
+                // Each failed sponsorship records its own error. A whole-transaction error has no
+                // single cause, so only the feature notes record it.
                 let failed = match err {
                     NtxError::AllNotesFailed(per_note) => {
+                        notes.failed_sponsorships =
+                            sponsorship_failures(&per_note, &sponsor_to_feature);
                         attribute_failed_notes(per_note, &sponsor_to_feature)
                     },
                     other => {
