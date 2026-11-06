@@ -30,6 +30,18 @@ pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
     let _otel_guard =
         miden_node_tracing::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;
 
+    miden_node_utils::shutdown::run_with_shutdown("miden-network-monitor", |shutdown| {
+        config.admin.run(shutdown.clone(), async move {
+            tokio::select! {
+                () = shutdown.cancelled() => Ok(()),
+                result = monitor(config) => result,
+            }
+        })
+    })
+    .await
+}
+
+async fn monitor(config: MonitorConfig) -> Result<()> {
     let mut tasks = Tasks::new();
 
     let rpc_rx = tasks.spawn_rpc_checker(&config);

@@ -83,6 +83,8 @@ pub enum FundingServiceCommand {
     /// Starts the funding service.
     Start {
         #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
+        #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
 
         /// Directory for the funding service's bootstrapped database.
@@ -214,7 +216,15 @@ impl FundingServiceCommand {
     }
 
     async fn start(self, shutdown: CancellationToken) -> Result<()> {
+        let Self::Start { admin, .. } = &self else {
+            unreachable!("start is only called for the Start variant")
+        };
+        admin.run(shutdown.clone(), self.start_service(shutdown)).await
+    }
+
+    async fn start_service(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
+            admin: _,
             grpc_message_size,
             data_directory,
             listen,

@@ -5025,6 +5025,7 @@ name = "miden-node-utils"
 version = "0.18.2"
 dependencies = [
  "anyhow",
+ "axum",
  "backon",
  "clap",
  "fs-err",

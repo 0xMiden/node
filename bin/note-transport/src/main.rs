@@ -24,7 +24,7 @@ enum Command {
     /// Applies pending migrations to an existing database.
     Migrate(DataDirectoryArgs),
     /// Serves gRPC and gRPC-Web requests.
-    Start(StartArgs),
+    Start(Box<StartArgs>),
 }
 
 #[derive(Args)]
@@ -36,6 +36,8 @@ struct DataDirectoryArgs {
 
 #[derive(Args)]
 struct StartArgs {
+    #[command(flatten)]
+    admin: miden_node_utils::admin::AdminOptions,
     #[command(flatten)]
     storage: DataDirectoryArgs,
     /// Trusted node RPC endpoint for note inclusion verification.
@@ -80,22 +82,26 @@ async fn main() -> anyhow::Result<()> {
             },
             Command::Migrate(args) => db::migrate(&args.data_directory.join("notes.sqlite3"))?,
             Command::Start(args) => {
-                let (writer, reader) =
-                    db::load(&args.storage.data_directory.join("notes.sqlite3"))?;
-                let server = Server::new(
-                    Config {
-                        rpc_url: args.rpc_url,
-                        max_note_size: args.max_note_size,
-                        max_connections: args.max_connections,
-                        max_storage_bytes: args.max_storage_bytes,
-                        retention_days: args.retention_days,
-                        grpc: args.grpc,
-                    },
-                    writer,
-                    reader,
-                )?;
-                let listener = tokio::net::TcpListener::bind(args.listen).await?;
-                server.serve_on(listener, shutdown).await?;
+                args.admin
+                    .run(shutdown.clone(), async move {
+                        let (writer, reader) =
+                            db::load(&args.storage.data_directory.join("notes.sqlite3"))?;
+                        let server = Server::new(
+                            Config {
+                                rpc_url: args.rpc_url,
+                                max_note_size: args.max_note_size,
+                                max_connections: args.max_connections,
+                                max_storage_bytes: args.max_storage_bytes,
+                                retention_days: args.retention_days,
+                                grpc: args.grpc,
+                            },
+                            writer,
+                            reader,
+                        )?;
+                        let listener = tokio::net::TcpListener::bind(args.listen).await?;
+                        server.serve_on(listener, shutdown).await
+                    })
+                    .await?;
             },
         }
         Ok(())

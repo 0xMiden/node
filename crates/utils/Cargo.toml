@@ -24,8 +24,9 @@ testing-prover = ["dep:miden-processor", "dep:miden-testing", "dep:miden-tx", "t
 
 [dependencies]
 anyhow                 = { workspace = true }
+axum                   = { workspace = true }
 backon                 = { workspace = true }
-clap                   = { workspace = true }
+clap                   = { features = ["env"], workspace = true }
 fs-err                 = { workspace = true }
 http                   = { workspace = true }
 humantime              = { workspace = true }
@@ -40,7 +41,7 @@ miden-testing          = { optional = true, workspace = true }
 miden-tx               = { optional = true, workspace = true }
 reqwest                = { workspace = true }
 thiserror              = { workspace = true }
-tokio                  = { features = ["macros", "rt", "signal", "time"], workspace = true }
+tokio                  = { features = ["macros", "net", "rt", "signal", "time"], workspace = true }
 tokio-util             = { workspace = true }
 tonic                  = { default-features = true, workspace = true }
 tower-http             = { workspace = true }

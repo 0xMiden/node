@@ -110,15 +110,28 @@ If neither Miden-specific filter is set, `RUST_LOG` configures both outputs. See
 
 ## Change filters while the service is running
 
-The sequencer and validator administration APIs can replace either tracing filter without restarting the service. Use
-this to collect more detail during an investigation, then restore your usual filter when finished. Updates affect only
-the process receiving the request and last until its next restart.
+Each service can expose an administration API to replace either tracing filter without restarting. Use this to collect
+more detail during an investigation, then restore your usual filter when finished. Updates affect only the process
+receiving the request and last until its next restart.
 
-Enable the private listener as described in
-[Sequencer administration](/network-operator/sequencer#allowlist-administration) or
-[Validator administration](/network-operator/validator#administration-api). Use the authenticated administration
-endpoint provided by your deployment; the listener itself does not authenticate requests. Set `ADMIN_URL` to that
-endpoint, for example:
+The listener is disabled by default. Add `--admin.listen <IP:PORT>` when starting the service. Use the service's
+`--help` output for its startup options. For example:
+
+```bash
+miden-node full --admin.listen 127.0.0.1:50100 ...
+miden-remote-prover --admin.listen 127.0.0.1:50101 ...
+```
+
+You can also configure the address with the `MIDEN_ADMIN_LISTEN` environment variable.
+
+The listener serves HTTP and does not authenticate requests. Bind it to loopback for local access, or keep it on a
+private network behind an authenticated proxy and prevent direct access. Do not expose it through the public service
+ingress. The sequencer and validator use their existing administration listeners, which also serve their other admin
+operations.
+
+### Example: change and restore a filter
+
+For the commands below, set the shell variable `ADMIN_URL` to the administration API's base URL:
 
 ```bash
 ADMIN_URL=http://127.0.0.1:50100
