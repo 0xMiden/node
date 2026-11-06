@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error, info, miden_instrument};
+use miden_node_tracing::{error_v2, info_v2, instrument_v2};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -25,7 +25,7 @@ use crate::selection::{
     log_oversized_notes,
     select_candidate,
 };
-use crate::{LOG_TARGET, NoteError, execute};
+use crate::{NoteError, execute};
 
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
@@ -173,7 +173,7 @@ pub struct NetworkTransactionOutcome {
 
 impl NetworkTransactionContext {
     /// Builds, proves and submits one network transaction for `account_id`.
-    #[miden_instrument(
+    #[instrument_v2(
         name = "ntx.build",
         fields(
             account.id = account_id,
@@ -305,8 +305,7 @@ impl NetworkTransactionContext {
             .map(|sponsored| sponsored.feature.as_note().nullifier())
             .collect();
 
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "executing network transaction",
             account.id = account_id,
             note.ids = note_ids.as_slice(),
@@ -321,8 +320,7 @@ impl NetworkTransactionContext {
                 oversized_notes,
                 fetched_scripts,
             }) => {
-                info!(
-                    target: LOG_TARGET,
+                info_v2!(
                     "network transaction executed",
                     account.id = account_id,
                     transaction.id = tx_id,
@@ -347,9 +345,8 @@ impl NetworkTransactionContext {
                 NetworkTransactionResult::Submitted { tx_id }
             },
             Err(err) => {
-                error!(
+                error_v2!(
                     &err,
-                    target: LOG_TARGET,
                     "network transaction failed",
                     account.id = account_id,
                     note.ids = note_ids.as_slice()
@@ -364,9 +361,8 @@ impl NetworkTransactionContext {
                         feature_nullifiers
                             .into_iter()
                             .map(|nullifier| {
-                                info!(
+                                info_v2!(
                                     error.as_ref(),
-                                    target: LOG_TARGET,
                                     "note failed: transaction execution error",
                                     note.nullifier = nullifier
                                 );

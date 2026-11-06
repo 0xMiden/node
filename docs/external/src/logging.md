@@ -72,26 +72,28 @@ per-transaction messages would create undesirable noise. Events whose primary us
 use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other targets default to
 `info`. The `miden_prover` dependency is limited to `warn`.
 
-| Target                        | Events                                                            |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `user::miden-node`            | Node command startup, bootstrap, and recovery                     |
-| `miden::rpc::server`          | RPC requests, subscriptions, readiness, and submissions           |
-| `miden::production`           | Sequencer orchestration and fee-collector operations              |
-| `miden::production::batches`  | Transaction selection and batch assembly                          |
-| `miden::production::blocks`   | Batch selection, block assembly, and committing blocks            |
-| `miden::mempool`              | Transaction dependencies, readiness, capacity, and eviction       |
-| `miden::proving::batches`     | Batch execution and proving                                       |
-| `miden::proving::blocks`      | Block proof scheduling, retries, and results                      |
-| `miden::sync`                 | Chain synchronization coordination and readiness                  |
-| `miden::sync::blocks`         | Receiving, validating, and applying committed blocks              |
-| `miden::sync::proofs`         | Receiving and applying block proofs                               |
-| `miden::rpc::client`          | Outgoing RPC requests and client diagnostics                      |
-| `miden::storage`              | Persistence and account, note, and storage lifecycle events       |
-| `user::miden-validator`       | Validator startup, bootstrap, validation, and block signing       |
-| `user::miden-ntx-builder`     | Network transaction construction and account actor activity       |
-| `user::miden-prover`          | Remote prover lifecycle events                                    |
-| `user::miden-network-monitor` | Network monitor checks and end-to-end probes                      |
-| `user::miden-funding-service` | Funding service readiness, funding transactions, and note commits |
+| Target                            | Events                                                        |
+| --------------------------------- | ------------------------------------------------------------- |
+| `user::miden-node`                | Node command startup, bootstrap, and recovery                 |
+| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions       |
+| `miden::production`               | Sequencer orchestration and fee-collector operations          |
+| `miden::production::transactions` | Network transaction scheduling, note selection, and execution |
+| `miden::production::batches`      | Transaction selection and batch assembly                      |
+| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks        |
+| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction   |
+| `miden::proving::transactions`    | Transaction proof requests and results                        |
+| `miden::proving::batches`         | Batch execution and proving                                   |
+| `miden::proving::blocks`          | Block proof scheduling, retries, and results                  |
+| `miden::sync`                     | Chain synchronization coordination and readiness              |
+| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks          |
+| `miden::sync::proofs`             | Receiving and applying block proofs                           |
+| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                  |
+| `miden::storage`                  | Persistence and account, note, and storage lifecycle events   |
+| `user::miden-validator`           | Validator startup, bootstrap, validation, and block signing   |
+
+| `user::miden-prover` | Remote prover lifecycle events | | `user::miden-network-monitor` | Network monitor checks and
+end-to-end probes | | `user::miden-funding-service` | Funding service readiness, funding transactions, and note commits
+|
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
 `miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.

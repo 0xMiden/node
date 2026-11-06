@@ -1,10 +1,9 @@
 use miden_node_proto::generated::miden::node::v1 as rpc;
 use miden_node_proto::generated::{self as grpc};
-use miden_node_tracing::error;
+use miden_node_tracing::error_v2;
 use miden_protocol::Word;
 
 use super::NtxBuilderRpcServer;
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteStatus
@@ -29,8 +28,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    #[miden_node_tracing::miden_instrument(
-        target = COMPONENT,
+    #[miden_node_tracing::instrument_v2(
         name = "get_network_note_status",
         fields (
             note.id = note_id,
@@ -44,11 +42,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let row = self.db.get_note_status(note_id).await.map_err(|err| {
-            error!(
-                &err,
-                target: LOG_TARGET,
-                "Failed to query note status from DB"
-            );
+            error_v2!(&err, "Failed to query note status from DB");
             tonic::Status::internal("database error")
         })?;
 
