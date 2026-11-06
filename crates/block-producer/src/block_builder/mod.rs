@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use miden_node_store::state::{BlockWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorSpanExt, Span, debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorSpanExt, Span, debug_v2, instrument_v2, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::batch::{OrderedBatches, ProvenBatch};
 use miden_protocol::block::{
@@ -21,7 +21,6 @@ use tokio::time::Duration;
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, LOG_TARGET};
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -103,9 +102,8 @@ impl BlockBuilder {
     }
 
     /// Selects and builds a block from the mempool. Rolls back the selection on failure.
-    #[miden_instrument(
+    #[instrument_v2(
         parent = None,
-        target = COMPONENT,
         name = "block_builder.build_block",
     )]
     async fn build_block(&mut self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
@@ -126,7 +124,7 @@ impl BlockBuilder {
     }
 
     /// Builds a block from the selected batches and obtains validator signatures.
-    #[miden_instrument(target = COMPONENT, name = "block_builder.prepare_block", err)]
+    #[instrument_v2(name = "block_builder.prepare_block", err)]
     pub(crate) async fn prepare_block(
         state: &State,
         validator: &BlockProducerValidatorClient,
@@ -166,10 +164,7 @@ impl BlockBuilder {
             .await
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.select_block",
-    )]
+    #[instrument_v2(name = "block_builder.select_block")]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -190,11 +185,7 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.get_block_inputs",
-        err,
-    )]
+    #[instrument_v2(name = "block_builder.get_block_inputs", err)]
     async fn get_block_inputs(
         state: &State,
         selected_block: SelectedBlock,
@@ -279,11 +270,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.propose_block",
-        err,
-    )]
+    #[instrument_v2(name = "block_builder.propose_block", err)]
     async fn propose_block(
         batches_inputs: BlockBatchesAndInputs,
     ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
@@ -297,11 +284,7 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.validate_block",
-        err,
-    )]
+    #[instrument_v2(name = "block_builder.validate_block", err)]
     async fn build_and_validate_block(
         state: &State,
         validator: &BlockProducerValidatorClient,
@@ -384,11 +367,7 @@ impl BlockBuilder {
         })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.commit_block",
-        err,
-    )]
+    #[instrument_v2(name = "block_builder.commit_block", err)]
     async fn commit_block(
         &mut self,
         mempool: &SharedMempool,
@@ -409,11 +388,7 @@ impl BlockBuilder {
         );
 
         if num_transactions > 0 {
-            debug!(
-                target: LOG_TARGET,
-                "Included transactions",
-                block.transaction.count = num_transactions
-            );
+            debug_v2!("Included transactions", block.transaction.count = num_transactions);
         }
 
         self.block_writer
@@ -427,10 +402,7 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_builder.rollback_block",
-    )]
+    #[instrument_v2(name = "block_builder.rollback_block")]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())

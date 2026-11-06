@@ -1,7 +1,7 @@
 pub mod child;
 mod operations;
 
-pub use operations::{configured, explicit_error, explicit_override, parent};
+pub use operations::{configured, explicit_error, explicit_override, parent, root};
 
 pub fn manual_spans() {
     let parent = miden_node_tracing::info_span_v2!("manual.parent", account.id = "account");
