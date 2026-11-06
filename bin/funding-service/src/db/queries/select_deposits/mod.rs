@@ -5,7 +5,7 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use super::read_deposit;
 use crate::db::DatabaseIdentity;
 
-/// Loads all stored deposits, validating that the funding account can consume each one.
+/// Loads every stored deposit, largest first, validating that the funding account can consume each.
 pub fn select_deposits(
     tx: &ReadTx<'_>,
     identity: DatabaseIdentity,

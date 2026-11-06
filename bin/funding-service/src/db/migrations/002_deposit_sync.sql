@@ -7,9 +7,14 @@ CREATE TABLE deposit_sync (
 
 INSERT INTO deposit_sync (singleton, next_sync_block) VALUES (1, 0);
 
--- Deposits discovered before next_sync_block with no known spend before that block. Deposits
--- consumed or discarded by the service are removed.
+-- Deposits discovered before next_sync_block with no spend known when they were discovered. This
+-- table is the deposit pool: rows are added as discovery advances and removed one by one when the
+-- service consumes or discards them. The amount duplicates the note's asset so selection can order
+-- deposits without decoding notes.
 CREATE TABLE deposits (
     nullifier BLOB PRIMARY KEY CHECK (length(nullifier) = 32),
+    amount INTEGER NOT NULL CHECK (amount > 0),
     note BLOB NOT NULL
 ) STRICT;
+
+CREATE INDEX idx_deposits_by_amount ON deposits(amount DESC, nullifier);

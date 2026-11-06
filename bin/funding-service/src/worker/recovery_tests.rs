@@ -1,13 +1,15 @@
+use std::collections::HashMap;
+
 use miden_node_proto::clients::ForeignAccount;
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteType};
+use miden_protocol::note::{Note, NoteType, Nullifier};
 use miden_standards::note::P2idNote;
 use opentelemetry::trace::Status;
 use tokio::time::Instant;
 
 use super::*;
-use crate::db::{DatabaseIdentity, DepositCheckpoint};
+use crate::db::DatabaseIdentity;
 use crate::lifecycle::DATABASE_FILENAME;
 use crate::node::tests::{TestChain, TestServer};
 use crate::test_utils::Fixture;
@@ -98,9 +100,9 @@ impl Funder {
     }
 }
 
-/// Synchronizes the wallet and saves its deposit checkpoint before creating the worker.
+/// Synchronizes the wallet and stores the deposits it finds before creating the worker.
 ///
-/// The matching wallet and database state satisfy the worker's startup requirement.
+/// The matching wallet and database cursors satisfy the worker's startup requirement.
 async fn with_deposits(
     mut setup: FunderSetup,
     mut chain: TestChain,
@@ -118,18 +120,18 @@ async fn with_deposits(
     let tip = chain.tip.into();
     let server = TestServer::start(chain).await;
     let update = setup.wallet.sync_to(&mut server.node.rpc_client(), tip).await.unwrap();
-    setup.wallet.apply(update).unwrap();
-    setup.database.save_deposit_checkpoint(setup.wallet.checkpoint()).await.unwrap();
+    let scan = setup.wallet.apply(update).unwrap();
+    setup.database.record_deposit_scan(scan.next_sync, scan.deposits).await.unwrap();
+    setup.wallet.complete_deposit_scan(scan.next_sync);
     (Funder::new(server.node.clone(), Prover::local(), setup), server)
 }
 
 /// Loads stored deposits keyed by nullifier for order-independent comparison.
 async fn stored_deposits(database: &FundingDatabase) -> HashMap<Nullifier, Note> {
     database
-        .deposit_checkpoint()
+        .deposits()
         .await
         .unwrap()
-        .deposits
         .into_iter()
         .map(|deposit| (deposit.nullifier(), deposit.into_note()))
         .collect()
@@ -242,16 +244,6 @@ async fn state_conflict_discards_only_the_selected_deposit() {
         .unwrap();
 
     assert_eq!(
-        &funder
-            .setup
-            .wallet
-            .deposits()
-            .iter()
-            .map(|(key, deposit)| (*key, deposit.note().clone()))
-            .collect::<HashMap<_, _>>(),
-        &HashMap::from([(unselected.nullifier(), unselected.clone())])
-    );
-    assert_eq!(
         stored_deposits(&funder.setup.database).await,
         HashMap::from([(unselected.nullifier(), unselected)])
     );
@@ -287,14 +279,8 @@ async fn other_rejections_preserve_notes() {
         );
 
         assert_eq!(
-            &funder
-                .setup
-                .wallet
-                .deposits()
-                .iter()
-                .map(|(key, deposit)| (*key, deposit.note().clone()))
-                .collect::<HashMap<_, _>>(),
-            &HashMap::from([(deposit.nullifier(), deposit)])
+            stored_deposits(&funder.setup.database).await,
+            HashMap::from([(deposit.nullifier(), deposit)])
         );
         assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
         let span = telemetry.span("funding.resolve_attempt");
@@ -385,13 +371,13 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
                 assert_eq!(stored.note, *payout.note());
                 assert_eq!(delivery.transaction_id, transaction_id);
                 assert_eq!(delivery.committed_in_block, BlockNumber::from(19));
-                assert!(funder.setup.wallet.deposits().is_empty());
                 assert!(stored_deposits(&funder.setup.database).await.is_empty());
                 assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([waiting]));
             } else {
-                let expected = HashMap::from([(deposit.nullifier(), deposit)]);
-                assert_eq!(wallet_deposits(&funder), expected);
-                assert_eq!(stored_deposits(&funder.setup.database).await, expected);
+                assert_eq!(
+                    stored_deposits(&funder.setup.database).await,
+                    HashMap::from([(deposit.nullifier(), deposit)])
+                );
                 assert_eq!(
                     funder.pending_requests().await.unwrap(),
                     VecDeque::from([payout, waiting])
@@ -713,15 +699,11 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
     }
 }
 
-// DEPOSIT CHECKPOINT
+// DEPOSIT DISCOVERY
 // ================================================================================================
 
-/// Recreates the worker from a reopened database and a wallet restored from its saved checkpoint.
-async fn restart(
-    funder: Funder,
-    directory: &tempfile::TempDir,
-    server: &TestServer,
-) -> (Funder, DepositCheckpoint) {
+/// Recreates the worker from a reopened database and a wallet resumed at its stored cursor.
+async fn restart(funder: Funder, directory: &tempfile::TempDir, server: &TestServer) -> Funder {
     let mut setup = funder.setup;
     let identity = setup.database.identity();
     setup.database = Arc::new(
@@ -733,32 +715,21 @@ async fn restart(
         .await
         .unwrap(),
     );
-    let checkpoint = setup.database.deposit_checkpoint().await.unwrap();
     setup.wallet = FundingWallet::load_at(
         &mut server.node.rpc_client(),
         identity.funding_account_id,
         setup.wallet.secret_key().clone(),
         setup.fee_asset_id,
         BlockNumber::GENESIS,
-        checkpoint.clone(),
+        setup.database.deposit_sync().await.unwrap(),
     )
     .await
     .unwrap();
-    (Funder::new(server.node.clone(), Prover::local(), setup), checkpoint)
-}
-
-fn wallet_deposits(funder: &Funder) -> HashMap<Nullifier, Note> {
-    funder
-        .setup
-        .wallet
-        .deposits()
-        .iter()
-        .map(|(nullifier, deposit)| (*nullifier, deposit.note().clone()))
-        .collect()
+    Funder::new(server.node.clone(), Prover::local(), setup)
 }
 
 #[tokio::test]
-async fn a_restarted_worker_resumes_deposit_discovery_from_the_saved_checkpoint() {
+async fn a_restarted_worker_resumes_deposit_discovery_from_the_stored_cursor() {
     let (directory, mut setup) = FunderSetup::fixture().await;
     let deposit = setup.deposit(1);
     let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
@@ -767,22 +738,20 @@ async fn a_restarted_worker_resumes_deposit_discovery_from_the_saved_checkpoint(
 
     funder.read_chain_state().await.unwrap();
     let expected = HashMap::from([(deposit.nullifier(), deposit)]);
-    assert_eq!(wallet_deposits(&funder), expected);
+    assert_eq!(stored_deposits(&funder.setup.database).await, expected);
 
-    // This note lies before the saved cursor and must not be discovered after restart.
+    // This note lies before the stored cursor and must not be discovered after restart.
     let unscanned = funder.setup.deposit(2);
     server.chain.lock().unwrap().notes.push((0, unscanned));
-    let (mut restarted, checkpoint) = restart(funder, &directory, &server).await;
-    assert_eq!(checkpoint.next_sync, BlockNumber::from(1));
-    assert_eq!(wallet_deposits(&restarted), expected);
+    let mut restarted = restart(funder, &directory, &server).await;
+    assert_eq!(restarted.setup.wallet.next_sync(), BlockNumber::from(1));
 
     restarted.read_chain_state().await.unwrap();
-    assert_eq!(wallet_deposits(&restarted), expected);
     assert_eq!(stored_deposits(&restarted.setup.database).await, expected);
 }
 
 #[tokio::test]
-async fn a_checkpoint_which_could_not_be_saved_is_saved_on_the_next_sync() {
+async fn a_scan_which_could_not_be_stored_is_repeated_on_the_next_sync() {
     let (directory, mut setup) = FunderSetup::fixture().await;
     let deposit = setup.deposit(1);
     let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
@@ -792,7 +761,7 @@ async fn a_checkpoint_which_could_not_be_saved_is_saved_on_the_next_sync() {
         miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
     let set_trigger = async |sql: &'static str| {
         writer
-            .write("change checkpoint trigger", move |tx| {
+            .write("change deposit scan trigger", move |tx| {
                 tx.execute(sql, &[])?;
                 Ok::<_, miden_node_db::DatabaseError>(())
             })
@@ -801,23 +770,44 @@ async fn a_checkpoint_which_could_not_be_saved_is_saved_on_the_next_sync() {
     };
 
     set_trigger(
-        "CREATE TRIGGER reject_checkpoint BEFORE UPDATE ON deposit_sync
+        "CREATE TRIGGER reject_scan BEFORE UPDATE ON deposit_sync
          BEGIN SELECT RAISE(FAIL, 'write failed'); END",
     )
     .await;
     assert!(funder.read_chain_state().await.is_err());
-    assert_eq!(
-        funder.setup.database.deposit_checkpoint().await.unwrap(),
-        DepositCheckpoint::default()
-    );
+    assert_eq!(funder.setup.database.deposit_sync().await.unwrap(), BlockNumber::GENESIS);
+    assert!(stored_deposits(&funder.setup.database).await.is_empty());
+    assert_eq!(funder.setup.wallet.next_sync(), BlockNumber::GENESIS);
 
-    // An unchanged chain tip must not prevent a failed checkpoint save from being retried.
-    set_trigger("DROP TRIGGER reject_checkpoint").await;
+    // An unchanged chain tip must not prevent the failed scan from being repeated.
+    set_trigger("DROP TRIGGER reject_scan").await;
     funder.read_chain_state().await.unwrap();
-    let checkpoint = funder.setup.database.deposit_checkpoint().await.unwrap();
-    assert_eq!(checkpoint.next_sync, BlockNumber::from(1));
+    assert_eq!(funder.setup.database.deposit_sync().await.unwrap(), BlockNumber::from(1));
     assert_eq!(
         stored_deposits(&funder.setup.database).await,
         HashMap::from([(deposit.nullifier(), deposit)])
     );
+}
+
+#[tokio::test]
+async fn the_largest_stored_deposit_is_selected() {
+    let (_directory, mut setup) = FunderSetup::fixture().await;
+    let small = setup.deposit(1);
+    let large: Note = P2idNote::builder()
+        .sender(setup.fee_asset_id.faucet_id())
+        .target(setup.wallet.account_id())
+        .asset(FungibleAsset::new(setup.fee_asset_id.faucet_id(), 5_000).unwrap())
+        .note_type(NoteType::Public)
+        .serial_number(Word::from([2u32; 4]))
+        .build()
+        .unwrap()
+        .into();
+    let (wallet, server) = genesis_server(0, 0, &[small, large.clone()]).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    funder.read_chain_state().await.unwrap();
+
+    let selected = funder.setup.database.largest_deposits(NonZeroUsize::MIN).await.unwrap();
+    assert_eq!(selected.into_iter().map(UsdcxP2Id::into_note).collect::<Vec<_>>(), vec![large]);
+    assert_eq!(funder.setup.database.deposit_count().await.unwrap(), 2);
 }

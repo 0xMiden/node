@@ -50,17 +50,22 @@ pub use select_deposit_sync::select_deposit_sync;
 mod update_deposit_sync;
 pub use update_deposit_sync::update_deposit_sync;
 
+#[cfg(test)]
 mod select_deposits;
+#[cfg(test)]
 pub use select_deposits::select_deposits;
+
+mod select_largest_deposits;
+pub use select_largest_deposits::select_largest_deposits;
+
+mod count_deposits;
+pub use count_deposits::count_deposits;
 
 mod insert_deposit;
 pub use insert_deposit::insert_deposit;
 
 mod delete_deposit;
 pub use delete_deposit::delete_deposit;
-
-mod delete_deposits;
-pub use delete_deposits::delete_deposits;
 
 /// Reads a stored request, reconstructing its public P2ID note and optional delivery record.
 ///

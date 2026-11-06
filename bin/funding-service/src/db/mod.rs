@@ -88,19 +88,6 @@ pub struct TransactionAttempt {
     pub note_ids: Vec<NoteId>,
 }
 
-/// A snapshot of deposit discovery progress and the remaining deposits. The default starts
-/// discovery at genesis with no deposits.
-///
-/// Deposits were discovered before `next_sync` and have no known spend before that block. Deposits
-/// consumed or discarded by the service are excluded.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct DepositCheckpoint {
-    /// The first block to include in the next deposit scan.
-    pub next_sync: BlockNumber,
-    /// Discovered deposits that have not been spent, consumed, or discarded as of this checkpoint.
-    pub deposits: Vec<UsdcxP2Id>,
-}
-
 /// File-backed storage for funding requests, with serialized durable writes.
 pub struct FundingDatabase {
     writer: DbWriter,
@@ -336,50 +323,75 @@ impl FundingDatabase {
             .await
     }
 
-    /// Loads the deposit scan cursor and remaining deposits as a consistent checkpoint.
-    pub async fn deposit_checkpoint(&self) -> anyhow::Result<DepositCheckpoint> {
-        let identity = self.identity;
+    /// Returns the first block to include in the next deposit scan.
+    pub async fn deposit_sync(&self) -> anyhow::Result<BlockNumber> {
         self.reader
-            .read("read deposit checkpoint", move |tx| {
-                let next_sync = queries::select_deposit_sync(tx)?
-                    .context("the deposit sync cursor is missing")?;
-                let deposits = queries::select_deposits(tx, identity)?;
-                Ok(DepositCheckpoint { next_sync, deposits })
+            .read("read deposit sync cursor", |tx| {
+                queries::select_deposit_sync(tx)?.context("the deposit sync cursor is missing")
             })
             .await
     }
 
-    /// Saves the deposit scan cursor and replaces the stored deposits in one database transaction.
+    /// Returns the number of stored deposits.
+    pub async fn deposit_count(&self) -> anyhow::Result<usize> {
+        let count = self.reader.read("count deposits", queries::count_deposits).await?;
+        usize::try_from(count).context("deposit count is negative")
+    }
+
+    /// Returns at most `limit` stored deposits, largest first.
+    pub async fn largest_deposits(&self, limit: NonZeroUsize) -> anyhow::Result<Vec<UsdcxP2Id>> {
+        let limit = i64::try_from(limit.get()).context("deposit limit exceeds i64")?;
+        let identity = self.identity;
+        Ok(self
+            .reader
+            .read("read largest deposits", move |tx| {
+                queries::select_largest_deposits(tx, limit, identity)
+            })
+            .await?)
+    }
+
+    /// Stores the deposits found by a scan and advances the scan cursor to `next_sync` in one
+    /// database transaction.
     ///
-    /// The caller must include all deposits discovered before `checkpoint.next_sync` that remain
-    /// unspent and have not been discarded. Earlier cursors are rejected because discovery cannot
-    /// safely resume from a checkpoint whose deposits reflect a later chain state.
-    pub async fn save_deposit_checkpoint(
+    /// `deposits` must hold the unspent deposits discovered before `next_sync` that are not yet
+    /// stored. Deposits already stored are kept unchanged, so repeating a scan whose result was
+    /// saved has no effect. An earlier cursor is rejected because a rescan could restore deposits
+    /// the service has since consumed.
+    pub async fn record_deposit_scan(
         &self,
-        checkpoint: DepositCheckpoint,
+        next_sync: BlockNumber,
+        deposits: Vec<UsdcxP2Id>,
     ) -> anyhow::Result<()> {
         let funding_account_id = self.identity.funding_account_id;
         self.writer
-            .write("save deposit checkpoint", move |tx| {
+            .write("record deposit scan", move |tx| {
                 let stored = queries::select_deposit_sync(tx)?
                     .context("the deposit sync cursor is missing")?;
                 ensure!(
-                    checkpoint.next_sync >= stored,
-                    "the deposit checkpoint cannot move from block {stored} back to block {}",
-                    checkpoint.next_sync,
+                    next_sync >= stored,
+                    "the deposit scan cannot move from block {stored} back to block {next_sync}",
                 );
-                queries::update_deposit_sync(tx, checkpoint.next_sync)?;
-                queries::delete_deposits(tx)?;
-                for deposit in &checkpoint.deposits {
+                queries::update_deposit_sync(tx, next_sync)?;
+                for deposit in &deposits {
                     ensure!(
                         deposit.target() == funding_account_id,
                         "the deposit {} targets another account",
                         deposit.note().id(),
                     );
-                    queries::insert_deposit(tx, deposit.note())?;
+                    queries::insert_deposit(tx, deposit)?;
                 }
                 Ok(())
             })
             .await
+    }
+
+    /// Returns every stored deposit, largest first.
+    #[cfg(test)]
+    pub async fn deposits(&self) -> anyhow::Result<Vec<UsdcxP2Id>> {
+        let identity = self.identity;
+        Ok(self
+            .reader
+            .read("read deposits", move |tx| queries::select_deposits(tx, identity))
+            .await?)
     }
 }

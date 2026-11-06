@@ -193,10 +193,10 @@ To refill the account, send it a **public** pay-to-ID note that holds the native
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs at
 `--poll-interval`, which defaults to one second, while no transaction is in flight.
 
-The service records how far it has scanned, together with the unspent deposits it found, in its database. A restart
-resumes the scan from the recorded block, so it still finds deposits sent while the service was stopped without scanning
-the whole chain again. The first start after bootstrap, or after upgrading from a version that did not record this
-progress, scans from genesis once and can take noticeably longer.
+The service stores the unspent deposits it finds and how far it has scanned in its database. A restart resumes the scan
+from the recorded block, so it still finds deposits sent while the service was stopped without scanning the whole chain
+again. The first start after bootstrap, or after upgrading from a version that did not record this progress, scans from
+genesis once and can take noticeably longer.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
@@ -215,7 +215,7 @@ The payouts remain queued. Accepted transactions and uncertain transport failure
 expiration. Other rejections and expiration retain the notes for retry.
 
 If the node cannot serve a deposit or check whether it has been spent, funding waits for synchronization to succeed. The
-service retries these failures automatically and checks the recovered deposits against the chain after a restart.
+service retries these failures automatically.
 
 One transaction consumes at most one deposit, selected by largest amount. A transaction that consumes a deposit and
 creates no funding note is only submitted when that deposit is worth more than the fee, so a note holding a single base

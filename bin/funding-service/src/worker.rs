@@ -3,7 +3,7 @@
 //! One task owns the funding account and submits one transaction at a time.
 //! It periodically loads pending requests from SQLite, refreshes the wallet, and retries pending work.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::num::{NonZeroU16, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -16,9 +16,8 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::crypto::rand::RandomCoin;
-use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, TransactionId};
 use miden_protocol::utils::serde::Serializable;
@@ -62,7 +61,7 @@ pub struct WorkerConfig {
 pub struct FunderSetup {
     /// Durable pending requests and delivery records.
     pub database: Arc<FundingDatabase>,
-    /// The funding wallet and its deposit scan progress.
+    /// The funding wallet and its deposit scan cursor.
     pub wallet: FundingWallet,
     /// The native asset, which pays the fee.
     pub fee_asset_id: AssetId,
@@ -88,23 +87,19 @@ pub struct Funder {
     prover: Prover,
     setup: FunderSetup,
     rng: RandomCoin,
-    /// The deposit scan cursor from the last successfully saved checkpoint.
-    persisted_sync: BlockNumber,
 }
 
 impl Funder {
     /// Creates a worker for the given funding account.
     ///
-    /// The wallet must match the database's deposit checkpoint because its cursor is treated as
-    /// already persisted.
+    /// The wallet's deposit cursor must not be ahead of the database's, so that every deposit the
+    /// wallet has scanned past is stored.
     pub fn new(node: RpcNodeClient, prover: Prover, setup: FunderSetup) -> Self {
-        let persisted_sync = setup.wallet.next_sync();
         Self {
             node,
             prover,
             setup,
             rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
-            persisted_sync,
         }
     }
 
@@ -144,7 +139,7 @@ impl Funder {
         fields(
             account.id = self.account_id(),
             queued.count,
-            deposit.count = self.setup.wallet.deposits().len(),
+            deposit.count,
         ),
         err,
     )]
@@ -173,9 +168,16 @@ impl Funder {
             asset.reserve = reserve,
             transaction.reference_block.number = reference_block
         );
-        let Some(selection) =
-            Selection::choose(self.setup.wallet.deposits(), &queued, balance, reserve)
-        else {
+        let deposit_count = self.setup.database.deposit_count().await?;
+        miden_span_record!(deposit.count = deposit_count);
+        let deposit = self
+            .setup
+            .database
+            .largest_deposits(NonZeroUsize::MIN)
+            .await?
+            .into_iter()
+            .next();
+        let Some(selection) = Selection::choose(deposit, &queued, balance, reserve) else {
             miden_span_record!(funding.selection = "unaffordable" #[nonstandard]);
             return Ok(());
         };
@@ -305,8 +307,7 @@ impl Funder {
                     status.code() == tonic::Code::InvalidArgument && status.details() == [2]
                 });
                 self.setup.database.release_attempt(transaction_id, discarded).await?;
-                if let Some(nullifier) = discarded {
-                    self.setup.wallet.remove_deposit(nullifier);
+                if discarded.is_some() {
                     warn!(
                         &status,
                         target: LOG_TARGET,
@@ -368,10 +369,6 @@ impl Funder {
                         tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
                     info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
-                    // Remove the consumed deposit from memory after delivery is durably recorded.
-                    if let Some(nullifier) = deposit_nullifier {
-                        self.setup.wallet.remove_deposit(nullifier);
-                    }
                     miden_span_record!(funding.outcome = "committed" #[nonstandard]);
                     break Resolution::Committed;
                 },
@@ -401,11 +398,11 @@ impl Funder {
         Ok(resolution)
     }
 
-    /// Synchronizes the funding wallet to the current reference block, saves its deposit checkpoint,
-    /// and returns the chain state.
+    /// Synchronizes the funding wallet to the current reference block, stores the deposits found
+    /// since the last sync, and returns the chain state.
     ///
-    /// Saving before transaction selection ensures that every deposit used by a recorded attempt
-    /// can be recovered from the database.
+    /// Storing before transaction selection ensures that every deposit the worker selects is in the
+    /// database.
     #[miden_instrument(
         target = COMPONENT,
         name = "funding.read_chain_state",
@@ -422,23 +419,21 @@ impl Funder {
             .sync_to(&mut self.node.rpc_client(), reference_block)
             .await
             .context("failed to sync the funding wallet")?;
-        self.setup
+        let scan = self
+            .setup
             .wallet
             .apply(update)
             .context("failed to apply the funding wallet update")?;
 
-        // Save any checkpoint ahead of the last successful database write.
-        //
-        // The wallet can advance before a save fails. Tracking the persisted cursor separately
-        // ensures the next poll retries the save even if the chain tip is unchanged.
-        if self.setup.wallet.next_sync() != self.persisted_sync {
-            self.setup
-                .database
-                .save_deposit_checkpoint(self.setup.wallet.checkpoint())
-                .await
-                .context("failed to persist the deposit checkpoint")?;
-            self.persisted_sync = self.setup.wallet.next_sync();
-        }
+        // The cursor advances only after the scan is stored, so a failed write is retried by
+        // rescanning the same blocks on the next poll.
+        let next_sync = scan.next_sync;
+        self.setup
+            .database
+            .record_deposit_scan(next_sync, scan.deposits)
+            .await
+            .context("failed to store the deposit scan")?;
+        self.setup.wallet.complete_deposit_scan(next_sync);
 
         Ok(ChainState { reference_header, blockchain })
     }
@@ -507,15 +502,14 @@ struct Selection {
 }
 
 impl Selection {
-    /// Selects the largest deposit and the queued notes it can fund with the account balance.
+    /// Combines `deposit` with the queued notes it can fund with the account balance.
     fn choose(
-        deposits: &HashMap<Nullifier, UsdcxP2Id>,
+        deposit: Option<UsdcxP2Id>,
         queued: &VecDeque<UsdcxP2Id>,
         balance: u64,
         reserve: u64,
     ) -> Option<Self> {
-        let deposit = deposits.values().max_by_key(|deposit| deposit.amount());
-        let collected = deposit.map_or(0, UsdcxP2Id::amount);
+        let collected = deposit.as_ref().map_or(0, UsdcxP2Id::amount);
         let note_count =
             admit(queued.iter().map(UsdcxP2Id::amount), balance.saturating_add(collected), reserve);
         if note_count == 0 && collected <= reserve {
@@ -523,7 +517,7 @@ impl Selection {
         }
 
         Some(Self {
-            deposit: deposit.cloned(),
+            deposit,
             notes: queued.iter().take(note_count).cloned().collect(),
         })
     }
@@ -592,32 +586,18 @@ mod tests {
         UsdcxP2Id::from_note(note, fee_asset_id()).unwrap()
     }
 
-    fn deposit_pool(notes: impl IntoIterator<Item = UsdcxP2Id>) -> HashMap<Nullifier, UsdcxP2Id> {
-        notes.into_iter().map(|note| (note.nullifier(), note)).collect()
-    }
-
     #[test]
     fn a_deposit_without_payouts_must_be_worth_more_than_its_fee() {
-        let deposits = deposit_pool([note(RESERVE, 1), note(RESERVE, 2)]);
-        assert!(Selection::choose(&deposits, &VecDeque::new(), 0, RESERVE).is_none());
-        assert_eq!(deposits.len(), 2);
+        assert!(Selection::choose(Some(note(RESERVE, 1)), &VecDeque::new(), 0, RESERVE).is_none());
     }
 
     #[test]
-    fn combined_transaction_selects_only_the_largest_deposit() {
-        let largest = note(RESERVE + 2_000, 1);
-        let deposits = deposit_pool([note(RESERVE + 1_000, 2), largest.clone()]);
-        let queued = VecDeque::from([note(1_000, 3)]);
-
+    fn a_deposit_worth_more_than_its_fee_is_consumed_without_payouts() {
+        let deposit = note(RESERVE + 1, 1);
         assert_eq!(
-            Selection::choose(&deposits, &queued, 0, RESERVE),
-            Some(Selection {
-                deposit: Some(largest),
-                notes: queued.iter().cloned().collect()
-            })
+            Selection::choose(Some(deposit.clone()), &VecDeque::new(), 0, RESERVE),
+            Some(Selection { deposit: Some(deposit), notes: vec![] })
         );
-        assert_eq!(deposits.len(), 2);
-        assert_eq!(queued.len(), 1);
     }
 
     #[test]
@@ -625,7 +605,7 @@ mod tests {
         let payout = note(1_000, 2);
         let queued = VecDeque::from([payout.clone(), note(1, 3)]);
         assert_eq!(
-            Selection::choose(&HashMap::new(), &queued, RESERVE + 1_000, RESERVE),
+            Selection::choose(None, &queued, RESERVE + 1_000, RESERVE),
             Some(Selection { deposit: None, notes: vec![payout] })
         );
         assert_eq!(queued.len(), 2);
@@ -635,34 +615,14 @@ mod tests {
     fn a_small_deposit_can_fund_payouts_in_the_same_transaction() {
         let deposit = note(1_000, 1);
         let payout = note(1_000, 2);
-        let deposits = deposit_pool([deposit.clone()]);
         let queued = VecDeque::from([payout.clone()]);
         assert_eq!(
-            Selection::choose(&deposits, &queued, RESERVE, RESERVE),
+            Selection::choose(Some(deposit.clone()), &queued, RESERVE, RESERVE),
             Some(Selection {
                 deposit: Some(deposit),
                 notes: vec![payout]
             })
         );
-    }
-
-    #[test]
-    fn selection_keeps_notes_available_for_retry() {
-        let deposit = note(RESERVE + 1_000, 1);
-        let payout = note(1_000, 2);
-        let deposits = deposit_pool([deposit.clone()]);
-        let queued = VecDeque::from([payout.clone()]);
-        for _ in 0..2 {
-            assert_eq!(
-                Selection::choose(&deposits, &queued, 0, RESERVE),
-                Some(Selection {
-                    deposit: Some(deposit.clone()),
-                    notes: vec![payout.clone()]
-                })
-            );
-        }
-        assert_eq!(deposits, deposit_pool([deposit]));
-        assert_eq!(queued, VecDeque::from([payout]));
     }
 
     #[test]

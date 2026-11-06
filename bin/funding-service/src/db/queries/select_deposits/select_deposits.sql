@@ -1,1 +1,1 @@
-SELECT note FROM deposits ORDER BY nullifier;
+SELECT note FROM deposits ORDER BY amount DESC, nullifier;

@@ -241,19 +241,19 @@ impl FundingServiceConfig {
             .await
             .context("failed to read the chain state from the node")?;
         let chain_tip = initial_header.block_num();
-        // Restore deposit discovery from the last saved checkpoint.
-        let checkpoint = database
-            .deposit_checkpoint()
+        // Resume deposit discovery from the stored cursor.
+        let deposit_sync = database
+            .deposit_sync()
             .await
-            .context("failed to read the deposit checkpoint")?;
-        let checkpoint_block = checkpoint.next_sync;
-        let checkpoint_deposits = checkpoint.deposits.len();
-        if checkpoint_block > chain_tip + 1 {
+            .context("failed to read the deposit sync cursor")?;
+        let deposit_count =
+            database.deposit_count().await.context("failed to count the stored deposits")?;
+        if deposit_sync > chain_tip + 1 {
             warn!(
                 target: LOG_TARGET,
-                "The node's chain tip is behind the deposit checkpoint",
+                "The node's chain tip is behind the deposit sync cursor",
                 block.number = chain_tip,
-                deposit.checkpoint.block = checkpoint_block #[nonstandard]
+                deposit.sync.block = deposit_sync #[nonstandard]
             );
         }
         let wallet = FundingWallet::load_at(
@@ -262,7 +262,7 @@ impl FundingServiceConfig {
             secret_key,
             fee_asset_id,
             chain_tip,
-            checkpoint,
+            deposit_sync,
         )
         .await
         .context("failed to load the public funding account from the node")?;
@@ -297,8 +297,8 @@ impl FundingServiceConfig {
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),
             genesis.commitment = node.genesis_commitment(),
-            deposit.checkpoint.block = checkpoint_block #[nonstandard],
-            deposit.count = checkpoint_deposits,
+            deposit.sync.block = deposit_sync #[nonstandard],
+            deposit.count = deposit_count,
             funding_service.max_amount = self.max_amount,
             funding_service.max_notes_per_tx = self.max_notes_per_tx.get(),
             funding_service.tx_expiration_delta = self.tx_expiration_delta.get(),
