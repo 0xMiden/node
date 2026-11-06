@@ -10,6 +10,7 @@ use std::time::SystemTime;
 use anyhow::{Context, ensure};
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::{AssetId, FungibleAsset};
@@ -82,8 +83,8 @@ pub struct TransactionAttempt {
     pub transaction_id: TransactionId,
     pub reference_block: BlockNumber,
     pub expiration_block: BlockNumber,
-    /// The nullifier of the deposit consumed by the transaction, if any.
-    pub deposit_nullifier: Option<Nullifier>,
+    /// The nullifiers of the deposits consumed by the transaction, largest deposit first.
+    pub deposit_nullifiers: Vec<Nullifier>,
     pub note_ids: Vec<NoteId>,
 }
 
@@ -221,8 +222,8 @@ impl FundingDatabase {
             "invalid attempt block range"
         );
         ensure!(
-            !attempt.note_ids.is_empty() || attempt.deposit_nullifier.is_some(),
-            "a funding attempt must contain requests or a deposit"
+            !attempt.note_ids.is_empty() || !attempt.deposit_nullifiers.is_empty(),
+            "a funding attempt must contain requests or deposits"
         );
         self.writer
             .write("record funding transaction attempt", move |tx| {
@@ -232,6 +233,13 @@ impl FundingDatabase {
                         queries::assign_request_to_attempt(tx, note_id, attempt.transaction_id)?
                             == 1,
                         "the request is missing, already delivered, or part of an attempt"
+                    );
+                }
+                for nullifier in attempt.deposit_nullifiers {
+                    ensure!(
+                        queries::assign_deposit_to_attempt(tx, nullifier, attempt.transaction_id)?
+                            == 1,
+                        "the deposit is missing or part of an attempt"
                     );
                 }
                 Ok(())
@@ -244,23 +252,34 @@ impl FundingDatabase {
         Ok(self.reader.read("read active funding attempt", queries::select_attempt).await?)
     }
 
-    /// Removes a rejected or expired transaction so its requests can be retried.
-    pub async fn release_attempt(&self, transaction_id: TransactionId) -> anyhow::Result<()> {
+    /// Removes a rejected or expired transaction attempt so its requests and deposits can be
+    /// retried. Also removes the `discarded_deposits` in the same database transaction.
+    ///
+    /// Discard only deposits known to be unusable. Expiration leaves deposits unspent, so they
+    /// remain available for a later attempt.
+    pub async fn release_attempt(
+        &self,
+        transaction_id: TransactionId,
+        discarded_deposits: Vec<Nullifier>,
+    ) -> anyhow::Result<()> {
         self.writer
             .write("release funding transaction attempt", move |tx| {
                 if let Some(attempt) = queries::select_attempt(tx)? {
                     ensure!(attempt.transaction_id == transaction_id, "another attempt is active");
                     queries::delete_attempt(tx, transaction_id)?;
                 }
+                for nullifier in discarded_deposits {
+                    queries::delete_deposit(tx, nullifier)?;
+                }
                 Ok(())
             })
             .await
     }
 
-    /// Records delivery of the requests and removes the attempt.
+    /// Records delivery of the requests and removes the attempt and the deposits it consumed.
     ///
-    /// The caller must check that the transaction committed on chain. Both updates share a database
-    /// transaction so a restart cannot leave delivered requests waiting to be retried.
+    /// The caller must verify that the transaction committed on chain. A single database transaction
+    /// prevents a restart from retrying delivered requests or restoring the consumed deposit.
     pub async fn record_delivery(
         &self,
         notes: Vec<NoteId>,
@@ -301,10 +320,83 @@ impl FundingDatabase {
                     )?;
                 }
                 if attempt.is_some() {
+                    queries::delete_attempt_deposits(tx, transaction_id)?;
                     queries::delete_attempt(tx, transaction_id)?;
                 }
                 Ok(())
             })
             .await
+    }
+
+    /// Returns the first block to include in the next deposit scan.
+    pub async fn deposit_sync(&self) -> anyhow::Result<BlockNumber> {
+        self.reader
+            .read("read deposit sync cursor", |tx| {
+                queries::select_deposit_sync(tx)?.context("the deposit sync cursor is missing")
+            })
+            .await
+    }
+
+    /// Returns the number of stored deposits.
+    pub async fn deposit_count(&self) -> anyhow::Result<usize> {
+        let count = self.reader.read("count deposits", queries::count_deposits).await?;
+        usize::try_from(count).context("deposit count is negative")
+    }
+
+    /// Returns at most `limit` deposits not linked to an attempt, largest first.
+    pub async fn largest_deposits(&self, limit: NonZeroUsize) -> anyhow::Result<Vec<UsdcxP2Id>> {
+        let limit = i64::try_from(limit.get()).context("deposit limit exceeds i64")?;
+        let identity = self.identity;
+        Ok(self
+            .reader
+            .read("read largest deposits", move |tx| {
+                queries::select_largest_deposits(tx, limit, identity)
+            })
+            .await?)
+    }
+
+    /// Stores the deposits found by a scan and advances the scan cursor to `next_sync` in one
+    /// database transaction.
+    ///
+    /// `deposits` must hold the unspent deposits discovered before `next_sync` that are not yet
+    /// stored. Deposits already stored are kept unchanged, so repeating a scan whose result was
+    /// saved has no effect. An earlier cursor is rejected because a rescan could restore deposits
+    /// the service has since consumed.
+    pub async fn record_deposit_scan(
+        &self,
+        next_sync: BlockNumber,
+        deposits: Vec<UsdcxP2Id>,
+    ) -> anyhow::Result<()> {
+        let funding_account_id = self.identity.funding_account_id;
+        self.writer
+            .write("record deposit scan", move |tx| {
+                let stored = queries::select_deposit_sync(tx)?
+                    .context("the deposit sync cursor is missing")?;
+                ensure!(
+                    next_sync >= stored,
+                    "the deposit scan cannot move from block {stored} back to block {next_sync}",
+                );
+                queries::update_deposit_sync(tx, next_sync)?;
+                for deposit in &deposits {
+                    ensure!(
+                        deposit.target() == funding_account_id,
+                        "the deposit {} targets another account",
+                        deposit.note().id(),
+                    );
+                    queries::insert_deposit(tx, deposit)?;
+                }
+                Ok(())
+            })
+            .await
+    }
+
+    /// Returns every stored deposit, largest first.
+    #[cfg(test)]
+    pub async fn deposits(&self) -> anyhow::Result<Vec<UsdcxP2Id>> {
+        let identity = self.identity;
+        Ok(self
+            .reader
+            .read("read deposits", move |tx| queries::select_deposits(tx, identity))
+            .await?)
     }
 }

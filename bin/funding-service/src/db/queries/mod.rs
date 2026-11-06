@@ -5,6 +5,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::Context;
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::Row;
+use miden_node_utils::usdcx_p2id::UsdcxP2Id;
+use miden_protocol::note::Note;
 use miden_protocol::transaction::TransactionId;
 
 use crate::db::{DatabaseIdentity, Delivery, StoredRequest};
@@ -42,6 +44,38 @@ pub use assign_request_to_attempt::assign_request_to_attempt;
 mod delete_attempt;
 pub use delete_attempt::delete_attempt;
 
+mod select_deposit_sync;
+pub use select_deposit_sync::select_deposit_sync;
+
+mod update_deposit_sync;
+pub use update_deposit_sync::update_deposit_sync;
+
+#[cfg(test)]
+mod select_deposits;
+#[cfg(test)]
+pub use select_deposits::select_deposits;
+
+mod select_largest_deposits;
+pub use select_largest_deposits::select_largest_deposits;
+
+mod count_deposits;
+pub use count_deposits::count_deposits;
+
+mod insert_deposit;
+pub use insert_deposit::insert_deposit;
+
+mod delete_deposit;
+pub use delete_deposit::delete_deposit;
+
+mod assign_deposit_to_attempt;
+pub use assign_deposit_to_attempt::assign_deposit_to_attempt;
+
+mod select_attempt_deposits;
+pub use select_attempt_deposits::select_attempt_deposits;
+
+mod delete_attempt_deposits;
+pub use delete_attempt_deposits::delete_attempt_deposits;
+
 /// Reads a stored request, reconstructing its public P2ID note and optional delivery record.
 ///
 /// The sender and asset come from the database identity because they are shared by every request.
@@ -65,6 +99,22 @@ fn read_request(row: &Row<'_>, identity: DatabaseIdentity) -> Result<StoredReque
         accepted_at: read_timestamp(row, 4)?,
         delivery,
     })
+}
+
+/// Reads a stored deposit and checks that the funding account can consume it.
+///
+/// Stored deposits must target the funding account and hold only the native asset. Invalid rows
+/// produce an error because silently skipping a deposit would strand its assets.
+fn read_deposit(row: &Row<'_>, identity: DatabaseIdentity) -> Result<UsdcxP2Id, DatabaseError> {
+    let note: Note = row.get(0)?;
+    UsdcxP2Id::from_note(note, identity.fee_asset_id)
+        .filter(|deposit| deposit.target() == identity.funding_account_id)
+        .ok_or_else(|| {
+            DatabaseError::deserialization(
+                "deposit note",
+                std::io::Error::other("the funding account cannot consume the stored deposit"),
+            )
+        })
 }
 
 /// Encodes a local timestamp at the database's microsecond precision.
