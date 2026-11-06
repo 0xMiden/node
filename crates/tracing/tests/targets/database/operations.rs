@@ -23,3 +23,6 @@ pub fn configured() -> std::io::Result<()> {
 pub fn explicit_error() -> std::io::Result<()> {
     Err(std::io::Error::other("rpc unavailable"))
 }
+
+#[miden_node_tracing::instrument_v2(parent = None, name = "scoped_root")]
+pub fn root() {}

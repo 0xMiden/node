@@ -708,3 +708,30 @@ fn manual_spans_use_scoped_targets_and_preserve_levels_and_fields() {
     }
     assert_eq!(fields.get("account.id").as_deref(), Some("account"));
 }
+
+#[test]
+fn scoped_instrumentation_can_create_a_root_span_inside_an_entered_span() {
+    #[derive(Clone, Default)]
+    struct Roots(Arc<Mutex<Vec<(&'static str, bool)>>>);
+
+    impl<S: Subscriber> Layer<S> for Roots {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::Id,
+            _: Context<'_, S>,
+        ) {
+            if attrs.metadata().name() == "scoped_root" {
+                self.0.lock().unwrap().push((attrs.metadata().target(), attrs.is_root()));
+            }
+        }
+    }
+
+    let roots = Roots::default();
+    let subscriber = tracing_subscriber::registry().with(roots.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        let _parent = tracing::info_span!("caller").entered();
+        targets::database::root();
+    });
+    assert_eq!(*roots.0.lock().unwrap(), [("miden::storage::sqlite", true)]);
+}

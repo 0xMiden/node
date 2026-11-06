@@ -2,7 +2,7 @@ use std::num::NonZeroU32;
 
 use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_store::state::{State, TransactionInputs as StoreTransactionInputs};
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug_v2, instrument_v2};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -10,7 +10,6 @@ use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::ProvenTransaction;
 
 use crate::errors::{MempoolSubmissionError, StateConflict};
-use crate::{COMPONENT, LOG_TARGET};
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]
 /// needed to admit it to the mempool.
@@ -24,8 +23,7 @@ use crate::{COMPONENT, LOG_TARGET};
 ///
 /// Returns an error if the store query fails, or if the transaction creates a new account whose ID
 /// prefix already exists in the store.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "store.state.get_tx_inputs",
     err(level = "debug"),
     fields(
@@ -64,7 +62,7 @@ pub async fn get_tx_inputs(
 
     let tx_inputs = from_store_inputs(proven_tx.account_id(), store_inputs, *current_block_height);
 
-    debug!(target: LOG_TARGET, "Transaction inputs loaded");
+    debug_v2!("Transaction inputs loaded");
 
     Ok(tx_inputs)
 }
