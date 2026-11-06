@@ -5,8 +5,8 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use super::read_deposit;
 use crate::db::DatabaseIdentity;
 
-/// Loads at most `limit` stored deposits, largest first, validating that the funding account can
-/// consume each one.
+/// Loads at most `limit` deposits not linked to an attempt, largest first, validating that the
+/// funding account can consume each one.
 pub fn select_largest_deposits(
     tx: &ReadTx<'_>,
     limit: i64,

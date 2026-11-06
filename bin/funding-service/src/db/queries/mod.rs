@@ -67,6 +67,15 @@ pub use insert_deposit::insert_deposit;
 mod delete_deposit;
 pub use delete_deposit::delete_deposit;
 
+mod assign_deposit_to_attempt;
+pub use assign_deposit_to_attempt::assign_deposit_to_attempt;
+
+mod select_attempt_deposits;
+pub use select_attempt_deposits::select_attempt_deposits;
+
+mod delete_attempt_deposits;
+pub use delete_attempt_deposits::delete_attempt_deposits;
+
 /// Reads a stored request, reconstructing its public P2ID note and optional delivery record.
 ///
 /// The sender and asset come from the database identity because they are shared by every request.

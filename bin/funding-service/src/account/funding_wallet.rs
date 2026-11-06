@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -29,6 +29,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::note::Nullifier;
 use miden_standards::account::auth::AuthSingleSig;
 
 use crate::COMPONENT;
@@ -233,6 +234,15 @@ impl FundingWallet {
             next_sync: update.block_num + 1,
             deposits: update.deposits,
         })
+    }
+
+    /// Returns the given deposits whose nullifiers were recorded on chain by block `tip`.
+    pub async fn spent_deposits(
+        rpc_client: &mut RpcClient,
+        nullifiers: &[Nullifier],
+        tip: BlockNumber,
+    ) -> Result<HashSet<Nullifier>> {
+        spent_nullifiers(rpc_client, nullifiers, BlockNumber::GENESIS, tip).await
     }
 
     /// Advances the deposit cursor past a scan whose deposits are stored.

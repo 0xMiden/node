@@ -29,25 +29,25 @@ A single worker owns the account and submits one transaction at a time. It loads
 The worker checks for work immediately on startup and waits `--poll-interval` between attempts. If an unfinished transaction is recorded, it resolves that attempt before the next check. Otherwise, it follows these steps:
 
 1. Load the oldest pending requests. Read the chain state and sync the wallet, including deposit discovery and spent-note checks, then publish the synchronized balance and fee.
-2. Select at most one deposit and an affordable prefix of requests, then execute and prove the transaction.
+2. Select up to `--max-deposits-per-tx` of the largest stored deposits and an affordable prefix of requests, then execute and prove the transaction.
 3. Record the transaction attempt and link its requests in one database transaction before submitting it to the node.
 4. Resolve the outcome. On commitment, record delivery and remove the attempt atomically. On rejection or expiration, remove the attempt and leave its requests pending for retry.
 
 ### Recovering an unfinished transaction
 
-The database holds at most one transaction attempt. It records the transaction ID, reference and expiration blocks, the selected deposit's nullifier if any, and links to its funding requests. Requests linked to an attempt are excluded from pending batches until that attempt is resolved.
+The database holds at most one transaction attempt. It records the transaction ID, reference and expiration blocks, and links to its deposits and funding requests. Deposits and requests linked to an attempt are excluded from selection until that attempt is resolved.
 
 The transaction payload is not retained. After a restart or an uncertain submission result, the worker polls `SyncTransactions` for the recorded ID. Each poll checks every page from the block after the reference block through the earlier of the current tip and expiration block. It reports expiration only after checking that range for commitment. RPC failures delay resolution; they do not release requests for retry.
 
 A known commitment is kept in memory while its delivery write is retried. The worker does not start another transaction until that write succeeds. Recording delivery and removing the attempt share a database transaction, so a restart cannot leave a partially recorded batch.
 
-A crash after recording an attempt but before submission can delay its requests until expiration, because recovery cannot rebroadcast the transaction. Errors known to occur before submission, such as failure to fetch the encryption key or seal the inputs, release the attempt immediately. A definite node rejection also releases it. A state-conflict rejection with error byte `2` discards the selected deposit and retains all payouts. A failed RPC submission clears the cached encryption key for the next submission.
+A crash after recording an attempt but before submission can delay its requests until expiration, because recovery cannot rebroadcast the transaction. Errors known to occur before submission, such as failure to fetch the encryption key or seal the inputs, release the attempt immediately. A definite node rejection also releases it. A state-conflict rejection with error byte `2` discards the deposits it is blamed on, described under [Deposits](#deposits), and retains all payouts. A failed RPC submission clears the cached encryption key for the next submission.
 
 Preparation failures, rejections, and expiration preserve each request's note ID across retries. Once an attempt is resolved, the worker synchronizes the wallet before preparing the next transaction.
 
 ### Deposits and payouts in one transaction
 
-The worker selects at most one deposit and pending funding notes together. It uses the account balance plus that deposit to admit payouts. A transaction can consume a deposit, create funding notes, or do both.
+The worker selects deposits and pending funding notes together. It uses the account balance plus the selected deposits to admit payouts. A transaction can consume deposits, create funding notes, or do both.
 
 Input assets enter the vault before the transaction creates funding notes and the kernel withdraws the fee. Deposits can therefore fund payouts and the fee in the same transaction when the account balance is zero. The combined transaction pays one fee.
 
@@ -57,7 +57,7 @@ The native asset is callback-enabled: the kernel loads the issuing faucet in a f
 
 ## Admission
 
-The worker adds the selected deposit to the account balance and holds back the worst-case fee of one transaction. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
+The worker adds the selected deposits to the account balance and holds back the worst-case fee of one transaction. It then admits queued notes in order and stops at the first note which does not fit, which keeps the queue first-come-first-served and stops a stream of small notes from starving a large one.
 
 A note which does not fit remains pending in SQLite. The next attempt reloads pending requests in acceptance order and refreshes the balance and deposits before selecting payouts. Requests that arrive during an attempt are considered on a later attempt.
 
@@ -73,10 +73,10 @@ Each sync collects the deposits created from the scan cursor through its referen
 
 The pagination cursor and discovered notes remain local until synchronization succeeds. The worker then applies the account state and, in one database transaction, inserts the new deposits and advances the stored cursor. Only after that write succeeds does the wallet's cursor move, so a failed write is retried on the next poll by scanning the same range again, even if the chain tip has not moved. Inserting a deposit that is already stored has no effect. The write happens before the worker selects a transaction, so every deposit it can select is in the database.
 
-Recording a delivery deletes the consumed deposit, and releasing an attempt whose deposit the node rejected deletes that deposit, each in the same transaction as the attempt update. An expired attempt keeps its deposit, which is still unspent.
+Recording a delivery deletes the consumed deposits, and releasing an attempt deletes the deposits the node rejected, each in the same transaction as the attempt update. Releasing an attempt returns its other deposits to the pool. An expired attempt keeps its deposits, which are still unspent.
 
-A stored deposit can still turn out to be spent, for example when another holder of the signing key consumed it, or a note ID appears on chain again after the note was spent in an earlier block. The worker expects the node to reject this transaction with `INVALID_ARGUMENT` and error byte `2`. The transaction has at most one deposit, so the worker discards that deposit and retains the payouts. This relies on one writer for the funding account and outputs constructed by the service. P2ID deposits have no reclaim path.
+A stored deposit can still turn out to be spent, for example when another holder of the signing key consumed it, or a note ID appears on chain again after the note was spent in an earlier block. The worker expects the node to reject this transaction with `INVALID_ARGUMENT` and error byte `2`. It then looks up the transaction's deposit nullifiers from genesis to the committed tip and discards the spent deposits, retaining the payouts. If none is spent and the transaction had a single deposit, that deposit is discarded, because with one writer for the funding account and outputs constructed by the service it is the only input that can conflict. If none of several deposits is spent, all are kept and the rejection is reported; a conflict with a transaction still in the mempool is resolved once that transaction commits. P2ID deposits have no reclaim path.
 
-One transaction consumes at most one deposit. The worker selects the largest available deposit.
+One transaction consumes up to `--max-deposits-per-tx` deposits, largest first. The service is also the batch fee collector, so it receives a deposit for every batch; consuming many deposits in one transaction shares a single fee between them, which keeps the pool from growing faster than it drains.
 
 A transaction which only consumes deposits is submitted only when the deposits are worth more than the fee. Anyone can send a note which holds a single base unit, and consuming it on its own would cost the account more than it brings in.

@@ -1,1 +1,1 @@
-SELECT note FROM deposits ORDER BY amount DESC, nullifier LIMIT ?1;
+SELECT note FROM deposits WHERE attempt_id IS NULL ORDER BY amount DESC, nullifier LIMIT ?1;

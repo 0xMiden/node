@@ -493,6 +493,39 @@ mod tests {
         Ok(())
     }
 
+    /// Several deposits are consumed together and pay a single fee.
+    #[tokio::test]
+    async fn one_transaction_consumes_several_deposits_for_one_fee() -> Result<()> {
+        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([37u32; 4]));
+        let deposits: Vec<_> =
+            (1..=8).map(|serial| deposit_note(&fixture, 1_000_000, serial)).collect();
+        let collected = 8 * 1_000_000;
+
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
+        let executed_tx = execute(inputs, deposits.clone(), Vec::new(), &mut rng).await?;
+
+        let consumed: Vec<_> = executed_tx.input_notes().iter().map(InputNote::id).collect();
+        assert_eq!(consumed.len(), deposits.len());
+        for deposit in &deposits {
+            assert!(consumed.contains(&deposit.id()), "deposit {} is not consumed", deposit.id());
+        }
+        let fee_notes = executed_tx
+            .output_notes()
+            .iter()
+            .filter(|note| {
+                note.recipient()
+                    .is_some_and(|recipient| recipient.script().root() == TxFeeNote::script_root())
+            })
+            .count();
+        assert_eq!(fee_notes, 1, "the deposits must share one fee");
+
+        let balance = balance_after(&fixture, &executed_tx)?;
+        assert!(balance > 0 && balance < collected, "unexpected balance {balance}");
+
+        Ok(())
+    }
+
     /// The native asset is callback-enabled, so moving it loads the issuing faucet in a foreign
     /// context. Without the faucet the kernel cannot start that context.
     #[tokio::test]

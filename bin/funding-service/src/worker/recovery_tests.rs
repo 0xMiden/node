@@ -50,6 +50,7 @@ impl FunderSetup {
                     .unwrap(),
                 config: WorkerConfig {
                     max_notes_per_tx: 16.try_into().unwrap(),
+                    max_deposits_per_tx: 16.try_into().unwrap(),
                     expiration_delta: 50.try_into().unwrap(),
                     poll_interval: Duration::from_millis(1),
                 },
@@ -83,16 +84,12 @@ impl FunderSetup {
 }
 
 impl Funder {
-    async fn reserve_attempt(
-        &self,
-        notes: &[UsdcxP2Id],
-        deposit: Option<&Note>,
-    ) -> TransactionAttempt {
+    async fn reserve_attempt(&self, notes: &[UsdcxP2Id], deposits: &[Note]) -> TransactionAttempt {
         let attempt = TransactionAttempt {
             transaction_id: TransactionId::from_raw(Word::empty()),
             reference_block: 10.into(),
             expiration_block: 20.into(),
-            deposit_nullifier: deposit.map(Note::nullifier),
+            deposit_nullifiers: deposits.iter().map(Note::nullifier).collect(),
             note_ids: notes.iter().map(|note| note.note().id()).collect(),
         };
         self.setup.database.start_attempt(attempt.clone()).await.unwrap();
@@ -204,7 +201,7 @@ async fn a_failure_before_submission_releases_requests_for_retry() {
         .submit(
             inputs,
             Selection {
-                deposit: None,
+                deposits: vec![],
                 notes: vec![payout.clone()],
             },
         )
@@ -237,7 +234,9 @@ async fn state_conflict_discards_only_the_selected_deposit() {
         .unwrap();
     let status =
         tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
-    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+    let attempt = funder
+        .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+        .await;
     funder
         .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
         .await
@@ -251,6 +250,69 @@ async fn state_conflict_discards_only_the_selected_deposit() {
     let span = telemetry.span("funding.resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("deposit_discarded".into()));
     assert!(matches!(span.status, Status::Error { .. }));
+}
+
+/// Rejects an attempt holding `selected` with a state conflict after `spent` were spent on chain.
+async fn reject_with_state_conflict(
+    funder: &mut Funder,
+    server: &TestServer,
+    selected: &[Note],
+    spent: &[&Note],
+) -> Result<Resolution> {
+    server
+        .chain
+        .lock()
+        .unwrap()
+        .spent
+        .extend(spent.iter().map(|note| (15, note.nullifier())));
+    let status =
+        tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
+    let attempt = funder.reserve_attempt(&[], selected).await;
+    funder.resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status))).await
+}
+
+#[tokio::test]
+async fn state_conflict_discards_only_the_spent_deposits_of_a_batch() {
+    let (_directory, setup) = FunderSetup::fixture().await;
+    let deposits: Vec<_> = (1..=4).map(|serial| setup.deposit(serial)).collect();
+    let (mut funder, server) = with_deposits(setup, TestChain::new(20), &deposits).await;
+
+    let resolution =
+        reject_with_state_conflict(&mut funder, &server, &deposits[..3], &[&deposits[1]])
+            .await
+            .unwrap();
+
+    assert!(resolution == Resolution::DepositDiscarded);
+    assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        [&deposits[0], &deposits[2], &deposits[3]]
+            .into_iter()
+            .map(|note| (note.nullifier(), note.clone()))
+            .collect::<HashMap<_, _>>()
+    );
+}
+
+#[tokio::test]
+async fn state_conflict_keeps_a_batch_of_unspent_deposits() {
+    let (_directory, setup) = FunderSetup::fixture().await;
+    let deposits: Vec<_> = (1..=2).map(|serial| setup.deposit(serial)).collect();
+    let (mut funder, server) = with_deposits(setup, TestChain::new(20), &deposits).await;
+
+    assert!(reject_with_state_conflict(&mut funder, &server, &deposits, &[]).await.is_err());
+
+    assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
+    assert_eq!(funder.setup.database.deposit_count().await.unwrap(), 2);
+    assert_eq!(
+        funder
+            .setup
+            .database
+            .largest_deposits(NonZeroUsize::new(10).unwrap())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -270,7 +332,9 @@ async fn other_rejections_preserve_notes() {
             .unwrap();
         let status =
             tonic::Status::with_details(tonic::Code::InvalidArgument, "rejected", details.into());
-        let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+        let attempt = funder
+            .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+            .await;
         assert!(
             funder
                 .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
@@ -330,8 +394,9 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             } else {
                 SubmissionOutcome::Unknown(tonic::Status::unavailable("connection lost"))
             };
-            let attempt =
-                funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+            let attempt = funder
+                .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+                .await;
             funder.resolve_attempt(attempt, Some(outcome)).await.unwrap();
             assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
 
@@ -530,7 +595,7 @@ async fn a_restarted_worker_waits_for_the_recorded_attempt_before_retrying_reque
         transaction_id: TransactionId::from_raw(Word::empty()),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: None,
+        deposit_nullifiers: vec![],
         note_ids: vec![payout.note().id()],
     };
     setup.database.start_attempt(attempt.clone()).await.unwrap();
@@ -619,7 +684,7 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
     chain.transactions.push((19, setup.wallet.account_id(), transaction_id));
     let server = TestServer::start(chain).await;
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), None).await;
+    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), &[]).await;
     let (writer, _reader) =
         miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
     writer
@@ -674,7 +739,7 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
     chain.unavailable_for = Some(("SyncTransactions", failures));
     let server = TestServer::start(chain).await;
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    let attempt = funder.reserve_attempt(&[payout], None).await;
+    let attempt = funder.reserve_attempt(&[payout], &[]).await;
     let (telemetry, _guard) = Telemetry::capture();
     funder
         .resolve_attempt(attempt, Some(SubmissionOutcome::Accepted))

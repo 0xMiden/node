@@ -114,7 +114,7 @@ async fn persisted_requests_reopen_with_the_exact_note_and_acceptance_order() {
         transaction_id: transaction(1),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: None,
+        deposit_nullifiers: vec![],
         note_ids: vec![first.note.id(), second.note.id()],
     };
     database.start_attempt(attempt.clone()).await.unwrap();
@@ -246,11 +246,13 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
     let first = store_request(&database, 1).await;
     let second = store_request(&database, 2).await;
     let waiting = store_request(&database, 3).await;
+    let (held, later) = (deposit(4), deposit(5));
+    save(&database, 11, &[&held, &later]).await;
     let mut attempt = TransactionAttempt {
         transaction_id: transaction(1),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: Some(Nullifier::from_raw(Word::from([4u32; 4]))),
+        deposit_nullifiers: vec![held.nullifier()],
         note_ids: vec![first.note.id(), note(4).note().id()],
     };
     assert!(database.start_attempt(attempt.clone()).await.is_err());
@@ -269,7 +271,7 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
         vec![waiting.clone()]
     );
     assert!(database.start_attempt(attempt.clone()).await.is_err());
-    assert!(database.release_attempt(transaction(2), None).await.is_err());
+    assert!(database.release_attempt(transaction(2), vec![]).await.is_err());
 
     database
         .writer
@@ -322,9 +324,10 @@ async fn attempts_hold_requests_until_delivery_or_release_and_failed_writes_leav
     );
 
     attempt.transaction_id = transaction(2);
+    attempt.deposit_nullifiers = vec![later.nullifier()];
     attempt.note_ids = vec![waiting.note.id()];
     database.start_attempt(attempt.clone()).await.unwrap();
-    database.release_attempt(attempt.transaction_id, None).await.unwrap();
+    database.release_attempt(attempt.transaction_id, vec![]).await.unwrap();
     assert!(database.active_attempt().await.unwrap().is_none());
     assert_eq!(database.pending_requests(3.try_into().unwrap()).await.unwrap(), vec![waiting]);
 
@@ -466,7 +469,7 @@ async fn acknowledged_writes_survive_abrupt_process_exit() {
                 transaction_id: transaction(1),
                 reference_block: 10.into(),
                 expiration_block: 20.into(),
-                deposit_nullifier: None,
+                deposit_nullifiers: vec![],
                 note_ids: vec![note(1).note().id()],
             })
             .await
@@ -658,7 +661,7 @@ async fn the_largest_deposits_are_returned_first_up_to_the_limit() {
 }
 
 #[tokio::test]
-async fn delivery_removes_the_consumed_deposit_together_with_the_attempt() {
+async fn delivery_removes_the_consumed_deposits_together_with_the_attempt() {
     let (_dir, database) = database().await;
     let request = store_request(&database, 1).await;
     let (consumed, other) = (deposit(1), deposit(2));
@@ -667,7 +670,7 @@ async fn delivery_removes_the_consumed_deposit_together_with_the_attempt() {
         transaction_id: transaction(1),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: Some(consumed.nullifier()),
+        deposit_nullifiers: vec![consumed.nullifier()],
         note_ids: vec![request.note.id()],
     };
     database.start_attempt(attempt.clone()).await.unwrap();
@@ -713,7 +716,7 @@ async fn delivery_removes_the_consumed_deposit_together_with_the_attempt() {
     database
         .start_attempt(TransactionAttempt {
             transaction_id: transaction(2),
-            deposit_nullifier: None,
+            deposit_nullifiers: vec![],
             note_ids: vec![payout.note.id()],
             ..attempt
         })
@@ -727,6 +730,56 @@ async fn delivery_removes_the_consumed_deposit_together_with_the_attempt() {
 }
 
 #[tokio::test]
+async fn deposits_in_an_attempt_are_unavailable_until_it_is_released() {
+    let (_dir, database) = database().await;
+    let funder = identity().funding_account_id;
+    let (small, large, medium) = (
+        note_for(funder, 1_000, 1),
+        note_for(funder, 3_000, 2),
+        note_for(funder, 2_000, 3),
+    );
+    save(&database, 11, &[&small, &large, &medium]).await;
+    let attempt = TransactionAttempt {
+        transaction_id: transaction(1),
+        reference_block: 10.into(),
+        expiration_block: 20.into(),
+        deposit_nullifiers: vec![large.nullifier(), small.nullifier()],
+        note_ids: vec![],
+    };
+    database.start_attempt(attempt.clone()).await.unwrap();
+    assert_eq!(database.active_attempt().await.unwrap(), Some(attempt.clone()));
+    assert_eq!(
+        database.largest_deposits(NonZeroUsize::new(10).unwrap()).await.unwrap(),
+        vec![medium.clone()]
+    );
+
+    // An attempt cannot hold a deposit twice or a deposit that is not stored.
+    database.release_attempt(attempt.transaction_id, vec![]).await.unwrap();
+    let mut invalid = attempt.clone();
+    invalid.deposit_nullifiers = vec![medium.nullifier(), medium.nullifier()];
+    assert!(database.start_attempt(invalid.clone()).await.is_err());
+    invalid.deposit_nullifiers = vec![medium.nullifier(), deposit(9).nullifier()];
+    assert!(database.start_attempt(invalid).await.is_err());
+    assert!(database.active_attempt().await.unwrap().is_none());
+    assert_eq!(database.deposit_count().await.unwrap(), 3);
+    assert_eq!(
+        database.largest_deposits(NonZeroUsize::new(10).unwrap()).await.unwrap().len(),
+        3
+    );
+
+    // Releasing an attempt returns its deposits except the discarded ones.
+    database.start_attempt(attempt.clone()).await.unwrap();
+    database
+        .release_attempt(attempt.transaction_id, vec![small.nullifier()])
+        .await
+        .unwrap();
+    assert_eq!(
+        database.largest_deposits(NonZeroUsize::new(10).unwrap()).await.unwrap(),
+        vec![large, medium]
+    );
+}
+
+#[tokio::test]
 async fn releasing_an_attempt_keeps_its_deposit_unless_the_node_rejected_it() {
     let (_dir, database) = database().await;
     let selected = deposit(1);
@@ -735,17 +788,17 @@ async fn releasing_an_attempt_keeps_its_deposit_unless_the_node_rejected_it() {
         transaction_id: transaction(1),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: Some(selected.nullifier()),
+        deposit_nullifiers: vec![selected.nullifier()],
         note_ids: vec![],
     };
 
     database.start_attempt(attempt.clone()).await.unwrap();
-    database.release_attempt(attempt.transaction_id, None).await.unwrap();
+    database.release_attempt(attempt.transaction_id, vec![]).await.unwrap();
     assert_eq!(contents(&database).await, (11.into(), deposits_of(&[&selected])));
 
     database.start_attempt(attempt.clone()).await.unwrap();
     database
-        .release_attempt(attempt.transaction_id, Some(selected.nullifier()))
+        .release_attempt(attempt.transaction_id, vec![selected.nullifier()])
         .await
         .unwrap();
     assert!(database.active_attempt().await.unwrap().is_none());
