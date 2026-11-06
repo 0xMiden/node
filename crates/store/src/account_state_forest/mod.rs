@@ -13,7 +13,7 @@ use miden_node_proto::domain::account::{
     AccountVaultDetails,
     StorageMapEntries,
 };
-use miden_node_tracing::{ErrorReport, instrument_v2, trace};
+use miden_node_tracing::{ErrorReport, instrument_v2, trace_v2};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::{
     AccountId,
@@ -864,8 +864,7 @@ impl<B: Backend> AccountStateForest<B> {
         for patch in &account_patches {
             self.cache_hashed_keys_from_patch(patch);
 
-            trace!(
-                target: crate::LOG_TARGET,
+            trace_v2!(
                 "Updated forest with account patch",
                 account.id = patch.id(),
                 block.number = block_num

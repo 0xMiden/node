@@ -15,7 +15,7 @@ The stdout filter is selected from the first non-empty value in this order:
 
 1. `MIDEN_STDOUT_FILTER`
 2. `RUST_LOG`
-3. `info,user=debug` (default)
+3. `info,user=debug,miden::storage=debug,miden_prover=warn` (default)
 
 `MIDEN_STDOUT_FILTER` uses the
 [`tracing_subscriber` filter syntax](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html).
@@ -32,7 +32,7 @@ For example, keep third-party and internal output at `warn`, show user-facing ev
 events:
 
 ```bash
-MIDEN_STDOUT_FILTER='warn,user=info,user::miden-rpc=debug' \
+MIDEN_STDOUT_FILTER='warn,user=info,miden::storage=info,user::miden-rpc=debug' \
 miden-node full ...
 ```
 
@@ -46,7 +46,7 @@ To configure a container, pass the filter as an environment variable:
 
 ```bash
 docker run --rm \
-  -e MIDEN_STDOUT_FILTER='warn,user=info,user::miden-rpc=debug' \
+  -e MIDEN_STDOUT_FILTER='warn,user=info,miden::storage=info,user::miden-rpc=debug' \
   ghcr.io/0xmiden/miden-node:<release-tag> \
   miden-node full ...
 ```
@@ -55,7 +55,7 @@ For systemd, set the same value in the service unit or an environment file, then
 
 ```ini
 [Service]
-Environment="MIDEN_STDOUT_FILTER=warn,user=info,user::miden-rpc=debug"
+Environment="MIDEN_STDOUT_FILTER=warn,user=info,miden::storage=info,user::miden-rpc=debug"
 ```
 
 `RUST_LOG` is a compatibility fallback. Prefer `MIDEN_STDOUT_FILTER` when configuring stdout independently from
@@ -63,20 +63,20 @@ OpenTelemetry.
 
 ## User-facing targets
 
-The `user::*` targets contain events intended for operators. They are enabled at `debug` by the default stdout filter.
-The compact stdout format does not print the target name, but the filter still matches it.
+Operator events use `user::*` targets and the `miden::storage` category. The default stdout filter enables both at
+`debug`. The compact stdout format does not print the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
-use the `debug` level, even when they are user-visible. The default `info,user=debug` stdout filter keeps production
-events at `info` while still printing user-visible `debug` events.
+use the `debug` level, even when they are user-visible. The default stdout filter prints operator and storage `debug`
+events, keeps other targets at `info`, and limits the `miden_prover` dependency to `warn`.
 
 | Target                        | Events                                                             |
 | ----------------------------- | ------------------------------------------------------------------ |
 | `user::miden-node`            | Node command startup, bootstrap, and recovery                      |
 | `user::miden-rpc`             | Public RPC requests, subscriptions, readiness, and submissions     |
 | `user::miden-block-producer`  | Sequencing, batches, blocks, mempool activity, and synchronization |
-| `user::miden-store`           | Persistence and account, note, and storage lifecycle events        |
+| `miden::storage`              | Persistence and account, note, and storage lifecycle events        |
 | `user::miden-validator`       | Validator startup, bootstrap, validation, and block signing        |
 | `user::miden-ntx-builder`     | Network transaction construction and account actor activity        |
 | `user::miden-prover`          | Remote prover lifecycle events                                     |
@@ -84,7 +84,7 @@ events at `info` while still printing user-visible `debug` events.
 | `user::miden-funding-service` | Funding service readiness, funding transactions, and note commits  |
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
-`user::miden-rpc`, `user::miden-block-producer`, and `user::miden-store` events.
+`user::miden-rpc`, `user::miden-block-producer`, and `miden::storage` events.
 
 ## OpenTelemetry filter
 
@@ -98,8 +98,8 @@ non-empty value. Its filter is selected independently from the first non-empty v
 For example, retain debug-level user-facing events in the tracing backend while keeping stdout quieter:
 
 ```bash
-MIDEN_STDOUT_FILTER='warn,user=info' \
-MIDEN_OTEL_FILTER='info,user=debug' \
+MIDEN_STDOUT_FILTER='warn,user=info,miden::storage=info' \
+MIDEN_OTEL_FILTER='info,user=debug,miden::storage=debug' \
 OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317 \
 miden-node full ...
 ```
@@ -113,13 +113,13 @@ Start with a narrow target instead of enabling `trace` globally:
 
 ```bash
 # RPC request and subscription details
-MIDEN_STDOUT_FILTER='info,user=debug,user::miden-rpc=trace' miden-node full ...
+MIDEN_STDOUT_FILTER='info,user=debug,miden::storage=debug,user::miden-rpc=trace' miden-node full ...
 
 # Block production and mempool details
 MIDEN_STDOUT_FILTER='info,user::miden-block-producer=debug' miden-node sequencer ...
 
 # Store lifecycle and persistence details
-MIDEN_STDOUT_FILTER='info,user::miden-store=debug' miden-node full ...
+MIDEN_STDOUT_FILTER='info,miden::storage=debug' miden-node full ...
 ```
 
 Filters are read only during process startup. Restart the service after changing an environment variable.

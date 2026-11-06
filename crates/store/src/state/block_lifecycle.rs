@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use miden_node_tracing::{debug, instrument_v2};
+use miden_node_tracing::{debug_v2, instrument_v2};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -12,8 +12,6 @@ use miden_protocol::account::{
 use miden_protocol::block::{BlockBody, BlockNumber};
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
-
-use crate::LOG_TARGET;
 
 /// User-facing lifecycle information derived from a block before it is committed.
 ///
@@ -87,8 +85,7 @@ impl BlockLifecycle {
     #[instrument_v2(name = "block_lifecycle.emit")]
     pub(super) fn emit(self, resolved_note_ids: &BTreeMap<Nullifier, NoteId>) {
         for account in self.registered_accounts {
-            debug!(
-                target: LOG_TARGET,
+            debug_v2!(
                 "Account registered",
                 account.id = account.account_id,
                 block.number = self.block_num,
@@ -97,8 +94,7 @@ impl BlockLifecycle {
         }
 
         for note in self.created_notes {
-            debug!(
-                target: LOG_TARGET,
+            debug_v2!(
                 "Note created",
                 note.id = note.note_id,
                 note.sender = note.sender,
@@ -110,8 +106,7 @@ impl BlockLifecycle {
 
         for note in self.consumed_notes {
             let note_id = note.note_id.or_else(|| resolved_note_ids.get(&note.nullifier).copied());
-            debug!(
-                target: LOG_TARGET,
+            debug_v2!(
                 "Note consumed",
                 note.id = note_id,
                 note.id_resolved = note_id.is_some(),
@@ -129,7 +124,7 @@ impl BlockLifecycle {
 
 /// Returns whether any subscriber is interested in user-facing lifecycle events.
 pub(super) fn lifecycle_events_enabled() -> bool {
-    miden_node_tracing::enabled!(target: LOG_TARGET, miden_node_tracing::Level::DEBUG)
+    miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG)
 }
 
 struct RegisteredAccount {
@@ -181,8 +176,7 @@ impl StorageChange {
                 operation,
                 value: Some(value),
             } => {
-                debug!(
-                    target: LOG_TARGET,
+                debug_v2!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -198,8 +192,7 @@ impl StorageChange {
                 operation,
                 value: None,
             } => {
-                debug!(
-                    target: LOG_TARGET,
+                debug_v2!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -215,8 +208,7 @@ impl StorageChange {
                 key,
                 value,
             } => {
-                debug!(
-                    target: LOG_TARGET,
+                debug_v2!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -235,8 +227,7 @@ impl StorageChange {
                 operation,
                 entries_count,
             } => {
-                debug!(
-                    target: LOG_TARGET,
+                debug_v2!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -348,6 +339,25 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn lifecycle_event_collection_follows_the_storage_filter() {
+        use tracing_subscriber::util::SubscriberInitExt;
+
+        for (filter, expected) in [
+            ("off,miden::storage=debug", true),
+            ("off,miden::storage=info", false),
+            ("off,miden::storage::sqlite=debug", false),
+            ("off,user::miden-store=debug", false),
+        ] {
+            let _subscriber = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_test_writer()
+                .finish()
+                .set_default();
+            assert_eq!(lifecycle_events_enabled(), expected, "{filter}");
+        }
+    }
 
     #[test]
     fn extracts_account_and_note_lifecycle_from_transaction_headers() {
