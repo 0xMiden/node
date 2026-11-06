@@ -41,8 +41,8 @@ empty strings and duplicates are rejected. Keep the file private and give each m
 
 The monitor registers its wallet before requesting funding or submitting transactions. Its network counter account does
 not require registration. Each fresh pair consumes one code, so 100 unused codes support at most 100 pairs. Registration
-retries retain the same accounts and code when a response is uncertain, and a failure after registration, during funding or
-deployment, can consume codes without producing a usable pair. Registration's automatic funding does not replace the
+retries retain the same accounts and code when a response is uncertain, and a failure after registration, during funding
+or deployment, can consume codes without producing a usable pair. Registration's automatic funding does not replace the
 monitor's configured funding service.
 
 After a restart, the monitor tries codes in file order and skips any that registration reports as unknown or already
