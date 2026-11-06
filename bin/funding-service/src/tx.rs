@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{RpcClient, UsdcxFaucet};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument_v2, miden_span_record};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::BlockHeader;
@@ -26,7 +26,6 @@ use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransacti
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
 
-use crate::COMPONENT;
 use crate::data_store::InMemoryDataStore;
 
 // TRANSACTION EXECUTION
@@ -53,8 +52,7 @@ pub struct ExecutionInputs {
 }
 
 /// Executes one transaction which consumes `deposits` and creates `outputs`.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "funding.execute",
     fields(
         account.id = inputs.funder.id(),
@@ -412,7 +410,7 @@ mod tests {
 
         let (telemetry, _guard) = Telemetry::capture();
         let result = Box::pin(prover.prove(executed))
-            .instrument(miden_node_tracing::info_span!("test_transaction"))
+            .instrument(miden_node_tracing::info_span_v2!("test_transaction"))
             .await;
 
         assert!(result.is_err(), "a remote prover failure must not be proven in process");

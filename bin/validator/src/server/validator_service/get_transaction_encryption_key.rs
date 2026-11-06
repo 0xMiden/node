@@ -1,8 +1,7 @@
 use miden_node_proto::generated as grpc;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 
 use super::ValidatorService;
-use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::GetTransactionEncryptionKey
@@ -23,10 +22,7 @@ impl grpc::server::miden_validator_v1_validator_service::GetTransactionEncryptio
         Ok(grpc::miden::validator::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "get_transaction_encryption_key",
-    )]
+    #[instrument_v2(name = "get_transaction_encryption_key")]
     async fn handle(
         &self,
         _input: Self::Input,

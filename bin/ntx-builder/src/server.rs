@@ -4,14 +4,13 @@ use anyhow::Context;
 use miden_node_proto::server::miden_ntx_builder_v1_network_transaction_builder_service;
 use miden_node_proto_build::ntx_builder_api_descriptor;
 use miden_node_tracing::grpc::grpc_trace_layer;
-use miden_node_tracing::info;
+use miden_node_tracing::info_v2;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tonic_reflection::server;
 
-use crate::LOG_TARGET;
 use crate::db::NtxDbReader;
 
 mod get_network_note_status;
@@ -61,8 +60,7 @@ impl NtxBuilderRpcServer {
 
         let endpoint =
             listener.local_addr().context("failed to read NTX builder listen address")?;
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "NTX builder ready",
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),

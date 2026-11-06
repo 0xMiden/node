@@ -50,8 +50,10 @@ pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
             name.push('_');
         }
         let target = Ident::new(&name, proc_macro2::Span::mixed_site());
+        // Upstream requires parent and follows_from options to precede the target.
+        let args = split_top_level_args(attr);
         quote! {
-            #[::miden_node_tracing::miden_instrument(target = #target, #attr)]
+            #[::miden_node_tracing::miden_instrument(#(#args,)* target = #target)]
             #[::miden_node_tracing::__with_tracing_target(#target)]
             #item
         }

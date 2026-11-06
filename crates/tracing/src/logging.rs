@@ -25,9 +25,13 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
-const DEFAULT_STDOUT_FILTER: &str =
-    "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
+/// Stdout defaults for operator diagnostics with prover dependency noise suppression.
+const DEFAULT_STDOUT_FILTER: &str = concat!(
+    "info,user=debug,miden::storage=debug,miden::rpc::server=debug,",
+    "miden::production=debug,miden::mempool=debug,miden::proving=debug,miden::sync=debug,",
+    "miden::validation=debug,miden::privacy=debug,miden::admin=debug,",
+    "miden::funding=debug,miden_prover=warn",
+);
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]

@@ -63,29 +63,44 @@ OpenTelemetry.
 
 ## User-facing targets
 
-Operator events use `user::*`, `miden::storage`, and `miden::rpc::server` targets. The default stdout filter enables
-these at `debug`. The compact stdout format does not print the target name, but the filter still matches it.
+The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
+`miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`,
+`miden::admin`, and `miden::funding`. The compact stdout format does not print the target name, but the filter still
+matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
-use the `debug` level, even when they are user-visible. The default stdout filter prints operator, storage, and RPC
-server `debug` events, keeps shared RPC client diagnostics and other targets at `info`, and limits the `miden_prover`
-dependency to `warn`.
+use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other targets default to
+`info`. The `miden_prover` dependency is limited to `warn`.
 
-| Target                        | Events                                                             |
-| ----------------------------- | ------------------------------------------------------------------ |
-| `user::miden-node`            | Node command startup, bootstrap, and recovery                      |
-| `miden::rpc::server`          | RPC requests, subscriptions, readiness, and submissions            |
-| `user::miden-block-producer`  | Sequencing, batches, blocks, mempool activity, and synchronization |
-| `miden::storage`              | Persistence and account, note, and storage lifecycle events        |
-| `user::miden-validator`       | Validator startup, bootstrap, validation, and block signing        |
-| `user::miden-ntx-builder`     | Network transaction construction and account actor activity        |
-| `user::miden-prover`          | Remote prover lifecycle events                                     |
-| `user::miden-network-monitor` | Network monitor checks and end-to-end probes                       |
-| `user::miden-funding-service` | Funding service readiness, funding transactions, and note commits  |
+| Target                            | Events                                                        |
+| --------------------------------- | ------------------------------------------------------------- |
+| `user::miden-node`                | Node command startup, bootstrap, and recovery                 |
+| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions       |
+| `miden::production`               | Sequencer orchestration and fee-collector operations          |
+| `miden::production::transactions` | Network transaction scheduling, note selection, and execution |
+| `miden::production::batches`      | Transaction selection and batch assembly                      |
+| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks        |
+| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction   |
+| `miden::proving::transactions`    | Transaction proof requests and results                        |
+| `miden::proving::batches`         | Batch execution and proving                                   |
+| `miden::proving::blocks`          | Block proof scheduling, retries, and results                  |
+| `miden::sync`                     | Chain and account synchronization progress and readiness      |
+| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks          |
+| `miden::sync::proofs`             | Receiving and applying block proofs                           |
+| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                  |
+| `miden::storage`                  | Persistence and account, note, and storage lifecycle events   |
+| `miden::validation`               | Validator startup and configuration                           |
+| `miden::validation::transactions` | Transaction proof verification and re-execution               |
+| `miden::validation::blocks`       | Block validation and signing                                  |
+| `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
+| `miden::admin`                    | Private administration API diagnostics                        |
+| `miden::funding`                  | Funding requests, transaction construction, and delivery      |
+| `user::miden-prover`              | Remote prover lifecycle events                                |
+| `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                  |
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
-`miden::rpc::server`, `user::miden-block-producer`, and `miden::storage` events.
+`miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
 
 ## OpenTelemetry filter
 
@@ -205,8 +220,11 @@ Start with a narrow target instead of enabling `trace` globally:
 # RPC request and subscription details
 MIDEN_STDOUT_FILTER='info,user=debug,miden::storage=debug,miden::rpc::server=trace' miden-node full ...
 
+# Chain synchronization details
+MIDEN_STDOUT_FILTER='info,miden::sync=debug' miden-node full ...
+
 # Block production and mempool details
-MIDEN_STDOUT_FILTER='info,user::miden-block-producer=debug' miden-node sequencer ...
+MIDEN_STDOUT_FILTER='info,miden::production=debug,miden::mempool=debug' miden-node sequencer ...
 
 # Store lifecycle and persistence details
 MIDEN_STDOUT_FILTER='info,miden::storage=debug' miden-node full ...

@@ -7,13 +7,11 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request as ProofRequestVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction};
 use miden_tx::LocalTransactionProver;
 use url::Url;
-
-use crate::COMPONENT;
 
 // PROVER
 // ================================================================================================
@@ -43,8 +41,7 @@ impl Prover {
     }
 
     /// Proves one executed transaction.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.prove",
         fields(
             transaction.id = executed_tx.id(),
@@ -69,8 +66,7 @@ pub struct LocalProver;
 
 impl LocalProver {
     /// Proves one executed transaction in this process.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.prove.local",
         fields(
             transaction.id = executed_tx.id(),
@@ -116,8 +112,7 @@ impl RemoteProver {
     }
 
     /// Proves one transaction on the remote prover.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.prove.remote",
         fields(
             transaction.id = executed_tx.id(),
