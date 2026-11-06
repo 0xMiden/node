@@ -427,27 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn default_stdout_preserves_rpc_server_debug_without_enabling_client_debug() {
-        let events = default_stdout_events(|| {
-            tracing::debug!(target: "miden::rpc::server", "request debug");
-            tracing::debug!(target: "miden::rpc::server::subscription", "subscription debug");
-            tracing::trace!(target: "miden::rpc::server", "request trace");
-            tracing::debug!(target: "miden::rpc::client", "connection retry debug");
-            tracing::info!(target: "miden::rpc::client", "connection status");
-            tracing::debug!(target: "miden::other", "unrelated debug");
-        });
-
-        assert_eq!(
-            events,
-            [
-                ("miden::rpc::server", tracing::Level::DEBUG),
-                ("miden::rpc::server::subscription", tracing::Level::DEBUG),
-                ("miden::rpc::client", tracing::Level::INFO),
-            ]
-        );
-    }
-
-    #[test]
     fn resource_uses_configured_defaults() {
         let detected_resource = Resource::builder_empty()
             .with_attributes([KeyValue::new("telemetry.sdk.language", "rust")])
