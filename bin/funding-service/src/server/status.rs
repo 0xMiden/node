@@ -2,7 +2,6 @@ use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
 
-use crate::COMPONENT;
 use crate::server::FundingState;
 use crate::status::NativeAsset;
 
@@ -35,7 +34,7 @@ pub(super) struct StatusResponse {
 ///
 /// The status is served while the service is still synchronizing, so an operator can read the
 /// funding account it was configured with.
-#[miden_node_tracing::miden_instrument(target = COMPONENT, name = "status")]
+#[miden_node_tracing::instrument_v2(name = "status")]
 pub(super) async fn status(State(state): State<FundingState>) -> Json<StatusResponse> {
     let status = &state.status;
 

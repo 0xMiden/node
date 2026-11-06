@@ -64,39 +64,40 @@ OpenTelemetry.
 ## User-facing targets
 
 The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
-`miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`, and
-`miden::admin`. The compact stdout format does not print the target name, but the filter still matches it.
+`miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`,
+`miden::admin`, and `miden::funding`. The compact stdout format does not print the target name, but the filter still
+matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
 use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other targets default to
 `info`. The `miden_prover` dependency is limited to `warn`.
 
-| Target                            | Events                                                            |
-| --------------------------------- | ----------------------------------------------------------------- |
-| `user::miden-node`                | Node command startup, bootstrap, and recovery                     |
-| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions           |
-| `miden::production`               | Sequencer orchestration and fee-collector operations              |
-| `miden::production::transactions` | Network transaction scheduling, note selection, and execution     |
-| `miden::production::batches`      | Transaction selection and batch assembly                          |
-| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks            |
-| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction       |
-| `miden::proving::transactions`    | Transaction proof requests and results                            |
-| `miden::proving::batches`         | Batch execution and proving                                       |
-| `miden::proving::blocks`          | Block proof scheduling, retries, and results                      |
-| `miden::sync`                     | Chain synchronization coordination and readiness                  |
-| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks              |
-| `miden::sync::proofs`             | Receiving and applying block proofs                               |
-| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                      |
-| `miden::storage`                  | Persistence and account, note, and storage lifecycle events       |
-| `miden::validation`               | Validator startup and configuration                               |
-| `miden::validation::transactions` | Transaction proof verification and re-execution                   |
-| `miden::validation::blocks`       | Block validation and signing                                      |
-| `miden::privacy::dkg`             | Storage-key setup ceremonies                                      |
-| `miden::admin`                    | Private administration API diagnostics                            |
-| `user::miden-prover`              | Remote prover lifecycle events                                    |
-| `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                      |
-| `user::miden-funding-service`     | Funding service readiness, funding transactions, and note commits |
+| Target                            | Events                                                        |
+| --------------------------------- | ------------------------------------------------------------- |
+| `user::miden-node`                | Node command startup, bootstrap, and recovery                 |
+| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions       |
+| `miden::production`               | Sequencer orchestration and fee-collector operations          |
+| `miden::production::transactions` | Network transaction scheduling, note selection, and execution |
+| `miden::production::batches`      | Transaction selection and batch assembly                      |
+| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks        |
+| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction   |
+| `miden::proving::transactions`    | Transaction proof requests and results                        |
+| `miden::proving::batches`         | Batch execution and proving                                   |
+| `miden::proving::blocks`          | Block proof scheduling, retries, and results                  |
+| `miden::sync`                     | Chain and account synchronization progress and readiness      |
+| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks          |
+| `miden::sync::proofs`             | Receiving and applying block proofs                           |
+| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                  |
+| `miden::storage`                  | Persistence and account, note, and storage lifecycle events   |
+| `miden::validation`               | Validator startup and configuration                           |
+| `miden::validation::transactions` | Transaction proof verification and re-execution               |
+| `miden::validation::blocks`       | Block validation and signing                                  |
+| `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
+| `miden::admin`                    | Private administration API diagnostics                        |
+| `miden::funding`                  | Funding requests, transaction construction, and delivery      |
+| `user::miden-prover`              | Remote prover lifecycle events                                |
+| `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                  |
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
 `miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
