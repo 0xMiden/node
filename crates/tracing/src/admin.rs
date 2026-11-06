@@ -6,9 +6,8 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, Router, middleware};
 use serde::{Deserialize, Serialize};
-use tracing_subscriber::EnvFilter;
 
-use crate::logging::{FILTER_CONTROLS, FilterControl, FilterControls};
+use crate::filter_control::{FILTER_CONTROLS, FilterControl, FilterControls, SetFilterError};
 
 /// Returns tracing routes for a private, externally authenticated administration listener.
 ///
@@ -23,7 +22,7 @@ fn router_with_controls(controls: Option<FilterControls>) -> Router {
     Router::new()
         .route("/admin/tracing/stdout-filter", get(get_stdout_filter).put(set_stdout_filter))
         .route("/admin/tracing/otel-filter", get(get_otel_filter).put(set_otel_filter))
-        .route("/admin/tracing/targets", get(targets))
+        .route("/admin/tracing/targets", get(list_targets))
         .layer(middleware::map_response(no_store))
         .with_state(controls)
 }
@@ -71,8 +70,8 @@ async fn get_otel_filter(
 
 fn read_filter(control: &dyn FilterControl) -> Result<Json<FilterResponse>, ApiError> {
     let filter = control
-        .current()
-        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "failed to read tracing filter"))?;
+        .current_expression()
+        .map_err(|cause| internal_error("failed to read tracing filter", &cause))?;
     Ok(Json(FilterResponse { filter }))
 }
 
@@ -85,12 +84,7 @@ async fn set_stdout_filter(
     Json(request): Json<FilterRequest>,
 ) -> Result<StatusCode, ApiError> {
     let controls = controls.ok_or_else(controls_unavailable)?;
-    let filter = parse_filter(&request.filter)?;
-    controls
-        .stdout
-        .reload(filter, request.filter, "stdout")
-        .map_err(|_| reload_failed())?;
-    Ok(StatusCode::NO_CONTENT)
+    set_filter(controls.stdout.as_ref(), request.filter)
 }
 
 async fn set_otel_filter(
@@ -99,18 +93,24 @@ async fn set_otel_filter(
 ) -> Result<StatusCode, ApiError> {
     let controls = controls.ok_or_else(controls_unavailable)?;
     let control = controls.otel.ok_or_else(otel_disabled)?;
-    let filter = parse_filter(&request.filter)?;
-    control.reload(filter, request.filter, "otel").map_err(|_| reload_failed())?;
+    set_filter(control.as_ref(), request.filter)
+}
+
+fn set_filter(control: &dyn FilterControl, expression: String) -> Result<StatusCode, ApiError> {
+    control.set_expression(expression).map_err(|cause| match cause {
+        SetFilterError::InvalidExpression(cause) => {
+            error(StatusCode::BAD_REQUEST, format!("invalid tracing filter: {cause}"))
+        },
+        SetFilterError::Internal(cause) => {
+            internal_error("failed to update tracing filter", &cause)
+        },
+    })?;
     Ok(StatusCode::NO_CONTENT)
 }
 
-fn parse_filter(expression: &str) -> Result<EnvFilter, ApiError> {
-    EnvFilter::try_new(expression)
-        .map_err(|err| error(StatusCode::BAD_REQUEST, format!("invalid tracing filter: {err}")))
-}
-
-fn reload_failed() -> ApiError {
-    error(StatusCode::INTERNAL_SERVER_ERROR, "failed to update tracing filter")
+fn internal_error(message: &'static str, cause: &anyhow::Error) -> ApiError {
+    crate::error!(cause, "tracing admin API internal error");
+    error(StatusCode::INTERNAL_SERVER_ERROR, message)
 }
 
 #[derive(Serialize)]
@@ -118,7 +118,7 @@ struct TargetsResponse {
     targets: Vec<&'static str>,
 }
 
-async fn targets() -> Json<TargetsResponse> {
+async fn list_targets() -> Json<TargetsResponse> {
     Json(TargetsResponse { targets: crate::declared_targets() })
 }
 

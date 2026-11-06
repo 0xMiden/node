@@ -11,10 +11,36 @@ use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::{Layer, Registry};
 
 use super::router_with_controls;
-use crate::logging::{FilterControls, reloadable_filter};
+use crate::filter_control::{FilterControls, FilterOutput, reloadable_filter};
 
 #[derive(Clone, Default)]
 struct Recorded(Arc<Mutex<Vec<&'static str>>>);
+
+#[derive(Clone, Default)]
+struct RecordedErrors(Arc<Mutex<Vec<String>>>);
+
+impl tracing::field::Visit for RecordedErrors {
+    fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+
+    fn record_error(
+        &mut self,
+        _: &tracing::field::Field,
+        error: &(dyn std::error::Error + 'static),
+    ) {
+        self.0.lock().unwrap().push(error.to_string());
+        let mut source = error.source();
+        while let Some(error) = source {
+            self.0.lock().unwrap().push(error.to_string());
+            source = error.source();
+        }
+    }
+}
+
+impl<S: Subscriber> Layer<S> for RecordedErrors {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        event.record(&mut self.clone());
+    }
+}
 
 impl<S: Subscriber> Layer<S> for Recorded {
     fn on_event(&self, _: &tracing::Event<'_>, _: Context<'_, S>) {
@@ -37,8 +63,10 @@ fn setup_with_filters(
 ) -> (Router, tracing::Dispatch, Recorded, Recorded) {
     let stdout = Recorded::default();
     let otel = Recorded::default();
-    let (stdout_filter, stdout_reload) = reloadable_filter(stdout_expression).unwrap();
-    let (otel_filter, otel_reload) = reloadable_filter(otel_expression).unwrap();
+    let (stdout_filter, stdout_reload) =
+        reloadable_filter(stdout_expression, FilterOutput::Stdout).unwrap();
+    let (otel_filter, otel_reload) =
+        reloadable_filter(otel_expression, FilterOutput::OpenTelemetry).unwrap();
     let subscriber = Registry::default()
         .with(stdout.clone().with_filter(stdout_filter))
         .with(otel.clone().with_filter(otel_filter));
@@ -198,8 +226,8 @@ async fn reloaded_otel_filter_preserves_span_attributes_and_export() {
 
     let exporter = InMemorySpanExporter::default();
     let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
-    let (stdout_filter, stdout_reload) = reloadable_filter("off").unwrap();
-    let (otel_filter, otel_reload) = reloadable_filter("off").unwrap();
+    let (stdout_filter, stdout_reload) = reloadable_filter("off", FilterOutput::Stdout).unwrap();
+    let (otel_filter, otel_reload) = reloadable_filter("off", FilterOutput::OpenTelemetry).unwrap();
     let subscriber = Registry::default().with(Recorded::default().with_filter(stdout_filter)).with(
         tracing_opentelemetry::layer()
             .with_tracer(provider.tracer("admin_test"))
@@ -247,10 +275,28 @@ async fn unavailable_controls_return_service_unavailable() {
 async fn failed_reload_returns_an_error() {
     let (app, dispatch, ..) = setup(true);
     drop(dispatch);
-    assert_eq!(put(&app, "stdout", "debug").await, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(put(&app, "otel", "debug").await, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(get(&app, "stdout").await.0, StatusCode::INTERNAL_SERVER_ERROR);
-    assert_eq!(get(&app, "otel").await.0, StatusCode::INTERNAL_SERVER_ERROR);
+    let errors = RecordedErrors::default();
+    async {
+        for output in ["stdout", "otel"] {
+            assert_eq!(put(&app, output, "debug").await, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(
+                get(&app, output).await,
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error": "failed to read tracing filter"})
+                )
+            );
+        }
+    }
+    .with_subscriber(Registry::default().with(errors.clone()))
+    .await;
+
+    let errors = errors.0.lock().unwrap();
+    for output in ["stdout", "otel"] {
+        assert!(errors.contains(&format!("failed to update {output} tracing filter")));
+        assert!(errors.contains(&format!("failed to read {output} tracing filter")));
+    }
+    assert!(errors.iter().any(|error| error.contains("subscriber no longer exists")));
 }
 
 #[tokio::test]

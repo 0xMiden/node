@@ -1,3 +1,4 @@
+#[cfg(any(not(feature = "admin-api"), feature = "testing"))]
 use std::str::FromStr;
 use std::sync::OnceLock;
 
@@ -15,6 +16,8 @@ use tracing_subscriber::layer::Filter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+#[cfg(feature = "admin-api")]
+use crate::filter_control::{FILTER_CONTROLS, FilterControls, FilterOutput, reloadable_filter};
 use crate::{ErrorSpanExt, error};
 
 /// Global tracer provider for flushing traces on panic.
@@ -26,75 +29,6 @@ static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 /// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
 const DEFAULT_STDOUT_FILTER: &str =
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
-#[cfg(feature = "admin-api")]
-pub(crate) static FILTER_CONTROLS: OnceLock<FilterControls> = OnceLock::new();
-
-#[cfg(feature = "admin-api")]
-type ReloadFilter = std::sync::Arc<dyn FilterControl>;
-
-/// Reads and replaces an output's active filter through its reload handle.
-#[cfg(feature = "admin-api")]
-pub(crate) trait FilterControl: Send + Sync {
-    fn reload(&self, filter: EnvFilter, expression: String, output: &str) -> anyhow::Result<()>;
-    fn current(&self) -> anyhow::Result<String>;
-}
-
-/// Keeps the applied expression intact because formatting an `EnvFilter` can change value types.
-#[cfg(feature = "admin-api")]
-struct ReloadControl<S> {
-    handle: tracing_subscriber::reload::Handle<EnvFilter, S>,
-    expression: std::sync::Mutex<String>,
-}
-
-#[cfg(feature = "admin-api")]
-impl<S: Subscriber> FilterControl for ReloadControl<S> {
-    fn reload(&self, filter: EnvFilter, expression: String, output: &str) -> anyhow::Result<()> {
-        crate::info!(
-            "Setting tracing filter",
-            tracing.filter = expression.as_str(),
-            tracing.output = output
-        );
-        // Serialize updates and reads so the returned expression describes the active filter.
-        let mut current = self
-            .expression
-            .lock()
-            .map_err(|_| anyhow::anyhow!("tracing filter expression lock is poisoned"))?;
-        self.handle.reload(filter)?;
-        *current = expression;
-        Ok(())
-    }
-
-    fn current(&self) -> anyhow::Result<String> {
-        let expression = self
-            .expression
-            .lock()
-            .map_err(|_| anyhow::anyhow!("tracing filter expression lock is poisoned"))?;
-        self.handle.with_current(|_| ())?;
-        Ok(expression.clone())
-    }
-}
-
-/// Independent controls for the process's configured tracing outputs.
-#[cfg(feature = "admin-api")]
-#[derive(Clone)]
-pub(crate) struct FilterControls {
-    pub(crate) stdout: ReloadFilter,
-    pub(crate) otel: Option<ReloadFilter>,
-}
-
-#[cfg(feature = "admin-api")]
-pub(crate) fn reloadable_filter<S: Subscriber>(
-    expression: &str,
-) -> anyhow::Result<(tracing_subscriber::reload::Layer<EnvFilter, S>, ReloadFilter)> {
-    let (filter, handle) = tracing_subscriber::reload::Layer::new(EnvFilter::from_str(expression)?);
-    Ok((
-        filter,
-        std::sync::Arc::new(ReloadControl {
-            handle,
-            expression: std::sync::Mutex::new(expression.to_owned()),
-        }),
-    ))
-}
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
@@ -292,11 +226,11 @@ pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option
     });
 
     #[cfg(feature = "admin-api")]
-    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter)?;
+    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter, FilterOutput::Stdout)?;
     #[cfg(not(feature = "admin-api"))]
     let stdout_filter = filter_from_string(&stdout_filter)?;
     #[cfg(feature = "admin-api")]
-    let (otel_filter, otel_reload) = reloadable_filter(&otel_filter)?;
+    let (otel_filter, otel_reload) = reloadable_filter(&otel_filter, FilterOutput::OpenTelemetry)?;
     #[cfg(not(feature = "admin-api"))]
     let otel_filter = filter_from_string(&otel_filter)?;
 

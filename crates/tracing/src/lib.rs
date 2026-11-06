@@ -10,6 +10,8 @@ crate::declare_targets! {
 #[cfg(feature = "admin-api")]
 pub mod admin;
 mod attribute;
+#[cfg(feature = "admin-api")]
+mod filter_control;
 pub mod grpc;
 mod instrument;
 mod logging;
