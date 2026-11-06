@@ -1,0 +1,14 @@
+error[E0308]: mismatched types
+ --> tests/ui/tracing_macros/invalid_target_type.rs:2:14
+  |
+1 | / miden_node_tracing::declare_targets! {
+2 | |     default: 42_u32,
+  | |              ^^^^^^ expected `&str`, found `u32`
+3 | | }
+  | |_- arguments to this function are incorrect
+  |
+note: associated function defined here
+ --> src/targets.rs
+  |
+  |     pub const fn new(
+  |                  ^^^

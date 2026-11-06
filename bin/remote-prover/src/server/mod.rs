@@ -33,6 +33,8 @@ mod tests;
 #[derive(clap::Parser)]
 pub struct Server {
     #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
+    #[command(flatten)]
     grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// The port the gRPC server will be hosted on.
     #[arg(long, default_value = "50051", env = "MIDEN_PROVER_PORT")]

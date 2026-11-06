@@ -1,4 +1,12 @@
+miden_node_tracing::declare_targets! {
+    default: "miden::proto",
+    "miden_node_proto::clients" => "miden::rpc::client",
+    #[cfg(test)]
+    "miden_node_proto::clients::tests::tracing_targets" => "miden::test::caller",
+}
+
 pub mod clients;
+
 pub mod domain;
 pub mod errors;
 

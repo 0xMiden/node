@@ -135,3 +135,17 @@ fn grpc_commands_accept_one_process_decoding_limit() {
         assert!(parsed.is_ok(), "{parsed:?}");
     }
 }
+
+#[test]
+fn full_node_admin_listener_is_opt_in() {
+    let cli = parse_full(&["--network", "testnet"]).unwrap();
+    let Command::Full(command) = cli.command else {
+        panic!("expected full node command");
+    };
+    assert_eq!(command.admin.listen, None);
+    let cli = parse_full(&["--network", "testnet", "--admin.listen", "127.0.0.1:50100"]).unwrap();
+    let Command::Full(command) = cli.command else {
+        panic!("expected full node command");
+    };
+    assert_eq!(command.admin.listen, Some("127.0.0.1:50100".parse().unwrap()));
+}

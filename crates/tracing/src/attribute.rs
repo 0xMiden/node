@@ -157,6 +157,8 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "shutdown.signal",
     "sync.block_source.endpoint",
     "task.name",
+    "tracing.filter",
+    "tracing.output",
     "transaction.id",
     "transaction.input_notes",
     "transaction.output_notes",

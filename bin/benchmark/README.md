@@ -56,8 +56,9 @@ miden-benchmark run-benchmark \
   --wait-blocks                  3
 ```
 
-The signing public key must match the validator key that signs transaction encryption key attestations. The benchmark
-will not submit transactions unless it can verify the advertised encryption key.
+The signing public key is the `0x`-prefixed key printed by `miden-validator pubkey` for the validator that signs
+transaction encryption key attestations. The benchmark will not submit transactions unless it can verify the advertised
+encryption key.
 
 Mints go in sequentially, then consumes with the requested concurrency, then the run waits `--wait-blocks` blocks before
 scanning for inclusion. Per-phase ack rate, RPC latency percentiles, inclusion rate, and inclusion TPS are printed at
@@ -124,7 +125,7 @@ prover, runs `create-proofs` then `run-benchmark`, and tears everything down on 
 `$PATH`:
 
 ```sh
-make install-node install-validator install-ntx-builder install-remote-prover install-benchmark install-usdcx-genesis
+make install-node install-validator install-ntx-builder install-remote-prover install-benchmark install-genesis
 
 scripts/bench-local.sh                       # 5 tx pairs, local prover
 N_TXS=20 scripts/bench-local.sh              # 20 tx pairs
@@ -162,15 +163,15 @@ Prepare the native faucet and public funding account files with nonzero nonces. 
 network.
 
 Bootstrap a fresh data directory (one-time). Generate the validator key material first (`keygen` prints the signing
-secret, its public key, and the shared transaction encryption key), then the validator creates the genesis block —
-committing the signing public key — and every component bootstraps its storage from it:
+secret, its public key, and the shared transaction encryption key), then `miden-genesis build` creates the genesis
+block, committing the signing public key, and every component bootstraps its storage from it:
 
 ```sh
 DATA=./node-data
 
 miden-validator keygen   # note the printed signing-key, validator-key, and encryption-key values
 
-miden-validator genesis \
+miden-genesis build \
   --genesis-block-directory "$DATA/genesis" \
   --accounts-directory      "$DATA/accounts" \
   --native-faucet           /path/to/native-faucet.mac \

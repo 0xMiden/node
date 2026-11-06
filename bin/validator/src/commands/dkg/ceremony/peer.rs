@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, ensure};
 use iroh::endpoint::{Connection, Incoming, Side};
 use iroh::{Endpoint, EndpointAddr, EndpointId};
-use miden_node_tracing::warn;
+use miden_node_tracing::warn_v2;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_validator::ValidatorSigner;
@@ -36,9 +36,8 @@ impl ConnectedPeer {
             .retry(retry::exponential(Duration::from_secs(1), Duration::from_secs(10)))
             .when(|_| !endpoint.is_closed())
             .notify(|error, delay| {
-                warn!(
+                warn_v2!(
                     error,
-                    target: miden_validator::LOG_TARGET,
                     "Retrying DKG peer connection",
                     dkg.peer.endpoint = peer_endpoint.to_string() #[nonstandard],
                     retry.delay_ms = delay

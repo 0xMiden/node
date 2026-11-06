@@ -42,11 +42,11 @@ miden-validator pubkey --signing-key.kms-id <validator-N-kms-key-id>
 The full validator set is passed on the command line, as one `--validator.key` flag per validator. There is no default
 set: the flag is required.
 
-**One** operator then runs `genesis` with the required accounts and collected keys. Building the genesis block requires
-no signing key:
+**One** operator then runs `miden-genesis build` with the required accounts and collected keys. Building the genesis
+block requires no signing key:
 
 ```bash
-miden-validator genesis \
+miden-genesis build \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
   --native-faucet usdcx-faucet.mac \
@@ -58,9 +58,11 @@ miden-validator genesis \
   --validator.key <validator-3-public-key-hex>
 ```
 
-The native faucet and public funding account must be prepared before genesis. Both account files must have nonzero
-nonces. Genesis does not require their signing keys. The funding service uses the funding account file with its signing
-key. The verification base fee must match the fee configured in the native faucet.
+The native faucet and public funding account must be prepared before genesis. The same `miden-genesis` binary builds
+them with its `new-distributor`, `faucet`, `prefund` and `record-nonces` commands; see the
+[genesis tool documentation](https://github.com/0xMiden/node/tree/main/bin/genesis). Both account files must have
+nonzero nonces. Genesis does not require their signing keys. The funding service uses the funding account file with its
+signing key. The verification base fee must match the fee configured in the native faucet.
 
 Use `--accounts-config accounts.toml` to add faucets, generated wallets, or imported accounts. Each `[[wallet]]` entry
 requires a unique `name`; genesis writes its account file as `<name>.mac` in the accounts directory. Account file paths
@@ -112,7 +114,7 @@ key-pair with `miden-validator keygen` (or prints the public key of an existing 
 operator.
 
 ```bash
-miden-validator genesis \
+miden-genesis build \
   --genesis-block-directory genesis-data \
   --accounts-directory accounts \
   --native-faucet usdcx-faucet.mac \
@@ -152,7 +154,7 @@ miden-ntx-builder bootstrap \
 </Tabs>
 
 The key each validator operator starts their validator with must match the public key committed for them via the
-`genesis` command's `--validator.key` flags.
+`miden-genesis build` command's `--validator.key` flags.
 
 ## Storage Key Ceremony
 

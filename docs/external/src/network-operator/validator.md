@@ -155,10 +155,10 @@ address to enable it:
 --admin.listen 127.0.0.1:50102
 ```
 
-The corresponding environment variable is `MIDEN_VALIDATOR_ADMIN_LISTEN`. The API does not authenticate requests.
-Enforce authentication and authorization externally, and prevent direct access to this listener. Keep it on an isolated
-operator network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for
-remote access.
+The corresponding environment variable is `MIDEN_ADMIN_LISTEN`. The API does not authenticate requests. Enforce
+authentication and authorization externally, and prevent direct access to this listener. Keep it on an isolated operator
+network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
+access.
 
 | Method | Path                                              | Request                                               | Result                                                                                          |
 | ------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |

@@ -48,6 +48,7 @@ enum Scope {
     NtxBuilder,
     Prover,
     Validator,
+    Genesis,
     Internal,
     General,
 }

@@ -93,8 +93,8 @@ pub enum Command {
         /// transaction is not included within the block limit.
         #[arg(long)]
         fail_on_error: bool,
-        /// Hex-encoded validator signing public key trusted to attest the transaction encryption
-        /// key.
+        /// `0x`-prefixed hex validator signing public key trusted to attest the transaction
+        /// encryption key.
         #[arg(long)]
         validator_signing_public_key: String,
     },

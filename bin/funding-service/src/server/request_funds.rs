@@ -7,7 +7,6 @@ use miden_protocol::note::Note;
 use miden_protocol::utils::serde::Serializable;
 use serde::{Deserialize, Serialize};
 
-use crate::COMPONENT;
 use crate::error::RequestFundsError;
 use crate::server::FundingState;
 use crate::worker::MAX_FEE_VERIFICATION_CYCLES;
@@ -43,8 +42,7 @@ impl From<&Note> for RequestFundsResponse {
 
 /// Creates a public P2ID note which holds `amount` base units of the native asset and targets
 /// `account_id`, and persists it for the worker to create on chain.
-#[miden_node_tracing::miden_instrument(
-    target = COMPONENT,
+#[miden_node_tracing::instrument_v2(
     name = "request_funds",
     fields (
         account.id = request.account_id,

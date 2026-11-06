@@ -2,13 +2,11 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::account::AccountId;
 use reqwest::Client;
 use serde::Serialize;
 use url::Url;
-
-use crate::COMPONENT;
 
 /// Requests public P2ID notes from the funding service.
 #[derive(Clone)]
@@ -42,8 +40,7 @@ impl FundingClient {
 
     /// Requests the configured amount and waits for the funding service to queue the note. This
     /// method does not retry failed requests.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "account.funding",
         fields(account.id = account_id, asset.amount = self.amount.get()),
         err,

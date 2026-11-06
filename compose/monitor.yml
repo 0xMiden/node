@@ -16,7 +16,7 @@ services:
     command:
       - |
         exec miden-network-monitor start \
-          --validator-signing-public-key="$$(cat /data/genesis/validator-signing-public-keys)"
+          --validator-signing-public-key="$$(cat /data/validators/signing-public-keys)"
     environment:
       MIDEN_MONITOR_RPC_URL: http://sequencer:57291
       # The monitor pays transaction fees from notes this service sends it. Only used on a chain

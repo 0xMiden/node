@@ -9,7 +9,7 @@ use miden_node_proto::generated::miden::node::v1::{
     SyncNotesRequest,
     SyncNullifiersRequest,
 };
-use miden_node_tracing::{Level, enabled, miden_instrument, miden_span_record};
+use miden_node_tracing::{Level, enabled_v2, instrument_v2, miden_span_record};
 use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
@@ -22,7 +22,6 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteId, NoteTag, Nullifier};
 
 use super::FundingWallet;
-use crate::COMPONENT;
 
 impl FundingWallet {
     /// Finds deposits in the given block range.
@@ -45,8 +44,7 @@ impl FundingWallet {
     }
 
     /// Returns one page of deposits and the last block checked in the given range.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.wallet.sync_deposits",
         level = "debug",
         fields(
@@ -100,7 +98,7 @@ impl FundingWallet {
             }
         }
 
-        if enabled!(target: COMPONENT, Level::DEBUG) {
+        if enabled_v2!(Level::DEBUG) {
             miden_span_record!(note.count = note_ids.len(), block.number = last_checked_block);
         }
         let deposits: Vec<_> = Self::get_public_notes_by_id(rpc, &note_ids)
@@ -110,15 +108,14 @@ impl FundingWallet {
             .filter(|note| note.target() == funder && note.amount() > 0)
             .collect();
 
-        if enabled!(target: COMPONENT, Level::DEBUG) {
+        if enabled_v2!(Level::DEBUG) {
             miden_span_record!(deposit.count = deposits.len());
         }
         Ok(SyncedDeposits { deposits, last_checked_block })
     }
 
     /// The notes among `note_ids` whose details the node stores.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.wallet.get_notes",
         level = "debug",
         fields(
@@ -166,8 +163,7 @@ struct SyncedDeposits {
 }
 
 /// Returns the requested nullifiers spent in the given block range.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "funding.wallet.spent_nullifiers",
     fields(
         nullifier.count = nullifiers.len(),

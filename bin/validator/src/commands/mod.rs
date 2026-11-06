@@ -2,7 +2,6 @@ mod bootstrap;
 mod decrypt_private_record;
 mod dkg;
 mod export_private_record;
-mod genesis;
 mod issue_private_record_share;
 mod privacy;
 mod start;
@@ -14,10 +13,10 @@ use std::sync::Arc;
 use anyhow::Context;
 use base64::Engine;
 use clap::Parser;
-use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_tracing::{OpenTelemetry, info_v2};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_validator::{
@@ -32,12 +31,10 @@ use zeroize::Zeroizing;
 
 const ENV_DATA_DIRECTORY: &str = "MIDEN_VALIDATOR_DATA_DIRECTORY";
 const ENV_LISTEN: &str = "MIDEN_VALIDATOR_LISTEN";
-const ENV_ADMIN_LISTEN: &str = "MIDEN_VALIDATOR_ADMIN_LISTEN";
 const ENV_SIGNING_KEY: &str = "MIDEN_VALIDATOR_SIGNING_KEY";
 const ENV_SIGNING_KEY_KMS_ID: &str = "MIDEN_VALIDATOR_SIGNING_KEY_KMS_ID";
 const ENV_ENCRYPTION_KEY: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY";
 const ENV_ENCRYPTION_KEY_KMS_CIPHERTEXT: &str = "MIDEN_VALIDATOR_ENCRYPTION_KEY_KMS_CIPHERTEXT";
-const ENV_GENESIS_VALIDATOR_KEYS: &str = "MIDEN_VALIDATOR_GENESIS_VALIDATOR_KEYS";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_VALIDATOR_SQLITE_CONNECTION_POOL_SIZE";
 const ENV_STORAGE_KEY_FILE: &str = "MIDEN_VALIDATOR_STORAGE_KEY_FILE";
 const ENV_PROVING_INPUT_RETENTION_BLOCKS: &str = "MIDEN_VALIDATOR_PROVING_INPUT_RETENTION_BLOCKS";
@@ -92,7 +89,8 @@ pub struct PrivateRecordExportOptions {
     #[arg(long, value_name = "TRANSACTION_ID")]
     transaction_id: String,
 
-    /// Hex-encoded signing public key of the validator that produced the record.
+    /// `0x`-prefixed signing public key of the validator that produced the record, as printed by
+    /// `pubkey`.
     #[arg(long, value_name = "VALIDATOR_ID")]
     validator_id: String,
 
@@ -104,17 +102,10 @@ pub struct PrivateRecordExportOptions {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 pub enum ValidatorCommand {
-    /// Builds the genesis block from required accounts and optional additional accounts.
-    ///
-    /// Writes the unsigned genesis block and generated account files to disk. The genesis header
-    /// commits to the full validator set. Those validators must sign every subsequent block.
-    /// Each validator seeds its database from the genesis block with `bootstrap`.
-    Genesis(genesis::GenesisCommand),
-
     /// Seeds this validator's database from a genesis block file.
     ///
     /// Every validator runs this once before `start`, against the genesis block file produced by
-    /// the `genesis` command. The genesis block is the chain's trust root and carries no
+    /// `miden-genesis build`. The genesis block is the chain's trust root and carries no
     /// signatures; the file must come from a trusted source.
     Bootstrap {
         /// Directory in which to store the validator's database.
@@ -133,10 +124,11 @@ pub enum ValidatorCommand {
         genesis_block_file: PathBuf,
     },
 
-    /// Prints the hex-encoded public key for the configured validator signing key.
+    /// Prints the `0x`-prefixed hex public key for the configured validator signing key.
     ///
-    /// Every validator operator runs this and sends the printed key to whoever runs the `genesis`
-    /// command, which commits the full set to the genesis header via its `--validator.key` flags.
+    /// Every validator operator runs this and sends the printed key to whoever runs
+    /// `miden-genesis build`, which commits the full set to the genesis header via its
+    /// `--validator.key` flags.
     Pubkey {
         #[command(flatten)]
         signing_key: ValidatorSigningKey,
@@ -145,9 +137,9 @@ pub enum ValidatorCommand {
     /// Generates a validator signing key-pair and a shared transaction encryption key.
     ///
     /// Prints hex-encoded key material to stdout: the signing secret key (`start
-    /// --signing-key.hex`), its public key (`genesis --validator.key`), and a transaction
-    /// encryption key (`start --encryption-key.hex`), which must be shared by every validator
-    /// in the set.
+    /// --signing-key.hex`), its `0x`-prefixed public key (`miden-genesis build --validator.key`),
+    /// and a transaction encryption key (`start --encryption-key.hex`), which must be shared by
+    /// every validator in the set.
     ///
     /// Intended for local networks; production deployments should prefer KMS-backed keys
     /// (`--signing-key.kms-id`, `--encryption-key.kms-ciphertext`).
@@ -171,9 +163,8 @@ pub enum ValidatorCommand {
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: std::net::SocketAddr,
 
-        /// IP address and port for the private administration API (for example, 127.0.0.1:50102).
-        #[arg(long = "admin.listen", env = ENV_ADMIN_LISTEN, value_name = "IP:PORT")]
-        admin_listen: Option<std::net::SocketAddr>,
+        #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
 
         #[command(flatten)]
         grpc_options: GrpcOptions,
@@ -218,7 +209,6 @@ pub enum ValidatorCommand {
 impl ValidatorCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         match self {
-            Self::Genesis(command) => command.execute(),
             Self::Bootstrap {
                 data_directory,
                 sqlite_connection_pool_size,
@@ -233,14 +223,14 @@ impl ValidatorCommand {
             },
             Self::Pubkey { signing_key } => {
                 let signer = signing_key.into_signer().await?;
-                println!("{}", hex::encode(signer.public_key().to_bytes()));
+                println!("{}", signer.public_key());
                 Ok(())
             },
             Self::Keygen => {
                 let signing_key = SigningKey::new();
                 let encryption_key = KeyExchangeKey::new();
                 println!("signing-key: {}", hex::encode(signing_key.to_bytes()));
-                println!("validator-key: {}", hex::encode(signing_key.public_key().to_bytes()));
+                println!("validator-key: {}", signing_key.public_key());
                 println!("encryption-key: {}", hex::encode(encryption_key.to_bytes()));
                 Ok(())
             },
@@ -254,7 +244,7 @@ impl ValidatorCommand {
             Self::Privacy(options) => options.handle(shutdown).await,
             Self::Start {
                 listen,
-                admin_listen,
+                admin,
                 grpc_options,
                 signing_key,
                 data_directory,
@@ -265,19 +255,20 @@ impl ValidatorCommand {
             } => {
                 let address = listen;
                 let operator_key = storage_key.load()?;
-                info!(
-                    target: miden_validator::LOG_TARGET,
+                info_v2!(
                     "Starting validator",
                     service.name = "miden-validator",
                     service.version = env!("CARGO_PKG_VERSION"),
                     validator.listen = address.to_string(),
-                    validator.admin_listen = admin_listen.map_or_else(
-                        || "disabled".to_owned(),
-                        |address| address.to_string(),
-                    ),
+                    validator.admin_listen = admin
+                        .listen
+                        .map_or_else(|| "disabled".to_owned(), |address| address.to_string(),),
                     data.directory = data_directory.as_path(),
-                    validator.signer =
-                        if signing_key.signing_key_kms_id.is_some() { "kms" } else { "local" },
+                    validator.signer = if signing_key.signing_key_kms_id.is_some() {
+                        "kms"
+                    } else {
+                        "local"
+                    },
                     db.sqlite.connection_pool_size = sqlite_connection_pool_size.get(),
                     validator.proving_input_retention_blocks = proving_input_retention_blocks.get()
                 );
@@ -291,7 +282,7 @@ impl ValidatorCommand {
 
                 start::start(
                     address,
-                    admin_listen,
+                    admin.listen,
                     grpc_options,
                     start::ValidatorKeys { signer, decrypter, operator_key },
                     start::ValidatorDatabaseOptions {
@@ -309,20 +300,13 @@ impl ValidatorCommand {
     pub fn open_telemetry(&self) -> OpenTelemetry {
         match self {
             Self::Start { .. } => OpenTelemetry::from_env().with_name("validator"),
-            Self::Genesis(_)
-            | Self::Bootstrap { .. }
+            Self::Bootstrap { .. }
             | Self::Pubkey { .. }
             | Self::Keygen
             | Self::Privacy(_)
             | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
-}
-
-/// Parses a hex-encoded validator public key CLI argument.
-fn parse_validator_public_key(hex_key: &str) -> Result<PublicKey, String> {
-    let bytes = hex::decode(hex_key).map_err(|err| err.to_string())?;
-    PublicKey::read_from_bytes(&bytes).map_err(|err| err.to_string())
 }
 
 /// Configuration for the shared transaction encryption key.
@@ -626,86 +610,6 @@ mod tests {
         .unwrap();
     }
 
-    const BASE_GENESIS_ARGS: [&str; 14] = [
-        "miden-validator",
-        "genesis",
-        "--genesis-block-directory",
-        "/tmp/genesis",
-        "--accounts-directory",
-        "/tmp/accounts",
-        "--native-faucet",
-        "/tmp/native-faucet.mac",
-        "--funding-account",
-        "/tmp/funding-account.mac",
-        "--verification-base-fee",
-        "7",
-        "--timestamp",
-        "1717344256",
-    ];
-
-    fn parse_genesis(extra: &[&str]) -> Result<ValidatorCommand, clap::Error> {
-        ValidatorCommand::try_parse_from(
-            BASE_GENESIS_ARGS.iter().copied().chain(extra.iter().copied()),
-        )
-    }
-
-    #[test]
-    fn genesis_validator_keys_parse_from_repeated_flags() {
-        let keys = [7u8, 8].map(|seed| {
-            SigningKey::read_from_bytes(&[seed; 32]).expect("test signing key should decode")
-        });
-        let hex_keys = keys.clone().map(|key| hex::encode(key.public_key().to_bytes()));
-        let command =
-            parse_genesis(&["--validator.key", &hex_keys[0], "--validator.key", &hex_keys[1]])
-                .expect("genesis with explicit validator keys must parse");
-        let ValidatorCommand::Genesis(command) = command else {
-            panic!("expected the genesis command");
-        };
-        assert_eq!(command.validator_keys, keys.map(|key| key.public_key()).to_vec());
-    }
-
-    #[test]
-    fn genesis_requires_an_explicit_validator_set() {
-        let Err(error) = parse_genesis(&[]) else {
-            panic!("genesis without an explicit validator set must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument);
-
-        let key = SigningKey::read_from_bytes(&[7; 32]).expect("test signing key should decode");
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        parse_genesis(&["--accounts-config", "/tmp/accounts.toml", "--validator.key", &key_hex])
-            .expect("additional accounts with an explicit validator set must parse");
-    }
-
-    #[test]
-    fn genesis_requires_explicit_accounts_fee_and_timestamp() {
-        let key = SigningKey::new();
-        let key_hex = hex::encode(key.public_key().to_bytes());
-        for flag in
-            ["--native-faucet", "--funding-account", "--verification-base-fee", "--timestamp"]
-        {
-            let position = BASE_GENESIS_ARGS.iter().position(|value| *value == flag).unwrap();
-            let args = BASE_GENESIS_ARGS
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != position && *index != position + 1)
-                .map(|(_, value)| *value)
-                .chain(["--validator.key", key_hex.as_str()]);
-            let Err(error) = ValidatorCommand::try_parse_from(args) else {
-                panic!("genesis must require {flag}");
-            };
-            assert_eq!(error.kind(), clap::error::ErrorKind::MissingRequiredArgument, "{flag}");
-        }
-    }
-
-    #[test]
-    fn genesis_rejects_an_invalid_validator_key() {
-        let Err(error) = parse_genesis(&["--validator.key", "not-hex"]) else {
-            panic!("an invalid validator key must be rejected");
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
-    }
-
     #[test]
     fn encryption_key_is_required() {
         let Err(error) = parse_start(&[]) else {
@@ -732,19 +636,19 @@ mod tests {
     fn admin_listener_is_opt_in() {
         let command =
             parse_start(&ENCRYPTION_KEY_ARGS).expect("start without an admin listener must parse");
-        let ValidatorCommand::Start { admin_listen, .. } = command else {
+        let ValidatorCommand::Start { admin, .. } = command else {
             panic!("expected the start command");
         };
-        assert_eq!(admin_listen, None);
+        assert_eq!(admin.listen, None);
 
         let command = parse_start(
             &[ENCRYPTION_KEY_ARGS.as_slice(), &["--admin.listen", "127.0.0.1:50102"]].concat(),
         )
         .expect("start with an admin listener must parse");
-        let ValidatorCommand::Start { admin_listen, .. } = command else {
+        let ValidatorCommand::Start { admin, .. } = command else {
             panic!("expected the start command");
         };
-        assert_eq!(admin_listen, Some("127.0.0.1:50102".parse().unwrap()));
+        assert_eq!(admin.listen, Some("127.0.0.1:50102".parse().unwrap()));
     }
 
     #[test]
@@ -1099,7 +1003,7 @@ mod tests {
         store_private_record(&writer, target.clone()).await;
         let target_file = directory.path().join("target-record.bin");
         let encoded_transaction_id = hex::encode(transaction_id.to_bytes());
-        let encoded_validator_id = hex::encode(target.record_id().validator_id());
+        let encoded_validator_id = format!("0x{}", hex::encode(target.record_id().validator_id()));
         export_record_file(
             directory.path(),
             &encoded_transaction_id,
@@ -1161,7 +1065,7 @@ mod tests {
         let wrong_setup = test_operator_keys(9, 7).remove(0);
         assert_issue_error(&target_file, &first_output, &wrong_setup, "setup does not match");
 
-        let missing_validator_id = hex::encode(validator_signers[0].public_key().to_bytes());
+        let missing_validator_id = validator_signers[0].public_key().to_string();
         let error = export_private_record::export(PrivateRecordExportOptions {
             data_directory: directory.path().to_path_buf(),
             transaction_id: encoded_transaction_id,

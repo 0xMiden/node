@@ -55,6 +55,14 @@ async fn request(
 }
 
 #[tokio::test]
+async fn tracing_targets_are_exposed_on_the_admin_router() {
+    let (_dir, _allowlist, app) = setup();
+    let (status, body) = request(&app, "GET", "/admin/tracing/targets", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({"targets": miden_node_tracing::declared_targets()}));
+}
+
+#[tokio::test]
 async fn admin_registration_workflow() {
     let (_dir, allowlist, _) = setup();
     let rejected: AccountId = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap();

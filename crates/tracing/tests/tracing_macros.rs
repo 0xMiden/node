@@ -9,6 +9,41 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt as _};
 use tracing_subscriber::registry::LookupSpan;
 
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "tracing_macros::targets::database" => "miden::storage::sqlite",
+    "tracing_macros::targets::rocksdb" => "miden::storage::rocksdb",
+    "tracing_macros::targets::files" => "miden::storage::files",
+}
+
+mod targets;
+
+#[derive(Clone, Default)]
+struct RecordedSpans(Arc<Mutex<Vec<RecordedSpan>>>);
+
+#[derive(Debug, PartialEq, Eq)]
+struct RecordedSpan {
+    name: &'static str,
+    target: &'static str,
+    level: Level,
+}
+
+impl<S: Subscriber> Layer<S> for RecordedSpans {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _id: &tracing::Id,
+        _ctx: Context<'_, S>,
+    ) {
+        let metadata = attrs.metadata();
+        self.0.lock().unwrap().push(RecordedSpan {
+            name: metadata.name(),
+            target: metadata.target(),
+            level: *metadata.level(),
+        });
+    }
+}
+
 #[derive(Clone, Default)]
 struct RecordedFields(Arc<Mutex<BTreeMap<String, String>>>);
 
@@ -26,6 +61,7 @@ struct RecordedEvent {
     level: Level,
     target: String,
     fields: BTreeMap<String, String>,
+    parent: Option<&'static str>,
 }
 
 impl RecordedEvents {
@@ -39,7 +75,7 @@ where
     S: Subscriber,
     for<'a> S: LookupSpan<'a>,
 {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+    fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
         let fields = Arc::new(Mutex::new(BTreeMap::new()));
         event.record(&mut FieldVisitor(Arc::clone(&fields)));
         let fields = fields.lock().unwrap().clone();
@@ -49,6 +85,7 @@ where
             level: *metadata.level(),
             target: metadata.target().to_owned(),
             fields,
+            parent: ctx.event_span(event).map(|span| span.metadata().name()),
         });
     }
 }
@@ -367,6 +404,248 @@ fn event_macros_record_canonical_attributes() {
 }
 
 #[test]
+fn scoped_targets_follow_module_boundaries() {
+    let spans = RecordedSpans::default();
+    let subscriber = tracing_subscriber::registry().with(spans.clone());
+
+    tracing::subscriber::with_default(subscriber, || {
+        assert_eq!(targets::database::child::inherited(), "miden::storage::sqlite");
+        assert_eq!(targets::rocksdb::target(), "miden::storage::rocksdb");
+        assert_eq!(targets::files::target(), "miden::storage::files");
+        assert_eq!(targets::maintenance::target(), "miden::storage");
+        assert_eq!(targets::database::parent(), "miden::storage::sqlite");
+        assert_eq!(targets::database::explicit_override(), "miden::rpc::server");
+        assert_eq!(explicit_target_without_scope(), "miden::rpc::client");
+    });
+
+    let spans = spans.0.lock().unwrap();
+    let actual = spans.iter().map(|span| (span.name, span.target)).collect::<Vec<_>>();
+    assert_eq!(
+        actual,
+        [
+            ("inherited", "miden::storage::sqlite"),
+            ("target", "miden::storage::rocksdb"),
+            ("target", "miden::storage::files"),
+            ("target", "miden::storage"),
+            ("parent", "miden::storage::sqlite"),
+            ("explicit_override", "miden::rpc::server"),
+            ("explicit_target_without_scope", "miden::rpc::client"),
+        ]
+    );
+}
+
+#[miden_node_tracing::instrument_v2(target = "miden::rpc::client")]
+fn explicit_target_without_scope() -> &'static str {
+    tracing::Span::current().metadata().unwrap().target()
+}
+
+#[test]
+fn scoped_instrumentation_preserves_fields_errors_and_options() {
+    let spans = RecordedSpans::default();
+    let fields = RecordedFields::default();
+    let events = RecordedEvents::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(spans.clone())
+        .with(fields.clone())
+        .with(events.clone());
+
+    tracing::subscriber::with_default(subscriber, || {
+        let error = targets::database::configured().unwrap_err();
+        assert_eq!(error.to_string(), "database unavailable");
+        assert_eq!(targets::database::explicit_error().unwrap_err().to_string(), "rpc unavailable");
+    });
+
+    assert_eq!(
+        spans.0.lock().unwrap()[0],
+        RecordedSpan {
+            name: "database.load",
+            target: "miden::storage::sqlite",
+            level: Level::DEBUG,
+        }
+    );
+    assert_eq!(fields.get("service.name").as_deref(), Some("store"));
+    assert_eq!(fields.get("block.number").as_deref(), Some("42"));
+    let events = events.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].target, "miden::storage::sqlite");
+    assert_eq!(events[0].level, Level::WARN);
+    assert_eq!(events[0].fields.get("error").unwrap(), "database unavailable");
+    assert_eq!(events[1].target, "miden::rpc::server");
+    assert_eq!(events[1].fields.get("error").unwrap(), "rpc unavailable");
+}
+
+#[test]
+fn scoped_instrumentation_supports_methods_and_futures() {
+    let spans = RecordedSpans::default();
+    let subscriber = tracing_subscriber::registry().with(spans.clone());
+    let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+
+    tracing::subscriber::with_default(subscriber, || {
+        use targets::database::child::Backend as _;
+
+        assert_eq!(targets::database::child::helper_name_collision(42), 42);
+        let backend = targets::database::child::Database;
+        assert_eq!(backend.load(42), 42);
+        assert_eq!(backend.target(), "miden::storage::sqlite");
+        runtime.block_on(async {
+            assert_eq!(backend.load_async(7).await, 7);
+            assert_eq!(targets::database::child::returned_future().await, "miden::storage::sqlite");
+        });
+    });
+
+    let spans = spans.0.lock().unwrap();
+    assert_eq!(spans.len(), 5);
+    for span in spans.iter() {
+        assert_eq!(span.target, "miden::storage::sqlite");
+    }
+}
+
+#[test]
+fn scoped_events_inherit_targets_and_preserve_fields_and_errors() {
+    let recorded = RecordedEvents::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        targets::database::child::events();
+        targets::rocksdb::event();
+        targets::files::event();
+        targets::maintenance::event();
+    });
+
+    let events = recorded.events();
+    assert_eq!(events.len(), 8);
+    let levels = [Level::TRACE, Level::DEBUG, Level::INFO, Level::WARN, Level::ERROR];
+    let names = ["trace.event", "debug.event", "info.event", "warn.event", "error.event"];
+    for (index, event) in events[..5].iter().enumerate() {
+        assert_eq!(event.target, "miden::storage::sqlite");
+        assert_eq!(event.level, levels[index]);
+        assert_eq!(event.fields["message"], names[index]);
+        assert_eq!(event.fields["block.number"], (index + 1).to_string());
+    }
+    assert!(!events[0].fields.contains_key("error"));
+    assert_eq!(events[2].fields["custom.attribute"], "custom");
+    for index in [1, 3, 4] {
+        assert_eq!(events[index].fields["error"], "database unavailable");
+    }
+    assert_eq!(events[5].target, "miden::storage::rocksdb");
+    assert_eq!(events[6].target, "miden::storage::files");
+    assert_eq!(events[7].target, "miden::storage");
+}
+
+#[test]
+fn scoped_event_targets_are_independent_of_span_targets_and_parents() {
+    let recorded = RecordedEvents::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        let parent = tracing::info_span!(target: "different.target", "explicit-parent");
+        targets::database::child::parented_events(&parent);
+    });
+
+    let events = recorded.events();
+    assert_eq!(events.len(), 4);
+    for event in &events[..3] {
+        assert_eq!(event.target, "miden::storage::sqlite");
+    }
+    assert_eq!(events[0].parent, Some("parented_events"));
+    assert_eq!(events[1].parent, Some("explicit-parent"));
+    assert_eq!(events[2].parent, None);
+    assert_eq!(events[3].target, "miden::storage::override");
+    assert_eq!(events[3].parent, Some("explicit-parent"));
+    assert_eq!(events[3].fields["error"], "database unavailable");
+    assert_eq!(events[3].fields["block.number"], "6");
+}
+
+#[test]
+fn explicit_event_targets_work_without_a_scope() {
+    use miden_node_tracing::{debug_v2, error_v2, info_v2, trace_v2, warn_v2};
+
+    const TARGET: &str = "miden::explicit";
+    let recorded = RecordedEvents::default();
+    let subscriber = tracing_subscriber::registry().with(recorded.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        trace_v2!(target: TARGET, "trace.event");
+        debug_v2!(target: TARGET, "debug.event");
+        info_v2!(target: TARGET, "info.event");
+        warn_v2!(target: TARGET, "warn.event");
+        error_v2!(OuterError(SourceError), target: TARGET, "error.event");
+    });
+
+    let events = recorded.events();
+    assert_eq!(events.len(), 5);
+    assert!(events.iter().all(|event| event.target == TARGET));
+    assert_eq!(events[4].fields["error"], "outer error");
+}
+
+#[test]
+fn scoped_events_can_be_filtered_by_storage_backend() {
+    let recorded = RecordedEvents::default();
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new("off,miden::storage::sqlite=warn"))
+        .with(recorded.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        targets::database::child::events();
+        targets::rocksdb::event();
+        targets::files::event();
+        targets::maintenance::event();
+    });
+
+    let events = recorded.events();
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].fields["message"], "warn.event");
+    assert_eq!(events[1].fields["message"], "error.event");
+}
+
+#[test]
+fn enabled_checks_follow_scopes_levels_and_explicit_overrides() {
+    const OVERRIDE: &str = "miden::rpc::server";
+    for (filter, expected) in [
+        ("off", [false, false, false, false]),
+        ("off,miden::storage=debug", [true, true, true, false]),
+        ("off,miden::storage::sqlite=debug", [true, false, false, false]),
+        ("off,miden::storage::sqlite=info", [false, false, false, false]),
+        ("off,miden::storage::rocksdb=debug", [false, true, false, false]),
+        ("off,miden::rpc::server=debug", [false, false, false, true]),
+    ] {
+        let subscriber =
+            tracing_subscriber::registry().with(tracing_subscriber::EnvFilter::new(filter));
+        tracing::subscriber::with_default(subscriber, || {
+            assert_eq!(
+                [
+                    targets::database::child::debug_enabled(),
+                    targets::rocksdb::debug_enabled(),
+                    targets::maintenance::debug_enabled(),
+                    targets::database::child::override_enabled(),
+                ],
+                expected,
+                "{filter}"
+            );
+            assert_eq!(
+                miden_node_tracing::enabled_v2!(target: OVERRIDE, Level::DEBUG),
+                expected[3],
+                "{filter}"
+            );
+        });
+    }
+}
+
+#[test]
+fn enabled_checks_forward_field_names_to_subscribers() {
+    let subscriber =
+        tracing_subscriber::registry().with(tracing_subscriber::filter::filter_fn(|metadata| {
+            metadata.fields().field("block.number").is_some()
+        }));
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(!targets::database::child::debug_enabled());
+        assert!(targets::database::child::fields_enabled());
+        assert!(
+            miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, block.number)
+        );
+        assert!(
+            !miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, account.id)
+        );
+    });
+}
+
+#[test]
 fn ui_tests() {
     let tests = trybuild::TestCases::new();
     tests.pass("tests/ui/tracing_macros/pass.rs");
@@ -397,4 +676,62 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_error_type.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_optional_error_type.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_exception_message.rs");
+    tests.compile_fail("tests/ui/tracing_macros/missing_target_scope.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_target_type.rs");
+    tests.compile_fail("tests/ui/tracing_macros/missing_event_target_scope.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_scoped_events.rs");
+    tests.compile_fail("tests/ui/tracing_macros/invalid_scoped_event_errors.rs");
+    tests.compile_fail("tests/ui/tracing_macros/missing_enabled_target_scope.rs");
+}
+
+#[test]
+fn manual_spans_use_scoped_targets_and_preserve_levels_and_fields() {
+    let spans = RecordedSpans::default();
+    let fields = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(spans.clone()).with(fields.clone());
+    tracing::subscriber::with_default(subscriber, targets::database::manual_spans);
+
+    let spans = spans.0.lock().unwrap();
+    let expected = [
+        ("manual.parent", Level::INFO, "miden::storage::sqlite"),
+        ("manual.trace", Level::TRACE, "miden::storage::sqlite"),
+        ("manual.debug", Level::DEBUG, "miden::storage::sqlite"),
+        ("manual.warn", Level::WARN, "miden::storage::sqlite"),
+        ("manual.error", Level::ERROR, "miden::storage::sqlite"),
+        ("manual.override", Level::INFO, "miden::explicit"),
+    ];
+    assert_eq!(spans.len(), expected.len());
+    for (span, (name, level, target)) in spans.iter().zip(expected) {
+        assert_eq!(span.name, name);
+        assert_eq!(span.level, level);
+        assert_eq!(span.target, target);
+    }
+    assert_eq!(fields.get("account.id").as_deref(), Some("account"));
+}
+
+#[test]
+fn scoped_instrumentation_can_create_a_root_span_inside_an_entered_span() {
+    #[derive(Clone, Default)]
+    struct Roots(Arc<Mutex<Vec<(&'static str, bool)>>>);
+
+    impl<S: Subscriber> Layer<S> for Roots {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::Id,
+            _: Context<'_, S>,
+        ) {
+            if attrs.metadata().name() == "scoped_root" {
+                self.0.lock().unwrap().push((attrs.metadata().target(), attrs.is_root()));
+            }
+        }
+    }
+
+    let roots = Roots::default();
+    let subscriber = tracing_subscriber::registry().with(roots.clone());
+    tracing::subscriber::with_default(subscriber, || {
+        let _parent = tracing::info_span!("caller").entered();
+        targets::database::root();
+    });
+    assert_eq!(*roots.0.lock().unwrap(), [("miden::storage::sqlite", true)]);
 }

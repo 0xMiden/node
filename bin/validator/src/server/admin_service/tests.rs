@@ -606,6 +606,20 @@ async fn invalid_share_requests_return_bad_request() {
 }
 
 #[tokio::test]
+async fn tracing_targets_are_exposed_on_the_admin_router() {
+    let (_directory, _writer, reader) = test_database().await;
+    let response = router(operator_keys().remove(0), reader)
+        .oneshot(Request::get("/admin/tracing/targets").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body, serde_json::json!({"targets": miden_node_tracing::declared_targets()}));
+}
+
+#[tokio::test]
 async fn router_exposes_only_the_json_admin_routes() {
     let (_directory, _writer, reader) = test_database().await;
     let app = router(operator_keys().remove(0), reader);

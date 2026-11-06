@@ -52,10 +52,10 @@ to reload it. A missing or invalid file also leaves transaction checks unhealthy
 restarted. No file is required on networks with allowlist enforcement disabled. Remote prover probes do not submit their
 temporary accounts and do not consume registration codes.
 
-Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the
-hex-encoded validator key that signs transaction encryption key attestations. The monitor will not submit a transaction
-unless it can verify the advertised encryption key. The monitor obtains the active fee asset from the protocol
-configuration returned by RPC and verifies it against the transaction's reference block.
+Network transaction checks require `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY`. The signing key must contain the public
+key, as printed by `miden-validator pubkey`, of the validator that signs transaction encryption key attestations. The
+monitor will not submit a transaction unless it can verify the advertised encryption key. The monitor obtains the active
+fee asset from the protocol configuration returned by RPC and verifies it against the transaction's reference block.
 
 On a chain with a non-zero verification base fee, network transaction checks additionally require
 `MIDEN_MONITOR_FUNDING_SERVICE_URL`: the monitor funds its in-memory accounts from the funding service and tops the

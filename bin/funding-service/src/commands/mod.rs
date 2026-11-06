@@ -16,14 +16,13 @@ use miden_funding_service::{
     FundingServiceConfig,
     lifecycle,
 };
-use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_tracing::{OpenTelemetry, info_v2};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -83,6 +82,8 @@ pub enum FundingServiceCommand {
 
     /// Starts the funding service.
     Start {
+        #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
         #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
 
@@ -172,13 +173,13 @@ pub enum FundingServiceCommand {
         )]
         poll_interval: Duration,
 
-        /// Hex-encoded validator signing public key trusted to attest the transaction encryption
-        /// key.
+        /// `0x`-prefixed hex validator signing public key trusted to attest the transaction
+        /// encryption key.
         #[arg(
             long = "validator-signing-public-key",
             env = ENV_VALIDATOR_SIGNING_PUBLIC_KEYS,
             value_delimiter = ',',
-            value_parser = parse_validator_public_key,
+            value_parser = ValidatorPublicKey::from_hex,
             required = true,
             value_name = "HEX"
         )]
@@ -202,8 +203,7 @@ impl FundingServiceCommand {
                     _ => unreachable!("clap requires exactly one genesis block source"),
                 };
                 lifecycle::bootstrap(&data_directory, account_id, &genesis).await?;
-                info!(
-                    target: miden_funding_service::LOG_TARGET,
+                info_v2!(
                     "Funding service bootstrap complete",
                     genesis.commitment = genesis.inner().header().commitment(),
                     data.directory = data_directory.as_path()
@@ -215,7 +215,15 @@ impl FundingServiceCommand {
     }
 
     async fn start(self, shutdown: CancellationToken) -> Result<()> {
+        let Self::Start { admin, .. } = &self else {
+            unreachable!("start is only called for the Start variant")
+        };
+        admin.run(shutdown.clone(), self.start_service(shutdown)).await
+    }
+
+    async fn start_service(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
+            admin: _,
             grpc_message_size,
             data_directory,
             listen,
@@ -235,8 +243,7 @@ impl FundingServiceCommand {
             unreachable!("start is only called for the Start variant")
         };
 
-        info!(
-            target: miden_funding_service::LOG_TARGET,
+        info_v2!(
             "Starting the funding service",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
@@ -289,12 +296,4 @@ impl FundingServiceCommand {
             Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
-}
-
-/// Decodes a hex-encoded validator signing public key.
-fn parse_validator_public_key(value: &str) -> Result<ValidatorPublicKey> {
-    let bytes = hex::decode(value.trim_start_matches("0x"))
-        .context("a validator signing public key must be hex encoded")?;
-    ValidatorPublicKey::read_from_bytes(&bytes)
-        .context("a validator signing public key must be a valid K256 public key")
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use miden_node_proto::clients::UsdcxFaucet;
-use miden_node_tracing::{ErrorSpanExt, Span, info, miden_instrument, miden_span_record, warn};
+use miden_node_tracing::{ErrorSpanExt, Span, info_v2, instrument_v2, miden_span_record, warn_v2};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
@@ -29,7 +29,6 @@ use crate::node::{RpcNodeClient, SubmissionOutcome, TransactionStatus};
 use crate::prover::Prover;
 use crate::status::StatusSnapshot;
 use crate::tx::{self, ExecutionInputs};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[cfg(test)]
 mod recovery_tests;
@@ -130,9 +129,8 @@ impl Funder {
     }
 
     /// Selects affordable notes and completes one funding attempt.
-    #[miden_instrument(
+    #[instrument_v2(
         parent = None,
-        target = COMPONENT,
         name = "funding.process_batch",
         fields(
             account.id = self.account_id(),
@@ -178,8 +176,7 @@ impl Funder {
     }
 
     /// Submits one transaction and resolves its outcome.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.transaction",
         fields(
             account.id = self.account_id(),
@@ -255,8 +252,7 @@ impl Funder {
     ///
     /// A missing `outcome` means this attempt was loaded from the database. We cannot resubmit it
     /// because we do not store the transaction payload.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "funding.resolve_attempt",
         fields(
             account.id = self.account_id(),
@@ -281,8 +277,7 @@ impl Funder {
         miden_span_record!(funding.submission_outcome = outcome.as_ref().map_or("recovered", SubmissionOutcome::as_str) #[nonstandard]);
         match outcome {
             Some(SubmissionOutcome::Accepted) => {
-                info!(
-                    target: LOG_TARGET,
+                info_v2!(
                     "Submitted a funding transaction",
                     transaction.id = transaction_id,
                     transaction.expires_at = expiration_block
@@ -298,9 +293,8 @@ impl Funder {
                     && let Some(nullifier) = deposit_nullifier
                 {
                     self.setup.wallet.remove_deposit(nullifier);
-                    warn!(
+                    warn_v2!(
                         &status,
-                        target: LOG_TARGET,
                         "Discarded a deposit rejected by the node",
                         transaction.id = transaction_id
                     );
@@ -311,17 +305,15 @@ impl Funder {
                 return Err(status).context("the node rejected the funding transaction");
             },
             Some(SubmissionOutcome::Unknown(err)) => {
-                warn!(
+                warn_v2!(
                     &err,
-                    target: LOG_TARGET,
                     "The submission outcome is unknown; waiting for commitment or expiration",
                     transaction.id = transaction_id,
                     transaction.expires_at = expiration_block
                 );
             },
             None => {
-                info!(
-                    target: LOG_TARGET,
+                info_v2!(
                     "Recovering an unresolved funding transaction",
                     transaction.id = transaction_id,
                     transaction.expires_at = expiration_block
@@ -358,7 +350,7 @@ impl Funder {
                         );
                         tokio::time::sleep(self.setup.config.poll_interval).await;
                     }
-                    info!(target: LOG_TARGET, "A funding transaction committed", transaction.id = transaction_id);
+                    info_v2!("A funding transaction committed", transaction.id = transaction_id);
                     if let Some(nullifier) = deposit_nullifier {
                         self.setup.wallet.remove_deposit(nullifier);
                     }
@@ -367,8 +359,7 @@ impl Funder {
                 },
                 Ok(TransactionStatus::Expired) => {
                     self.setup.database.release_attempt(transaction_id).await?;
-                    warn!(
-                        target: LOG_TARGET,
+                    warn_v2!(
                         "A funding transaction expired; its notes remain queued",
                         transaction.id = transaction_id,
                         transaction.expires_at = expiration_block
@@ -391,11 +382,7 @@ impl Funder {
     }
 
     /// Reads the funding account and chain state at the current reference block.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.read_chain_state",
-        err,
-    )]
+    #[instrument_v2(name = "funding.read_chain_state", err)]
     async fn read_chain_state(&mut self) -> Result<ChainState> {
         let (reference_header, blockchain) =
             self.node.tip_chain_state().await.context("failed to read the chain state")?;
@@ -432,16 +419,14 @@ impl Funder {
 ///
 /// Each failure has a separate span so repeated exceptions cannot exhaust the resolution span's
 /// attribute budget.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "funding.poll_failure",
     fields(transaction.id = transaction_id),
 )]
 fn record_poll_failure(err: &anyhow::Error, transaction_id: TransactionId) {
     Span::current().set_error(err.as_ref());
-    warn!(
+    warn_v2!(
         err,
-        target: LOG_TARGET,
         "Failed to resolve the funding transaction; retrying",
         transaction.id = transaction_id
     );

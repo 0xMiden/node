@@ -10,7 +10,7 @@ use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::Builder;
 use iroh::endpoint::presets::{self, Preset};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
-use miden_node_tracing::{info, warn};
+use miden_node_tracing::{info_v2, warn_v2};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
@@ -173,9 +173,8 @@ impl Ceremony {
                     let connected_peer = match result.context("incoming connection task failed")? {
                         Ok(peer) => peer,
                         Err(error) => {
-                            warn!(
+                            warn_v2!(
                                 &error,
-                                target: miden_validator::LOG_TARGET,
                                 "Ignoring failed incoming DKG connection"
                             );
                             continue;
@@ -200,8 +199,7 @@ impl Ceremony {
                     authenticated_peers.push(result.context("peer authentication task failed")??);
                 },
                 _ = progress.tick() => {
-                    info!(
-                        target: miden_validator::LOG_TARGET,
+                    info_v2!(
                         "Waiting for DKG peers to connect and authenticate",
                         dkg.peers.authenticated = authenticated_peers.len() #[nonstandard],
                         dkg.peers.expected = self.peers.len() #[nonstandard]
@@ -416,9 +414,7 @@ impl ParticipateOptions {
             let [key, endpoint] = pair else {
                 anyhow::bail!("each --peer requires a public key followed by an endpoint");
             };
-            let key = super::super::parse_validator_public_key(key)
-                .map_err(anyhow::Error::msg)
-                .context("invalid peer validator public key")?;
+            let key = PublicKey::from_hex(key).context("invalid peer validator public key")?;
             ensure!(key != signer.public_key(), "peer keys contain the local validator key");
             ensure!(!validator_set.contains(&key), "peer validator keys contain duplicates");
             let peer = Self::parse_peer_endpoint(endpoint)?;
