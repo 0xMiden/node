@@ -24,6 +24,11 @@ mod duplicate {
 fn declarations_are_available_without_executing_callsites() {
     assert_eq!(
         miden_node_tracing::declared_targets(),
-        vec!["inventory::shared", "inventory::unexecuted"],
+        vec![
+            "inventory::shared",
+            "inventory::unexecuted",
+            "miden::rpc::server",
+            "miden::tracing"
+        ],
     );
 }
