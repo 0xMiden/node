@@ -9,6 +9,7 @@ mod logging;
 pub mod panic;
 mod span_ext;
 pub mod spawn;
+mod targets;
 
 #[doc(hidden)]
 pub use attribute::field_name_allowed;
@@ -23,16 +24,20 @@ pub use logging::{
     setup_tracing,
     setup_tracing_with_config,
 };
+#[doc(hidden)]
+pub use miden_node_tracing_macro::__with_tracing_target;
 pub use miden_node_tracing_macro::{
     debug,
     error,
     info,
+    instrument_v2,
     miden_instrument,
     miden_span_record,
     trace,
     warn,
 };
 pub use span_ext::ErrorSpanExt;
+pub use targets::TargetMap;
 // Used directly by applications and by expansions of `tracing::instrument`.
 pub use tracing::{Instrument, Level, Span, Value, enabled, field, info_span};
 /// Upstream `tracing` exports required by generated macro code.
@@ -42,6 +47,7 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 /// Upstream attribute and event macros used by this crate's proc-macro expansions.
 #[doc(hidden)]
 pub mod __private {
+    pub use inventory;
     pub use tracing::{debug, error, info, instrument, trace, warn};
 
     pub use crate::instrument::AsDynError;

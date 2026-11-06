@@ -5,6 +5,43 @@ layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
+## Scoped targets
+
+Use `declare_targets!` once at the crate root, before child module declarations, to give `#[instrument_v2]` functions a
+shared diagnostic target without repeating it at each call site:
+
+```rust
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "miden_node_store::db" => "miden::storage::sqlite",
+    "miden_node_store::accounts" => "miden::storage::rocksdb",
+    "miden_node_store::blocks" => "miden::storage::files",
+}
+
+mod accounts;
+mod blocks;
+mod db;
+```
+
+The most specific matching module prefix wins, regardless of rule order. Rules match complete module names and their
+descendants: `miden_node_store::db` includes `db::queries`, but not `db_backup`. Modules outside the configured subtrees
+use the default target. Resolution happens at compile time; generic functions use the module where they are defined.
+Update the map when moving or renaming a configured module.
+
+The declaration generates an inventory of compiled call sites in test builds and a test requiring every mapping rule to
+win for at least one call site. Registration uses the inventory re-exported by this crate, so callers need no extra
+dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
+compiled into the test binary.
+
+Use `#[instrument_v2(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
+also works without a scope; otherwise a missing scope is a compile error. The attribute preserves `miden_instrument`'s
+canonical fields, inferred fields from `miden_span_record!`, and typed error reporting. Function arguments are always
+skipped.
+
+The scoped target applies to the function's span and its automatic `err` event. Existing `miden_instrument`, event
+macros such as `info!`, and manual span macros keep their existing target defaults; use their explicit target options
+when needed.
+
 ## Error events
 
 `#[miden_instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")`

@@ -2,10 +2,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument_v2, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 
-use crate::COMPONENT;
 use crate::state::State;
 
 impl State {
@@ -27,11 +26,7 @@ impl State {
     }
 }
 
-#[miden_instrument(
-    target = COMPONENT,
-    name = "measure_disk_space_usage",
-    err,
-)]
+#[instrument_v2(name = "measure_disk_space_usage", err)]
 async fn measure_disk_space_usage(data_dir: PathBuf) -> Result<(), tokio::task::JoinError> {
     let usage = spawn_blocking_in_current_span(move || measure_disk_usage_bytes(&data_dir)).await?;
     miden_span_record!(

@@ -14,13 +14,12 @@ use miden_node_proto::domain::account::{
     StorageMapEntries,
     StorageMapRequest,
 };
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 
 use super::{ScopedBlockNum, StateView};
-use crate::COMPONENT;
 use crate::account_state_forest::AccountStorageMapResult;
 use crate::errors::{DatabaseError, GetAccountError};
 
@@ -34,9 +33,7 @@ impl StateView {
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
     /// the latest state. Note that historical states are only available for recent blocks close
     /// to the chain tip.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     pub async fn get_account(
         &self,
         get_account_request: GetAccountRequest,
@@ -71,9 +68,7 @@ impl StateView {
     /// If `block_num` is provided, returns the witness at that historical block; otherwise,
     /// returns the witness at the latest block. The tree resolution doubles as the tip
     /// validation, so the returned block is ready for block-bounded database queries.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     async fn get_account_witness(
         &self,
         block_num: Option<BlockNumber>,
@@ -106,9 +101,7 @@ impl StateView {
     /// reverse-key LRU cache. If any hashed key is unknown, the method returns `Ok(None)` to signal
     /// that the caller should fall back to reconstructing the storage map details from the
     /// database.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     fn get_storage_map_details_from_forest(
         &self,
         account_id: AccountId,
@@ -192,9 +185,7 @@ impl StateView {
     /// Returns an error if the forest doesn't have data for the requested slot.
     /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
     /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument_v2]
     async fn fetch_public_account_details(
         &self,
         account_id: AccountId,

@@ -24,6 +24,67 @@ use syn::{
 
 mod instrument;
 
+/// Instruments a function using canonical tracing attributes and a scoped target.
+///
+/// Uses the target from a lexically visible `tracing_target!` in this module or an ancestor module, unless
+/// an explicit `target` argument is supplied. All other options and field and error conventions are
+/// the same as `miden_instrument`. An explicit target can be used without a scope.
+#[proc_macro_attribute]
+pub fn instrument_v2(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = TokenStream2::from(attr);
+    let item = TokenStream2::from(item);
+    let explicit_target = split_top_level_args(attr.clone()).iter().any(|arg| {
+        matches!(arg.clone().into_iter().next(), Some(TokenTree::Ident(ident)) if ident == "target")
+    });
+
+    if explicit_target {
+        quote! {
+            #[::miden_node_tracing::miden_instrument(#attr)]
+            #item
+        }
+    } else {
+        // Constants use item-name resolution, so hygiene alone cannot prevent collisions. Choose a
+        // name absent from both the function and its instrumentation arguments.
+        let mut name = "__MIDEN_TRACING_TARGET".to_owned();
+        while contains_ident(item.clone(), &name) || contains_ident(attr.clone(), &name) {
+            name.push('_');
+        }
+        let target = Ident::new(&name, proc_macro2::Span::mixed_site());
+        quote! {
+            #[::miden_node_tracing::miden_instrument(target = #target, #attr)]
+            #[::miden_node_tracing::__with_tracing_target(#target)]
+            #item
+        }
+    }
+    .into()
+}
+
+fn contains_ident(tokens: TokenStream2, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == name,
+        TokenTree::Group(group) => contains_ident(group.stream(), name),
+        _ => false,
+    })
+}
+
+/// Binds the lexical target after upstream instrumentation has generated its function body.
+///
+/// The upstream attribute accepts only literals or identifiers for targets. Inserting this
+/// constant after expansion makes it visible to both generated spans and automatic error events.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn __with_tracing_target(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let target = parse_macro_input!(attr as Ident);
+    let mut function = parse_macro_input!(item as ItemFn);
+    function.block.stmts.insert(
+        0,
+        syn::parse_quote! {
+            const #target: &str = tracing_target!();
+        },
+    );
+    quote!(#function).into()
+}
+
 /// Instruments a function using canonical tracing attributes.
 ///
 /// Field values must implement `RecordAttribute`, and their names must be registered for the value
