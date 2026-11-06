@@ -683,3 +683,28 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_scoped_event_errors.rs");
     tests.compile_fail("tests/ui/tracing_macros/missing_enabled_target_scope.rs");
 }
+
+#[test]
+fn manual_spans_use_scoped_targets_and_preserve_levels_and_fields() {
+    let spans = RecordedSpans::default();
+    let fields = RecordedFields::default();
+    let subscriber = tracing_subscriber::registry().with(spans.clone()).with(fields.clone());
+    tracing::subscriber::with_default(subscriber, targets::database::manual_spans);
+
+    let spans = spans.0.lock().unwrap();
+    let expected = [
+        ("manual.parent", Level::INFO, "miden::storage::sqlite"),
+        ("manual.trace", Level::TRACE, "miden::storage::sqlite"),
+        ("manual.debug", Level::DEBUG, "miden::storage::sqlite"),
+        ("manual.warn", Level::WARN, "miden::storage::sqlite"),
+        ("manual.error", Level::ERROR, "miden::storage::sqlite"),
+        ("manual.override", Level::INFO, "miden::explicit"),
+    ];
+    assert_eq!(spans.len(), expected.len());
+    for (span, (name, level, target)) in spans.iter().zip(expected) {
+        assert_eq!(span.name, name);
+        assert_eq!(span.level, level);
+        assert_eq!(span.target, target);
+    }
+    assert_eq!(fields.get("account.id").as_deref(), Some("account"));
+}

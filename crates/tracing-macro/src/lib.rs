@@ -319,6 +319,51 @@ pub fn error_v2(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true, true)
 }
 
+/// Creates a trace-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::trace_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn trace_span_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "trace_span")
+}
+
+/// Creates a debug-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::debug_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn debug_span_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "debug_span")
+}
+
+/// Creates an info-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::info_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn info_span_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "info_span")
+}
+
+/// Creates a warn-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::warn_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn warn_span_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "warn_span")
+}
+
+/// Creates an error-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::error_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn error_span_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "error_span")
+}
+
 /// Checks subscriber interest at a level using the lexically visible `tracing_target!` target.
 ///
 /// Accepts a level followed by optional field names, just like `tracing::enabled!`. A leading
@@ -326,15 +371,20 @@ pub fn error_v2(input: TokenStream) -> TokenStream {
 /// This is an interest hint, not a guarantee that a particular span or event will be recorded.
 #[proc_macro]
 pub fn enabled_v2(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "enabled")
+}
+
+fn expand_scoped_macro(input: TokenStream, name: &str) -> TokenStream {
+    let name = Ident::new(name, proc_macro2::Span::call_site());
     let input = TokenStream2::from(input);
     let mut tokens = input.clone().into_iter();
     let explicit_target = matches!(tokens.next(), Some(TokenTree::Ident(name)) if name == "target")
         && matches!(tokens.next(), Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
 
     if explicit_target {
-        quote! { ::miden_node_tracing::enabled!(#input) }
+        quote! { ::miden_node_tracing::__private::#name!(#input) }
     } else {
-        quote! { ::miden_node_tracing::enabled!(target: tracing_target!(), #input) }
+        quote! { ::miden_node_tracing::__private::#name!(target: tracing_target!(), #input) }
     }
     .into()
 }

@@ -9,7 +9,7 @@ use miden_node_proto::domain::account::{
 };
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
-use miden_node_tracing::{debug_v2, info_span, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug_v2, info_span_v2, instrument_v2, miden_span_record};
 use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
@@ -51,8 +51,7 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
 
         // Bound requested proofs before forwarding to the store.
         if let Some(details) = &request.details {
-            let _span =
-                info_span!(target: "miden::rpc::server", "validate_account_details").entered();
+            let _span = info_span_v2!("validate_account_details").entered();
             validate_storage_request(&details.storage_request)?;
             if let AccountVaultRequest::Assets(ids) = &details.vault_request {
                 check::<QueryParamVaultAssetLimit>(ids.len())?;

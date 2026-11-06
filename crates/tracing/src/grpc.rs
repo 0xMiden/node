@@ -18,9 +18,6 @@ use tower_http::trace::{
 };
 use tracing::{Level, field};
 
-/// Diagnostic target for gRPC request spans and server failure events.
-const SERVER_TARGET: &str = "miden::rpc::server";
-
 /// The [`TraceLayer`] returned by [`grpc_trace_layer`].
 pub type GrpcTraceLayer = TraceLayer<
     GrpcMakeClassifier,
@@ -106,13 +103,7 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
     ) {
         if let GrpcFailureClass::Error(message) = classification {
             let error = FailureMessage(message);
-            tracing::error!(
-                target: SERVER_TARGET,
-                parent: span,
-                error = &error as &(dyn std::error::Error + 'static),
-                latency = ?latency,
-                "response failed"
-            );
+            crate::error_v2!(&error, parent: span, "response failed", latency = format!("{latency:?}") #[nonstandard]);
         }
     }
 }
@@ -133,25 +124,18 @@ fn record_status(status: &tonic::Status, latency: Duration, span: &tracing::Span
 fn log_failure(level: Level, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
     if level == Level::ERROR {
         let error = FailureMessage(status.message().to_owned());
-        tracing::error!(
-            target: SERVER_TARGET,
-            parent: span,
-            error = &error as &(dyn std::error::Error + 'static),
-            grpc.code = ?status.code(),
-            grpc.message = status.message(),
-            latency = ?latency,
-            "request failed"
+        crate::error_v2!(
+            &error, parent: span, "request failed",
+            grpc.code = format!("{:?}", status.code()) #[nonstandard],
+            grpc.message = status.message() #[nonstandard],
+            latency = format!("{latency:?}") #[nonstandard]
         );
     } else {
-        tracing::info!(
-            target: SERVER_TARGET,
-            parent: span,
-            {
-                grpc.code = ?status.code(),
-                grpc.message = status.message(),
-                latency = ?latency,
-            },
-            "request failed"
+        crate::info_v2!(
+            parent: span, "request failed",
+            grpc.code = format!("{:?}", status.code()) #[nonstandard],
+            grpc.message = status.message() #[nonstandard],
+            latency = format!("{latency:?}") #[nonstandard]
         );
     }
 }
@@ -189,8 +173,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
 
     // Create a span with a generic, static name. Fields to be recorded after needs to be
     // initialized as empty since otherwise the assignment will have no effect.
-    let span = tracing::info_span!(
-        target: SERVER_TARGET,
+    let span = crate::info_span_v2!(
         "rpc",
         otel.name = field::Empty,
         rpc.service = service,
