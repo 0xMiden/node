@@ -1,3 +1,4 @@
+#[cfg(feature = "testing")]
 use std::str::FromStr;
 use std::sync::OnceLock;
 
@@ -10,9 +11,12 @@ use opentelemetry_sdk::resource::{EnvResourceDetector, TelemetryResourceDetector
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing::subscriber::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::layer::{Filter, SubscriberExt};
+#[cfg(feature = "testing")]
+use tracing_subscriber::layer::Filter;
+use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Layer, Registry};
 
+use crate::filter_control::{FILTER_CONTROLS, FilterControls, FilterOutput, reloadable_filter};
 use crate::{ErrorSpanExt, error};
 
 /// Global tracer provider for flushing traces on panic.
@@ -20,6 +24,10 @@ use crate::{ErrorSpanExt, error};
 /// This is necessary because the panic hook needs access to the tracer provider to flush
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
+
+/// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
+const DEFAULT_STDOUT_FILTER: &str =
+    "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
@@ -116,10 +124,7 @@ impl TracingConfig {
     pub fn from_env(open_telemetry: OpenTelemetry) -> Self {
         Self {
             open_telemetry,
-            stdout_filter: filter_env_or_default(
-                "MIDEN_STDOUT_FILTER",
-                "info,user=debug,miden_prover=warn",
-            ),
+            stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", DEFAULT_STDOUT_FILTER),
             otel_filter: filter_env_or_default(
                 "MIDEN_OTEL_FILTER",
                 "info,axum::rejection=trace,miden_prover=warn",
@@ -140,6 +145,7 @@ fn filter_env_or_default(var: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_owned())
 }
 
+#[cfg(feature = "testing")]
 fn filter_from_string<S>(
     filter: &str,
 ) -> anyhow::Result<Box<dyn Filter<S> + Send + Sync + 'static>> {
@@ -164,7 +170,8 @@ impl Drop for OtelGuard {
 
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
-/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then `info,user=debug,miden_prover=warn`.
+/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
+/// built-in defaults for operator, storage, and RPC server diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace,miden_prover=warn`.
 ///
@@ -217,10 +224,20 @@ pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option
         OpenTelemetryLayer::new(provider.tracer("tracing-otel-subscriber")).boxed()
     });
 
+    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter, FilterOutput::Stdout)?;
+    let (otel_filter, otel_reload) = reloadable_filter(&otel_filter, FilterOutput::OpenTelemetry)?;
+
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(filter_from_string(&stdout_filter)?))
-        .with(otel_layer.with_filter(filter_from_string(&otel_filter)?));
+        .with(stdout_layer().with_filter(stdout_filter))
+        .with(otel_layer.with_filter(otel_filter));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
+
+    FILTER_CONTROLS
+        .set(FilterControls {
+            stdout: stdout_reload,
+            otel: tracer_provider.as_ref().map(|_| otel_reload),
+        })
+        .map_err(|_| anyhow::anyhow!("tracing filter controls already initialized"))?;
 
     // Register panic hook now that tracing is initialized. This chains with the default panic hook
     // to preserve backtrace printing.
@@ -370,9 +387,59 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use opentelemetry::Key;
 
     use super::*;
+
+    struct RecordedTargets(Arc<Mutex<Vec<(&'static str, tracing::Level)>>>);
+
+    impl<S: Subscriber> Layer<S> for RecordedTargets {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let metadata = event.metadata();
+            self.0.lock().unwrap().push((metadata.target(), *metadata.level()));
+        }
+    }
+
+    fn default_stdout_events(emit: impl FnOnce()) -> Vec<(&'static str, tracing::Level)> {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(
+            RecordedTargets(Arc::clone(&events))
+                .with_filter(EnvFilter::try_new(DEFAULT_STDOUT_FILTER).unwrap()),
+        );
+        tracing::subscriber::with_default(subscriber, emit);
+        events.lock().unwrap().clone()
+    }
+
+    #[test]
+    fn default_stdout_preserves_storage_and_operator_debug_events() {
+        let events = default_stdout_events(|| {
+            tracing::debug!(target: "user::miden-node", "operator debug");
+            tracing::debug!(target: "miden::storage", "storage lifecycle");
+            tracing::debug!(target: "miden::storage::sqlite", "database debug");
+            tracing::trace!(target: "miden::storage", "storage trace");
+            tracing::debug!(target: "other_dependency", "dependency debug");
+            tracing::info!(target: "other_dependency", "dependency info");
+            tracing::info!(target: "miden_prover", "prover info");
+            tracing::warn!(target: "miden_prover", "prover warning");
+        });
+
+        assert_eq!(
+            events,
+            [
+                ("user::miden-node", tracing::Level::DEBUG),
+                ("miden::storage", tracing::Level::DEBUG),
+                ("miden::storage::sqlite", tracing::Level::DEBUG),
+                ("other_dependency", tracing::Level::INFO),
+                ("miden_prover", tracing::Level::WARN),
+            ]
+        );
+    }
 
     #[test]
     fn resource_uses_configured_defaults() {

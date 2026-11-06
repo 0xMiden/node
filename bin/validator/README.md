@@ -10,9 +10,9 @@ The validator is separate from `node` so that block construction and block valid
 services. It verifies submitted transactions, validates proposed blocks, and signs blocks that satisfy the validator's
 checks.
 
-The validator binary is also responsible for creating the genesis block, via its `genesis` command. The genesis block is
-not signed; it commits to the validator set that must sign every subsequent block, and is then used to initialize the
-validators, the node, and other services that need trusted genesis state.
+The genesis block is built by the separate [`miden-genesis`](../genesis/README.md) binary. It is not signed; it commits
+to the validator set that must sign every subsequent block. Each validator seeds its database from it with the
+`bootstrap` command, as do the node and other services that need trusted genesis state.
 
 ## Operation
 

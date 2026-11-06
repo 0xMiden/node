@@ -51,7 +51,7 @@ Paths are resolved relative to the genesis configuration file's directory. Build
 service from it:
 
 ```bash
-miden-validator genesis --genesis-block-directory ./genesis --accounts-directory ./accounts \
+miden-genesis build --genesis-block-directory ./genesis --accounts-directory ./accounts \
   --native-faucet ./seeded/faucet.mac --funding-account ./seeded/wallet.mac \
   --verification-base-fee 0 --timestamp "$(date +%s)" \
   --accounts-config ./accounts.toml --validator.key <validator-public-key>

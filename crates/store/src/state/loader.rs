@@ -18,7 +18,7 @@ use miden_crypto::merkle::smt::{
     RocksDbStorage,
     SmtStorageReader,
 };
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info_v2, instrument_v2};
 use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
@@ -36,7 +36,6 @@ use crate::db::queries::{
 };
 use crate::db::{BlockHeaderCommitment, Db};
 use crate::errors::{DatabaseError, StateInitializationError};
-use crate::{COMPONENT, LOG_TARGET};
 
 // CONSTANTS
 // ================================================================================================
@@ -102,8 +101,7 @@ fn block_num_to_nullifier_leaf(block_num: BlockNumber) -> Word {
 // ================================================================================================
 
 /// Opens `RocksDB` storage for an account or nullifier tree.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "open_tree_storage",
     fields(path = domain),
 )]
@@ -121,9 +119,7 @@ pub fn open_tree_storage(
 }
 
 /// Loads the account tree from `RocksDB`, populating empty storage from SQLite.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument_v2]
 pub async fn load_account_tree(
     storage: RocksDbStorage,
     db: &Db,
@@ -136,7 +132,7 @@ pub async fn load_account_tree(
         return AccountTree::new(smt).map_err(StateInitializationError::FailedToCreateAccountsTree);
     }
 
-    info!(target: LOG_TARGET, "RocksDB account tree storage is empty, populating from SQLite");
+    info_v2!("RocksDB account tree storage is empty, populating from SQLite");
 
     let mut smt = LargeSmt::with_entries(storage, std::iter::empty())
         .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -160,9 +156,7 @@ pub async fn load_account_tree(
 }
 
 /// Loads the nullifier tree from `RocksDB`, populating empty storage from SQLite.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument_v2]
 pub async fn load_nullifier_tree(
     storage: RocksDbStorage,
     db: &Db,
@@ -175,7 +169,7 @@ pub async fn load_nullifier_tree(
         return Ok(NullifierTree::new_unchecked(smt));
     }
 
-    info!(target: LOG_TARGET, "RocksDB nullifier tree storage is empty, populating from SQLite");
+    info_v2!("RocksDB nullifier tree storage is empty, populating from SQLite");
 
     let mut smt = LargeSmt::with_entries(storage, std::iter::empty())
         .map_err(account_tree_large_smt_error_to_init_error)?;
@@ -198,8 +192,7 @@ pub async fn load_nullifier_tree(
 }
 
 /// Opens `RocksDB` storage for the account state forest.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     name = "open_forest_storage",
     fields(path = domain),
 )]
@@ -228,8 +221,7 @@ pub fn open_account_state_forest_storage(
 }
 
 /// Loads the account state forest from `RocksDB`, populating empty storage from SQLite.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     fields(
         block.number = block_num,
     ),
@@ -246,10 +238,7 @@ pub async fn load_account_state_forest(
         return Ok(forest);
     }
 
-    info!(
-        target: LOG_TARGET,
-        "RocksDB account state forest storage is empty, populating from SQLite"
-    );
+    info_v2!("RocksDB account state forest storage is empty, populating from SQLite");
     rebuild_account_state_forest(&mut forest, db, block_num).await?;
     Ok(forest)
 }
@@ -266,9 +255,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 // ================================================================================================
 
 /// Loads the blockchain MMR from all block headers in the database.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument_v2(target = "miden::storage")]
 pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
     let latest_header = db.select_block_header_by_block_num(None).await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
@@ -310,8 +297,7 @@ fn verify_chain_mmr_consistency(
 }
 
 /// Rebuilds SMT forest with storage map and vault Merkle paths for all public accounts.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument_v2(
     fields(
         block.number = block_num,
     ),
@@ -365,9 +351,7 @@ pub async fn rebuild_account_state_forest(
 ///
 /// # Errors
 /// Returns `StateInitializationError::TreeStorageDiverged` if any root doesn't match.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument_v2]
 pub async fn verify_tree_consistency(
     account_tree_root: Word,
     nullifier_tree_root: Word,
@@ -408,9 +392,7 @@ pub async fn verify_tree_consistency(
 /// This check ensures persisted account state forest has not diverged from the latest
 /// account states in SQLite. When the forest is rebuilt from SQLite, it will naturally
 /// match; when loaded from `RocksDB`, this catches corruption or incomplete shutdown.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument_v2]
 pub async fn verify_account_state_forest_consistency(
     forest: &AccountStateForest<impl Backend + Sync>,
     db: &Db,

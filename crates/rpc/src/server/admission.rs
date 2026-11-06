@@ -3,14 +3,14 @@ use std::sync::Arc;
 use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationStatus};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
 use tonic::Status;
 
+use crate::FundingClient;
 use crate::server::api::log_internal_error;
-use crate::{COMPONENT, FundingClient};
 
 /// Account creation policy shared by the public and internal sequencer APIs.
 #[derive(Clone)]
@@ -76,8 +76,7 @@ impl AccountAdmission {
     }
 
     /// Rejects the submission if it creates an unregistered, non-network account.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         name = "account_admission.check",
         fields(account.id = update.account_id()),
     )]

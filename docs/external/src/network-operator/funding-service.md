@@ -15,15 +15,14 @@ that source, and it gives an operator a single account to keep funded.
 ## Provision the funding account
 
 Prepare a public account using standard `AuthSingleSig` authentication, with a nonzero nonce and a balance of the native
-asset. Pass its account file to `miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its
+asset. Pass its account file to `miden-genesis build --funding-account`. Keep its account ID for bootstrap and its
 signing key for startup. The service reads the current public account state from the node.
 
 The signing-key file contains the binary serialization of `AuthSecretKey`, including its signature scheme. It supports
-ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-usdcx-genesis new-distributor` writes this file as
-`distributor.secret` alongside the account file; see the
-[genesis tool documentation](https://github.com/0xMiden/node/tree/main/crates/usdcx-genesis). For an existing account,
-export its key in the same format. Restrict the key file to its owner and keep it outside the database directory; the
-database contains no signing key.
+ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-genesis new-distributor` writes this file as `distributor.secret`
+alongside the account file; see the [genesis tool documentation](https://github.com/0xMiden/node/tree/main/bin/genesis).
+For an existing account, export its key in the same format. Restrict the key file to its owner and keep it outside the
+database directory; the database contains no signing key.
 
 ## Initialize the database
 
@@ -60,21 +59,21 @@ miden-funding-service start \
   --validator-signing-public-key <validator-signing-public-key>
 ```
 
-| Option                           | Default      | Purpose                                                                                                                                                                 |
-| -------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--data-directory`               | required     | Directory containing the bootstrapped funding database.                                                                                                                 |
-| `--listen`                       | required     | Socket address of the HTTP API.                                                                                                                                         |
-| `--rpc.url`                      | required     | The node RPC API the service reads from and submits to.                                                                                                                 |
-| `--signing-key-file`             | required     | Path to the funding account's serialized signing key.                                                                                                                   |
-| `--validator-signing-public-key` | required     | Hex-encoded validator signing public key trusted to attest the transaction encryption key. Repeat the flag, or pass a comma separated list, to trust more than one key. |
-| `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                    |
-| `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
-| `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
-| `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
-| `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                             |
-| `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
-| `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
-| `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
+| Option                           | Default      | Purpose                                                                                                                                                              |
+| -------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-directory`               | required     | Directory containing the bootstrapped funding database.                                                                                                              |
+| `--listen`                       | required     | Socket address of the HTTP API.                                                                                                                                      |
+| `--rpc.url`                      | required     | The node RPC API the service reads from and submits to.                                                                                                              |
+| `--signing-key-file`             | required     | Path to the funding account's serialized signing key.                                                                                                                |
+| `--validator-signing-public-key` | required     | `0x`-prefixed validator signing public key trusted to attest the transaction encryption key. Repeat the flag, or pass a comma separated list, to trust several keys. |
+| `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                 |
+| `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                               |
+| `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                |
+| `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                           |
+| `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                          |
+| `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                      |
+| `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                    |
+| `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                           |
 
 With `--tx-prover.url` set, the service proves only through the remote prover and never in process, so its host does not
 need the memory that proving requires. If the remote prover fails or times out, the affected requests stay queued and

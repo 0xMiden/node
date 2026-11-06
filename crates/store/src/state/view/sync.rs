@@ -1,13 +1,12 @@
 use std::ops::RangeInclusive;
 
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 
 use super::StateView;
-use crate::COMPONENT;
 use crate::db::queries::{
     AccountStorageMapValuesPaged,
     AccountVaultAssets,
@@ -49,11 +48,7 @@ impl StateView {
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
     /// view's chain tip.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn sync_chain_mmr(
         &self,
         block_range: RangeInclusive<BlockNumber>,
@@ -117,11 +112,7 @@ impl StateView {
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
     /// view's chain tip.
-    #[miden_instrument(
-        level = "debug",
-        target = COMPONENT,
-        err(level = "debug"),
-    )]
+    #[instrument_v2(level = "debug", err(level = "debug"))]
     pub async fn sync_notes(
         &self,
         note_tags: Vec<u32>,

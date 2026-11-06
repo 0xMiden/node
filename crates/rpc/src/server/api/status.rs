@@ -1,9 +1,8 @@
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug_v2, instrument_v2};
 
 use super::{ProtoMempoolStats, Request, RpcBackend, RpcService};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::Status for RpcService {
@@ -18,10 +17,7 @@ impl proto::server::miden_node_v1_node_service::Status for RpcService {
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "status",
-    )]
+    #[instrument_v2(name = "status")]
     async fn handle(
         &self,
         _input: Self::Input,
@@ -41,7 +37,7 @@ impl proto::server::miden_node_v1_node_service::Status for RpcService {
                 .and_then(|response| response.into_inner().block_producer),
         };
 
-        debug!(target: LOG_TARGET, "Getting status");
+        debug_v2!("Getting status");
 
         Ok(proto::miden::node::v1::StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),

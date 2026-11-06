@@ -3,6 +3,7 @@ exclude = ["xtask"]
 members = [
   "bin/benchmark",
   "bin/funding-service",
+  "bin/genesis",
   "bin/large-account-benchmark",
   "bin/network-monitor",
   "bin/node",
@@ -21,7 +22,6 @@ members = [
   "crates/test-macro",
   "crates/tracing",
   "crates/tracing-macro",
-  "crates/usdcx-genesis",
   "crates/utils",
   "proto",
 ]

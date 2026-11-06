@@ -87,7 +87,8 @@ struct ParticipateOptions {
     #[arg(long, value_name = "IP:PORT")]
     bind_address: Option<SocketAddr>,
 
-    /// Trusted validator public key and peer-to-peer endpoint. Repeat once per other validator.
+    /// Trusted `0x`-prefixed validator public key and peer-to-peer endpoint. Repeat once per other
+    /// validator.
     ///
     /// Append @IP:PORT for direct connections. A socket address is required unless public relays
     /// are enabled. Each endpoint must prove ownership of its paired validator key.

@@ -47,6 +47,8 @@ pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
         #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
+        #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// Socket address at which to serve the ntx-builder's gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
@@ -253,7 +255,15 @@ impl NtxBuilderCommand {
     }
 
     async fn start(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let Self::Start { admin, .. } = &self else {
+            unreachable!("start is only called for the Start variant")
+        };
+        admin.run(shutdown.clone(), self.start_service(shutdown)).await
+    }
+
+    async fn start_service(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let Self::Start {
+            admin: _,
             grpc_message_size,
             listen,
             grpc_timeout,

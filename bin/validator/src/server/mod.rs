@@ -61,8 +61,8 @@ pub struct ValidatorAdminServer {
     pub address: SocketAddr,
     /// Golden key material used to issue this validator's decryption shares.
     pub operator_key: GoldenOperatorKey,
-    /// Read handle to the shared validator database. The administration API only ever reads, so it
-    /// holds a [`ValidatorDbReader`] and cannot mutate validator state.
+    /// Read handle to the shared validator database. Administration routes cannot mutate stored
+    /// validator records through this handle.
     pub reader: ValidatorDbReader,
 }
 

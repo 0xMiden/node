@@ -3,13 +3,12 @@
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteId, Nullifier};
 
 use super::StateView;
-use crate::COMPONENT;
 use crate::db::NullifierInfo;
 use crate::errors::DatabaseError;
 
@@ -24,8 +23,7 @@ pub struct TransactionInputs {
 
 impl StateView {
     /// Returns data needed by the block producer to verify transaction validity.
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument_v2(
         fields(
             account.id = account_id,
             note.nullifiers = nullifiers,

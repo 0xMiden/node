@@ -181,12 +181,12 @@ Mount it through a Compose override:
 
 ```yaml title="accounts.override.yml"
 services:
-  bootstrap-validator:
+  bootstrap-genesis:
     configs:
       - source: additional-accounts
         target: /accounts.toml
     environment:
-      MIDEN_VALIDATOR_GENESIS_ACCOUNTS_CONFIG: /accounts.toml
+      MIDEN_GENESIS_ACCOUNTS_CONFIG: /accounts.toml
 configs:
   additional-accounts:
     file: /absolute/path/to/accounts.toml

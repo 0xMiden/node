@@ -73,7 +73,7 @@ enable it:
 --admin.listen 127.0.0.1:50100
 ```
 
-The corresponding environment variable is `MIDEN_NODE_ADMIN_LISTEN`. The API does not authenticate requests. Enforce
+The corresponding environment variable is `MIDEN_ADMIN_LISTEN`. The API does not authenticate requests. Enforce
 authentication and authorization externally, and prevent direct access to this listener. Keep it on an isolated operator
 network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
 access. Do not expose it through the public RPC ingress.
