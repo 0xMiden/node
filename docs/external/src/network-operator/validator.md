@@ -160,9 +160,6 @@ Enforce authentication and authorization externally, and prevent direct access t
 operator network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for
 remote access.
 
-This listener also supports
-[changing tracing filters and listing declared targets](/logging#change-filters-while-the-service-is-running).
-
 | Method | Path                                              | Request                                               | Result                                                                                          |
 | ------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `GET`  | `/admin/v1/transactions`                          | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |

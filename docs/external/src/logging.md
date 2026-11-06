@@ -124,26 +124,27 @@ endpoint, for example:
 ADMIN_URL=http://127.0.0.1:50100
 ```
 
-List the available declared targets before choosing a filter:
+List tracing targets to help choose which part of the service to investigate:
 
 ```bash
 curl --fail-with-body "${ADMIN_URL}/admin/tracing/targets"
 ```
 
-The response is a JSON object with a sorted, unique `targets` array. It includes targets declared by components linked
-into this build, even if their code has not run yet. Explicit call site overrides, older instrumentation, and
-third-party targets may also be used in expressions even when they do not appear in this list.
+The response contains a `targets` array of names you can use in filter expressions, such as `miden::storage::sqlite`.
+The list contains Miden's declared targets. Filters also accept targets absent from this list, including those used by
+external dependencies.
 
-Fetch and save the current filters before changing them:
+Each update replaces the entire filter for one output. Save the current filter so you can restore it after the
+investigation:
 
 ```bash
-curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter"
-curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter"
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter" --output stdout-filter.json
+curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter" --output otel-filter.json
 ```
 
-Each successful `GET` returns `200` with `{"filter":"<expression>"}`. It preserves the last successfully applied
-expression exactly, including the startup expression, so it can be saved and restored without changing field-value
-matching.
+Check that each request succeeds before proceeding. The saved JSON contains the active filter in the form
+`{"filter":"<expression>"}` and can be sent back unchanged to restore it. If you only need stdout logs, skip the
+OpenTelemetry request; it fails if exporting was disabled when the service started.
 
 Replace the stdout filter with a complete expression:
 
@@ -161,10 +162,9 @@ curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
   --data '{"filter":"info,miden::storage=debug"}'
 ```
 
-A successful update returns `204 No Content`. Subsequent instrumentation uses the new filter; spans already created or
-previously filtered out are not reconstructed. Changing a filter does not flush the exporter or change its endpoint.
-Verify the expected new activity in stdout or your tracing backend. Coordinate updates with other operators: each
-successful request replaces the selected output's entire expression.
+A successful update returns `204 No Content`. Check stdout or your tracing backend for the expected detail from new
+activity. Increasing verbosity does not recover earlier logs or traces. Updating the OpenTelemetry filter does not
+enable exporting or change where traces are sent.
 
 An invalid expression returns `400` and leaves the previous filter active. Correct the expression and retry. The
 OpenTelemetry endpoints return `409` if exporting was disabled at startup; configure an exporter and restart before
@@ -172,8 +172,17 @@ reading or changing its filter. A `503` means tracing controls are unavailable, 
 be read or updated. These handler errors return JSON with an `error` message. Correct request-shape errors, such as a
 missing `filter` field, before retrying.
 
-Restore the usual expression with another `PUT` after the investigation. To retain a filter across restarts, also update
-the service's environment configuration. Environment variables are read only during startup.
+After the investigation, restore each filter you changed using its saved file:
+
+```bash
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/stdout-filter" \
+  -H 'Content-Type: application/json' --data-binary @stdout-filter.json
+curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
+  -H 'Content-Type: application/json' --data-binary @otel-filter.json
+```
+
+To retain a filter across restarts, update the service's environment configuration. Environment variables are read only
+during startup.
 
 ## Troubleshooting filters
 
