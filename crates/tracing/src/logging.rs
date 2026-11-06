@@ -29,7 +29,8 @@ static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 const DEFAULT_STDOUT_FILTER: &str = concat!(
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,",
     "miden::production=debug,miden::mempool=debug,miden::proving=debug,miden::sync=debug,",
-    "miden::validation=debug,miden::privacy=debug,miden::admin=debug,miden_prover=warn",
+    "miden::validation=debug,miden::privacy=debug,miden::admin=debug,",
+    "miden::funding=debug,miden_prover=warn",
 );
 
 /// Default OpenTelemetry resource attributes for this process.
