@@ -85,7 +85,7 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::proving::transactions`    | Transaction proof requests and results                        |
 | `miden::proving::batches`         | Batch execution and proving                                   |
 | `miden::proving::blocks`          | Block proof scheduling, retries, and results                  |
-| `miden::sync`                     | Chain and account synchronization progress and readiness       |
+| `miden::sync`                     | Chain and account synchronization progress and readiness      |
 | `miden::sync::blocks`             | Receiving, validating, and applying committed blocks          |
 | `miden::sync::proofs`             | Receiving and applying block proofs                           |
 | `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                  |
