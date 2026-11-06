@@ -64,8 +64,8 @@ OpenTelemetry.
 ## User-facing targets
 
 The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
-`miden::production`, `miden::mempool`, `miden::proving`, and `miden::sync`. The compact stdout format does not print the
-target name, but the filter still matches it.
+`miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`, and
+`miden::admin`. The compact stdout format does not print the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
@@ -89,7 +89,11 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::sync::proofs`             | Receiving and applying block proofs                               |
 | `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                      |
 | `miden::storage`                  | Persistence and account, note, and storage lifecycle events       |
-| `user::miden-validator`           | Validator startup, bootstrap, validation, and block signing       |
+| `miden::validation`               | Validator startup and configuration                               |
+| `miden::validation::transactions` | Transaction proof verification and re-execution                   |
+| `miden::validation::blocks`       | Block validation and signing                                      |
+| `miden::privacy::dkg`             | Storage-key setup ceremonies                                      |
+| `miden::admin`                    | Private administration API diagnostics                            |
 | `user::miden-prover`              | Remote prover lifecycle events                                    |
 | `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                      |
 | `user::miden-funding-service`     | Funding service readiness, funding transactions, and note commits |

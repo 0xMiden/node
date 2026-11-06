@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
-use miden_node_tracing::{ErrorReport, error, info, miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorReport, error_v2, info_v2, instrument_v2, miden_span_record};
 use miden_protocol::block::BlockNumber;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
@@ -12,7 +12,6 @@ use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
 use super::ValidatorService;
-use crate::COMPONENT;
 
 type BlockStream =
     Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
@@ -46,10 +45,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
         Ok(item)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "validator.block_subscription",
-    )]
+    #[instrument_v2(name = "validator.block_subscription")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -118,7 +114,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                         )),
                     }
                     .inspect_err(|err| {
-                        error!(
+                        error_v2!(
                             err,
                             "failed to load block in validator recovery stream",
                             block.number = block
@@ -133,7 +129,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                     // and prevent the sending of the error response.
                     let is_err = response.is_err();
                     if tx.send(response).await.is_err() || is_err {
-                        info!("validator recovery stream closing");
+                        info_v2!("validator recovery stream closing");
                         return;
                     }
                 }

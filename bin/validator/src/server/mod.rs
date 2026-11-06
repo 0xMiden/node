@@ -4,7 +4,7 @@ use anyhow::Context;
 use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_tracing::grpc::grpc_trace_layer;
-use miden_node_tracing::info;
+use miden_node_tracing::info_v2;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc;
@@ -12,16 +12,11 @@ use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::db::{ValidatorDbReader, ValidatorDbWriter};
-use crate::{
-    GoldenOperatorKey,
-    LOG_TARGET,
-    PrivateRecordSealer,
-    TransactionInputDecrypter,
-    ValidatorSigner,
-};
+use crate::db::ValidatorDbWriter;
+use crate::{PrivateRecordSealer, TransactionInputDecrypter, ValidatorSigner};
 
 mod admin_service;
+pub use admin_service::ValidatorAdminServer;
 mod validator_service;
 
 use validator_service::ValidatorService;
@@ -53,46 +48,6 @@ pub struct ValidatorServer {
     /// Handle to the shared validator database. Carrying the write handle makes the public API the
     /// database's single writer; reads reach the shared read handle through its `Deref`.
     pub db: ValidatorDbWriter,
-}
-
-/// Serves the private validator administration API on a network-isolated listener.
-pub struct ValidatorAdminServer {
-    /// Address of the private administration listener.
-    pub address: SocketAddr,
-    /// Golden key material used to issue this validator's decryption shares.
-    pub operator_key: GoldenOperatorKey,
-    /// Read handle to the shared validator database. Administration routes cannot mutate stored
-    /// validator records through this handle.
-    pub reader: ValidatorDbReader,
-}
-
-impl ValidatorAdminServer {
-    /// Serves the private validator administration API.
-    pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        let listener =
-            TcpListener::bind(self.address).await.context("failed to bind admin address")?;
-        self.serve_on(listener, shutdown).await
-    }
-
-    async fn serve_on(
-        self,
-        listener: TcpListener,
-        shutdown: CancellationToken,
-    ) -> anyhow::Result<()> {
-        let endpoint =
-            listener.local_addr().context("failed to read validator admin listen address")?;
-        info!(
-            target: LOG_TARGET,
-            "Validator admin server ready",
-            service.name = "miden-validator-admin",
-            validator.admin_listen = endpoint.to_string()
-        );
-
-        axum::serve(listener, admin_service::router(self.operator_key, self.reader))
-            .with_graceful_shutdown(shutdown.cancelled_owned())
-            .await
-            .context("failed to serve validator admin API")
-    }
 }
 
 impl ValidatorServer {
@@ -135,8 +90,7 @@ impl ValidatorServer {
         .await
         .context("failed to initialize validator server")?;
         let endpoint = listener.local_addr().context("failed to read validator listen address")?;
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "Validator ready",
             service.name = "miden-validator",
             service.version = env!("CARGO_PKG_VERSION"),

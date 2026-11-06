@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 
 use anyhow::Context;
-use miden_node_tracing::info;
+use miden_node_tracing::info_v2;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::read_genesis_block;
 use miden_validator::DataDirectory;
@@ -18,8 +18,7 @@ pub async fn bootstrap(
     sqlite_connection_pool_size: NonZeroUsize,
     genesis_block_file: &Path,
 ) -> anyhow::Result<()> {
-    info!(
-        target: miden_validator::LOG_TARGET,
+    info_v2!(
         "Bootstrapping validator",
         service.name = "miden-validator",
         service.version = env!("CARGO_PKG_VERSION"),
@@ -45,8 +44,7 @@ pub async fn bootstrap(
     .await
     .context("failed to bootstrap the validator database")?;
 
-    info!(
-        target: miden_validator::LOG_TARGET,
+    info_v2!(
         "Validator bootstrap complete",
         genesis.commitment = genesis_commitment,
         data.directory = data_directory
