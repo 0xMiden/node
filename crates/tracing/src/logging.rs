@@ -21,8 +21,9 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Stdout defaults for operator events, storage diagnostics, and prover noise suppression.
-const DEFAULT_STDOUT_FILTER: &str = "info,user=debug,miden::storage=debug,miden_prover=warn";
+/// Stdout defaults for operator, storage, and RPC server diagnostics with prover noise suppression.
+const DEFAULT_STDOUT_FILTER: &str =
+    "info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn";
 
 /// Default OpenTelemetry resource attributes for this process.
 #[derive(Clone)]
@@ -165,7 +166,7 @@ impl Drop for OtelGuard {
 /// Initializes tracing to stdout and optionally an open-telemetry exporter.
 ///
 /// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
-/// built-in defaults for operator and storage diagnostics.
+/// built-in defaults for operator, storage, and RPC server diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info,axum::rejection=trace,miden_prover=warn`.
 ///

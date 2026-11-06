@@ -2,6 +2,11 @@
 
 extern crate self as miden_node_tracing;
 
+crate::declare_targets! {
+    default: "miden::tracing",
+    "miden_node_tracing::grpc" => "miden::rpc::server",
+}
+
 mod attribute;
 pub mod grpc;
 mod instrument;
@@ -28,18 +33,23 @@ pub use logging::{
 pub use miden_node_tracing_macro::__with_tracing_target;
 pub use miden_node_tracing_macro::{
     debug,
+    debug_span_v2,
     debug_v2,
     enabled_v2,
     error,
+    error_span_v2,
     error_v2,
     info,
+    info_span_v2,
     info_v2,
     instrument_v2,
     miden_instrument,
     miden_span_record,
     trace,
+    trace_span_v2,
     trace_v2,
     warn,
+    warn_span_v2,
     warn_v2,
 };
 pub use span_ext::ErrorSpanExt;
@@ -54,7 +64,20 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 #[doc(hidden)]
 pub mod __private {
     pub use inventory;
-    pub use tracing::{debug, error, info, instrument, trace, warn};
+    pub use tracing::{
+        debug,
+        debug_span,
+        enabled,
+        error,
+        error_span,
+        info,
+        info_span,
+        instrument,
+        trace,
+        trace_span,
+        warn,
+        warn_span,
+    };
 
     pub use crate::instrument::AsDynError;
 }

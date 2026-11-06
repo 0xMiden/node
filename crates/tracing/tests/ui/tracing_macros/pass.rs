@@ -149,6 +149,11 @@ fn records_allowed_canonical_fields() {
 fn records_count_without_registration(item_count: usize) {}
 
 fn main() {
+    let parent = miden_node_tracing::info_span_v2!(target: "explicit", "parent");
+    let _ = miden_node_tracing::trace_span_v2!(target: "explicit", parent: &parent, "trace");
+    let _ = miden_node_tracing::debug_span_v2!(target: "explicit", "debug");
+    let _ = miden_node_tracing::warn_span_v2!(target: "explicit", "warn");
+    let _ = miden_node_tracing::error_span_v2!(target: "explicit", "error");
     records_fields();
     records_user_defined_attribute();
     records_with_default_instrument_args(NotDebug);
