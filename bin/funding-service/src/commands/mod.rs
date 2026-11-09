@@ -203,7 +203,7 @@ impl FundingServiceCommand {
                     _ => unreachable!("clap requires exactly one genesis block source"),
                 };
                 lifecycle::bootstrap(&data_directory, account_id, &genesis).await?;
-                info_v2!(
+                info_v2!(target: "miden::storage",
                     "Funding service bootstrap complete",
                     genesis.commitment = genesis.inner().header().commitment(),
                     data.directory = data_directory.as_path()

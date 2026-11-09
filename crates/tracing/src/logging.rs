@@ -423,7 +423,8 @@ mod tests {
     #[test]
     fn default_stdout_preserves_storage_and_operator_debug_events() {
         let events = default_stdout_events(|| {
-            tracing::debug!(target: "user::miden-node", "operator debug");
+            tracing::info!(target: "miden", "process info");
+            tracing::debug!(target: "miden", "process debug");
             tracing::debug!(target: "miden::monitor", "probe debug");
             tracing::debug!(target: "miden::http::server", "dashboard debug");
             tracing::debug!(target: "miden::storage", "storage lifecycle");
@@ -438,7 +439,7 @@ mod tests {
         assert_eq!(
             events,
             [
-                ("user::miden-node", tracing::Level::DEBUG),
+                ("miden", tracing::Level::INFO),
                 ("miden::monitor", tracing::Level::DEBUG),
                 ("miden::http::server", tracing::Level::DEBUG),
                 ("miden::storage", tracing::Level::DEBUG),

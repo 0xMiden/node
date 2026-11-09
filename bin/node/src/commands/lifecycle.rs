@@ -5,7 +5,7 @@ use clap::ArgGroup;
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DataDirectory, Db, State};
-use miden_node_tracing::info;
+use miden_node_tracing::info_v2;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 
@@ -37,18 +37,17 @@ pub struct BootstrapCommand {
 
 impl BootstrapCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
-        info!(
-            target: crate::LOG_TARGET,
+        info_v2!(
             "Bootstrapping node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
-            genesis.source.kind =
-                if self.genesis_block_file.is_some() { "file" } else { "network" },
+            genesis.source.kind = if self.genesis_block_file.is_some() {
+                "file"
+            } else {
+                "network"
+            },
             genesis.source = self.genesis_block_file.as_ref().map_or_else(
-                || self.network.map_or_else(
-                    || "custom".to_owned(),
-                    |network| network.to_string(),
-                ),
+                || self.network.map_or_else(|| "custom".to_owned(), |network| network.to_string(),),
                 |path| path.display().to_string(),
             ),
             data.directory = self.data_directory.as_path()
@@ -58,8 +57,7 @@ impl BootstrapCommand {
             read_bootstrap_genesis_block(self.genesis_block_file.as_deref(), self.network).await?;
         let genesis_commitment = genesis_block.inner().header().commitment();
         State::bootstrap(genesis_block, &self.data_directory).await?;
-        info!(
-            target: crate::LOG_TARGET,
+        info_v2!(
             "Node bootstrap complete",
             genesis.commitment = genesis_commitment,
             data.directory = self.data_directory.as_path()
