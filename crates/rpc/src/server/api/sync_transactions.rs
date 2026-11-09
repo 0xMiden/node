@@ -105,14 +105,7 @@ fn transaction_record_to_proto(
         .collect();
 
     proto::miden::node::v1::TransactionRecord {
-        header: Some(proto::transaction::TransactionHeader {
-            transaction_id: Some(record.header.id().into()),
-            account_id: Some(record.header.account_id().into()),
-            initial_state_commitment: Some(record.header.initial_state_commitment().into()),
-            final_state_commitment: Some(record.header.final_state_commitment().into()),
-            input_notes: record.header.input_notes().iter().cloned().map(Into::into).collect(),
-            output_notes: record.header.output_notes().iter().copied().map(Into::into).collect(),
-        }),
+        header: Some((&record.header).into()),
         block_num: record.block_num.as_u32(),
         output_note_proofs,
         consumed_note_refs,
