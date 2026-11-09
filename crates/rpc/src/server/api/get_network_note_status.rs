@@ -1,5 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_protocol::Word;
 use tonic::Request;
 
@@ -31,7 +31,7 @@ impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcServ
         Ok(output)
     }
 
-    #[instrument_v2(name = "get_network_note_status")]
+    #[instrument(name = "get_network_note_status")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -43,7 +43,7 @@ impl proto::server::miden_node_v1_node_service::GetNetworkNoteStatus for RpcServ
         let note_id = request;
         miden_span_record!(note.id = note_id);
 
-        debug_v2!("Getting network note status", note.id = note_id);
+        debug!("Getting network note status", note.id = note_id);
 
         let mut forwarded_request = Request::new(proto::note::NoteId::from(note_id.as_word()));
         if let Some(accept) = original_accept_header {

@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::GetNotesByIdRequest;
 use miden_node_proto::generated::note::NoteId as ProtoNoteId;
-use miden_node_tracing::{info_v2, warn_v2};
+use miden_node_tracing::{info, warn};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -240,7 +240,7 @@ impl FeeFunder {
             note.amount()
         );
 
-        info_v2!(
+        info!(
             "Received fee tokens from the funding service",
             account.id = account_id,
             note.id = note.note().id(),
@@ -333,7 +333,7 @@ impl PendingFunding {
             Ok(true) => return Ok(()),
             Ok(false) => None,
             Err(err) => {
-                warn_v2!(
+                warn!(
                     &err,
                     "Failed to check whether the funding note has committed",
                     note.id = note_id

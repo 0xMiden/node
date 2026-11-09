@@ -2,7 +2,7 @@ use miden_node_proto::domain::account::RegisterAccountRequest;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::allowlist::{AllowlistError, InvitationCode, RegistrationOutcome};
-use miden_node_tracing::{ErrorReport, instrument_v2, miden_span_record};
+use miden_node_tracing::{ErrorReport, instrument, miden_span_record};
 use tonic::{Code, Request, Status};
 
 use super::{RpcBackend, RpcService, log_internal_error};
@@ -22,7 +22,7 @@ impl proto::server::miden_node_v1_node_service::RegisterAccount for RpcService {
         Ok(proto::miden::node::v1::RegisterAccountResponse {})
     }
 
-    #[instrument_v2(name = "register_account")]
+    #[instrument(name = "register_account")]
     async fn handle(
         &self,
         request: Self::Input,

@@ -17,7 +17,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use miden_node_tracing::{ErrorReport, instrument_v2};
+use miden_node_tracing::{ErrorReport, instrument};
 use miden_protocol::block::SignedBlock;
 use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::{mpsc, oneshot};
@@ -131,7 +131,7 @@ impl BlockWriter {
     /// time.
     /// Readers are unaffected while a block is being applied: they keep reading from the previous
     /// in-memory snapshot until the writer atomically publishes the new one.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     pub async fn apply_block(
         &mut self,
         signed_block: SignedBlock,

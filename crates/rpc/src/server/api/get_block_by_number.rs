@@ -1,5 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, error_v2, instrument_v2};
+use miden_node_tracing::{debug, error, instrument};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::vm::ExecutionProof;
 
@@ -23,7 +23,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
         Ok(output)
     }
 
-    #[instrument_v2(
+    #[instrument(
         name = "get_block_by_number",
         fields(
             block.number = request.block_num,
@@ -36,7 +36,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug_v2!(
+        debug!(
             "Getting block by number",
             block.number = request.block_num,
             request.include_proof = request.include_proof.unwrap_or_default()
@@ -51,7 +51,7 @@ impl proto::server::miden_node_v1_node_service::GetBlockByNumber for RpcService 
             .map(|bytes| {
                 miden_node_persistence::decode::<SignedBlock>(&bytes).map(Into::into).map_err(
                     |err| {
-                        error_v2!(err, "Failed to decode stored block", block.number = block_num);
+                        error!(err, "Failed to decode stored block", block.number = block_num);
                         internal_error(format!("Failed to decode stored block {block_num}."))
                     },
                 )

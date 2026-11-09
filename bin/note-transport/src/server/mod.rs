@@ -7,7 +7,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::miden::note_transport::v1::DecodedTransportNote;
 use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
-use miden_node_tracing::{debug_v2, error_v2, info_v2};
+use miden_node_tracing::{debug, error, info};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc;
 use miden_node_utils::lru_cache::LruCache;
@@ -110,7 +110,7 @@ impl Server {
             .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
             .build_v1()
             .context("failed to build note transport reflection service")?;
-        info_v2!(
+        info!(
             "Note transport ready",
             service.name = COMPONENT,
             service.version = env!("CARGO_PKG_VERSION"),
@@ -173,7 +173,7 @@ impl Server {
         )
         .await
         .map_err(storage_status)?;
-        debug_v2!(
+        debug!(
             "Note accepted",
             note.id = id,
             note_transport.payload_bytes = size,
@@ -223,7 +223,7 @@ fn storage_status(error: db::StorageError) -> tonic::Status {
         db::StorageError::InvalidCursor => tonic::Status::invalid_argument("invalid cursor"),
         db::StorageError::InvalidSyncRange => tonic::Status::invalid_argument("invalid sync range"),
         error => {
-            error_v2!(error, "Note storage operation failed");
+            error!(error, "Note storage operation failed");
             tonic::Status::internal("note storage operation failed")
         },
     }

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_store::DatabaseError;
 use miden_node_store::allowlist::{AccountAllowlist, InvitationCode, InvitationStatus};
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::transaction::TxAccountUpdate;
 use miden_standards::account::auth::NetworkAccount;
@@ -76,7 +76,7 @@ impl AccountAdmission {
     }
 
     /// Rejects the submission if it creates an unregistered, non-network account.
-    #[instrument_v2(
+    #[instrument(
         name = "account_admission.check",
         fields(account.id = update.account_id()),
     )]

@@ -1,4 +1,6 @@
-use miden_node_tracing::{RecordAttribute, miden_instrument, miden_span_record};
+miden_node_tracing::declare_targets! { default: "miden::test", }
+
+use miden_node_tracing::{RecordAttribute, instrument, miden_span_record};
 
 struct AccountId;
 
@@ -10,7 +12,7 @@ impl RecordAttribute for AccountId {
     }
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_scalar_with_plural_field() {
     miden_span_record!(account.ids = AccountId);
 }

@@ -1,7 +1,7 @@
 //! Inserts a protocol configuration at its activation block.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::protocol_config::ProtocolConfig;
 
@@ -17,7 +17,7 @@ const SQL: &str = include_str!("insert_protocol_config.sql");
 /// # Returns
 ///
 /// The number of affected rows.
-#[instrument_v2(err)]
+#[instrument(err)]
 pub(crate) fn insert_protocol_config(
     tx: &WriteTx<'_>,
     protocol_config: &ProtocolConfig,

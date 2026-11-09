@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU16;
 
 use anyhow::Context;
-use miden_node_tracing::{debug_v2, error_v2, info_v2, instrument_v2};
+use miden_node_tracing::{debug, error, info, instrument};
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -101,7 +101,7 @@ impl Scheduler {
     /// Accounts with a running build or an in-flight transaction are excluded, so an account never
     /// has two builds or two submitted transactions at once. `chain` fixes the reference block for
     /// every build spawned here.
-    #[instrument_v2(
+    #[instrument(
         name = "ntx.scheduler.dispatch",
         fields(tip.number = chain.chain_tip_header.block_num()),
         err,
@@ -137,7 +137,7 @@ impl Scheduler {
             let ctx = self.ctx.clone();
             let chain = chain.clone();
             self.tasks.spawn(account_id, ctx.build(account_id, chain));
-            debug_v2!(
+            debug!(
                 "dispatched a network transaction build",
                 account.id = account_id,
                 reference_block.number = block_num
@@ -146,7 +146,7 @@ impl Scheduler {
 
         // Neither the build concurrency nor the submitted-but-uncommitted backlog is otherwise
         // observable from outside the process.
-        debug_v2!(
+        debug!(
             "network transaction pipeline",
             reference_block.number = block_num,
             build.dispatched.count = dispatched,
@@ -169,7 +169,7 @@ impl Scheduler {
 
         self.in_flight.retain(|account_id, inflight| {
             if committed.get(account_id) == Some(&inflight.tx_id) {
-                info_v2!(
+                info!(
                     "submitted network transaction landed",
                     account.id = *account_id,
                     transaction.id = inflight.tx_id,
@@ -179,7 +179,7 @@ impl Scheduler {
             }
 
             if tip >= inflight.expires_at {
-                info_v2!(
+                info!(
                     "submitted network transaction expired",
                     account.id = *account_id,
                     transaction.id = inflight.tx_id,
@@ -224,7 +224,7 @@ impl Scheduler {
         match result {
             NetworkTransactionResult::Submitted { tx_id } => {
                 let expires_at = block_num + u32::from(self.config.tx_expiration_delta.get());
-                info_v2!(
+                info!(
                     "network transaction submitted; account is in flight",
                     account.id = account_id,
                     transaction.id = tx_id,
@@ -236,13 +236,13 @@ impl Scheduler {
             },
             NetworkTransactionResult::Failed => Ok(true),
             NetworkTransactionResult::NoWork => {
-                debug_v2!("no viable notes for account", account.id = account_id);
+                debug!("no viable notes for account", account.id = account_id);
                 // The state which selected this account did not change, so an immediate re-dispatch
                 // can pick the same account again.
                 Ok(false)
             },
             NetworkTransactionResult::Aborted(err) => {
-                error_v2!(&err, "network transaction build could not run", account.id = account_id);
+                error!(&err, "network transaction build could not run", account.id = account_id);
                 // The account was not worked on, so nothing changed which could make an immediate
                 // re-dispatch pick a different one.
                 Ok(false)

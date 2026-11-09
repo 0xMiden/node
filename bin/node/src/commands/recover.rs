@@ -11,7 +11,7 @@ use miden_node_proto::generated::miden::validator::v1::{
 };
 use miden_node_proto::{BlockProofRequest, DecodeMessageExt};
 use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::block::{
@@ -128,10 +128,10 @@ impl RecoverCommand {
                     shutdown,
                 )
                 .await?;
-                info_v2!(target: "miden::proving::blocks", "Recovery proving complete",
+                info!(target: "miden::proving::blocks", "Recovery proving complete",
                     block.number = state.proven_tip(), tip.number = state.committed_tip());
             } else {
-                info_v2!(
+                info!(
                     "Recovered inputs are ready for proving",
                     block.number = state.proven_tip(),
                     tip.number = state.committed_tip(),
@@ -216,7 +216,7 @@ async fn recover_from_validators(
         start = inputs::recovery_start(state, recovery_tip) => start?,
     };
     let Some(start) = start else {
-        info_v2!(
+        info!(
             "Local chain and proving inputs already cover recovery target",
             block.number = state.committed_tip(),
             sync.upstream_block = recovery_tip
@@ -264,7 +264,7 @@ async fn run_recovery_pipeline(
     let parent = parent.context("recovery parent header not found")?;
     let block_from = start.as_u32();
     let block_count = u64::from(target.as_u32()) - u64::from(block_from) + 1;
-    info_v2!(
+    info!(
         "Recovering blocks and proving inputs from validators",
         block.from = block_from,
         sync.upstream_block = target,
@@ -299,7 +299,7 @@ async fn run_recovery_pipeline(
                 inputs::apply_recovered(state, writer, recovered).await
                     .with_context(|| format!("failed to recover block {height}"))?;
                 last_delivered = Some(height);
-                info_v2!("Recovered block and proving inputs", block.number = height);
+                info!("Recovered block and proving inputs", block.number = height);
             },
         }
     }
@@ -312,7 +312,7 @@ async fn run_recovery_pipeline(
         }
     }
     anyhow::ensure!(last_delivered == Some(target), "recovery stream ended before target {target}");
-    info_v2!("Block and proving input recovery complete", tip.number = target);
+    info!("Block and proving input recovery complete", tip.number = target);
     Ok(())
 }
 

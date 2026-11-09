@@ -3,7 +3,7 @@ use std::future::Future;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error_v2, info_v2};
+use miden_node_tracing::{error, info};
 pub use tokio_util::sync::CancellationToken;
 
 /// Time allowed for services to finish after a shutdown signal before the process exits.
@@ -57,7 +57,7 @@ where
         result = &mut service => result,
         result = &mut signal => {
             let signal = result?;
-            info_v2!(target: "miden",
+            info!(target: "miden",
                 "Shutdown requested",
                 service.name = service_name,
                 shutdown.signal = signal.to_string()
@@ -65,7 +65,7 @@ where
             token.cancel();
 
             let Ok(result) = tokio::time::timeout(GRACE_PERIOD, &mut service).await else {
-                error_v2!(
+                error!(
                     anyhow::anyhow!("graceful shutdown timed out"),
                     target: "miden",
                     "Graceful shutdown timed out; exiting process",
@@ -76,7 +76,7 @@ where
             };
 
             result?;
-            info_v2!(target: "miden","Shutdown complete", service.name = service_name);
+            info!(target: "miden","Shutdown complete", service.name = service_name);
             Ok(())
         },
     }

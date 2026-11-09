@@ -1,13 +1,13 @@
 error[E0277]: the trait bound `UnapprovedAttribute: RecordAttribute` is not satisfied
- --> tests/ui/tracing_macros/invalid_nonstandard_attribute.rs:7:5
+ --> tests/ui/tracing_macros/invalid_nonstandard_attribute.rs:9:5
   |
-7 |     miden_span_record!(custom.attribute = UnapprovedAttribute #[nonstandard]);
+9 |     miden_span_record!(custom.attribute = UnapprovedAttribute #[nonstandard]);
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
   |
 help: the trait `RecordAttribute` is not implemented for `UnapprovedAttribute`
- --> tests/ui/tracing_macros/invalid_nonstandard_attribute.rs:3:1
+ --> tests/ui/tracing_macros/invalid_nonstandard_attribute.rs:5:1
   |
-3 | struct UnapprovedAttribute;
+5 | struct UnapprovedAttribute;
   | ^^^^^^^^^^^^^^^^^^^^^^^^^^
   = help: the following other types implement trait `RecordAttribute`:
             &T

@@ -1,8 +1,10 @@
+miden_node_tracing::declare_targets! { default: "miden::test", }
+
 use std::error::Error;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use opentelemetry::trace::{Status, TracerProvider as _};
 use opentelemetry::{Array, KeyValue, Value};
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
@@ -24,7 +26,7 @@ fn failure() -> Outer {
     Outer(Middle(Root))
 }
 
-#[miden_instrument(err, fields(service.name = "test"))]
+#[instrument(err, fields(service.name = "test"))]
 fn sync_result(mode: u8) -> Result<usize, Outer> {
     miden_span_record!(block.number = 42_u32);
     if mode == 1 {
@@ -40,7 +42,7 @@ fn sync_result(mode: u8) -> Result<usize, Outer> {
     }
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 async fn async_result(mode: u8) -> Result<usize, Outer> {
     tokio::task::yield_now().await;
     if mode == 1 {
@@ -56,7 +58,7 @@ async fn async_result(mode: u8) -> Result<usize, Outer> {
     }
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn future_result() -> impl Future<Output = Result<(), Outer>> {
     let error = failure();
     async move {
@@ -65,7 +67,7 @@ fn future_result() -> impl Future<Output = Result<(), Outer>> {
     }
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn maybe_send_result() -> impl miden_protocol::vm::FutureMaybeSend<Result<(), Outer>> {
     async move {
         tokio::task::yield_now().await;
@@ -74,7 +76,7 @@ fn maybe_send_result() -> impl miden_protocol::vm::FutureMaybeSend<Result<(), Ou
     }
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn boxed_future_result() -> std::pin::Pin<Box<dyn Future<Output = Result<(), Outer>> + Send>> {
     Box::pin(async move {
         tokio::task::yield_now().await;
@@ -83,28 +85,28 @@ fn boxed_future_result() -> std::pin::Pin<Box<dyn Future<Output = Result<(), Out
     })
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn anyhow_result() -> anyhow::Result<()> {
     Err(anyhow::Error::new(Root).context("middle error").context("outer error"))
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn boxed_error_result() -> Result<(), Box<dyn Error + Send + Sync>> {
     Err(Box::new(failure()))
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn borrowed_error_result() -> Result<(), &'static (dyn Error + Sync)> {
     static ERROR: Outer = Outer(Middle(Root));
     Err(&ERROR)
 }
 
-#[miden_instrument(err)]
+#[instrument(err)]
 fn opaque_result(fail: bool) -> Result<impl std::fmt::Debug, Outer> {
     if fail { Err(failure()) } else { Ok(7) }
 }
 
-#[miden_instrument(
+#[instrument(
     parent = None,
     target = "error-test",
     name = "configured",

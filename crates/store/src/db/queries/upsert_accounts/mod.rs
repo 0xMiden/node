@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::account::{
     Account,
     AccountCode,
@@ -83,7 +83,7 @@ type PendingAssetInserts = Vec<(AccountId, AssetId, Option<Asset>)>;
 ///
 /// Returns an error if an account in `new_account_ids` already exists or another account does not
 /// exist yet.
-#[instrument_v2(err)]
+#[instrument(err)]
 pub(crate) fn upsert_accounts(
     tx: &WriteTx<'_>,
     accounts: &[BlockAccountUpdate],

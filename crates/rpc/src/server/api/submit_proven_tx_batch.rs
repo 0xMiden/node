@@ -2,7 +2,7 @@ use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::{DecodeMessageExt, TransactionBatchSubmission, generated as proto};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, debug_v2, instrument_v2, miden_span_record, trace_v2};
+use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record, trace};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::BatchVerifier;
@@ -29,7 +29,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcServi
         Ok(proto::miden::node::v1::SubmitProvenTxBatchResponse { block_num: output.block_num })
     }
 
-    #[instrument_v2(name = "submit_proven_tx_batch")]
+    #[instrument(name = "submit_proven_tx_batch")]
     async fn handle(
         &self,
         input: Self::Input,
@@ -42,7 +42,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcServi
         let preserve_batch_fields =
             matches!(&self.backend, RpcBackend::FullNode { pre_auth: None, .. });
 
-        trace_v2!(
+        trace!(
             "Received transaction batch",
             batch.size = request.sealed_transaction_inputs.len()
         );
@@ -68,7 +68,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTxBatch for RpcServi
             batch.reference_block.commitment = proven_batch.reference_block_commitment()
         );
 
-        debug_v2!("Submitting transaction batch");
+        debug!("Submitting transaction batch");
 
         if let RpcBackend::Sequencer { account_admission, .. } = &self.backend {
             for tx in proposed_batch.transactions() {

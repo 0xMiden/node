@@ -5,7 +5,7 @@ use miden_node_proto::generated::miden::note_transport::v1::{
     FetchedNote,
 };
 use miden_node_proto::server::miden_note_transport_v1_note_transport_service::FetchNotes;
-use miden_node_tracing::{debug_v2, error_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, error, instrument, miden_span_record};
 use prost::Message;
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
@@ -40,7 +40,7 @@ impl FetchNotes for Server {
         Ok(response)
     }
 
-    #[instrument_v2]
+    #[instrument]
     async fn handle(
         &self,
         request: Self::Input,
@@ -67,7 +67,7 @@ impl FetchNotes for Server {
             .await
             .map_err(storage_status)?;
         let response = encode_page(page, cursor, MAX_RESPONSE_BYTES)?;
-        debug_v2!(
+        debug!(
             "Notes fetched",
             note_transport.returned = response.notes.len(),
             note_transport.cursor.sequence =
@@ -103,7 +103,7 @@ pub(super) fn encode_page(
     .encoded_len();
     for stored in page.notes {
         let next_cursor = u64::try_from(stored.seq).map_err(|error| {
-            error_v2!(error, "Invalid stored note cursor");
+            error!(error, "Invalid stored note cursor");
             tonic::Status::internal("note storage operation failed")
         })?;
         let note = FetchedNote {

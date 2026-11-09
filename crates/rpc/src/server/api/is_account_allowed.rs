@@ -1,6 +1,6 @@
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
-use miden_node_tracing::{instrument_v2, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::account::AccountId;
 use tonic::Request;
 
@@ -23,7 +23,7 @@ impl proto::server::miden_node_v1_node_service::IsAccountAllowed for RpcService 
         Ok(proto::miden::node::v1::IsAccountAllowedResponse { allowed })
     }
 
-    #[instrument_v2(name = "is_account_allowed")]
+    #[instrument(name = "is_account_allowed")]
     async fn handle(
         &self,
         account_id: Self::Input,

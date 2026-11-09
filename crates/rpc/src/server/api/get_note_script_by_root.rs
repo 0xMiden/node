@@ -1,5 +1,5 @@
 use miden_node_proto::{DecodeMessage, generated as proto};
-use miden_node_tracing::{debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::note::NoteScript;
 
@@ -28,7 +28,7 @@ impl proto::server::miden_node_v1_node_service::GetNoteScriptByRoot for RpcServi
         Ok(proto::miden::node::v1::GetNoteScriptByRootResponse { script: output.map(Into::into) })
     }
 
-    #[instrument_v2(name = "get_note_script_by_root")]
+    #[instrument(name = "get_note_script_by_root")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -37,7 +37,7 @@ impl proto::server::miden_node_v1_node_service::GetNoteScriptByRoot for RpcServi
     ) -> tonic::Result<Self::Output> {
         miden_span_record!(script.root = request);
 
-        debug_v2!("Getting note script by root", script.root = request);
+        debug!("Getting note script by root", script.root = request);
 
         let script = self
             .state

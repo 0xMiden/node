@@ -5,7 +5,7 @@ use anyhow::{Context, ensure};
 use miden_node_db::Transaction;
 use miden_node_persistence::generated::BlockStoreFormat;
 use miden_node_persistence::prost::Message;
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_protocol::block::{BlockHeader, SignedBlock};
 
 /// Imports committed blocks from the block directory into the database.
@@ -55,7 +55,7 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
         BlockStoreFormat::decode(marker.as_slice()).context("invalid block store format marker")?;
     ensure!(marker.version == 1, "unsupported block store version {}", marker.version);
 
-    info_v2!(
+    info!(
         "Importing blocks into SQLite",
         migration.blocks.total = total #[nonstandard]
     );
@@ -84,7 +84,7 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
         )?;
         imported += 1;
         if last_progress.elapsed() >= Duration::from_secs(10) {
-            info_v2!(
+            info!(
                 "Importing blocks into SQLite",
                 migration.blocks.imported = imported #[nonstandard],
                 migration.blocks.total = total #[nonstandard],
@@ -93,7 +93,7 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
             last_progress = Instant::now();
         }
     }
-    info_v2!(
+    info!(
         "Block import finished",
         migration.blocks.imported = imported #[nonstandard],
         migration.elapsed_seconds = started.elapsed().as_secs() #[nonstandard]
@@ -110,7 +110,7 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
     if total == 0 {
         return Ok(());
     }
-    info_v2!(
+    info!(
         "Rebuilding transaction links",
         migration.transaction_links.total = total #[nonstandard]
     );
@@ -136,7 +136,7 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
         copied += count as u64;
         position = last_position.query_row([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         if last_progress.elapsed() >= Duration::from_secs(10) {
-            info_v2!(
+            info!(
                 "Rebuilding transaction links",
                 migration.transaction_links.copied = copied #[nonstandard],
                 migration.transaction_links.total = total #[nonstandard],
@@ -145,7 +145,7 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
             last_progress = Instant::now();
         }
     }
-    info_v2!(
+    info!(
         "Transaction links copied; finalizing migration",
         migration.transaction_links.copied = copied #[nonstandard],
         migration.elapsed_seconds = started.elapsed().as_secs() #[nonstandard]

@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     // Failures that end the process, such as a store that cannot be loaded at startup, are
     // otherwise only printed to stderr when `main` returns, and never reach the tracing layers.
     if let Err(err) = &result {
-        miden_node_tracing::error_v2!(err, "Node exited with an error");
+        miden_node_tracing::error!(err, "Node exited with an error");
     }
     result
 }

@@ -1,5 +1,5 @@
-error: `skip` is not supported by `miden_instrument`; function arguments are always skipped, record fields explicitly with `fields(...)`
- --> tests/ui/tracing_macros/invalid_skip.rs:3:20
+error: `skip` is not supported by `instrument`; function arguments are always skipped, record fields explicitly with `fields(...)`
+ --> tests/ui/tracing_macros/invalid_skip.rs:5:14
   |
-3 | #[miden_instrument(skip(value))]
-  |                    ^^^^^^^^^^^
+5 | #[instrument(skip(value))]
+  |              ^^^^^^^^^^^

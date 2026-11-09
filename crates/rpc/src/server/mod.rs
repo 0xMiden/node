@@ -15,7 +15,7 @@ use miden_node_proto::server::{miden_node_v1_node_service, miden_sequencer_v1_se
 use miden_node_proto_build::rpc_api_descriptor;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::grpc::grpc_trace_layer;
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_tracing::panic::{CatchPanicLayer, catch_panic_layer_fn};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
@@ -407,7 +407,7 @@ impl Rpc {
 }
 
 fn log_node_ready(mode: &str, endpoint: impl Display, chain_tip: BlockNumber) {
-    info_v2!(
+    info!(
         "Node ready",
         service.name = "miden-node",
         service.version = env!("CARGO_PKG_VERSION"),
@@ -418,7 +418,7 @@ fn log_node_ready(mode: &str, endpoint: impl Display, chain_tip: BlockNumber) {
 }
 
 fn log_node_synchronizing(mode: &str, endpoint: impl Display, readiness_threshold: u32) {
-    info_v2!(
+    info!(
         "Node started; synchronizing",
         service.name = "miden-node",
         service.version = env!("CARGO_PKG_VERSION"),
@@ -462,7 +462,7 @@ impl SequencerInternal {
             .listener
             .local_addr()
             .context("failed to read internal sequencer listen address")?;
-        info_v2!("Internal sequencer server ready", internal.listen = endpoint.to_string());
+        info!("Internal sequencer server ready", internal.listen = endpoint.to_string());
 
         let service = SequencerInternalService {
             state: self.state,

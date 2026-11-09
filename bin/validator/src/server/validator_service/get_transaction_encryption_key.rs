@@ -1,5 +1,5 @@
 use miden_node_proto::generated as grpc;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 
 use super::ValidatorService;
 
@@ -22,7 +22,7 @@ impl grpc::server::miden_validator_v1_validator_service::GetTransactionEncryptio
         Ok(grpc::miden::validator::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
-    #[instrument_v2(name = "get_transaction_encryption_key")]
+    #[instrument(name = "get_transaction_encryption_key")]
     async fn handle(
         &self,
         _input: Self::Input,

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, instrument_v2};
+use miden_node_tracing::{ErrorReport, instrument};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::sync::{mpsc, watch};
@@ -111,7 +111,7 @@ impl State {
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks. Call [`LoadedState::start`] on the result to spawn the block
     /// writer and obtain the usable [`State`].
-    #[instrument_v2]
+    #[instrument]
     pub async fn load(
         data_path: &Path,
         storage_options: StorageOptions,
@@ -125,7 +125,7 @@ impl State {
     /// The loaded state owns all store data structures and exposes subscription methods for
     /// sequencer and replica tasks. Call [`LoadedState::start`] on the result to spawn the block
     /// writer and obtain the usable [`State`].
-    #[instrument_v2]
+    #[instrument]
     pub async fn load_with_database_options(
         data_path: &Path,
         storage_options: StorageOptions,

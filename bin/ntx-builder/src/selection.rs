@@ -11,7 +11,7 @@ use std::num::{NonZeroU16, NonZeroUsize};
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_tracing::{ErrorReport, info_v2, warn_v2};
+use miden_node_tracing::{ErrorReport, info, warn};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::account::Account;
 use miden_protocol::block::BlockNumber;
@@ -94,7 +94,7 @@ pub(crate) async fn select_candidate(
         })
         .collect::<Vec<_>>();
     if !rejected.is_empty() {
-        info_v2!(
+        info!(
             "dropping network notes whose script roots are not allowlisted",
             account.id = account_id,
             note.rejected.count = rejected.len()
@@ -170,7 +170,7 @@ pub(crate) fn attribute_failed_notes(
     let mut attributed = Vec::new();
     for f in failed {
         let Some(error) = f.error() else {
-            info_v2!(
+            info!(
                 "note deferred after bundle rejection",
                 note.id = f.note().id(),
                 note.nullifier = f.note().nullifier()
@@ -178,7 +178,7 @@ pub(crate) fn attribute_failed_notes(
             continue;
         };
         let error_msg = error.as_report();
-        info_v2!(
+        info!(
             error,
             "note failed: consumability check",
             note.id = f.note().id(),
@@ -206,7 +206,7 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
     oversized
         .into_iter()
         .map(|note| {
-            warn_v2!(
+            warn!(
                 "note discarded: exceeds the per-tx cycle budget on its own and can never be consumed",
                 note.id = note.note().id(),
                 note.nullifier = note.note().nullifier(),
@@ -224,7 +224,7 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
 /// round with their `attempt_count` untouched.
 pub(crate) fn log_deferred_notes(deferred: Vec<FailedNote>) {
     for note in deferred {
-        info_v2!(
+        info!(
             "note deferred: exceeded per-tx cycle budget, will retry next round",
             note.id = note.note().id(),
             note.nullifier = note.note().nullifier(),

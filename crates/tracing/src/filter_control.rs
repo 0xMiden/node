@@ -49,7 +49,7 @@ struct ReloadableFilter<S> {
 impl<S: Subscriber> FilterControl for ReloadableFilter<S> {
     fn set_expression(&self, expression: String) -> Result<(), SetFilterError> {
         let filter = EnvFilter::try_new(&expression).map_err(SetFilterError::InvalidExpression)?;
-        crate::info_v2!(
+        crate::info!(
             "Setting tracing filter",
             tracing.filter = expression.as_str(),
             tracing.output = self.output.as_str()

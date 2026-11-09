@@ -1,6 +1,6 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::DatabaseError;
-use miden_node_tracing::{debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 
 use super::error_codes::SyncNullifiersErrorCode;
@@ -25,7 +25,7 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
         Ok(output)
     }
 
-    #[instrument_v2(name = "sync_nullifiers")]
+    #[instrument(name = "sync_nullifiers")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -42,7 +42,7 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
             prefixes = nullifiers.as_slice() #[nonstandard]
         );
 
-        debug_v2!(
+        debug!(
 
             "Syncing nullifiers",
             block_range.from = range.block_from,

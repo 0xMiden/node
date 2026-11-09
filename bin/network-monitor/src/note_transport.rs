@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
@@ -51,7 +51,7 @@ impl Service for NoteTransportService {
         )
     }
 
-    #[instrument_v2(name = "check-status.note-transport")]
+    #[instrument(name = "check-status.note-transport")]
     async fn check(&mut self) -> ServiceStatus {
         let details = NoteTransportStatusDetails { url: self.url.to_string() };
         let health = self

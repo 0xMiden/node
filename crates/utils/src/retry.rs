@@ -6,7 +6,7 @@
 //!
 //! ```ignore
 //! use miden_node_utils::retry::{self, Retryable};
-//! use miden_node_tracing::warn_v2;
+//! use miden_node_tracing::warn;
 //!
 //! miden_node_tracing::declare_targets! { default: "miden", }
 //!
@@ -14,7 +14,7 @@
 //!     .retry(retry::exponential(min, max))
 //!     .when(|err| is_transient(err))
 //!     .notify(|err, dur| {
-//!         warn_v2!(
+//!         warn!(
 //!             err,
 //!             "retrying",
 //!             retry.delay_ms = dur
