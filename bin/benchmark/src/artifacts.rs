@@ -84,15 +84,22 @@ mod tests {
             AccountUpdateDetails::Private,
         )
         .unwrap();
-        ProvenTransaction::new(
-            update,
-            Vec::<InputNoteCommitment>::new(),
-            Vec::<OutputNote>::new(),
-            BlockNumber::GENESIS,
-            Word::empty(),
-            (seed + 1).into(),
-            miden_protocol::testing::dummy_execution_proof(),
-        )
+        {
+            let logs = miden_protocol::transaction::TransactionLogs::default();
+            let log_details =
+                miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+            ProvenTransaction::new(
+                update,
+                Vec::<InputNoteCommitment>::new(),
+                Vec::<OutputNote>::new(),
+                BlockNumber::GENESIS,
+                Word::empty(),
+                (seed + 1).into(),
+                miden_protocol::testing::dummy_execution_proof(),
+                log_details,
+                miden_protocol::block::code_tree::CodePatch::default(),
+            )
+        }
         .unwrap()
     }
 
@@ -106,14 +113,14 @@ mod tests {
         );
         let blockchain = PartialBlockchain::default();
         let header = BlockHeader::mock(0_u32, Some(blockchain.peaks().hash_peaks()), None, &[]);
-        TransactionInputs::new(
-            (&account).into(),
-            header,
-            ProtocolConfig::mock(),
-            blockchain,
-            InputNotes::default(),
-        )
-        .unwrap()
+        TransactionInputs::builder()
+            .account((&account).into())
+            .block_header(header)
+            .protocol_config(ProtocolConfig::mock())
+            .blockchain(blockchain)
+            .input_notes(InputNotes::default())
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -170,7 +177,9 @@ mod tests {
         fs_err::write(
             &path,
             BenchmarkTransactionInputs {
-                inputs: vec![miden_node_proto::generated::transaction::TransactionInputs::default()],
+                inputs: vec![
+                    miden_node_proto::generated::transaction::TransactionInputs::default(),
+                ],
             }
             .encode_to_vec(),
         )
