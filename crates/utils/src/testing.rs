@@ -55,7 +55,7 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
             let executed = Box::pin(
                 chain
                     .build_transaction(account.id())
-                    .authenticated_input_note(note.id())
+                    .authenticated_input_note(note.clone())
                     .auth_args(auth_args)
                     .add_advice_map_entry(auth_args, advice)
                     .build()
@@ -100,19 +100,30 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
                 AccountUpdateDetails::Public(executed.account_patch().clone()),
             )
             .unwrap();
-            let transaction = ProvenTransaction::new(
-                account_update,
-                executed.input_notes().iter(),
-                executed
-                    .output_notes()
-                    .iter()
-                    .cloned()
-                    .map(|note| note.into_output_note().unwrap()),
-                executed.block_header().block_num(),
-                executed.block_header().commitment(),
-                executed.expiration_block_num(),
-                proof,
-            )
+            let transaction = {
+                let update = account_update;
+                let logs = executed.logs().clone();
+                let log_details = if update.account_id().is_public() {
+                    miden_protocol::transaction::TransactionLogDetails::Public(logs)
+                } else {
+                    miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+                };
+                ProvenTransaction::new(
+                    update,
+                    executed.input_notes().iter(),
+                    executed
+                        .output_notes()
+                        .iter()
+                        .cloned()
+                        .map(|note| note.into_output_note().unwrap()),
+                    executed.block_header().block_num(),
+                    executed.block_header().commitment(),
+                    executed.expiration_block_num(),
+                    proof,
+                    log_details,
+                    executed.code_patch().clone(),
+                )
+            }
             .unwrap();
             let outcome =
                 TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&transaction).unwrap();
