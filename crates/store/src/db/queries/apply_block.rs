@@ -43,7 +43,9 @@ pub(crate) fn apply_block(
     )?;
     count += insert_note_scripts(tx, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(tx, notes)?;
-    count += insert_transactions(tx, block.header().block_num(), block.body().transactions())?;
+    for batch in block.body().transactions() {
+        count += insert_transactions(tx, block.header().block_num(), batch)?;
+    }
     count += insert_nullifiers_for_block(
         tx,
         block.body().created_nullifiers(),
