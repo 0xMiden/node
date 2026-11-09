@@ -5,13 +5,13 @@ use miden_node_proto::generated::miden::note_transport::v1::{
     FetchedNote,
 };
 use miden_node_proto::server::miden_note_transport_v1_note_transport_service::FetchNotes;
-use miden_node_tracing::{debug, error, miden_instrument, miden_span_record};
+use miden_node_tracing::{debug_v2, error_v2, instrument_v2, miden_span_record};
 use prost::Message;
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
 
 use super::{Server, storage_status};
-use crate::{COMPONENT, LOG_TARGET, db};
+use crate::db;
 
 // Keep responses within the default gRPC client decoding limit.
 const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
@@ -40,7 +40,7 @@ impl FetchNotes for Server {
         Ok(response)
     }
 
-    #[miden_instrument(target = COMPONENT)]
+    #[instrument_v2]
     async fn handle(
         &self,
         request: Self::Input,
@@ -67,10 +67,13 @@ impl FetchNotes for Server {
             .await
             .map_err(storage_status)?;
         let response = encode_page(page, cursor, MAX_RESPONSE_BYTES)?;
-        debug!(target: LOG_TARGET, "Notes fetched",
+        debug_v2!(
+            "Notes fetched",
             note_transport.returned = response.notes.len(),
-            note_transport.cursor.sequence = response.cursor.expect("response cursor is present").sequence,
-            note_transport.has_more = response.has_more);
+            note_transport.cursor.sequence =
+                response.cursor.expect("response cursor is present").sequence,
+            note_transport.has_more = response.has_more
+        );
         Ok(response)
     }
 }
@@ -100,7 +103,7 @@ pub(super) fn encode_page(
     .encoded_len();
     for stored in page.notes {
         let next_cursor = u64::try_from(stored.seq).map_err(|error| {
-            error!(error, target: LOG_TARGET, "Invalid stored note cursor");
+            error_v2!(error, "Invalid stored note cursor");
             tonic::Status::internal("note storage operation failed")
         })?;
         let note = FetchedNote {

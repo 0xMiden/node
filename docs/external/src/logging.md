@@ -96,7 +96,6 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
 | `miden::admin`                    | Private administration API diagnostics                        |
 | `miden::funding`                  | Funding requests, transaction construction, and delivery      |
-| `user::miden-prover`              | Remote prover lifecycle events                                |
 | `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup     |
 | `miden::http::server`             | HTTP dashboard requests and listener readiness                |
 
