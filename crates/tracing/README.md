@@ -66,8 +66,8 @@ function's span target with `#[instrument_v2(target = "...")]` does not change t
 body. Use `trace_span_v2!`, `debug_span_v2!`, `info_span_v2!`, `warn_span_v2!`, and `error_span_v2!` for manual spans
 with the same scoped target resolution. These accept upstream tracing span fields and explicit `target:` overrides.
 
-The legacy `miden_instrument`, unsuffixed event macros, and upstream manual span macros retain their original target
-defaults. Use the scoped APIs for new instrumentation.
+The legacy `miden_instrument`, event macros without the `_v2` suffix, and upstream manual span macros retain their
+original target defaults. Use the scoped APIs for new instrumentation.
 
 Use `enabled_v2!(Level::DEBUG)` to check subscriber interest before preparing diagnostic data. The check inherits the
 same target as scoped spans and events. It also accepts optional field names, such as
