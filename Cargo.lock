@@ -5566,6 +5566,7 @@ dependencies = [
  "miden-node-tracing",
  "miden-node-utils",
  "miden-protocol",
+ "miden-standards",
  "miden-testing",
  "miden-tx",
  "rand 0.10.3",

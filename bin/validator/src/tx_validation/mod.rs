@@ -1,5 +1,8 @@
 mod data_store;
 
+#[cfg(test)]
+mod tests;
+
 pub use data_store::TransactionInputsDataStore;
 use miden_node_tracing::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
 use miden_node_tracing::{Instrument, info_span_v2, instrument_v2};
@@ -7,6 +10,7 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::errors::TransactionVerifierError;
 use miden_protocol::transaction::{
     ProvenTransaction,
+    TransactionArgs,
     TransactionEffects,
     TransactionHeader,
     TransactionInputs,
@@ -59,7 +63,8 @@ pub async fn validate_transaction(
     let data_store = TransactionInputsDataStore::new(tx_inputs.clone());
 
     // VM execution may not yield; run it on a dedicated blocking thread.
-    let (account, block_header, _, input_notes, tx_args) = tx_inputs.into_parts();
+    let tx_args = replay_args(&tx_inputs);
+    let (account, block_header, _, input_notes, _) = tx_inputs.into_parts();
     let execute_span = info_span_v2!("execute").or_current();
     let executed_tx = spawn_blocking_in_current_span(move || {
         let executor: TransactionExecutor<'_, '_, _, UnreachableAuth> =
@@ -94,4 +99,12 @@ pub async fn validate_transaction(
             executed_tx_header: executed_tx_header.into(),
         })
     }
+}
+
+fn replay_args(inputs: &TransactionInputs) -> TransactionArgs {
+    let mut args = inputs.tx_args().clone();
+    for signature in inputs.signatures() {
+        args.add_signature(signature.clone());
+    }
+    args
 }
