@@ -6,7 +6,6 @@ use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{Instrument, info_span_v2, instrument_v2, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
 use tonic::Status;
 
@@ -170,7 +169,9 @@ impl ValidatorService {
                 ))
             })?;
 
-        TransactionInputs::read_from_bytes(&plaintext)
+        grpc::transaction::TransactionInputs::decode(plaintext.as_slice())
+            .map_err(|err| Status::invalid_argument(format!("Invalid transaction inputs: {err}")))?
+            .decode_and_build_unchecked()
             .or_invalid_argument("Invalid transaction inputs")
     }
 }

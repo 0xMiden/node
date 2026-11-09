@@ -23,7 +23,6 @@ use miden_node_proto::domain::encryption::TransactionInputsSealer;
 use miden_node_proto::generated as proto;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_protocol::utils::serde::Serializable;
 use tokio::sync::Semaphore;
 use url::Url;
 
@@ -215,9 +214,8 @@ async fn submit_all(
         let printed = printed.clone();
         let sealer = sealer.clone();
         set.spawn(async move {
-            let sealed_inputs = sealer
-                .seal(tx.id(), &inputs.to_bytes())
-                .expect("failed to seal transaction inputs");
+            let sealed_inputs =
+                sealer.seal(tx.id(), &inputs).expect("failed to seal transaction inputs");
             let request = proto::submission::ProvenTransactionSubmission {
                 transaction: Some((&tx).into()),
                 sealed_transaction_inputs: Some(sealed_inputs),
@@ -280,9 +278,8 @@ async fn submit_sequential(
     let mut outcomes = Vec::with_capacity(total);
 
     for (i, (tx, inputs)) in txs.into_iter().zip(tx_inputs).enumerate() {
-        let sealed_inputs = sealer
-            .seal(tx.id(), &inputs.to_bytes())
-            .expect("failed to seal transaction inputs");
+        let sealed_inputs =
+            sealer.seal(tx.id(), &inputs).expect("failed to seal transaction inputs");
         let request = proto::submission::ProvenTransactionSubmission {
             transaction: Some((&tx).into()),
             sealed_transaction_inputs: Some(sealed_inputs),

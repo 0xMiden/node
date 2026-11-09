@@ -223,7 +223,7 @@ impl RpcNodeClient {
     pub async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
-        transaction_inputs: &[u8],
+        transaction_inputs: &miden_protocol::transaction::TransactionInputs,
     ) -> Result<SubmissionOutcome> {
         let sealed = self
             .sealer()

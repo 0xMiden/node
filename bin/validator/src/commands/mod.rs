@@ -990,7 +990,7 @@ mod tests {
             let mut rng = ChaCha20Rng::from_seed([6 + index as u8; 32]);
             records.push(
                 miden_validator::PrivateRecordSealer::from_operator_key(&operator_keys[index])
-                    .seal(&mut rng, record_id, context, &inputs.to_bytes())
+                    .seal(&mut rng, record_id, context, &miden_node_persistence::encode(&inputs))
                     .unwrap(),
             );
         }
@@ -1037,8 +1037,8 @@ mod tests {
         )
         .await;
         let opened = fs_err::read(&output).unwrap();
-        assert_eq!(opened, inputs.to_bytes());
-        assert_eq!(TransactionInputs::read_from_bytes(&opened).unwrap(), inputs);
+        assert_eq!(opened, miden_node_persistence::encode(&inputs));
+        assert_eq!(miden_node_persistence::decode::<TransactionInputs>(&opened).unwrap(), inputs);
 
         assert_decrypt_preserves_output(
             &target_file,
@@ -1057,7 +1057,7 @@ mod tests {
             &operator_keys[2],
         )
         .await;
-        assert_eq!(fs_err::read(&output).unwrap(), inputs.to_bytes());
+        assert_eq!(fs_err::read(&output).unwrap(), miden_node_persistence::encode(&inputs));
 
         let wrong_epoch = test_operator_keys(10, 3).remove(0);
         assert_issue_error(&target_file, &first_output, &wrong_epoch, "key epoch does not match");

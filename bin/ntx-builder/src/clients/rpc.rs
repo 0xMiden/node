@@ -53,7 +53,6 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublic
 use miden_protocol::note::NoteScript;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{AccountInputs, ProvenTransaction, TransactionInputs};
-use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tonic::Status;
@@ -332,7 +331,7 @@ impl RpcClient {
         tx_inputs: &TransactionInputs,
     ) -> Result<(), Status> {
         let transaction: proto::transaction::ProvenTransaction = proven_tx.into();
-        let transaction_inputs = tx_inputs.to_bytes();
+        let transaction_inputs = tx_inputs.clone();
         let tx_id = proven_tx.id();
         let stale_key = AtomicBool::new(false);
 
@@ -641,6 +640,7 @@ mod protocol_config_tests {
     use miden_node_store::genesis::GenesisState;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::Word;
+    use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
     use miden_protocol::protocol_config::ProtocolConfig;
 
@@ -669,6 +669,7 @@ mod protocol_config_tests {
             Word::empty(),
             Word::empty(),
             Word::empty(),
+            CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
             Word::empty(),
             Word::empty(),
             fixture.header().validator_config().clone(),

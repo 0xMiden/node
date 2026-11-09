@@ -39,7 +39,6 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionScript,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
@@ -162,7 +161,7 @@ impl Driver {
         let (auth_args, conversion_info_preimage) = self.fee_conversion_auth_args();
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
-        tx_args.add_output_note_recipient(Box::new(recipient));
+        tx_args.add_output_note_recipient(recipient);
 
         let mut data_store = DriverDataStore::new(
             self.genesis_header.clone(),
@@ -188,7 +187,7 @@ impl Driver {
             .await
             .context("failed to execute the increment transaction")?;
 
-        let tx_inputs = executed.tx_inputs().to_bytes();
+        let tx_inputs = executed.tx_inputs().clone();
         let patch = executed.account_patch().clone();
 
         let proving_started = Instant::now();

@@ -39,7 +39,6 @@ use miden_protocol::note::{
     PartialNoteMetadata,
 };
 use miden_protocol::transaction::{InputNote, InputNotes, TransactionArgs, TransactionScript};
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_standards::code_builder::CodeBuilder;
@@ -328,7 +327,7 @@ impl IncrementService {
         );
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
-        tx_args.add_output_note_recipient(Box::new(note_recipient));
+        tx_args.add_output_note_recipient(note_recipient);
 
         // A committed funding note rides along as an unauthenticated input note; its assets land
         // before the epilogue withdraws the fee.
@@ -374,7 +373,7 @@ impl IncrementService {
             ))
             .context("Failed to execute transaction")?;
 
-            let tx_inputs = executed_tx.tx_inputs().to_bytes();
+            let tx_inputs = executed_tx.tx_inputs().clone();
             // The patch captures the wallet's nonce bump and counter-slot write; the increment task
             // applies it to keep its local wallet copy in sync with chain.
             let account_patch = executed_tx.account_patch().clone();
@@ -1221,7 +1220,7 @@ mod tests {
             fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
-        tx_args.add_output_note_recipient(Box::new(note_recipient));
+        tx_args.add_output_note_recipient(note_recipient);
 
         let mut data_store = MonitorDataStore::new(
             block_header.clone(),
@@ -1428,7 +1427,7 @@ mod tests {
             fee_conversion_auth_args(chain.protocol_config().fee_asset_id().faucet_id(), &mut rng);
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, preimage)]);
-        tx_args.add_output_note_recipient(Box::new(note_recipient));
+        tx_args.add_output_note_recipient(note_recipient);
 
         let mut data_store = MonitorDataStore::new(
             block_header.clone(),

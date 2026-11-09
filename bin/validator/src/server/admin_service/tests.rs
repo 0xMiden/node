@@ -137,7 +137,8 @@ async fn listed_record_drives_threshold_recovery() {
     let second_service = ValidatorAdminService::new(second, reader);
     let inputs = transaction_inputs();
     let transaction_id = TransactionId::from_raw(Word::from([8u32, 7, 6, 5]));
-    let record = target_record(&record_owner, transaction_id, 10, &inputs.to_bytes());
+    let record =
+        target_record(&record_owner, transaction_id, 10, &miden_node_persistence::encode(&inputs));
     writer.insert_validated_private_transaction(record.clone()).await.unwrap();
     commit(&writer, 4, &[transaction_id]).await;
 
@@ -193,7 +194,7 @@ async fn listed_record_drives_threshold_recovery() {
         )
         .unwrap();
 
-    assert_eq!(TransactionInputs::read_from_bytes(&plaintext).unwrap(), inputs);
+    assert_eq!(miden_node_persistence::decode::<TransactionInputs>(&plaintext).unwrap(), inputs);
 }
 
 /// Metadata-only listing (the default) omits the sealed record payload entirely.
@@ -729,7 +730,7 @@ async fn http_private_record_recovery() {
     let (_dir, writer, reader) = test_database().await;
     let tx = TransactionId::from_raw(Word::from([8u32, 7, 6, 5]));
     let inputs = transaction_inputs();
-    let record = target_record(&owner, tx, 10, &inputs.to_bytes());
+    let record = target_record(&owner, tx, 10, &miden_node_persistence::encode(&inputs));
     writer.insert_validated_private_transaction(record.clone()).await.unwrap();
     let request = share_request(&record);
     let issue_body = format!(
@@ -768,7 +769,7 @@ async fn http_private_record_recovery() {
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let plaintext = hex::decode(response["plaintext"].as_str().unwrap()).unwrap();
-    assert_eq!(plaintext, inputs.to_bytes());
+    assert_eq!(plaintext, miden_node_persistence::encode(&inputs));
     assert_eq!(reader.load_private_record(tx).await.unwrap().unwrap(), record);
 }
 

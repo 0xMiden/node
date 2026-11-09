@@ -13,7 +13,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{
 };
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::PublicKey as EncryptionPublicKey;
 use miden_protocol::crypto::ies::SealingKey;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{TransactionId, TransactionInputs};
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 
 use crate::generated as proto;
@@ -453,16 +453,18 @@ impl TransactionInputsSealer {
 
     /// Seals `transaction_inputs` for the transaction identified by `tx_id`.
     ///
-    /// `transaction_inputs` must be the encoding of
-    /// [`miden_protocol::transaction::TransactionInputs::to_bytes`].
+    /// Inputs are encoded using their canonical protobuf representation.
     ///
     /// Each call draws a fresh ephemeral key, so sealing the same inputs twice is safe and yields
     /// different ciphertexts.
     pub fn seal(
         &self,
         tx_id: TransactionId,
-        transaction_inputs: &[u8],
+        transaction_inputs: &TransactionInputs,
     ) -> Result<proto::submission::SealedTransactionInputs, TransactionInputSealError> {
+        let transaction_inputs = prost::Message::encode_to_vec(
+            &proto::transaction::TransactionInputs::from(transaction_inputs),
+        );
         let associated_data = transaction_inputs_associated_data(
             self.scheme.as_u32(),
             &self.key_id,
@@ -471,7 +473,11 @@ impl TransactionInputsSealer {
         );
         let sealed = self
             .sealing_key
-            .seal_bytes_with_associated_data(&mut rand::rng(), transaction_inputs, &associated_data)
+            .seal_bytes_with_associated_data(
+                &mut rand::rng(),
+                &transaction_inputs,
+                &associated_data,
+            )
             .map_err(TransactionInputSealError::Seal)?;
 
         Ok(proto::submission::SealedTransactionInputs {
@@ -504,6 +510,8 @@ mod tests {
             Word::from([0, seed, 0, 0]),
             Word::from([0, 0, seed, 0]),
             Word::from([0, 0, 0, seed]),
+            miden_protocol::transaction::TransactionLogs::default().commitment(),
+            miden_protocol::block::code_tree::CodePatch::default().commitment(),
         )
     }
 
@@ -704,5 +712,56 @@ mod tests {
         assert_eq!(ad, expected);
         // 22-byte tag + 4 scheme + 4 length + 4 key id + 32 genesis + 32 transaction id.
         assert_eq!(ad.len(), 98);
+    }
+
+    #[test]
+    fn sealed_inputs_decode_as_canonical_protobuf() {
+        use miden_protocol::account::{Account, AccountCode, AccountStorage};
+        use miden_protocol::asset::AssetVault;
+        use miden_protocol::block::BlockHeader;
+        use miden_protocol::crypto::ies::{SealedMessage, UnsealingKey};
+        use miden_protocol::protocol_config::ProtocolConfig;
+        use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
+        use miden_protocol::transaction::{InputNotes, PartialBlockchain, TransactionInputs};
+        use prost::Message;
+
+        let account = Account::new_existing(
+            ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap(),
+            AssetVault::mock(),
+            AccountStorage::mock(),
+            AccountCode::mock(),
+            1_u32.into(),
+        );
+        let chain = PartialBlockchain::default();
+        let header = BlockHeader::mock(0_u32, Some(chain.peaks().hash_peaks()), None, &[]);
+        let inputs = TransactionInputs::builder()
+            .account((&account).into())
+            .block_header(header)
+            .protocol_config(ProtocolConfig::mock())
+            .blockchain(chain)
+            .input_notes(InputNotes::default())
+            .build()
+            .unwrap();
+        let signer = signing_key(1);
+        let trusted_keys = [signer.public_key()];
+        let key = signed_encryption_key(&signer, genesis())
+            .verify_with(TrustedTransactionEncryptionState::new(genesis(), &trusted_keys))
+            .unwrap();
+        let sealer = TransactionInputsSealer::new(key);
+        let id = tx_id(10);
+        let envelope = sealer.seal(id, &inputs).unwrap();
+        let plaintext = UnsealingKey::X25519XChaCha20Poly1305(
+            KeyExchangeKey::read_from_bytes(&[7; 32]).unwrap(),
+        )
+        .unseal_bytes_with_associated_data(
+            SealedMessage::read_from_bytes(&envelope.ciphertext).unwrap(),
+            &transaction_inputs_associated_data(1, &TEST_KEY_ID, genesis(), id),
+        )
+        .unwrap();
+        let decoded = proto::transaction::TransactionInputs::decode(plaintext.as_slice())
+            .unwrap()
+            .decode_and_build_unchecked()
+            .unwrap();
+        assert_eq!(inputs, decoded);
     }
 }
