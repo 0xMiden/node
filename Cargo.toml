@@ -122,7 +122,7 @@ rand_core_06          = { features = ["getrandom"], package = "rand_core", versi
 rayon                 = { version = "1.10" }
 reqwest               = { version = "0.13" }
 rstest                = { version = "0.26" }
-rusqlite              = { features = ["array", "bundled"], version = "0.41" }
+rusqlite              = { features = ["array", "bundled", "fallible_uint"], version = "0.41" }
 serde                 = { features = ["derive"], version = "1" }
 serde_json            = { version = "1.0" }
 serial_test           = { version = "3.2" }
