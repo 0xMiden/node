@@ -186,7 +186,7 @@ jobs:
           expected-patterns: '["next", "release/v*"]'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@v2.87.32
+      - uses: taiki-e/install-action@v2.89.1
         with:
           tool: nextest@0.9.122
       - uses: $/.github/actions/setup-kache
@@ -289,7 +289,7 @@ jobs:
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
           download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
-      - uses: taiki-e/install-action@v2.87.32
+      - uses: taiki-e/install-action@v2.89.1
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -478,7 +478,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.87.32
+        uses: taiki-e/install-action@v2.89.1
         with:
           tool: cargo-binstall
       - name: Install cargo-audit
@@ -580,7 +580,7 @@ jobs:
       # Checks workflows and local actions for unsafe permissions, script
       # injection, credential exposure, and unpinned container images.
       - name: zizmor
-        uses: zizmorcore/zizmor-action@v0.8.0
+        uses: zizmorcore/zizmor-action@v0.8.1
         with:
           advanced-security: false
           config: .config/zizmor.yml
@@ -599,7 +599,7 @@ jobs:
         with:
           node-version: "22.23.4"
           package-manager-cache: false
-      - uses: taiki-e/install-action@v2.87.32
+      - uses: taiki-e/install-action@v2.89.1
         with:
           tool: typos@1.42.0
       - name: Install Markdown tools
@@ -639,7 +639,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.87.32
+      - uses: taiki-e/install-action@v2.89.1
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -652,7 +652,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.87.32
+      - uses: taiki-e/install-action@v2.89.1
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
@@ -666,7 +666,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.87.32
+        uses: taiki-e/install-action@v2.89.1
         with:
           tool: cargo-binstall
       - name: Install workspace inheritance checker
@@ -682,7 +682,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.87.32
+        uses: taiki-e/install-action@v2.89.1
         with:
           tool: cargo-binstall
       - name: Install cargo-shear
