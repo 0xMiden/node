@@ -15,7 +15,7 @@ The stdout filter is selected from the first non-empty value in this order:
 
 1. `MIDEN_STDOUT_FILTER`
 2. `RUST_LOG`
-3. `info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn` (default)
+3. The default levels described under [User-facing targets](#user-facing-targets).
 
 `MIDEN_STDOUT_FILTER` uses the
 [`tracing_subscriber` filter syntax](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html).

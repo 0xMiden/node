@@ -63,8 +63,11 @@ miden_node_tracing::info_v2!(target: "miden::rpc::server", "request.completed");
 
 Event targets follow their lexical scope, independently of the current span or an explicit event parent. Overriding a
 function's span target with `#[instrument_v2(target = "...")]` does not change the target of explicit events in its
-body. Existing `miden_instrument`, event macros such as `info!`, and manual span macros keep their existing target
-defaults; use their explicit target options when needed.
+body. Use `trace_span_v2!`, `debug_span_v2!`, `info_span_v2!`, `warn_span_v2!`, and `error_span_v2!` for manual spans
+with the same scoped target resolution. These accept upstream tracing span fields and explicit `target:` overrides.
+
+The legacy `miden_instrument`, unsuffixed event macros, and upstream manual span macros retain their original target
+defaults. Use the scoped APIs for new instrumentation.
 
 Use `enabled_v2!(Level::DEBUG)` to check subscriber interest before preparing diagnostic data. The check inherits the
 same target as scoped spans and events. It also accepts optional field names, such as
@@ -79,9 +82,9 @@ event, use `info_v2!(target: "miden::storage", "account.loaded")`.
 
 ## Error events
 
-`#[miden_instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")`
-records an explicit typed error event. The optional error argument to `trace!`, `debug!`, `info!`, and `warn!` uses the
-same representation.
+`#[instrument_v2(err)]` emits one typed error event when the function returns `Err`. `error_v2!(error, "event.name")`
+records an explicit typed error event. The optional error argument to `trace_v2!`, `debug_v2!`, `info_v2!`, and
+`warn_v2!` uses the same representation.
 
 The default OpenTelemetry layer records the outer message as `exception.message` and the source messages as the
 `exception.stacktrace` array. The subscriber traverses the source chain. This array contains error messages from
@@ -116,9 +119,9 @@ or the caller that instantiated the layer. It logs each failed request once, wit
 `INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR`, which sets the span status to error. Other codes
 describe the request, so they are logged at `INFO`.
 
-A function that handles requests does not need `#[miden_instrument(err)]`, because the trace layer already logs the
-failure at the level its status code calls for. Log an internal error with its causes where it is converted to a status
-instead, since the status message should not expose node internals to clients.
+A function that handles requests does not need `#[instrument_v2(err)]`, because the trace layer already logs the failure
+at the level its status code calls for. Log an internal error with its causes where it is converted to a status instead,
+since the status message should not expose node internals to clients.
 
 ## License
 

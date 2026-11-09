@@ -69,9 +69,9 @@ mod tests {
         assert_eq!(client_status.message(), "client error 1");
     }
 
-    /// Records the level and error message of each event that carries an error.
+    /// Records the target, level, and error message of each event that carries an error.
     #[derive(Clone, Default)]
-    struct ErrorEvents(Arc<Mutex<Vec<(tracing::Level, String)>>>);
+    struct ErrorEvents(Arc<Mutex<Vec<(&'static str, tracing::Level, String)>>>);
 
     impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ErrorEvents {
         fn on_event(
@@ -94,7 +94,11 @@ mod tests {
             let mut error = ErrorField(None);
             event.record(&mut error);
             if let Some(error) = error.0 {
-                self.0.lock().unwrap().push((*event.metadata().level(), error));
+                self.0.lock().unwrap().push((
+                    event.metadata().target(),
+                    *event.metadata().level(),
+                    error,
+                ));
             }
         }
     }
@@ -112,7 +116,7 @@ mod tests {
 
         assert_eq!(
             *events.0.lock().unwrap(),
-            [(tracing::Level::ERROR, "internal error 1".to_owned())]
+            [("miden::proto", tracing::Level::ERROR, "internal error 1".to_owned())]
         );
     }
 }

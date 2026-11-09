@@ -7,7 +7,9 @@ is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
 The macro derives the node's internal `GrpcError` integration for error enums that cross gRPC boundaries. It generates a
 compact wire-facing error enum, maps implementation errors to API error codes, and supports marking selected variants as
-internal errors.
+internal errors. Internal errors are logged with their causes under the calling module’s scoped tracing target. Declare
+the crate’s targets with `miden_node_tracing::declare_targets!` before its child modules; see
+[Scoped targets](../tracing/README.md#scoped-targets).
 
 This is an implementation detail for the node crates. External users should normally interact with the public protobuf
 API and documented gRPC status behavior rather than depend on this macro directly.
