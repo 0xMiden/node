@@ -13,6 +13,7 @@ use miden_node_utils::limiter::{
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::code_tree::CodePatchCommitment;
 use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
 use miden_protocol::transaction::{
     InputNoteCommitment,
@@ -40,6 +41,8 @@ struct TransactionRow {
     input_notes: Vec<u8>,
     output_notes: Vec<u8>,
     size_in_bytes: i64,
+    logs_commitment: Word,
+    code_patch_commitment: CodePatchCommitment,
 }
 
 /// Paginated query over the complete transaction records of a set of accounts up to `block_to`,
@@ -188,8 +191,7 @@ fn select_transactions_records(
     })
 }
 
-/// Maps a `SELECT account_id, block_num, transaction_id, initial_state_commitment,
-/// final_state_commitment, input_notes, output_notes, size_in_bytes` row to a [`TransactionRow`].
+/// Restores stored transaction fields while leaving note payloads encoded.
 fn transaction_row_from_row(row: &Row<'_>) -> Result<TransactionRow, miden_node_db::DatabaseError> {
     Ok(TransactionRow {
         account_id: row.get::<AccountId>(0)?,
@@ -200,6 +202,8 @@ fn transaction_row_from_row(row: &Row<'_>) -> Result<TransactionRow, miden_node_
         input_notes: row.get::<Vec<u8>>(5)?,
         output_notes: row.get::<Vec<u8>>(6)?,
         size_in_bytes: row.get::<i64>(7)?,
+        logs_commitment: row.get::<Word>(8)?,
+        code_patch_commitment: CodePatchCommitment::from_raw(row.get::<Word>(9)?),
     })
 }
 
@@ -276,6 +280,8 @@ fn with_output_note_proofs(
                 raw.final_state_commitment,
                 InputNotes::new_unchecked(input_notes),
                 output_notes,
+                raw.logs_commitment,
+                raw.code_patch_commitment,
             )
             .map_err(|err| {
                 DatabaseError::DataCorrupted(format!(

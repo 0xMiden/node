@@ -3,7 +3,7 @@
 -- Account ids are bound as a single array parameter so the statement text stays constant regardless
 -- of how many are requested; see `miden_node_db::sqlite::InList`.
 SELECT account_id, block_num, transaction_id, initial_state_commitment, final_state_commitment,
-       input_notes, output_notes, size_in_bytes
+       input_notes, output_notes, size_in_bytes, logs_commitment, code_patch_commitment
 FROM transactions
 WHERE block_num >= ?1
   AND block_num <= ?2
