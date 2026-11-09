@@ -996,7 +996,7 @@ mod tests {
     fn independent_writers_with_same_inputs_produce_distinct_ciphertexts() {
         let operator_keys = operator_keys();
         let transaction_id = transaction_id();
-        let plaintext = transaction_inputs().to_bytes();
+        let plaintext = miden_node_persistence::encode(&transaction_inputs());
         let context =
             PrivateRecordContext::new(CHAIN_ID, operator_keys[0].key_epoch(), transaction_id);
         let first_record_id = record_id_for_validator(transaction_id, 7);
@@ -1028,7 +1028,7 @@ mod tests {
     fn two_of_three_canonical_shares_open_the_record() {
         let operator_keys = operator_keys();
         let inputs = transaction_inputs();
-        let plaintext = inputs.to_bytes();
+        let plaintext = miden_node_persistence::encode(&inputs);
         let original = threshold_record(&operator_keys[0], transaction_id(), 20, &plaintext);
         let record: StoredPrivateRecord =
             miden_node_persistence::decode(&miden_node_persistence::encode(&original)).unwrap();
@@ -1047,13 +1047,96 @@ mod tests {
             .unwrap()
             .open(&request, &record, &shares)
             .unwrap();
-        assert_eq!(TransactionInputs::read_from_bytes(&opened).unwrap(), inputs);
+        assert_eq!(miden_node_persistence::decode::<TransactionInputs>(&opened).unwrap(), inputs);
+    }
+
+    #[test]
+    fn private_effects_roundtrip_preserves_logs_and_code_patch() {
+        use miden_node_persistence::prost::Message;
+        use miden_protocol::Word;
+        use miden_protocol::account::AccountPatch;
+        use miden_protocol::block::code_tree::CodePatch;
+        use miden_protocol::code::ProcedureRoot;
+        use miden_protocol::transaction::{
+            LogTopic,
+            TransactionEffects,
+            TransactionLog,
+            TransactionLogs,
+        };
+
+        let inputs = transaction_inputs();
+        let package = miden_protocol::testing::assembler::assemble_test_package(
+            "private-record-patch",
+            "test::private_record_patch",
+            "pub proc entry push.1 drop end",
+        );
+        let mast = package.mast_forest().clone();
+        let patch = CodePatch::new(
+            mast.procedure_digests().map(ProcedureRoot::from_raw).collect(),
+            vec![],
+            mast,
+        )
+        .unwrap();
+        let logs = TransactionLogs::new(vec![
+            TransactionLog::new(
+                inputs.account().id(),
+                LogTopic::from_name("private-record-test"),
+                vec![Word::from([42_u32; 4])],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let effects = TransactionEffects::builder()
+            .initial_state_commitment(inputs.account().to_commitment())
+            .final_state_commitment(inputs.account().to_commitment())
+            .account_patch(
+                AccountPatch::new(
+                    inputs.account().id(),
+                    miden_protocol::account::AccountStoragePatch::default(),
+                    miden_protocol::account::AccountVaultPatch::default(),
+                    miden_protocol::account::AccountCodePatch::default(),
+                    None,
+                )
+                .unwrap(),
+            )
+            .input_notes(miden_protocol::transaction::InputNotes::default())
+            .output_notes(miden_protocol::transaction::RawOutputNotes::new(vec![]).unwrap())
+            .ref_block_number(inputs.ref_block())
+            .ref_block_commitment(inputs.block_header().commitment())
+            .expiration_block_num(inputs.ref_block().child())
+            .logs(logs)
+            .code_patch(patch)
+            .build();
+        let bytes = miden_node_proto::generated::transaction::TransactionEffects::from(&effects)
+            .encode_to_vec();
+        let keys = operator_keys();
+        let original = threshold_record(&keys[0], effects.transaction_id(), 20, &bytes);
+        let record: StoredPrivateRecord =
+            miden_node_persistence::decode(&miden_node_persistence::encode(&original)).unwrap();
+        let request = PrivateRecordShareRequest::for_record(&record);
+        let shares = [
+            issue_share(&keys[0], &request, &record, 22),
+            issue_share(&keys[1], &request, &record, 23),
+        ];
+        let plaintext = PrivateRecordCombiner::from_operator_key(&keys[2])
+            .unwrap()
+            .open(&request, &record, &shares)
+            .unwrap();
+        let decoded = miden_node_proto::generated::transaction::TransactionEffects::decode(
+            plaintext.as_slice(),
+        )
+        .unwrap()
+        .decode_and_verify()
+        .unwrap();
+        assert_eq!(decoded.transaction_id(), effects.transaction_id());
+        assert_eq!(decoded.logs(), effects.logs());
+        assert_eq!(decoded.code_patch(), effects.code_patch());
     }
 
     #[test]
     fn shares_for_independently_sealed_records_do_not_combine() {
         let operator_keys = operator_keys();
-        let plaintext = transaction_inputs().to_bytes();
+        let plaintext = miden_node_persistence::encode(&transaction_inputs());
         let first_record = threshold_record(&operator_keys[0], transaction_id(), 31, &plaintext);
         let second_record = threshold_record(&operator_keys[0], transaction_id(), 32, &plaintext);
         assert_ne!(first_record.encrypted_record_key(), second_record.encrypted_record_key(),);
