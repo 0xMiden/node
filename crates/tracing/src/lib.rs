@@ -3,7 +3,9 @@
 extern crate self as miden_node_tracing;
 
 crate::declare_targets! {
-    default: "miden::tracing",
+    default: "miden",
+    "miden_node_tracing::admin" => "miden::admin",
+    "miden_node_tracing::filter_control" => "miden::admin",
     "miden_node_tracing::grpc" => "miden::rpc::server",
 }
 

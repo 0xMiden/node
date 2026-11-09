@@ -98,6 +98,7 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::funding`                  | Funding requests, transaction construction, and delivery          |
 | `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup         |
 | `miden::http::server`             | HTTP dashboard requests and listener readiness                    |
+| `miden::cache`                    | In-memory cache lock spans                                        |
 
 Network monitor startup and configuration messages use the root `miden` target.
 

@@ -109,7 +109,7 @@ fn set_filter(control: &dyn FilterControl, expression: String) -> Result<StatusC
 }
 
 fn internal_error(message: &'static str, cause: &anyhow::Error) -> ApiError {
-    crate::error!(cause, "tracing admin API internal error");
+    crate::error_v2!(cause, "tracing admin API internal error");
     error(StatusCode::INTERNAL_SERVER_ERROR, message)
 }
 
