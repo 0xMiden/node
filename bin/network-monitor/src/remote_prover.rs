@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use miden_node_proto::clients::{RemoteProverClient, RemoteProverProxyStatusClient};
 use miden_node_proto::generated as proto;
 use miden_node_proto::prost::Message;
-use miden_node_tracing::{debug, miden_instrument, warn};
+use miden_node_tracing::{debug_v2, instrument_v2, warn_v2};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -22,7 +22,6 @@ use tokio::time::MissedTickBehavior;
 use tonic::Request;
 use url::Url;
 
-use crate::COMPONENT;
 use crate::deploy::UnsupportedChainError;
 use crate::funding::FundingClient;
 use crate::service::{Service, build_tls_client};
@@ -190,15 +189,11 @@ impl ProverStatusService {
         }
         match &self.probe_handle {
             None => {
-                debug!(target: COMPONENT, "spawning probe task", prover = self.name);
+                debug_v2!("spawning probe task", prover = self.name);
                 self.probe_handle = Some(self.probe_spawner.spawn());
             },
             Some(handle) if handle.is_finished() => {
-                warn!(
-                    target: COMPONENT,
-                    "probe task terminated unexpectedly; respawning",
-                    prover = self.name
-                );
+                warn_v2!("probe task terminated unexpectedly; respawning", prover = self.name);
                 self.probe_spawner.probe_tx.send_modify(|snapshot| {
                     snapshot.failure_count += 1;
                     snapshot.latest = Some(ProverTestOutcome {
@@ -297,9 +292,8 @@ impl Service for ProverStatusService {
         self.build_status(&ProbeSnapshot::default())
     }
 
-    #[miden_instrument(
+    #[instrument_v2(
         parent = None,
-        target = COMPONENT,
         name = "network_monitor.prover.status_check",
         level = "info",
         fields(
@@ -320,12 +314,7 @@ impl Service for ProverStatusService {
                 self.last_status_err = None;
             },
             Err(e) => {
-                debug!(
-                    &e,
-                    target: COMPONENT,
-                    "Remote prover status check failed",
-                    prover = self.name
-                );
+                debug_v2!(&e, "Remote prover status check failed", prover = self.name);
                 self.last_status_err = Some(e.to_string());
             },
         }
@@ -387,9 +376,8 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// failures are published as [`Status::Unknown`] outcomes: they are an RPC problem, not a prover
 /// failure. The exception is an [`UnsupportedChainError`] (fee-charging chain, no faucet): that
 /// is permanent, so it is published as [`Status::Unhealthy`] to demand operator action.
-#[miden_instrument(
+#[instrument_v2(
     parent = None,
-    target = COMPONENT,
     name = "network_monitor.prover.run_test",
     level = "info",
     fields(
@@ -407,11 +395,7 @@ async fn run_prover_test(
 ) {
     let payload = loop {
         if probe_tx.is_closed() {
-            debug!(
-                target: COMPONENT,
-                "probe channel closed, exiting probe task",
-                prover = name
-            );
+            debug_v2!("probe channel closed, exiting probe task", prover = name);
             return;
         }
         match generate_prover_test_payload(&rpc_url, max_decoding_message_size, funding.as_ref())
@@ -419,9 +403,8 @@ async fn run_prover_test(
         {
             Ok(payload) => break payload,
             Err(e) => {
-                warn!(
+                warn_v2!(
                     &e,
-                    target: COMPONENT,
                     "failed to build remote-prover probe payload; retrying",
                     prover = name
                 );
@@ -494,11 +477,7 @@ async fn run_prover_test(
         }
 
         if probe_tx.send(state.clone()).is_err() {
-            debug!(
-                target: COMPONENT,
-                "probe channel closed, exiting probe task",
-                prover = name
-            );
+            debug_v2!("probe channel closed, exiting probe task", prover = name);
             return;
         }
     }
@@ -544,9 +523,8 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 /// This requires a single RPC read for the genesis block header and is independent of the network
 /// transaction service. On a fee-charging chain it also claims one faucet note for the fee; the
 /// payload is reused for every probe, so this is a one-time cost.
-#[miden_instrument(
+#[instrument_v2(
     parent = None,
-    target = COMPONENT,
     name = "network_monitor.remote_prover.generate_prover_test_payload",
     level = "info",
     err,
