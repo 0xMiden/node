@@ -52,14 +52,17 @@ service NodeService {
 
     // Public account and storage headers, conditionally returned per account.
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
-    // Immutable code addressed by its commitment.
-    rpc GetAccountCode(GetAccountCodeRequest) returns (GetAccountCodeResponse) {}
     // Account inclusion or non-inclusion at the requested block, including private accounts.
     rpc GetAccountWitness(GetAccountWitnessRequest) returns (GetAccountWitnessResponse) {}
     // Batched asset inclusion and non-inclusion proofs against the target vault root.
     rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
     // Batched key inclusion and non-inclusion proofs, grouped by storage map.
     rpc GetAccountStorageWitnesses(GetAccountStorageWitnessesRequest) returns (GetAccountStorageWitnessesResponse) {}
+
+    // Code registry synchronization.
+
+    // Streams procedures first added to the registry within the inclusive block range.
+    rpc SyncCodeRegistry(SyncCodeRegistryRequest) returns (stream SyncCodeRegistryResponse) {}
 
     // Complete account synchronization.
 
@@ -78,7 +81,7 @@ service NodeService {
     rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
 }
 
-// ACCOUNT INFORMATION AND CODE
+// ACCOUNT INFORMATION
 // ================================================================================================
 
 message GetAccountInfosRequest {
@@ -112,15 +115,6 @@ message GetAccountInfosResponse {
     repeated AccountInfo accounts = 2;
 }
 
-message GetAccountCodeRequest {
-    primitives.Word code_commitment = 1;
-}
-
-message GetAccountCodeResponse {
-    // Hash and compare with the requested commitment. Unknown code returns NOT_FOUND.
-    account.AccountCode code = 1;
-}
-
 message GetAccountWitnessRequest {
     account.AccountId account_id = 1;
     optional fixed32 block_num = 2;
@@ -131,6 +125,23 @@ message GetAccountWitnessResponse {
     // Verify against the authenticated target block's account root. An empty commitment proves
     // absence. This witness is returned even when the account has not changed since an earlier read.
     account.AccountWitness witness = 2;
+}
+
+// CODE REGISTRY SYNCHRONIZATION
+// ================================================================================================
+
+message SyncCodeRegistryRequest {
+    // Required inclusive range [N, M]. Bootstrap with N = 0; after syncing through H, use N = H + 1.
+    // The registry only adds procedures. Reuse by another account does not add a new leaf.
+    BlockRange block_range = 1;
+}
+
+message SyncCodeRegistryResponse {
+    // Registry leaf identity. Verify against the supplied procedure before inserting it locally.
+    primitives.Word procedure_root = 1;
+    // Procedure and its dependencies. The exact payload follows the protocol's registry format.
+    primitives.MastForest procedure = 2;
+    fixed32 added_at = 3;
 }
 
 // SMALL-ACCOUNT SYNCHRONIZATION
