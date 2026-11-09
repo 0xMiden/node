@@ -101,7 +101,7 @@ humantime          = { version = "2.2" }
 indexmap           = { version = "2.12" }
 iroh               = { version = "=1.0.3" }
 itertools          = { version = "0.14" }
-libsqlite3-sys     = { features = ["bundled"], version = "0.35" }
+libsqlite3-sys     = { features = ["bundled"], version = "0.39" }
 lru                = { default-features = false, version = "0.18" }
 miette             = { version = "7.6" }
 opentelemetry      = { version = "0.32" }
@@ -122,7 +122,7 @@ rand_core_06          = { features = ["getrandom"], package = "rand_core", versi
 rayon                 = { version = "1.10" }
 reqwest               = { version = "0.13" }
 rstest                = { version = "0.26" }
-rusqlite              = { features = ["array", "bundled"], version = "0.37" }
+rusqlite              = { features = ["array", "bundled"], version = "0.41" }
 serde                 = { features = ["derive"], version = "1" }
 serde_json            = { version = "1.0" }
 serial_test           = { version = "3.2" }
