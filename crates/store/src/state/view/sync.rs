@@ -3,6 +3,8 @@ use std::ops::RangeInclusive;
 use miden_node_tracing::instrument_v2;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
+#[cfg(test)]
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 
@@ -214,7 +216,6 @@ mod tests {
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use miden_protocol::testing::random_secret_key::random_secret_key;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     use super::*;
     use crate::GenesisState;
@@ -237,21 +238,16 @@ mod tests {
         let mut parent = parent.expect("chain should have a parent block");
 
         for _ in 0..count {
-            let body = BlockBody::new(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                OrderedTransactionHeaders::new_unchecked(Vec::new()),
-            )
-            .unwrap();
+            let body = BlockBody::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
             let header = BlockHeader::new(
                 parent.commitment(),
                 parent.block_num().child(),
                 mmr.peaks().hash_peaks(),
                 parent.account_root(),
                 parent.nullifier_root(),
+                CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
                 body.compute_block_note_tree().root(),
-                body.transaction_commitment(),
+                body.compute_transactions_commitment(),
                 parent.validator_config().clone(),
                 parent.fee_parameters().clone(),
                 parent.protocol_config_commitment(),

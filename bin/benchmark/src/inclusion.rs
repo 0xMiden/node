@@ -156,7 +156,12 @@ pub(crate) async fn scan_with_drain(
             scanned_block_count += 1;
 
             let mut hits_in_this_block: u32 = 0;
-            for header in signed_block.body().transactions().as_slice() {
+            for header in signed_block
+                .body()
+                .transactions()
+                .iter()
+                .flat_map(miden_protocol::transaction::OrderedTransactionHeaders::as_slice)
+            {
                 if let Some(ack_at) = ack_by_id.remove(&header.id()) {
                     hits_in_this_block += 1;
                     included_count += 1;

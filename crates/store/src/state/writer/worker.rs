@@ -190,7 +190,8 @@ impl WriteWorker {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
-        let num_transactions = body.transactions().as_slice().len();
+        let num_transactions =
+            body.transactions().iter().map(|batch| batch.as_slice().len()).sum::<usize>();
 
         miden_span_record!(
             block.number = block_num,
@@ -332,11 +333,11 @@ impl WriteWorker {
 
             // The header must commit to the body's transactions. Checked here rather than in
             // `validate_block_header` so the transaction hashing runs on the apply-block pool.
-            let tx_commitment = body.transactions().commitment();
-            if header.tx_commitment() != tx_commitment {
+            let tx_commitment = body.compute_transactions_commitment();
+            if header.transactions_commitment() != tx_commitment {
                 return Err(InvalidBlockError::InvalidBlockTxCommitment {
                     expected: tx_commitment,
-                    actual: header.tx_commitment(),
+                    actual: header.transactions_commitment(),
                 }
                 .into());
             }
@@ -352,7 +353,13 @@ impl WriteWorker {
                     AccountUpdateDetails::Public(patch) => Some(patch.clone()),
                     AccountUpdateDetails::Private => None,
                 });
-            let new_account_ids = body.transactions().created_account_ids().collect();
+            let new_account_ids = body
+                .transactions()
+                .iter()
+                .flat_map(
+                    miden_protocol::transaction::OrderedTransactionHeaders::created_account_ids,
+                )
+                .collect();
             let account_forest_update = self
                 .forest
                 .compute_block_update_mutations(
@@ -609,6 +616,7 @@ mod tests {
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_node_utils::shutdown::CancellationToken;
     use miden_protocol::asset::AssetId;
+    use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{
         BlockBody,
         BlockHeader,
@@ -620,7 +628,6 @@ mod tests {
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
     use miden_protocol::testing::random_secret_key::random_secret_key;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
     use tempfile::TempDir;
 
     use crate::errors::{ApplyBlockError, DatabaseError};
@@ -669,21 +676,16 @@ mod tests {
             let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
             mmr.add(header.expect("block header should exist").commitment()).unwrap();
         }
-        let body = BlockBody::new(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(Vec::new()),
-        )
-        .unwrap();
+        let body = BlockBody::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
         let header = BlockHeader::new(
             parent.commitment(),
             parent.block_num().child(),
             mmr.peaks().hash_peaks(),
             parent.account_root(),
             parent.nullifier_root(),
+            CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
             body.compute_block_note_tree().root(),
-            body.transaction_commitment(),
+            body.compute_transactions_commitment(),
             parent.validator_config().clone(),
             parent.fee_parameters().clone(),
             protocol_config.to_commitment(),
