@@ -4,7 +4,7 @@ use std::future::Future;
 use std::net::SocketAddr;
 
 use anyhow::Context as _;
-use miden_node_tracing::info;
+use miden_node_tracing::info_v2;
 use tokio::net::TcpListener;
 
 use crate::shutdown::CancellationToken;
@@ -52,7 +52,7 @@ async fn serve(
     shutdown: CancellationToken,
     service: impl Future<Output = anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
-    info!(
+    info_v2!(
         "Admin server ready",
         admin.listen = listener
             .local_addr()
