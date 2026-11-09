@@ -11,6 +11,7 @@ use clap::Parser;
 
 miden_node_tracing::declare_targets! {
     default: "miden::monitor",
+    "miden_network_monitor::commands" => "miden",
     "miden_network_monitor::status" => "miden::monitor::rpc",
     "miden_network_monitor::remote_prover" => "miden::monitor::prover",
     "miden_network_monitor::faucet" => "miden::monitor::faucet",

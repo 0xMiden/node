@@ -100,6 +100,8 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup     |
 | `miden::http::server`             | HTTP dashboard requests and listener readiness                |
 
+Network monitor startup and configuration messages use the root `miden` target.
+
 Network monitor probes have separate child targets under `miden::monitor`: `rpc`, `prover`, `faucet`, `funding`,
 `explorer`, `validator`, `note_transport`, `agglayer`, and `transactions`. The transactions target includes account
 setup, fee funding, and wallet recovery for the end-to-end transaction probe. For example, enable detailed prover probe
