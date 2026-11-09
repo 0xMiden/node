@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument_v2;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{
@@ -22,8 +22,6 @@ use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
-
-use crate::COMPONENT;
 
 /// Storage slot on the wallet account holding the number of increment transactions the wallet has
 /// committed.
@@ -62,10 +60,7 @@ pub fn wallet_counter_component_code() -> Result<AccountComponentCode> {
 /// Create a wallet account with `RpoFalcon512` authentication and a self-counter component.
 ///
 /// Returns the created account and the secret key for authentication.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "create-wallet-account",
-)]
+#[instrument_v2(name = "create-wallet-account")]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut rng);

@@ -28,7 +28,7 @@ use miden_node_proto::generated::miden::node::v1::{
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug, info, miden_instrument, warn};
+use miden_node_tracing::{debug_v2, info_v2, instrument_v2, warn_v2};
 use miden_node_utils::retry;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
@@ -97,7 +97,6 @@ use crate::funding::{
     counter_funding_amount,
 };
 use crate::registration::{MonitorAccountPair, RegistrationPool};
-use crate::{COMPONENT, LOG_TARGET};
 
 pub mod counter;
 pub mod wallet;
@@ -209,9 +208,8 @@ impl TransactionSubmissionClient {
             ))
             .when(is_unknown_unauthenticated_note)
             .notify(|err: &anyhow::Error, delay: Duration| {
-                warn!(
+                warn_v2!(
                     err,
-                    target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
                     retry.delay_ms = delay
@@ -266,9 +264,8 @@ impl TransactionSubmissionClient {
         })
         .notify(|status: &anyhow::Error, _| {
             stale_key.store(true, Ordering::Relaxed);
-            warn!(
+            warn_v2!(
                 status,
-                target: COMPONENT,
                 "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
                 transaction.id = tx_id
             );
@@ -373,9 +370,8 @@ pub async fn create_genesis_aware_rpc_client(
     })
     .retry(genesis_discovery_backoff())
     .notify(|err: &anyhow::Error, sleep: Duration| {
-        warn!(
+        warn_v2!(
             err,
-            target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
             retry.delay_ms = sleep
         );
@@ -398,7 +394,7 @@ pub async fn create_and_deploy_accounts(
     registration: Option<&mut RegistrationPool>,
     on_wait: &(impl Fn(&FundingWait) + Sync),
 ) -> Result<DeployedMonitorAccounts> {
-    info!(target: LOG_TARGET, "Preparing monitor accounts");
+    info_v2!("Preparing monitor accounts");
 
     let mut rpc_client = submission_client.rpc_client();
 
@@ -479,10 +475,7 @@ pub async fn create_and_deploy_accounts(
     )
     .await?;
 
-    info!(
-        target: LOG_TARGET,
-        "Successfully created and deployed accounts"
-    );
+    info_v2!("Successfully created and deployed accounts");
 
     Ok(DeployedMonitorAccounts {
         wallet: wallet_account,
@@ -699,24 +692,21 @@ async fn resolve_counter_anchor(
         .await
         {
             Ok(Some(anchor)) => {
-                info!(
-                    target: LOG_TARGET,
+                info_v2!(
                     "Resolved counter FPI anchor",
                     account.id = committed_counter.id(),
                     block.number = anchor.block_header.block_num()
                 );
                 return Ok(anchor);
             },
-            Ok(None) => debug!(
-                target: LOG_TARGET,
+            Ok(None) => debug_v2!(
                 "Counter account not yet committed in the expected state; retrying",
                 account.id = committed_counter.id(),
                 retry.attempt = attempt
             ),
             Err(err) => {
-                debug!(
+                debug_v2!(
                     &err,
-                    target: LOG_TARGET,
                     "Counter anchor resolution attempt failed; retrying",
                     account.id = committed_counter.id(),
                     retry.attempt = attempt
@@ -1113,10 +1103,7 @@ pub async fn build_probe_transaction_inputs(
     clippy::too_many_arguments,
     reason = "the arguments describe the account, its complete transaction anchor, and submission"
 )]
-#[miden_instrument(
-    target = COMPONENT,
-    name = "deploy-counter-account",
-)]
+#[instrument_v2(name = "deploy-counter-account")]
 pub async fn deploy_counter_account(
     counter_account: &Account,
     reference_header: BlockHeader,

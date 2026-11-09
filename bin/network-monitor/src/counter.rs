@@ -12,7 +12,7 @@ use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{ForeignAccount, RpcClient};
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug, error, info, miden_instrument, warn};
+use miden_node_tracing::{debug_v2, error_v2, info_v2, instrument_v2, warn_v2};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
@@ -49,6 +49,7 @@ use miden_tx::{LocalTransactionProver, TransactionExecutor};
 use tokio::sync::Mutex;
 
 use crate::config::MonitorConfig;
+use crate::current_unix_timestamp_secs;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
 use crate::deploy::wallet::WALLET_COUNTER_SLOT_NAME;
 use crate::deploy::{
@@ -76,7 +77,6 @@ use crate::status::{
     ServiceDetails,
     ServiceStatus,
 };
-use crate::{COMPONENT, LOG_TARGET, current_unix_timestamp_secs};
 
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
@@ -229,9 +229,8 @@ impl IncrementService {
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
-    #[miden_instrument(
+    #[instrument_v2(
         parent = None,
-        target = COMPONENT,
         name = "network_monitor.counter.try_resync_wallet_account",
         fields(
             account.id = self.tx.wallet_account.id(),
@@ -247,19 +246,14 @@ impl IncrementService {
         )
         .await
         .inspect_err(|e| {
-            error!(
+            error_v2!(
                 e,
-                target: LOG_TARGET,
                 "Failed to re-sync wallet account from RPC",
                 account.id = self.tx.wallet_account.id()
             );
         })?;
 
-        debug!(
-            target: LOG_TARGET,
-            "Wallet account re-synced from RPC",
-            account.id = self.tx.wallet_account.id()
-        );
+        debug_v2!("Wallet account re-synced from RPC", account.id = self.tx.wallet_account.id());
         self.tx.wallet_account = fresh_account;
         // The pending note may have been consumed by a transaction whose success was missed, and
         // re-offering a spent note fails every increment. Drop it; the top-up check will request a
@@ -296,9 +290,8 @@ impl IncrementService {
     /// Create and submit a network note that increments the counter account.
     ///
     /// The transaction consumes `funding_note` when one is given.
-    #[miden_instrument(
+    #[instrument_v2(
         parent = None,
-        target = COMPONENT,
         name = "network_monitor.counter.submit_increment",
         level = "info",
         err,
@@ -395,11 +388,7 @@ impl IncrementService {
         let block_height = self.submission_client.submit(&proven_tx, &tx_inputs).await?;
 
         let tx_id = proven_tx.id().to_hex();
-        info!(
-            target: LOG_TARGET,
-            "Submitted proven transaction to RPC",
-            transaction.id = tx_id.as_str()
-        );
+        info_v2!("Submitted proven transaction to RPC", transaction.id = tx_id.as_str());
 
         Ok((tx_id, account_patch, block_height))
     }
@@ -433,8 +422,7 @@ impl IncrementService {
             return;
         }
 
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "Wallet fee balance is low, requesting a faucet top-up",
             account.id = self.tx.wallet_account.id(),
             asset.balance = balance
@@ -446,7 +434,7 @@ impl IncrementService {
                 self.details.fee_topup_error = None;
             },
             Err(err) => {
-                error!(&err, target: LOG_TARGET, "Faucet top-up failed");
+                error_v2!(&err, "Faucet top-up failed");
                 self.details.fee_topup_error = Some(format!("{err:#}"));
             },
         }
@@ -496,7 +484,7 @@ impl Service for IncrementService {
                 guard.pending_started = Some(Instant::now());
             },
             Err(e) => {
-                error!(&e, target: LOG_TARGET, "Failed to create and submit network note");
+                error_v2!(&e, "Failed to create and submit network note");
                 self.details.failure_count += 1;
                 self.failures.record_failure();
                 last_error = Some(format!("create/submit note failed: {e}"));
@@ -588,7 +576,7 @@ impl CounterTrackingService {
             // Counter value not available yet, but not an error.
             Ok(None) => return None,
             Err(e) => {
-                error!(&e, target: LOG_TARGET, "Failed to fetch counter value");
+                error_v2!(&e, "Failed to fetch counter value");
                 return Some(format!("fetch counter value failed: {e}"));
             },
         };
@@ -609,11 +597,7 @@ impl CounterTrackingService {
             // Wallet not on-chain yet (no committed increment): leave `expected` unknown.
             Ok(None) => {},
             Err(e) => {
-                error!(
-                    &e,
-                    target: LOG_TARGET,
-                    "Failed to fetch expected wallet counter value"
-                );
+                error_v2!(&e, "Failed to fetch expected wallet counter value");
                 last_error = Some(format!("fetch expected value failed: {e}"));
             },
         }
@@ -658,8 +642,7 @@ impl CounterTrackingService {
             if Instant::now().saturating_duration_since(started)
                 >= self.config.counter_latency_timeout
             {
-                warn!(
-                    target: LOG_TARGET,
+                warn_v2!(
                     "Latency measurement timed out",
                     counter.latency.timeout_ms =
                         self.config.counter_latency_timeout.as_millis() as u64,
@@ -763,14 +746,10 @@ async fn initialize_tracking_state(
         Ok(Some(observed)) => {
             details.current_value = Some(observed);
             details.last_updated = Some(current_unix_timestamp_secs());
-            info!(
-                target: LOG_TARGET,
-                "Initialized counter tracking",
-                counter.value.observed = observed
-            );
+            info_v2!("Initialized counter tracking", counter.value.observed = observed);
         },
-        Ok(None) => warn!(target: LOG_TARGET, "Counter account not found at init"),
-        Err(e) => error!(&e, target: LOG_TARGET, "Failed to fetch initial counter value"),
+        Ok(None) => warn_v2!("Counter account not found at init"),
+        Err(e) => error_v2!(&e, "Failed to fetch initial counter value"),
     }
 
     match fetch_slot_value(rpc_client, wallet_account.id(), WALLET_COUNTER_SLOT_NAME.as_str()).await
@@ -778,7 +757,7 @@ async fn initialize_tracking_state(
         Ok(Some(expected)) => details.expected_value = Some(expected),
         Ok(None) => {},
         Err(e) => {
-            error!(&e, target: LOG_TARGET, "Failed to fetch initial expected wallet value");
+            error_v2!(&e, "Failed to fetch initial expected wallet value");
         },
     }
 
@@ -865,8 +844,7 @@ fn update_expected_and_pending(
     if expected >= observed_value {
         details.pending_increments = Some(expected - observed_value);
     } else {
-        warn!(
-            target: LOG_TARGET,
+        warn_v2!(
             "Expected counter value is less than current value, setting pending to 0",
             counter.value.expected = expected,
             counter.value.observed = observed_value

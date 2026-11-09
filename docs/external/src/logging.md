@@ -65,8 +65,8 @@ OpenTelemetry.
 
 The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
 `miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`,
-`miden::admin`, and `miden::funding`. The compact stdout format does not print the target name, but the filter still
-matches it.
+`miden::admin`, `miden::funding`, `miden::monitor`, and `miden::http::server`. The compact stdout format does not print
+the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
@@ -96,7 +96,19 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
 | `miden::admin`                    | Private administration API diagnostics                        |
 | `miden::funding`                  | Funding requests, transaction construction, and delivery      |
-| `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                  |
+| `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup     |
+| `miden::http::server`             | HTTP dashboard requests and listener readiness                |
+
+Network monitor startup and configuration messages use the root `miden` target.
+
+Network monitor probes have separate child targets under `miden::monitor`: `rpc`, `prover`, `faucet`, `funding`,
+`explorer`, `validator`, `note_transport`, `agglayer`, and `transactions`. The transactions target includes account
+setup, fee funding, and wallet recovery for the end-to-end transaction probe. For example, enable detailed prover probe
+logs while keeping other monitor diagnostics at `info`:
+
+```text
+miden::monitor=info,miden::monitor::prover=debug
+```
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
 `miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.

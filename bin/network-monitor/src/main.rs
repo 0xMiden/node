@@ -9,6 +9,23 @@ extern crate miden_node_tracing as tracing;
 use anyhow::Result;
 use clap::Parser;
 
+miden_node_tracing::declare_targets! {
+    default: "miden::monitor",
+    "miden_network_monitor::commands" => "miden",
+    "miden_network_monitor::status" => "miden::monitor::rpc",
+    "miden_network_monitor::remote_prover" => "miden::monitor::prover",
+    "miden_network_monitor::faucet" => "miden::monitor::faucet",
+    "miden_network_monitor::funding_service" => "miden::monitor::funding",
+    "miden_network_monitor::explorer" => "miden::monitor::explorer",
+    "miden_network_monitor::validator" => "miden::monitor::validator",
+    "miden_network_monitor::note_transport" => "miden::monitor::note_transport",
+    "miden_network_monitor::agglayer" => "miden::monitor::agglayer",
+    "miden_network_monitor::counter" => "miden::monitor::transactions",
+    "miden_network_monitor::deploy" => "miden::monitor::transactions",
+    "miden_network_monitor::funding" => "miden::monitor::transactions",
+    "miden_network_monitor::frontend" => "miden::http::server",
+}
+
 // Module declarations
 pub mod agglayer;
 mod cli;
@@ -35,12 +52,6 @@ mod view;
 use cli::Cli;
 // Re-export for other modules
 pub use service_status::current_unix_timestamp_secs;
-
-/// Component identifier for structured logging and tracing
-pub const COMPONENT: &str = "miden-network-monitor";
-
-/// Tracing target used for user-visible log messages.
-pub const LOG_TARGET: &str = "user::miden-network-monitor";
 
 /// Network Monitor main function.
 ///

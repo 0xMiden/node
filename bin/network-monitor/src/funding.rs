@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::GetNotesByIdRequest;
 use miden_node_proto::generated::note::NoteId as ProtoNoteId;
-use miden_node_tracing::{info, warn};
+use miden_node_tracing::{info_v2, warn_v2};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -29,7 +29,6 @@ use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use url::Url;
 
-use crate::LOG_TARGET;
 use crate::config::MonitorConfig;
 use crate::faucet::{
     GetMetadataResponse,
@@ -241,8 +240,7 @@ impl FeeFunder {
             note.amount()
         );
 
-        info!(
-            target: LOG_TARGET,
+        info_v2!(
             "Received fee tokens from the funding service",
             account.id = account_id,
             note.id = note.note().id(),
@@ -335,9 +333,8 @@ impl PendingFunding {
             Ok(true) => return Ok(()),
             Ok(false) => None,
             Err(err) => {
-                warn!(
+                warn_v2!(
                     &err,
-                    target: LOG_TARGET,
                     "Failed to check whether the funding note has committed",
                     note.id = note_id
                 );
