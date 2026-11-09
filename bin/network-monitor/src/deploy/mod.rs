@@ -89,7 +89,13 @@ use url::Url;
 
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
-use crate::funding::{FeeFunder, FundingClient, counter_funding_amount};
+use crate::funding::{
+    FeeFunder,
+    FundingClient,
+    FundingWait,
+    PendingFunding,
+    counter_funding_amount,
+};
 use crate::registration::{MonitorAccountPair, RegistrationPool};
 use crate::{COMPONENT, LOG_TARGET};
 
@@ -107,9 +113,9 @@ pub struct DeployedMonitorAccounts {
     pub secret_key: SecretKey,
     pub counter: Account,
     pub counter_anchor: CounterAnchor,
-    /// Faucet note funding the wallet's fees, consumed by its first increment transaction. `None`
-    /// on zero-fee chains.
-    pub wallet_funding_note: Option<UsdcxP2Id>,
+    /// Funding note for the wallet's fees, consumed by its first increment transaction once it
+    /// commits. `None` on zero-fee chains.
+    pub wallet_funding_note: Option<PendingFunding>,
 }
 
 /// RPC client and verified transaction-input sealer shared by monitor submission workflows.
@@ -379,17 +385,18 @@ pub async fn create_genesis_aware_rpc_client(
 
 /// Prepare an in-memory wallet/counter pair and deploy the counter to the network.
 ///
-/// Used both at startup and by the increment task when accounts are fundamentally outdated
-/// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
-/// are never persisted to disk; the monitor re-creates them on every restart. When a registration
-/// pool is provided, unresolved registrations reuse their existing accounts and codes. On a
-/// fee-charging chain the wallet receives `wallet_funding_amount` base units of the fee asset.
+/// Used at startup. The accounts are never persisted to disk; the monitor re-creates them on every
+/// restart. When a registration pool is provided, unresolved registrations reuse their existing
+/// accounts and codes. On a fee-charging chain the wallet receives `wallet_funding_amount` base
+/// units of the fee asset, and the counter is deployed only once its own funding note has
+/// committed; `on_wait` receives each unsuccessful check until then.
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
     wallet_funding_amount: NonZeroU64,
     registration: Option<&mut RegistrationPool>,
+    on_wait: &(impl Fn(&FundingWait) + Sync),
 ) -> Result<DeployedMonitorAccounts> {
     info!(target: LOG_TARGET, "Preparing monitor accounts");
 
@@ -428,9 +435,13 @@ pub async fn create_and_deploy_accounts(
                 .fund(wallet_account.id(), wallet_funding_amount.get())
                 .await
                 .context("failed to fund the wallet account")?;
-            (Some(counter_note), Some(wallet_note))
+            (Some(PendingFunding::new(counter_note)), Some(PendingFunding::new(wallet_note)))
         },
         None => (None, None),
+    };
+    let counter_funding_note = match counter_funding_note {
+        Some(pending) => Some(pending.wait_until_committed(&mut rpc_client, on_wait).await),
+        None => None,
     };
 
     let creation_anchor =

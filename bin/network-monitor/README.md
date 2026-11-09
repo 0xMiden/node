@@ -24,7 +24,9 @@ configured.
 ## Operation
 
 The monitor is an observer and test client, not a node component required for block production. Its network transaction
-checks create fresh in-memory accounts on startup and do not persist account state to disk.
+checks create fresh in-memory accounts on startup and do not persist account state to disk. The monitor keeps these
+accounts until it stops. If transaction checks keep failing, for example after a network reset, restart the monitor to
+create a fresh pair.
 
 On a network with account allowlist enforcement enabled, give the monitor a finite pool of invitation codes. Obtain
 unused codes from the network operator and save their original text as a JSON array, for example:
@@ -38,10 +40,10 @@ For containers, mount the file and use its path inside the container. Codes are 
 empty strings and duplicates are rejected. Keep the file private and give each monitor instance its own pool.
 
 The monitor registers its wallet before requesting funding or submitting transactions. Its network counter account does
-not require registration. Each fresh pair consumes one code, so 100 unused codes support at most 100 pairs. Startup and
-recovery use the same pool. Registration retries retain the same accounts and code when a response is uncertain; a
-failure after registration, during funding or deployment, can consume codes without producing a usable pair.
-Registration's automatic funding does not replace the monitor's configured funding service.
+not require registration. Each fresh pair consumes one code, so 100 unused codes support at most 100 pairs. Registration
+retries retain the same accounts and code when a response is uncertain, and a failure after registration, during funding
+or deployment, can consume codes without producing a usable pair. Registration's automatic funding does not replace the
+monitor's configured funding service.
 
 After a restart, the monitor tries codes in file order and skips any that registration reports as unknown or already
 consumed; it does not persist accounts or update the file. When no usable codes remain, transaction checks report an
@@ -60,13 +62,19 @@ On a chain with a non-zero verification base fee, network transaction checks add
 balance up automatically when it runs low. Without it the monitor refuses to start its network transaction checks on
 such chains. `MIDEN_MONITOR_FAUCET_URL` is only used for the faucet checks.
 
+The funding service accepts a request before it creates the note on chain, so the monitor waits for each funding note to
+commit before a transaction consumes it. While a note is pending at startup, both transaction cards report that they are
+waiting for it. Top-ups are requested while the wallet still holds a reserve, so increments continue on the remaining
+balance and wait only if the reserve runs out before the note arrives. A wait that lasts longer than five minutes turns
+the cards unhealthy, which usually means the funding service is falling behind. The monitor keeps waiting for the same
+note instead of requesting another one.
+
 Each wallet funding request asks for `MIDEN_MONITOR_WALLET_FUNDING_AMOUNT` base units of the native asset, which
 defaults to `1_000_000`. The wallet requests another top-up when its balance falls below a tenth of this amount. Because
 the accounts live only in memory, every restart abandons the wallet's remaining balance, which can reach about 1.1 times
-the funding amount. The same happens when the monitor replaces its accounts after persistent transaction failures.
-Choose an amount you can afford to lose on each restart: a smaller amount only means more frequent funding requests.
-Keep the amount at or below the funding service's `--max-amount`, otherwise the service rejects every request and the
-network transaction checks report the error.
+the funding amount. Choose an amount you can afford to lose on each restart: a smaller amount only means more frequent
+funding requests. Keep the amount at or below the funding service's `--max-amount`, otherwise the service rejects every
+request and the network transaction checks report the error.
 
 Setting `MIDEN_MONITOR_FUNDING_SERVICE_URL` also enables a funding service card, even when network transaction checks
 are disabled. The monitor reads `GET /status` at the status-check interval and displays the funding account, native
