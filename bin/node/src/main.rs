@@ -5,10 +5,16 @@ use clap::Parser;
 use clap::error::ErrorKind;
 use commands::Command;
 
+miden_node_tracing::declare_targets! {
+    default: "miden",
+    "miden_node::admin" => "miden::admin",
+    "miden_node::commands::lifecycle" => "miden::storage",
+    "miden_node::commands::recover" => "miden::sync::blocks",
+    "miden_node::commands::fee_collector" => "miden::production",
+}
+
 mod admin;
 mod commands;
-
-const LOG_TARGET: &str = "user::miden-node";
 
 // COMMANDS
 // ================================================================================================
@@ -51,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
     // Failures that end the process, such as a store that cannot be loaded at startup, are
     // otherwise only printed to stderr when `main` returns, and never reach the tracing layers.
     if let Err(err) = &result {
-        miden_node_tracing::error!(err, target: LOG_TARGET, "Node exited with an error");
+        miden_node_tracing::error_v2!(err, "Node exited with an error");
     }
     result
 }

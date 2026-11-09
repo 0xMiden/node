@@ -25,7 +25,7 @@ use miden_node_rpc::{
 };
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
-use miden_node_tracing::{info, warn};
+use miden_node_tracing::{info_v2, warn_v2};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
@@ -184,7 +184,7 @@ impl SequencerCommand {
         funding: Option<FundingClient>,
     ) -> AccountAdmission {
         if self.disable_account_allowlist {
-            warn!(target: crate::LOG_TARGET, "Account allowlist enforcement is disabled");
+            warn_v2!("Account allowlist enforcement is disabled");
             AccountAdmission::disabled(allowlist)
         } else {
             AccountAdmission::enabled(allowlist)
@@ -205,17 +205,15 @@ impl SequencerCommand {
     }
 
     fn log_starting(&self) {
-        info!(
-            target: crate::LOG_TARGET,
+        info_v2!(
             "Starting node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
             node.role = "sequencer",
             rpc.listen = self.runtime.rpc.listen.to_string(),
-            internal.listen = self.internal.map_or_else(
-                || "disabled".to_owned(),
-                |address| address.to_string(),
-            ),
+            internal.listen = self
+                .internal
+                .map_or_else(|| "disabled".to_owned(), |address| address.to_string(),),
             data.directory = self.runtime.data_directory.as_path(),
             validator.endpoints = self
                 .external_services
@@ -480,8 +478,7 @@ impl FullNodeCommand {
     }
 
     fn log_starting(&self) {
-        info!(
-            target: crate::LOG_TARGET,
+        info_v2!(
             "Starting node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
@@ -495,10 +492,10 @@ impl FullNodeCommand {
             } else {
                 self.validator_urls.iter().map(format_endpoint).collect::<Vec<_>>().join(",")
             },
-            sequencer.endpoint = self.sequencer_url.as_ref().map_or_else(
-                || "disabled".to_owned(),
-                format_endpoint,
-            ),
+            sequencer.endpoint = self
+                .sequencer_url
+                .as_ref()
+                .map_or_else(|| "disabled".to_owned(), format_endpoint,),
             db.sqlite.connection_pool_size = self.store.sqlite.connection_pool_size.get()
         );
     }
