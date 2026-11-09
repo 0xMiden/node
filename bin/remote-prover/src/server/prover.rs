@@ -4,14 +4,13 @@ use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Decode
 use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
 use miden_node_proto::generated::{block_proving, transaction};
 use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, Decoded, VerifyWith};
-use miden_node_tracing::{ErrorReport, miden_instrument};
+use miden_node_tracing::{ErrorReport, instrument_v2};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::block::ProposedBlock;
 use miden_protocol::transaction::TransactionInputs;
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
-use crate::COMPONENT;
 use crate::server::proof_kind::ProofKind;
 
 /// An enum representing the different types of provers available.
@@ -32,10 +31,7 @@ impl Prover {
     }
 
     /// Proves the structured request matching this worker's configured capability.
-    #[miden_instrument(
-        target=COMPONENT,
-        name="prove",
-    )]
+    #[instrument_v2(name = "prove")]
     pub fn prove(
         &self,
         request: proto::ProveRequest,
@@ -67,6 +63,7 @@ impl Prover {
     }
 }
 
+#[instrument_v2(target = "miden::proving::transactions")]
 fn prove_transaction(
     prover: &LocalTransactionProver,
     input: Decoded<transaction::TransactionInputs>,
@@ -85,6 +82,7 @@ fn prove_transaction(
     Ok(ProofVariant::Transaction(transaction.into()))
 }
 
+#[instrument_v2(target = "miden::proving::batches")]
 fn prove_batch(
     prover: &LocalBatchProver,
     input: Decoded<transaction::ProposedBatch>,
@@ -102,6 +100,7 @@ fn prove_batch(
     Ok(ProofVariant::Batch(batch.into()))
 }
 
+#[instrument_v2(target = "miden::proving::blocks")]
 fn prove_block(
     prover: &LocalBlockProver,
     input: block_proving::DecodedBlockProofRequest,

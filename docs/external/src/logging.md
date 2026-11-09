@@ -96,7 +96,6 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
 | `miden::admin`                    | Private administration API diagnostics                        |
 | `miden::funding`                  | Funding requests, transaction construction, and delivery      |
-| `user::miden-prover`              | Remote prover lifecycle events                                |
 | `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                  |
 
 A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
