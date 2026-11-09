@@ -31,6 +31,8 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::asset::{NonFungibleAsset, NonFungibleAssetDetails};
+#[cfg(test)]
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -253,6 +255,7 @@ fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
+        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
         Word::default(),
         Word::default(),
         ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),

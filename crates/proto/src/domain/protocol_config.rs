@@ -1,6 +1,8 @@
 //! Protocol configuration validation at RPC boundaries.
 
 use miden_protocol::block::BlockHeader;
+#[cfg(test)]
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::protocol_config::ProtocolConfig;
 
 use crate::DecodeMessageExt;
@@ -57,6 +59,7 @@ mod tests {
             Word::empty(),
             Word::empty(),
             Word::empty(),
+            CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
             Word::empty(),
             Word::empty(),
             other_header.validator_config().clone(),

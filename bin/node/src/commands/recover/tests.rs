@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
+#[cfg(test)]
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockBody,
     BlockHeader,
@@ -13,7 +15,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
-use miden_protocol::transaction::{OrderedTransactionHeaders, PartialBlockchain};
+use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -156,6 +158,7 @@ async fn coalescer_rejects_protocol_config_disagreement() {
         Word::empty(),
         Word::empty(),
         Word::empty(),
+        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
         Word::empty(),
         Word::empty(),
         validators.clone(),
@@ -164,17 +167,16 @@ async fn coalescer_rejects_protocol_config_disagreement() {
         None,
         0,
     );
-    let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
-            .unwrap();
+    let body = BlockBody::new(vec![], vec![], vec![], Vec::new()).unwrap();
     let header = BlockHeader::new(
         parent.commitment(),
         1.into(),
         Word::empty(),
         Word::empty(),
         Word::empty(),
+        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
         body.compute_block_note_tree().root(),
-        body.transaction_commitment(),
+        body.compute_transactions_commitment(),
         validators,
         FeeParameters::new(0),
         first_config.to_commitment(),
@@ -644,8 +646,9 @@ async fn recovery_uses_active_configuration_after_legacy_activation() {
         base.chain_commitment(),
         base.account_root(),
         base.nullifier_root(),
+        base.code_tree_root(),
         base.note_root(),
-        base.tx_commitment(),
+        base.transactions_commitment(),
         base.validator_config().clone(),
         base.fee_parameters().clone(),
         second.to_commitment(),
