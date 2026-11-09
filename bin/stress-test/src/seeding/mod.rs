@@ -57,7 +57,6 @@ use miden_protocol::transaction::{
     TransactionHeader,
     TxAccountUpdate,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{ACCOUNT_UPDATE_MAX_SIZE, Felt, ONE, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
@@ -611,7 +610,11 @@ async fn apply_block(
     let transaction_count = batches.iter().map(|batch| batch.transactions().as_slice().len()).sum();
     let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
-    let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
+    let block_size: usize = miden_node_proto::prost::Message::encoded_len(
+        &miden_node_proto::generated::blockchain::BlockHeader::from(&header),
+    ) + miden_node_proto::prost::Message::encoded_len(
+        &miden_node_proto::generated::blockchain::BlockBody::from(&body),
+    );
     let signature = signer.sign(header.commitment());
     let signatures = BlockSignatures::new(vec![signature]).unwrap();
     // SAFETY: The header, body, and signature are known to correspond to each other.
@@ -968,15 +971,26 @@ fn create_consume_note_tx(
         details,
     )
     .unwrap();
-    let transaction = ProvenTransaction::new(
-        account_update,
-        vec![InputNoteCommitment::from(input_note)],
-        Vec::<OutputNote>::new(),
-        block_ref.block_num(),
-        block_ref.commitment(),
-        u32::MAX.into(),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    let transaction = {
+        let update = account_update;
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+        ProvenTransaction::new(
+            update,
+            vec![InputNoteCommitment::from(input_note)],
+            Vec::<OutputNote>::new(),
+            block_ref.block_num(),
+            block_ref.commitment(),
+            u32::MAX.into(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
+    }
     .unwrap();
 
     (account, transaction)
@@ -1058,18 +1072,29 @@ fn create_emit_note_tx(
         AccountUpdateDetails::Private,
     )
     .unwrap();
-    ProvenTransaction::new(
-        account_update,
-        Vec::<InputNoteCommitment>::new(),
-        output_notes
-            .into_iter()
-            .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
-            .collect::<Vec<OutputNote>>(),
-        block_ref.block_num(),
-        block_ref.commitment(),
-        u32::MAX.into(),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    {
+        let update = account_update;
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+        ProvenTransaction::new(
+            update,
+            Vec::<InputNoteCommitment>::new(),
+            output_notes
+                .into_iter()
+                .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
+                .collect::<Vec<OutputNote>>(),
+            block_ref.block_num(),
+            block_ref.commitment(),
+            u32::MAX.into(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
+    }
     .unwrap()
 }
 

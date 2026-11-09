@@ -16,7 +16,6 @@ use miden_protocol::Word;
 use miden_protocol::block::{BlockInputs, ProposedBlock, ValidatorConfig};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
-use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use url::Url;
 
@@ -107,8 +106,7 @@ impl BlockProducerValidatorClient {
         .key
         .ok_or_else(|| tonic::Status::internal("missing transaction encryption key"))?
         .verify_with(TrustedTransactionEncryptionState::new(genesis, validators.keys()))?;
-        let sealed =
-            TransactionInputsSealer::new(key).seal(transaction.id(), &inputs.to_bytes())?;
+        let sealed = TransactionInputsSealer::new(key).seal(transaction.id(), inputs)?;
         let request = proto::submission::ProvenTransactionSubmission {
             transaction: Some(transaction.into()),
             sealed_transaction_inputs: Some(sealed),

@@ -362,6 +362,7 @@ mod tests {
             chain_commitment: Some(word.into()),
             account_root: Some(word.into()),
             nullifier_root: Some(word.into()),
+            code_tree_root: Some(word.into()),
             note_root: Some(word.into()),
             tx_commitment: Some(word.into()),
             validator_config: Some(proto::blockchain::ValidatorConfig {

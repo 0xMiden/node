@@ -48,15 +48,26 @@ fn transaction_and_inputs() -> (Arc<ProvenTransaction>, TransactionInputs) {
         Nullifier::from_raw(Word::from([1u32, 0, 0, 0])),
         Nullifier::from_raw(Word::from([2u32, 0, 0, 0])),
     ];
-    let tx = ProvenTransaction::new(
-        account_update,
-        nullifiers,
-        Vec::<OutputNote>::new(),
-        BlockNumber::GENESIS,
-        Word::empty(),
-        BlockNumber::from(100),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    let tx = {
+        let update = account_update;
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+        ProvenTransaction::new(
+            update,
+            nullifiers,
+            Vec::<OutputNote>::new(),
+            BlockNumber::GENESIS,
+            Word::empty(),
+            BlockNumber::from(100),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
+    }
     .unwrap();
     let inputs = TransactionInputs {
         account_id: tx.account_id(),
@@ -139,18 +150,29 @@ fn note_authentication_preserves_ids_across_serialization() {
     let input_note_ids = input_notes.each_ref().map(Note::id);
     let output_note = Note::mock_noop(Word::from([3u32, 0, 0, 0]));
     let output_note_id = output_note.id();
-    let tx = ProvenTransaction::new(
-        tx.account_update().clone(),
-        input_notes.map(InputNote::unauthenticated),
-        vec![OutputNote::Private(
-            PrivateOutputNote::new(*output_note.header(), output_note.attachments().clone())
-                .unwrap(),
-        )],
-        tx.ref_block_num(),
-        tx.ref_block_commitment(),
-        tx.expiration_block_num(),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    let tx = {
+        let update = tx.account_update().clone();
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+        ProvenTransaction::new(
+            update,
+            input_notes.map(InputNote::unauthenticated),
+            vec![OutputNote::Private(
+                PrivateOutputNote::new(*output_note.header(), output_note.attachments().clone())
+                    .unwrap(),
+            )],
+            tx.ref_block_num(),
+            tx.ref_block_commitment(),
+            tx.expiration_block_num(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
+    }
     .unwrap();
     inputs.nullifiers = tx.nullifiers().map(|nullifier| (nullifier, None)).collect();
     inputs.found_unauthenticated_notes.insert(input_note_ids[0]);

@@ -73,7 +73,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
     )
     .into_block()?;
     let mut validators = Vec::new();
-    let result = async {
+    let result = Box::pin(async {
         for key in &keys {
             validators
                 .push(start_validator(key.clone(), genesis.inner().clone(), config.clone()).await?);
@@ -222,7 +222,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         )
         .await?;
         anyhow::Ok(())
-    }
+    })
     .await;
     let mut cleanup = Ok(());
     for validator in validators {

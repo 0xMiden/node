@@ -169,7 +169,11 @@ pub(crate) fn attribute_failed_notes(
     let mut seen = HashSet::new();
     let mut attributed = Vec::new();
     for f in failed {
-        let Some(error) = f.error() else {
+        let error: &(dyn std::error::Error + 'static) = if let Some(error) = f.execution_error() {
+            error
+        } else if let miden_tx::NoteFailure::Rejected { reason } = f.failure() {
+            reason.as_ref()
+        } else {
             info_v2!(
                 "note deferred after bundle rejection",
                 note.id = f.note().id(),
@@ -177,13 +181,13 @@ pub(crate) fn attribute_failed_notes(
             );
             continue;
         };
-        let error_msg = error.as_report();
         info_v2!(
             error,
             "note failed: consumability check",
             note.id = f.note().id(),
             note.nullifier = f.note().nullifier()
         );
+        let error_msg = error.as_report();
         let nullifier = sponsor_to_feature
             .get(&f.note().id())
             .copied()
@@ -492,6 +496,23 @@ end";
         let failed = vec![FailedNote::new(note, miden_tx::NoteFailure::Collateral { blamed_by })];
 
         assert!(attribute_failed_notes(failed, &HashMap::new()).is_empty());
+    }
+
+    #[test]
+    fn statically_rejected_notes_retain_their_failure() {
+        let note =
+            crate::test_utils::mock_single_target_note(mock_network_account_id(), 1).into_note();
+        let nullifier = note.nullifier();
+        let failed = vec![FailedNote::new(
+            note,
+            miden_tx::NoteFailure::Rejected {
+                reason: Box::new(std::io::Error::other("invalid fee sponsorship")),
+            },
+        )];
+        let attributed = attribute_failed_notes(failed, &HashMap::new());
+        assert_eq!(attributed.len(), 1);
+        assert_eq!(attributed[0].0, nullifier);
+        assert!(attributed[0].1.to_string().contains("invalid fee sponsorship"));
     }
 
     #[test]

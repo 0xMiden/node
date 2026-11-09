@@ -169,7 +169,7 @@ fn build_tx_args(
         let mut tx_args = TransactionArgs::default()
             .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
         for note in outputs {
-            tx_args.add_output_note_recipient(Box::new(note.recipient().clone()));
+            tx_args.add_output_note_recipient(note.recipient().clone());
         }
 
         tx_args
