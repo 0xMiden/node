@@ -11,7 +11,7 @@ impl NtxContext {
     ///
     /// Transient transport failures against the remote prover are retried in-place; intrinsic
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
-    #[instrument(name = "ntx.execute_transaction.prove", err)]
+    #[instrument(name = "prove", err)]
     pub(super) async fn prove(
         &self,
         tx_inputs: &TransactionInputs,

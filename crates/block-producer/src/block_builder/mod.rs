@@ -104,7 +104,7 @@ impl BlockBuilder {
     /// Selects and builds a block from the mempool. Rolls back the selection on failure.
     #[instrument(
         parent = None,
-        name = "block_builder.build_block",
+        name = "build_block",
     )]
     async fn build_block(&mut self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
@@ -124,7 +124,7 @@ impl BlockBuilder {
     }
 
     /// Builds a block from the selected batches and obtains validator signatures.
-    #[instrument(name = "block_builder.prepare_block", err)]
+    #[instrument(name = "prepare_block", err)]
     pub(crate) async fn prepare_block(
         state: &State,
         validator: &BlockProducerValidatorClient,
@@ -164,7 +164,7 @@ impl BlockBuilder {
             .await
     }
 
-    #[instrument(name = "block_builder.select_block")]
+    #[instrument(name = "select_block")]
     fn select_block(mempool: &SharedMempool) -> Result<SelectedBlock, BuildBlockError> {
         Ok(mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.select_block())
     }
@@ -185,7 +185,7 @@ impl BlockBuilder {
     ///     which nullifiers the block will actually create, we fetch witnesses for all nullifiers
     ///     created by batches. If we knew that a certain note will be erased, we would not have to
     ///     supply a nullifier witness for it.
-    #[instrument(name = "block_builder.get_block_inputs", err)]
+    #[instrument(name = "get_block_inputs", err)]
     async fn get_block_inputs(
         state: &State,
         selected_block: SelectedBlock,
@@ -270,7 +270,7 @@ impl BlockBuilder {
         Ok(BlockBatchesAndInputs { batches, inputs })
     }
 
-    #[instrument(name = "block_builder.propose_block", err)]
+    #[instrument(name = "propose_block", err)]
     async fn propose_block(
         batches_inputs: BlockBatchesAndInputs,
     ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
@@ -284,7 +284,7 @@ impl BlockBuilder {
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
 
-    #[instrument(name = "block_builder.validate_block", err)]
+    #[instrument(name = "validate_block", err)]
     async fn build_and_validate_block(
         state: &State,
         validator: &BlockProducerValidatorClient,
@@ -367,7 +367,7 @@ impl BlockBuilder {
         })
     }
 
-    #[instrument(name = "block_builder.commit_block", err)]
+    #[instrument(name = "commit_block", err)]
     async fn commit_block(
         &mut self,
         mempool: &SharedMempool,
@@ -402,7 +402,7 @@ impl BlockBuilder {
         Ok(())
     }
 
-    #[instrument(name = "block_builder.rollback_block")]
+    #[instrument(name = "rollback_block")]
     fn rollback_block(mempool: &SharedMempool, block: BlockNumber) -> Result<(), BuildBlockError> {
         mempool.lock().map_err(BuildBlockError::MempoolPoisoned)?.rollback_block(block);
         Ok(())

@@ -120,7 +120,7 @@ impl Service for RpcService {
 
     #[instrument(
         parent = None,
-        name = "network_monitor.status.check_rpc",
+        name = "check_rpc",
         level = "info",
     )]
     async fn check(&mut self) -> ServiceStatus {

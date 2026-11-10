@@ -24,7 +24,7 @@ use crate::errors::{MempoolSubmissionError, StateConflict};
 /// Returns an error if the store query fails, or if the transaction creates a new account whose ID
 /// prefix already exists in the store.
 #[instrument(
-    name = "store.state.get_tx_inputs",
+    name = "get_tx_inputs",
     err(level = "debug"),
     fields(
         transaction.id = proven_tx.id()

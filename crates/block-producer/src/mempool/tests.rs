@@ -192,7 +192,7 @@ async fn add_transaction_traces_are_correct() {
     let span_data = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let span_data = rx_export.recv().await.unwrap();
-            if span_data.name == "mempool.add_transaction"
+            if span_data.name == "add_transaction"
                 && span_data
                     .attributes
                     .iter()

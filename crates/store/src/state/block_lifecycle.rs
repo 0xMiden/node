@@ -25,7 +25,7 @@ pub(super) struct BlockLifecycle {
 }
 
 impl BlockLifecycle {
-    #[instrument(name = "block_lifecycle.from_block_body")]
+    #[instrument(name = "from_block_body")]
     pub(super) fn from_block_body(block_num: BlockNumber, body: &BlockBody) -> Self {
         let persisted_note_ids =
             body.output_notes().map(|(_, note)| note.id()).collect::<BTreeSet<_>>();
@@ -82,7 +82,7 @@ impl BlockLifecycle {
             .collect()
     }
 
-    #[instrument(name = "block_lifecycle.emit")]
+    #[instrument(name = "emit")]
     pub(super) fn emit(self, resolved_note_ids: &BTreeMap<Nullifier, NoteId>) {
         for account in self.registered_accounts {
             debug!(

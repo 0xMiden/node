@@ -267,7 +267,7 @@ async fn prove_block(
 
 /// Generates a block proof by loading inputs from the block store and invoking the block prover.
 #[instrument(
-    name = "prove_block.generate",
+    name = "generate_block_proof",
     fields(
         block.number = block_num
     ),

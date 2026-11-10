@@ -294,7 +294,7 @@ impl Service for ProverStatusService {
 
     #[instrument(
         parent = None,
-        name = "network_monitor.prover.status_check",
+        name = "status_check",
         level = "info",
         fields(
             prover = self.name,
@@ -378,7 +378,7 @@ const PAYLOAD_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// is permanent, so it is published as [`Status::Unhealthy`] to demand operator action.
 #[instrument(
     parent = None,
-    name = "network_monitor.prover.run_test",
+    name = "run_test",
     level = "info",
     fields(
         prover = name,
@@ -521,7 +521,7 @@ fn tonic_status_to_json(status: &tonic::Status) -> String {
 /// payload is reused for every probe, so this is a one-time cost.
 #[instrument(
     parent = None,
-    name = "network_monitor.remote_prover.generate_prover_test_payload",
+    name = "generate_prover_test_payload",
     level = "info",
     err,
 )]

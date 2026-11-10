@@ -306,7 +306,7 @@ impl NtxDbWriter {
 
 /// Opens an async connection pool after verifying the database is at the latest schema version.
 #[instrument(
-    name = "ntx_builder.database.load",
+    name = "load",
     fields(path = database_filepath),
     err,
 )]
@@ -317,7 +317,7 @@ pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
 /// Opens an async connection pool with a specific pool size after verifying the database is at the
 /// latest schema version.
 #[instrument(
-    name = "ntx_builder.database.load",
+    name = "load",
     fields(path = database_filepath),
     err,
 )]
@@ -363,7 +363,7 @@ fn open_with_pool_size(
 ///
 /// Returns an error if the database has already been bootstrapped.
 #[instrument(
-    name = "ntx_builder.database.bootstrap",
+    name = "bootstrap",
     fields(path = database_filepath),
     err,
 )]

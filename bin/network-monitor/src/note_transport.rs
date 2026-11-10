@@ -51,7 +51,7 @@ impl Service for NoteTransportService {
         )
     }
 
-    #[instrument(name = "check-status.note-transport")]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let details = NoteTransportStatusDetails { url: self.url.to_string() };
         let health = self

@@ -92,7 +92,7 @@ struct InvitationRequest {
     account_id: Option<String>,
 }
 
-#[instrument(name = "admin.allowlist.put_invitation", err)]
+#[instrument(name = "put_invitation", err)]
 async fn put_invitation(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -122,7 +122,7 @@ async fn put_invitation(
     })
 }
 
-#[instrument(name = "admin.allowlist.put_account", err)]
+#[instrument(name = "put_account", err)]
 async fn put_account(
     State(state): State<AdminState>,
     Path(account): Path<String>,
@@ -155,7 +155,7 @@ struct InvitationStatusResponse {
     allowlisted_at: Option<i64>,
 }
 
-#[instrument(name = "admin.allowlist.invitation_status", err)]
+#[instrument(name = "invitation_status", err)]
 async fn invitation_status(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -189,7 +189,7 @@ struct AccountStatusResponse {
     allowlisted_at: i64,
 }
 
-#[instrument(name = "admin.allowlist.account_status", err)]
+#[instrument(name = "account_status", err)]
 async fn account_status(
     State(state): State<AdminState>,
     Path(account): Path<String>,

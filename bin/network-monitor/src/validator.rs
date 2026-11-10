@@ -50,7 +50,7 @@ impl Service for ValidatorService {
         )
     }
 
-    #[instrument(name = "check-status.validator")]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         match self
             .client

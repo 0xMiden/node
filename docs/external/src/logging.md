@@ -118,6 +118,19 @@ example `miden=info,miden::sync=debug`.
 A `miden-node` process contains multiple components. For example, a sequencer can emit `miden`, `miden::rpc::server`,
 `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
 
+## Select a span
+
+Span names describe operations such as `build_block`; targets identify activities such as `miden::production::blocks`.
+Combine both to enable diagnostics within a particular operation:
+
+```text
+info,miden::production::blocks[build_block]=debug
+```
+
+The target matches by prefix and the span name matches exactly. The directive also enables debug output within that
+span's scope, including output from other targets. Use it with `MIDEN_STDOUT_FILTER`, `MIDEN_OTEL_FILTER`, or the
+administration API.
+
 ## OpenTelemetry filter
 
 OpenTelemetry export is enabled when either `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT` has a
@@ -138,6 +151,10 @@ miden-node full ...
 
 If neither Miden-specific filter is set, `RUST_LOG` configures both outputs. See
 [Monitoring](/network-operator/monitoring) for exporter and resource configuration.
+
+Exported spans include their tracing target in the `target` attribute. Use it alongside `service.name` and the span name
+when filtering or grouping operations in the tracing backend. Short span names can occur under multiple targets or
+services, so dashboards and derived metrics should retain those dimensions when they need to distinguish the operations.
 
 ## Change filters while the service is running
 

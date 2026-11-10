@@ -45,7 +45,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
         Ok(item)
     }
 
-    #[instrument(name = "validator.block_subscription")]
+    #[instrument(name = "block_subscription")]
     async fn handle(
         &self,
         request: Self::Input,

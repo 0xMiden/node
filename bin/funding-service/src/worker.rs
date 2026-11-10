@@ -131,7 +131,7 @@ impl Funder {
     /// Selects affordable notes and completes one funding attempt.
     #[instrument(
         parent = None,
-        name = "funding.process_batch",
+        name = "process_batch",
         fields(
             account.id = self.account_id(),
             queued.count,
@@ -177,7 +177,7 @@ impl Funder {
 
     /// Submits one transaction and resolves its outcome.
     #[instrument(
-        name = "funding.transaction",
+        name = "transaction",
         fields(
             account.id = self.account_id(),
             note.count = selection.notes.len(),
@@ -253,7 +253,7 @@ impl Funder {
     /// A missing `outcome` means this attempt was loaded from the database. We cannot resubmit it
     /// because we do not store the transaction payload.
     #[instrument(
-        name = "funding.resolve_attempt",
+        name = "resolve_attempt",
         fields(
             account.id = self.account_id(),
             transaction.id = attempt.transaction_id,
@@ -382,7 +382,7 @@ impl Funder {
     }
 
     /// Reads the funding account and chain state at the current reference block.
-    #[instrument(name = "funding.read_chain_state", err)]
+    #[instrument(name = "read_chain_state", err)]
     async fn read_chain_state(&mut self) -> Result<ChainState> {
         let (reference_header, blockchain) =
             self.node.tip_chain_state().await.context("failed to read the chain state")?;
@@ -420,7 +420,7 @@ impl Funder {
 /// Each failure has a separate span so repeated exceptions cannot exhaust the resolution span's
 /// attribute budget.
 #[instrument(
-    name = "funding.poll_failure",
+    name = "poll_failure",
     fields(transaction.id = transaction_id),
 )]
 fn record_poll_failure(err: &anyhow::Error, transaction_id: TransactionId) {

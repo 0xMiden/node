@@ -122,7 +122,7 @@ impl FundingWallet {
     ///
     /// Retries transient RPC failures with backoff. Apply the returned update with [`Self::apply`].
     #[instrument(
-        name = "funding.wallet.sync_to",
+        name = "sync_to",
         fields(account.id = self.account_id(), block.number = block_num),
         err,
     )]

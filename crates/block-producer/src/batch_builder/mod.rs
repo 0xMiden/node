@@ -150,7 +150,7 @@ impl BatchBuilder {
 
     #[instrument(
         parent = None,
-        name = "batch_builder.build_batch",
+        name = "build_batch",
     )]
     fn build_batch(&mut self, mempool: SharedMempool, batch: SelectedBatch) {
         miden_span_record!(
@@ -199,14 +199,14 @@ impl BatchBuilder {
         Ok(true)
     }
 
-    #[instrument(name = "batch_builder.select_full_batch")]
+    #[instrument(name = "select_full_batch")]
     fn select_full_batch(
         mempool: &SharedMempool,
     ) -> Result<Option<SelectedBatch>, BuildBatchError> {
         Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_full_batch())
     }
 
-    #[instrument(name = "batch_builder.select_any_batch")]
+    #[instrument(name = "select_any_batch")]
     fn select_any_batch(mempool: &SharedMempool) -> Result<Option<SelectedBatch>, BuildBatchError> {
         Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_any_batch())
     }
@@ -273,7 +273,7 @@ struct BatchInputs {
 }
 
 impl BatchJob {
-    #[instrument(name = "batch_builder.build_batch_job", err)]
+    #[instrument(name = "build_batch_job", err)]
     async fn build_batch(&self, batch: SelectedBatch) -> Result<(), BuildBatchError> {
         let batch_id = batch.id();
 
@@ -304,7 +304,7 @@ impl BatchJob {
         }
     }
 
-    #[instrument(name = "batch_builder.get_batch_inputs", err)]
+    #[instrument(name = "get_batch_inputs", err)]
     async fn get_batch_inputs(
         &self,
         selected: SelectedBatch,
@@ -468,7 +468,7 @@ impl BatchJob {
         Ok(fee_collection_tx)
     }
 
-    #[instrument(name = "batch_builder.commit_batch")]
+    #[instrument(name = "commit_batch")]
     fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
@@ -477,7 +477,7 @@ impl BatchJob {
         Ok(())
     }
 
-    #[instrument(name = "batch_builder.rollback_batch")]
+    #[instrument(name = "rollback_batch")]
     fn rollback_batch(&self, batch_id: SelectedBatchId) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()

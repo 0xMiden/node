@@ -328,7 +328,7 @@ impl BlockProducerApi {
     // ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[instrument(name = "block_producer.api.submit_proven_tx")]
+    #[instrument(name = "submit_proven_tx")]
     pub async fn submit_proven_tx(
         &self,
         tx: ProvenTransaction,
@@ -355,7 +355,7 @@ impl BlockProducerApi {
     }
 
     /// Adds a transaction that has already been authenticated.
-    #[instrument(name = "block_producer.api.submit_authenticated_tx")]
+    #[instrument(name = "submit_authenticated_tx")]
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
@@ -370,7 +370,7 @@ impl BlockProducerApi {
         result
     }
 
-    #[instrument(name = "block_producer.api.submit_proven_tx_batch")]
+    #[instrument(name = "submit_proven_tx_batch")]
     pub async fn submit_proven_tx_batch(
         &self,
         proof: ProvenBatch,
@@ -395,7 +395,7 @@ impl BlockProducerApi {
     ///
     /// Panics if the number of transactions in `batch` does not match the number of inputs in
     /// `inputs`.
-    #[instrument(name = "block_producer.api.submit_authenticated_tx_batch")]
+    #[instrument(name = "submit_authenticated_tx_batch")]
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,

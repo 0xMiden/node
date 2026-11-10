@@ -231,7 +231,7 @@ impl IncrementService {
     /// Re-sync the wallet account from the RPC after repeated failures.
     #[instrument(
         parent = None,
-        name = "network_monitor.counter.try_resync_wallet_account",
+        name = "try_resync_wallet_account",
         fields(
             account.id = self.tx.wallet_account.id(),
         ),
@@ -292,7 +292,7 @@ impl IncrementService {
     /// The transaction consumes `funding_note` when one is given.
     #[instrument(
         parent = None,
-        name = "network_monitor.counter.submit_increment",
+        name = "submit_increment",
         level = "info",
         err,
     )]

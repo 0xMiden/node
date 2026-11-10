@@ -45,7 +45,7 @@ impl FundingWallet {
 
     /// Returns one page of deposits and the last block checked in the given range.
     #[instrument(
-        name = "funding.wallet.sync_deposits",
+        name = "sync_deposits",
         level = "debug",
         fields(
             account.id = funder,
@@ -116,7 +116,7 @@ impl FundingWallet {
 
     /// The notes among `note_ids` whose details the node stores.
     #[instrument(
-        name = "funding.wallet.get_notes",
+        name = "get_notes",
         level = "debug",
         fields(
             note.count = note_ids.len(),
@@ -164,7 +164,7 @@ struct SyncedDeposits {
 
 /// Returns the requested nullifiers spent in the given block range.
 #[instrument(
-    name = "funding.wallet.spent_nullifiers",
+    name = "spent_nullifiers",
     fields(
         nullifier.count = nullifiers.len(),
         block_range.to = tip,

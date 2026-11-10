@@ -102,7 +102,7 @@ impl Scheduler {
     /// has two builds or two submitted transactions at once. `chain` fixes the reference block for
     /// every build spawned here.
     #[instrument(
-        name = "ntx.scheduler.dispatch",
+        name = "dispatch",
         fields(tip.number = chain.chain_tip_header.block_num()),
         err,
     )]
