@@ -84,22 +84,20 @@ mod tests {
             AccountUpdateDetails::Private,
         )
         .unwrap();
-        {
-            let logs = miden_protocol::transaction::TransactionLogs::default();
-            let log_details =
-                miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
-            ProvenTransaction::new(
-                update,
-                Vec::<InputNoteCommitment>::new(),
-                Vec::<OutputNote>::new(),
-                BlockNumber::GENESIS,
-                Word::empty(),
-                (seed + 1).into(),
-                miden_protocol::testing::dummy_execution_proof(),
-                log_details,
-                miden_protocol::block::code_tree::CodePatch::default(),
-            )
-        }
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+        ProvenTransaction::new(
+            update,
+            Vec::<InputNoteCommitment>::new(),
+            Vec::<OutputNote>::new(),
+            BlockNumber::GENESIS,
+            Word::empty(),
+            (seed + 1).into(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
         .unwrap()
     }
 
