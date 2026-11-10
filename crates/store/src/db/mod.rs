@@ -219,7 +219,7 @@ impl From<NoteRecord> for NoteSyncRecord {
 impl Db {
     /// Creates a new database and inserts the genesis block.
     #[instrument(
-        name = "store.database.bootstrap",
+        name = "bootstrap",
         fields(path = database_filepath),
         err,
     )]

@@ -85,7 +85,7 @@ impl Service for ExplorerService {
         )
     }
 
-    #[instrument(name = "check-status.explorer")]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let resp = self
             .client

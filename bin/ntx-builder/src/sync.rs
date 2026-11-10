@@ -58,7 +58,7 @@ impl BlockFollower {
     }
 
     /// Applies a committed block before publishing its chain snapshot and reporting catch-up.
-    #[instrument(name = "ntx.builder.apply_committed_block", fields(block.number = block.header().block_num(), tip.number = committed_tip))]
+    #[instrument(name = "apply_committed_block", fields(block.number = block.header().block_num(), tip.number = committed_tip))]
     pub(crate) async fn apply(
         &mut self,
         db: &NtxDbWriter,

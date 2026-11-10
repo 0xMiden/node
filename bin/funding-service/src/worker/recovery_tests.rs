@@ -203,7 +203,7 @@ async fn state_conflict_discards_only_the_selected_deposit() {
         &HashMap::from([(unselected.nullifier(), unselected)])
     );
     assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
-    let span = telemetry.span("funding.resolve_attempt");
+    let span = telemetry.span("resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("deposit_discarded".into()));
     assert!(matches!(span.status, Status::Error { .. }));
 }
@@ -244,7 +244,7 @@ async fn other_rejections_preserve_notes() {
             &HashMap::from([(deposit.nullifier(), deposit)])
         );
         assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
-        let span = telemetry.span("funding.resolve_attempt");
+        let span = telemetry.span("resolve_attempt");
         assert_eq!(attribute(&span, "funding.outcome"), Some("rejected".into()));
         assert!(matches!(span.status, Status::Error { .. }));
     }
@@ -296,7 +296,7 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             funder.resolve_attempt(attempt, Some(outcome)).await.unwrap();
             assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
 
-            let span = telemetry.span("funding.resolve_attempt");
+            let span = telemetry.span("resolve_attempt");
             let traceparent =
                 format!("00-{}-{}-01", span.span_context.trace_id(), span.span_context.span_id());
             assert!(
@@ -319,12 +319,7 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             assert_eq!(attribute(&span, "transaction.id"), Some(transaction_id.to_string().into()));
             assert_eq!(attribute(&span, "poll.count"), Some("1".into()));
             assert_eq!(matches!(span.status, Status::Error { .. }), !committed);
-            assert!(
-                !telemetry
-                    .spans()
-                    .iter()
-                    .any(|span| span.name == "funding.node.transaction_status")
-            );
+            assert!(!telemetry.spans().iter().any(|span| span.name == "transaction_status"));
             if committed {
                 let stored =
                     funder.setup.database.request(payout.note().id()).await.unwrap().unwrap();
@@ -403,12 +398,7 @@ async fn admission_uses_the_reference_blocks_fee() {
 async fn wait_for_attempts(telemetry: &Telemetry, count: usize) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if telemetry
-                .spans()
-                .iter()
-                .filter(|span| span.name == "funding.process_batch")
-                .count()
-                >= count
+            if telemetry.spans().iter().filter(|span| span.name == "process_batch").count() >= count
             {
                 break;
             }
@@ -454,7 +444,7 @@ async fn a_restarted_worker_loads_pending_requests_in_bounded_acceptance_order()
     }
     shutdown.cancel();
     worker.await.unwrap();
-    let span = telemetry.span("funding.process_batch");
+    let span = telemetry.span("process_batch");
     assert_eq!(attribute(&span, "queued.count"), Some("2".into()));
 }
 
@@ -488,8 +478,7 @@ async fn pending_requests_are_discovered_and_retried_without_an_http_server() {
     shutdown.cancel();
     worker.await.unwrap();
     let spans = telemetry.spans();
-    let attempts: Vec<_> =
-        spans.iter().filter(|span| span.name == "funding.process_batch").collect();
+    let attempts: Vec<_> = spans.iter().filter(|span| span.name == "process_batch").collect();
     assert!(
         attempts[1..]
             .iter()
@@ -671,15 +660,14 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
         .resolve_attempt(attempt, Some(SubmissionOutcome::Accepted))
         .await
         .unwrap();
-    let span = telemetry.span("funding.resolve_attempt");
+    let span = telemetry.span("resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("committed".into()));
     assert_eq!(attribute(&span, "poll.count"), Some((failures + 1).to_string().into()));
     assert_eq!(attribute(&span, "poll.error.count"), Some(failures.to_string().into()));
     assert!(!matches!(span.status, Status::Error { .. }));
     assert_eq!(span.dropped_attributes_count, 0);
     let spans = telemetry.spans();
-    let failed_polls: Vec<_> =
-        spans.iter().filter(|span| span.name == "funding.poll_failure").collect();
+    let failed_polls: Vec<_> = spans.iter().filter(|span| span.name == "poll_failure").collect();
     assert_eq!(failed_polls.len(), failures);
     for failed_poll in failed_polls {
         assert_eq!(failed_poll.parent_span_id, span.span_context.span_id());

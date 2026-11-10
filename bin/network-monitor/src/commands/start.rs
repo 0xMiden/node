@@ -15,7 +15,7 @@ use crate::monitor::tasks::Tasks;
 /// remote prover testing, faucet testing, and the web frontend.
 #[instrument(
     parent = None,
-    name = "network_monitor.start_monitor",
+    name = "start_monitor",
     level = "info",
     fields(
         port = config.port,

@@ -271,7 +271,7 @@ impl RpcClient {
     /// first response and for each transition. The committed chain tip is the latest block the node
     /// believes is committed when it emits the response.
     #[instrument(
-        name = "rpc.client.block_subscription_with_retry",
+        name = "block_subscription_with_retry",
         fields(
             block.from = block_from,
         ),
@@ -325,7 +325,7 @@ impl RpcClient {
         .await
     }
 
-    #[instrument(name = "ntx.rpc.client.submit_proven_tx", err)]
+    #[instrument(name = "submit_proven_tx", err)]
     pub async fn submit_proven_tx(
         &self,
         proven_tx: &ProvenTransaction,
@@ -551,7 +551,7 @@ impl RpcClient {
     }
 
     /// Fetches a note script by its root, returning `None` if the node does not know it.
-    #[instrument(name = "ntx.rpc.client.get_note_script_by_root", err)]
+    #[instrument(name = "get_note_script_by_root", err)]
     pub async fn get_note_script_by_root(
         &self,
         script_root: Word,

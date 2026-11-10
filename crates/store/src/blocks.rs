@@ -34,7 +34,7 @@ impl BlockStore {
     ///
     /// Uses [`std::fs::create_dir`] and therefore has the same error conditions.
     #[instrument(
-        name = "store.block_store.bootstrap",
+        name = "bootstrap",
         err,
         fields(
             path = store_dir,
@@ -110,7 +110,7 @@ impl BlockStore {
     }
 
     #[instrument(
-        name = "store.block_store.save_block",
+        name = "save_block",
         err,
         fields(
             block.number = block_num,
@@ -139,7 +139,7 @@ impl BlockStore {
     // --------------------------------------------------------------------------------------------
 
     #[instrument(
-        name = "store.block_store.save_proof",
+        name = "save_proof",
         err,
         fields(
             block.number = block_num,
@@ -167,7 +167,7 @@ impl BlockStore {
     // --------------------------------------------------------------------------------------------
 
     #[instrument(
-        name = "store.block_store.save_proving_inputs",
+        name = "save_proving_inputs",
         err,
         fields(
             block.number = block_num,

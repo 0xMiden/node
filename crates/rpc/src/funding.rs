@@ -41,7 +41,7 @@ impl FundingClient {
     /// Requests the configured amount and waits for the funding service to queue the note. This
     /// method does not retry failed requests.
     #[instrument(
-        name = "account.funding",
+        name = "funding",
         fields(account.id = account_id, asset.amount = self.amount.get()),
         err,
     )]

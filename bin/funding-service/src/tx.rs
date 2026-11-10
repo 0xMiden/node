@@ -53,7 +53,7 @@ pub struct ExecutionInputs {
 
 /// Executes one transaction which consumes `deposits` and creates `outputs`.
 #[instrument(
-    name = "funding.execute",
+    name = "execute",
     fields(
         account.id = inputs.funder.id(),
         transaction.reference_block.number = inputs.reference_header.block_num(),
@@ -415,8 +415,8 @@ mod tests {
 
         assert!(result.is_err(), "a remote prover failure must not be proven in process");
         let root = telemetry.span("test_transaction");
-        let proving = telemetry.span("funding.prove");
-        let remote = telemetry.span("funding.prove.remote");
+        let proving = telemetry.span("prove");
+        let remote = telemetry.span("prove_remote");
         assert_eq!(proving.parent_span_id, root.span_context.span_id());
         assert_eq!(remote.parent_span_id, proving.span_context.span_id());
         assert!(matches!(remote.status, Status::Error { .. }));

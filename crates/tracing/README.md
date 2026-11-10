@@ -74,6 +74,17 @@ If the compiler reports a missing `tracing_target` macro, invoke `declare_target
 modules, or supply an explicit target. For instrumentation, use `#[instrument(target = "miden::storage")]`; for an
 event, use `info!(target: "miden::storage", "account.loaded")`.
 
+## Span names
+
+Name spans after the operation, without a component or module prefix: use `build_block` rather than
+`block_builder.build_block`. The scoped target identifies the activity. Use the function name when it describes the
+operation, and an explicit `name` when it adds useful meaning. Keep qualifiers that distinguish the work being timed,
+such as `prove_local`, `prove_remote`, and `build_batch_job`.
+
+Span names can repeat across targets. Select an operation with both its target and name, for example
+`miden::production::blocks[build_block]=debug`. In OpenTelemetry, the tracing target is exported as the span attribute
+`target`. Include the service, target, and span name when grouping operations in dashboards or metrics.
+
 ## Error events
 
 `#[instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")` records

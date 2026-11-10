@@ -12,7 +12,7 @@ use crate::state::State;
 impl State {
     /// Bootstraps the store state, creating the database state and inserting the genesis block
     /// data.
-    #[instrument(name = "store.bootstrap", err)]
+    #[instrument(name = "bootstrap", err)]
     pub async fn bootstrap(genesis: GenesisBlock, data_directory: &Path) -> anyhow::Result<()> {
         let data_directory =
             DataDirectory::load(data_directory.to_path_buf()).with_context(|| {

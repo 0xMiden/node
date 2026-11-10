@@ -187,7 +187,7 @@ impl Service for FaucetService {
 /// Fetches the faucet's metadata from the `/get_metadata` endpoint.
 #[instrument(
     parent = None,
-    name = "network_monitor.faucet.fetch_faucet_metadata",
+    name = "fetch_faucet_metadata",
     level = "info",
     err,
 )]
@@ -210,7 +210,7 @@ pub(crate) async fn fetch_faucet_metadata(
 /// whose ID is returned. Used by the faucet health check and by [`crate::funding`].
 #[instrument(
     parent = None,
-    name = "network_monitor.faucet.request_tokens",
+    name = "request_tokens",
     level = "info",
     err,
 )]
@@ -320,7 +320,7 @@ where
 /// and time bounds.
 #[instrument(
     parent = None,
-    name = "network_monitor.faucet.solve_pow_challenge",
+    name = "solve_pow_challenge",
     level = "info",
     err,
 )]

@@ -190,7 +190,7 @@ impl FundingServiceConfig {
     /// Connects to the node and builds the service.
     #[instrument(
         target = "miden",
-        name = "funding.initialize",
+        name = "initialize",
         fields(
             funding_service.remote_prover = self.tx_prover_url.is_some(),
         ),

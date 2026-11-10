@@ -82,7 +82,7 @@ impl BlockProducerValidatorClient {
     }
 
     /// Validates a transaction with every validator before it can appear in a signed block.
-    #[instrument(name = "validator.client.validate_transaction", err)]
+    #[instrument(name = "validate_transaction", err)]
     pub(crate) async fn validate_transaction(
         &self,
         transaction: &ProvenTransaction,
@@ -129,7 +129,7 @@ impl BlockProducerValidatorClient {
     ///
     /// Fails if any validator fails to respond, since every validator in the parent's set must
     /// sign for the block to reach quorum.
-    #[instrument(name = "validator.client.validate_block", err)]
+    #[instrument(name = "validate_block", err)]
     pub async fn sign_block(
         &self,
         proposed_block: &ProposedBlock,
@@ -170,7 +170,7 @@ struct Validator {
 impl Validator {
     /// Submits a proven transaction, retrying service unavailability and connection failures.
     #[instrument(
-        name = "validator.client.submit_proven_transaction",
+        name = "submit_proven_transaction",
         fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
         err,
     )]
@@ -195,7 +195,7 @@ impl Validator {
 
     /// Requests and decodes a block signature from this validator.
     #[instrument(
-        name = "validator.client.sign_block",
+        name = "sign_block",
         fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
         err,
     )]

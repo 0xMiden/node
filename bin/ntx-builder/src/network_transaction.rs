@@ -174,7 +174,7 @@ pub struct NetworkTransactionOutcome {
 impl NetworkTransactionContext {
     /// Builds, proves and submits one network transaction for `account_id`.
     #[instrument(
-        name = "ntx.build",
+        name = "build",
         fields(
             account.id = account_id,
             reference_block.number = chain.chain_tip_header.block_num(),

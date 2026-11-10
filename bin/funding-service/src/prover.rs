@@ -42,7 +42,7 @@ impl Prover {
 
     /// Proves one executed transaction.
     #[instrument(
-        name = "funding.prove",
+        name = "prove",
         fields(
             transaction.id = executed_tx.id(),
             prover.kind = if matches!(self, Self::Local(_)) { "local" } else { "remote" },
@@ -67,7 +67,7 @@ pub struct LocalProver;
 impl LocalProver {
     /// Proves one executed transaction in this process.
     #[instrument(
-        name = "funding.prove.local",
+        name = "prove_local",
         fields(
             transaction.id = executed_tx.id(),
         ),
@@ -113,7 +113,7 @@ impl RemoteProver {
 
     /// Proves one transaction on the remote prover.
     #[instrument(
-        name = "funding.prove.remote",
+        name = "prove_remote",
         fields(
             transaction.id = executed_tx.id(),
         ),

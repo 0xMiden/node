@@ -77,7 +77,7 @@ impl AccountAdmission {
 
     /// Rejects the submission if it creates an unregistered, non-network account.
     #[instrument(
-        name = "account_admission.check",
+        name = "check",
         fields(account.id = update.account_id()),
     )]
     pub(crate) async fn check(&self, update: &TxAccountUpdate) -> tonic::Result<()> {

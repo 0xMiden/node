@@ -51,7 +51,7 @@ pub struct RpcNodeClient {
 
 impl RpcNodeClient {
     /// Connects to the node's RPC API and verifies the attested transaction encryption key.
-    #[instrument(name = "funding.node.connect", err)]
+    #[instrument(name = "connect", err)]
     pub async fn connect(
         rpc_url: &Url,
         timeout: Duration,
@@ -91,7 +91,7 @@ impl RpcNodeClient {
     }
 
     /// The committed chain tip header with a partial blockchain which proves it.
-    #[instrument(name = "funding.node.tip_chain_state", err)]
+    #[instrument(name = "tip_chain_state", err)]
     pub async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)> {
         fetch_tip_chain_state(&mut self.rpc_client.clone(), self.genesis_commitment).await
     }
@@ -103,7 +103,7 @@ impl RpcNodeClient {
 
     /// Checks for commitment before reporting expiration. Reads every page in the block range.
     #[instrument(
-        name = "funding.node.transaction_status",
+        name = "transaction_status",
         level = "debug",
         fields(
             account.id = account_id,
@@ -191,7 +191,7 @@ impl RpcNodeClient {
     }
 
     /// The chain tip of the node's local store.
-    #[instrument(name = "funding.node.committed_tip", level = "debug", err(level = "debug"))]
+    #[instrument(name = "committed_tip", level = "debug", err(level = "debug"))]
     pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
             .rpc_client
@@ -206,7 +206,7 @@ impl RpcNodeClient {
 
     /// Seals and submits one proven transaction. Errors occur before submission starts.
     #[instrument(
-        name = "funding.node.submit",
+        name = "submit",
         fields(
             transaction.id = proven_tx.id(),
         ),
@@ -262,7 +262,7 @@ impl RpcNodeClient {
     }
 
     /// Fetches and verifies the node's transaction encryption key on a cache miss.
-    #[instrument(name = "funding.node.refresh_sealer", err)]
+    #[instrument(name = "refresh_sealer", err)]
     async fn refresh_sealer(&self) -> Result<TransactionInputsSealer> {
         let key = self
             .rpc_client

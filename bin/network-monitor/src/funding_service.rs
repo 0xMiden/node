@@ -81,7 +81,7 @@ impl Service for FundingService {
         )
     }
 
-    #[instrument(name = "check-status.funding-service")]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let mut details = FundingStatusDetails { url: self.url.to_string(), status: None };
         match self.fetch_status().await {

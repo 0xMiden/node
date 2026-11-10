@@ -15,7 +15,7 @@ impl BatchProver {
         Self(LocalBatchProver::default().skip_precompile_proof_generation(true))
     }
 
-    #[instrument(name = "batch_builder.prove_batch", err)]
+    #[instrument(name = "prove_batch", err)]
     pub(crate) async fn prove(
         &self,
         proposed_batch: ProposedBatch,

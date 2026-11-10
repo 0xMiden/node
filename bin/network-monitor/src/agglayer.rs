@@ -69,7 +69,7 @@ impl Service for AgglayerService {
         )
     }
 
-    #[instrument(name = "check-status.agglayer")]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let body = match self.fetch_status().await {
             Ok(body) => body,

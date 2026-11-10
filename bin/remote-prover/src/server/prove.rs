@@ -10,7 +10,7 @@ impl grpc::server::miden_remote_prover_v1_prover_service::Prove for ProverServic
     type Input = (ProofKind, grpc::miden::remote_prover::v1::ProveRequest);
     type Output = grpc::miden::remote_prover::v1::ProveResponse;
 
-    #[instrument(name = "remote_prover.prove")]
+    #[instrument(name = "prove")]
     async fn handle(
         &self,
         (proof_kind, request): Self::Input,

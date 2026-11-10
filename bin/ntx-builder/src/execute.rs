@@ -234,7 +234,7 @@ impl NtxContext {
     /// transaction builds against gives exactly the state the transaction must start from. The
     /// response is checked against the reference block header rather than trusted: its witness must
     /// open to the block's account root, and the account state must match the witness.
-    #[instrument(name = "ntx.load_account", err)]
+    #[instrument(name = "load_account", err)]
     pub async fn load_account(
         &self,
         account_id: AccountId,
@@ -295,7 +295,7 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[instrument(name = "ntx.execute_transaction", err)]
+    #[instrument(name = "execute_transaction", err)]
     pub fn execute_transaction(
         self,
         account: PartialAccount,
@@ -391,7 +391,7 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[instrument(name = "ntx.execute_transaction.filter_notes", err)]
+    #[instrument(name = "filter_notes", err)]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -526,7 +526,7 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[instrument(name = "ntx.execute_transaction.execute", err)]
+    #[instrument(name = "execute", err)]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -553,7 +553,7 @@ impl NtxContext {
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the caller can mark the batch failed.
-    #[instrument(name = "ntx.execute_transaction.submit", err)]
+    #[instrument(name = "submit", err)]
     async fn submit(
         &self,
         proven_tx: &ProvenTransaction,

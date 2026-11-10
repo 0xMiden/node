@@ -81,7 +81,7 @@ pub struct AccountAllowlistReader {
 impl AccountAllowlistReader {
     /// Returns when the account's allowlist entry was added, if it exists.
     #[instrument(
-        name = "store.allowlist.allowlisted_at",
+        name = "allowlisted_at",
         fields(account.id = account_id),
         err(level = "debug"),
     )]
@@ -96,7 +96,7 @@ impl AccountAllowlistReader {
     }
 
     /// Returns the invitation's registration and allowlist entry timestamp, if it exists.
-    #[instrument(name = "store.allowlist.invitation_info", err(level = "debug"))]
+    #[instrument(name = "invitation_info", err(level = "debug"))]
     pub async fn invitation_info(
         &self,
         invitation_code: InvitationCode,
@@ -111,7 +111,7 @@ impl AccountAllowlistReader {
 
     /// Returns whether the registry contains the account.
     #[instrument(
-        name = "store.allowlist.contains_account",
+        name = "contains_account",
         fields(account.id = account_id),
         err(level = "debug"),
     )]
@@ -125,7 +125,7 @@ impl AccountAllowlistReader {
     }
 
     /// Returns the registration state of the invitation code.
-    #[instrument(name = "store.allowlist.invitation_status", err(level = "debug"))]
+    #[instrument(name = "invitation_status", err(level = "debug"))]
     pub async fn invitation_status(
         &self,
         invitation_code: InvitationCode,
@@ -217,7 +217,7 @@ impl AccountAllowlist {
     /// An entry with an account can register an unused invitation code. An identical registration has no effect.
     /// A conflicting registration leaves the registry unchanged.
     #[instrument(
-        name = "store.allowlist.import_invitation",
+        name = "import_invitation",
         fields(account.id = entry.account_id),
         err,
     )]
@@ -235,7 +235,7 @@ impl AccountAllowlist {
     ///
     /// An existing account keeps its invitation code registration, if any.
     #[instrument(
-        name = "store.allowlist.add_account",
+        name = "add_account",
         fields(account.id = account_id),
         err,
     )]
@@ -251,7 +251,7 @@ impl AccountAllowlist {
     /// A retry with the same invitation code and account succeeds without changes.
     /// An account already registered by another method cannot consume an unused invitation code.
     #[instrument(
-        name = "store.allowlist.register_account",
+        name = "register_account",
         fields(account.id = account_id),
         err,
     )]
