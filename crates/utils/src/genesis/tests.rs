@@ -3,7 +3,11 @@ use miden_node_persistence::prost::Message;
 use miden_protocol::Word;
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
-    BlockBody, BlockHeader, BlockSignatures, FeeParameters, ValidatorConfig,
+    BlockBody,
+    BlockHeader,
+    BlockSignatures,
+    FeeParameters,
+    ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::utils::serde::Deserializable;
@@ -15,21 +19,9 @@ fn official_network_endpoints() {
     use clap::ValueEnum;
 
     for (name, genesis_url, rpc_url) in [
-        (
-            "mainnet",
-            "https://genesis.mainnet.miden.io",
-            "https://rpc.mainnet.miden.io/",
-        ),
-        (
-            "testnet",
-            "https://genesis.testnet.miden.io",
-            "https://rpc.testnet.miden.io/",
-        ),
-        (
-            "devnet",
-            "https://genesis.devnet.miden.io",
-            "https://rpc.devnet.miden.io/",
-        ),
+        ("mainnet", "https://genesis.mainnet.miden.io", "https://rpc.mainnet.miden.io/"),
+        ("testnet", "https://genesis.testnet.miden.io", "https://rpc.testnet.miden.io/"),
+        ("devnet", "https://genesis.devnet.miden.io", "https://rpc.devnet.miden.io/"),
     ] {
         let network = OfficialNetwork::from_str(name, false).unwrap();
         assert_eq!(network.to_string(), name);
@@ -176,10 +168,7 @@ fn genesis_accepts_unknown_fields_and_rejects_versions() {
     let value = GenesisBlock::new(genesis(BlockNumber::GENESIS, &config), config).unwrap();
     let mut bytes = encode(&value);
     bytes.extend_from_slice(&[0xa0, 0x06, 0x01]);
-    assert_eq!(
-        deserialize_genesis_block(&bytes).unwrap().inner(),
-        value.inner()
-    );
+    assert_eq!(deserialize_genesis_block(&bytes).unwrap().inner(), value.inner());
     for version in [0, 2] {
         let mut message = value.to_proto();
         message.version = version;
