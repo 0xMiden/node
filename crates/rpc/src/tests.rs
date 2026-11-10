@@ -316,26 +316,20 @@ fn build_test_proven_tx_with_fee(
 
     let output_notes = fee.map(|asset| fee_output_note(account_id, asset));
 
-    {
-        let update = account_update;
-        let logs = miden_protocol::transaction::TransactionLogs::default();
-        let log_details = if update.account_id().is_public() {
-            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-        } else {
-            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-        };
-        ProvenTransaction::new(
-            update,
-            Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
-            output_notes,
-            0.into(),
-            genesis,
-            u32::MAX.into(),
-            miden_protocol::testing::dummy_execution_proof(),
-            log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
-        )
-    }
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
+
+    ProvenTransaction::new(
+        account_update,
+        Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+        output_notes,
+        0.into(),
+        genesis,
+        u32::MAX.into(),
+        miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        miden_protocol::block::code_tree::CodePatch::default(),
+    )
     .unwrap()
 }
 
@@ -367,30 +361,23 @@ fn build_test_proven_tx_with_id(
         AccountUpdateDetails::Public(patch),
     )
     .unwrap();
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
 
-    {
-        let update = account_update;
-        let logs = miden_protocol::transaction::TransactionLogs::default();
-        let log_details = if update.account_id().is_public() {
-            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-        } else {
-            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-        };
-        ProvenTransaction::new(
-            update,
-            Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
-            [fee_output_note(
-                account_id,
-                FungibleAsset::new(fee_asset_id.faucet_id(), 1).unwrap(),
-            )],
-            0.into(),
-            genesis,
-            u32::MAX.into(),
-            miden_protocol::testing::dummy_execution_proof(),
-            log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
-        )
-    }
+    ProvenTransaction::new(
+        account_update,
+        Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+        [fee_output_note(
+            account_id,
+            FungibleAsset::new(fee_asset_id.faucet_id(), 1).unwrap(),
+        )],
+        0.into(),
+        genesis,
+        u32::MAX.into(),
+        miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        miden_protocol::block::code_tree::CodePatch::default(),
+    )
     .unwrap()
 }
 

@@ -971,26 +971,24 @@ fn create_consume_note_tx(
         details,
     )
     .unwrap();
-    let transaction = {
-        let update = account_update;
-        let logs = miden_protocol::transaction::TransactionLogs::default();
-        let log_details = if update.account_id().is_public() {
-            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-        } else {
-            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-        };
-        ProvenTransaction::new(
-            update,
-            vec![InputNoteCommitment::from(input_note)],
-            Vec::<OutputNote>::new(),
-            block_ref.block_num(),
-            block_ref.commitment(),
-            u32::MAX.into(),
-            miden_protocol::testing::dummy_execution_proof(),
-            log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
-        )
-    }
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = if account_update.account_id().is_public() {
+        miden_protocol::transaction::TransactionLogDetails::Public(logs)
+    } else {
+        miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+    };
+
+    let transaction = ProvenTransaction::new(
+        account_update,
+        vec![InputNoteCommitment::from(input_note)],
+        Vec::<OutputNote>::new(),
+        block_ref.block_num(),
+        block_ref.commitment(),
+        u32::MAX.into(),
+        miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        miden_protocol::block::code_tree::CodePatch::default(),
+    )
     .unwrap();
 
     (account, transaction)
@@ -1073,15 +1071,11 @@ fn create_emit_note_tx(
     )
     .unwrap();
     {
-        let update = account_update;
         let logs = miden_protocol::transaction::TransactionLogs::default();
-        let log_details = if update.account_id().is_public() {
-            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-        } else {
-            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-        };
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
         ProvenTransaction::new(
-            update,
+            account_update,
             Vec::<InputNoteCommitment>::new(),
             output_notes
                 .into_iter()
