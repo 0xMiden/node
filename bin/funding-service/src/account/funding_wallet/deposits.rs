@@ -9,7 +9,7 @@ use miden_node_proto::generated::miden::node::v1::{
     SyncNotesRequest,
     SyncNullifiersRequest,
 };
-use miden_node_tracing::{Level, enabled_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{Level, enabled, instrument, miden_span_record};
 use miden_node_utils::limiter::{
     QueryParamLimiter,
     QueryParamNoteIdLimit,
@@ -44,7 +44,7 @@ impl FundingWallet {
     }
 
     /// Returns one page of deposits and the last block checked in the given range.
-    #[instrument_v2(
+    #[instrument(
         name = "funding.wallet.sync_deposits",
         level = "debug",
         fields(
@@ -98,7 +98,7 @@ impl FundingWallet {
             }
         }
 
-        if enabled_v2!(Level::DEBUG) {
+        if enabled!(Level::DEBUG) {
             miden_span_record!(note.count = note_ids.len(), block.number = last_checked_block);
         }
         let deposits: Vec<_> = Self::get_public_notes_by_id(rpc, &note_ids)
@@ -108,14 +108,14 @@ impl FundingWallet {
             .filter(|note| note.target() == funder && note.amount() > 0)
             .collect();
 
-        if enabled_v2!(Level::DEBUG) {
+        if enabled!(Level::DEBUG) {
             miden_span_record!(deposit.count = deposits.len());
         }
         Ok(SyncedDeposits { deposits, last_checked_block })
     }
 
     /// The notes among `note_ids` whose details the node stores.
-    #[instrument_v2(
+    #[instrument(
         name = "funding.wallet.get_notes",
         level = "debug",
         fields(
@@ -163,7 +163,7 @@ struct SyncedDeposits {
 }
 
 /// Returns the requested nullifiers spent in the given block range.
-#[instrument_v2(
+#[instrument(
     name = "funding.wallet.spent_nullifiers",
     fields(
         nullifier.count = nullifiers.len(),

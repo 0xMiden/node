@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::UsdcxFaucet;
-use miden_node_tracing::{info_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{info, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -188,7 +188,7 @@ impl FundingServiceConfig {
     }
 
     /// Connects to the node and builds the service.
-    #[instrument_v2(
+    #[instrument(
         target = "miden",
         name = "funding.initialize",
         fields(
@@ -278,7 +278,7 @@ impl FundingServiceConfig {
             None => Prover::local(),
         };
 
-        info_v2!(target: "miden",
+        info!(target: "miden",
             "Funding service initialized",
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),

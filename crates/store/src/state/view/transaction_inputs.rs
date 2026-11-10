@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::note::{NoteId, Nullifier};
@@ -23,7 +23,7 @@ pub struct TransactionInputs {
 
 impl StateView {
     /// Returns data needed by the block producer to verify transaction validity.
-    #[instrument_v2(
+    #[instrument(
         fields(
             account.id = account_id,
             note.nullifiers = nullifiers,

@@ -21,15 +21,7 @@ use miden_node_proto::generated::miden::node::v1::{
 };
 use miden_node_proto::generated::submission::ProvenTransactionSubmission;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
-use miden_node_tracing::{
-    ErrorSpanExt,
-    Level,
-    Span,
-    enabled_v2,
-    instrument_v2,
-    miden_span_record,
-    warn_v2,
-};
+use miden_node_tracing::{ErrorSpanExt, Level, Span, enabled, instrument, miden_span_record, warn};
 use miden_node_utils::retry::Retryable;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
@@ -59,7 +51,7 @@ pub struct RpcNodeClient {
 
 impl RpcNodeClient {
     /// Connects to the node's RPC API and verifies the attested transaction encryption key.
-    #[instrument_v2(name = "funding.node.connect", err)]
+    #[instrument(name = "funding.node.connect", err)]
     pub async fn connect(
         rpc_url: &Url,
         timeout: Duration,
@@ -99,7 +91,7 @@ impl RpcNodeClient {
     }
 
     /// The committed chain tip header with a partial blockchain which proves it.
-    #[instrument_v2(name = "funding.node.tip_chain_state", err)]
+    #[instrument(name = "funding.node.tip_chain_state", err)]
     pub async fn tip_chain_state(&self) -> Result<(BlockHeader, PartialBlockchain)> {
         fetch_tip_chain_state(&mut self.rpc_client.clone(), self.genesis_commitment).await
     }
@@ -110,7 +102,7 @@ impl RpcNodeClient {
     }
 
     /// Checks for commitment before reporting expiration. Reads every page in the block range.
-    #[instrument_v2(
+    #[instrument(
         name = "funding.node.transaction_status",
         level = "debug",
         fields(
@@ -132,7 +124,7 @@ impl RpcNodeClient {
         let end = tip.min(expiration_block);
         let mut start = reference_block + 1;
         let mut pages = 0_usize;
-        if enabled_v2!(Level::DEBUG) {
+        if enabled!(Level::DEBUG) {
             miden_span_record!(tip.number = tip);
         }
 
@@ -161,7 +153,7 @@ impl RpcNodeClient {
                     .decode_and_verify()
                     .context("failed to convert a transaction ID")?;
                 if id == transaction_id {
-                    if enabled_v2!(Level::DEBUG) {
+                    if enabled!(Level::DEBUG) {
                         miden_span_record!(page.count = pages);
                     }
                     let block_num = BlockNumber::from(record.block_num);
@@ -188,7 +180,7 @@ impl RpcNodeClient {
             start = last_checked + 1;
         }
 
-        if enabled_v2!(Level::DEBUG) {
+        if enabled!(Level::DEBUG) {
             miden_span_record!(page.count = pages);
         }
         Ok(if tip >= expiration_block {
@@ -199,7 +191,7 @@ impl RpcNodeClient {
     }
 
     /// The chain tip of the node's local store.
-    #[instrument_v2(name = "funding.node.committed_tip", level = "debug", err(level = "debug"))]
+    #[instrument(name = "funding.node.committed_tip", level = "debug", err(level = "debug"))]
     pub async fn committed_tip(&self) -> Result<BlockNumber> {
         let status = self
             .rpc_client
@@ -213,7 +205,7 @@ impl RpcNodeClient {
     }
 
     /// Seals and submits one proven transaction. Errors occur before submission starts.
-    #[instrument_v2(
+    #[instrument(
         name = "funding.node.submit",
         fields(
             transaction.id = proven_tx.id(),
@@ -251,7 +243,7 @@ impl RpcNodeClient {
             Ok(_) => SubmissionOutcome::Accepted,
             Err(status) => {
                 Span::current().set_error(&status);
-                warn_v2!(&status, "Funding transaction submission failed");
+                warn!(&status, "Funding transaction submission failed");
                 miden_span_record!(rpc.status = status.code().to_string() #[nonstandard]);
                 SubmissionOutcome::from_status(status)
             },
@@ -270,7 +262,7 @@ impl RpcNodeClient {
     }
 
     /// Fetches and verifies the node's transaction encryption key on a cache miss.
-    #[instrument_v2(name = "funding.node.refresh_sealer", err)]
+    #[instrument(name = "funding.node.refresh_sealer", err)]
     async fn refresh_sealer(&self) -> Result<TransactionInputsSealer> {
         let key = self
             .rpc_client
@@ -410,7 +402,7 @@ async fn create_genesis_aware_rpc_client(
     })
     .retry(genesis_discovery_backoff())
     .notify(|err: &anyhow::Error, sleep: Duration| {
-        warn_v2!(
+        warn!(
             err,
             "RPC genesis discovery failed; retrying after backoff",
             retry.delay_ms = sleep

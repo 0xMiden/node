@@ -9,14 +9,14 @@ miden_node_tracing::declare_targets! {
 mod unexecuted {
     #[expect(dead_code, reason = "Target discovery must not require executing this function.")]
     pub fn emit() {
-        miden_node_tracing::info_v2!("unexecuted");
+        miden_node_tracing::info!("unexecuted");
     }
 }
 
 mod duplicate {
     #[expect(dead_code, reason = "Target discovery must not require executing this function.")]
     pub fn emit() {
-        miden_node_tracing::info_v2!("duplicate");
+        miden_node_tracing::info!("duplicate");
     }
 }
 

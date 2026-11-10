@@ -22,7 +22,7 @@ use crate::split_top_level_args;
 pub fn instrument_result(attr: TokenStream, function: &mut ItemFn) -> Result<TokenStream> {
     let mut args = split_top_level_args(attr);
     if let Some(ret) = args.iter().find(|arg| starts_with(arg, "ret")) {
-        return Err(syn::Error::new_spanned(ret, "`ret` is not supported by `miden_instrument`"));
+        return Err(syn::Error::new_spanned(ret, "`ret` is not supported by `instrument`"));
     }
     let Some(err) = take_argument(&mut args, "err")? else {
         return Ok(quote! { #(#args),* });

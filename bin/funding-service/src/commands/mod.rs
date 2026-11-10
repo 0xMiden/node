@@ -16,7 +16,7 @@ use miden_funding_service::{
     FundingServiceConfig,
     lifecycle,
 };
-use miden_node_tracing::{OpenTelemetry, info_v2};
+use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
@@ -203,7 +203,7 @@ impl FundingServiceCommand {
                     _ => unreachable!("clap requires exactly one genesis block source"),
                 };
                 lifecycle::bootstrap(&data_directory, account_id, &genesis).await?;
-                info_v2!(target: "miden::storage",
+                info!(target: "miden::storage",
                     "Funding service bootstrap complete",
                     genesis.commitment = genesis.inner().header().commitment(),
                     data.directory = data_directory.as_path()
@@ -243,7 +243,7 @@ impl FundingServiceCommand {
             unreachable!("start is only called for the Start variant")
         };
 
-        info_v2!(
+        info!(
             "Starting the funding service",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),

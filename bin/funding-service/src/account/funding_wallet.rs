@@ -12,7 +12,7 @@ use miden_node_proto::generated::miden::node::v1::get_account_request::account_d
     StorageRequest,
     VaultRequest,
 };
-use miden_node_tracing::{instrument_v2, warn_v2};
+use miden_node_tracing::{instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
@@ -121,7 +121,7 @@ impl FundingWallet {
     /// Fetches an update to the specified block without changing the wallet.
     ///
     /// Retries transient RPC failures with backoff. Apply the returned update with [`Self::apply`].
-    #[instrument_v2(
+    #[instrument(
         name = "funding.wallet.sync_to",
         fields(account.id = self.account_id(), block.number = block_num),
         err,
@@ -149,7 +149,7 @@ impl FundingWallet {
             })
         })
         .notify(|err, delay| {
-            warn_v2!(
+            warn!(
                 err,
                 "Funding wallet synchronization failed; retrying after backoff",
                 retry.delay_ms = delay

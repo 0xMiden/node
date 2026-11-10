@@ -2,7 +2,7 @@ use miden_node_proto::domain::account::InvitationCodeValidity;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::allowlist::InvitationCode;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use tonic::{Request, Status};
 
 use super::{RpcBackend, RpcService, log_internal_error};
@@ -25,7 +25,7 @@ impl proto::server::miden_node_v1_node_service::IsInvitationCodeValid for RpcSer
     }
 
     // The invitation code is a secret. Do not record it on the span.
-    #[instrument_v2(name = "is_invitation_code_valid")]
+    #[instrument(name = "is_invitation_code_valid")]
     async fn handle(
         &self,
         invitation_code: Self::Input,

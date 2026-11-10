@@ -1,6 +1,6 @@
 use miden_node_proto::generated::miden::node::v1 as rpc;
 use miden_node_proto::generated::{self as grpc};
-use miden_node_tracing::error_v2;
+use miden_node_tracing::error;
 use miden_protocol::Word;
 
 use super::NtxBuilderRpcServer;
@@ -28,7 +28,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    #[miden_node_tracing::instrument_v2(
+    #[miden_node_tracing::instrument(
         name = "get_network_note_status",
         fields (
             note.id = note_id,
@@ -42,7 +42,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let row = self.db.get_note_status(note_id).await.map_err(|err| {
-            error_v2!(&err, "Failed to query note status from DB");
+            error!(&err, "Failed to query note status from DB");
             tonic::Status::internal("database error")
         })?;
 

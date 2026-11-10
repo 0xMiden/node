@@ -1,6 +1,6 @@
 use miden_node_proto::generated as grpc;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{ErrorReport, instrument_v2, miden_span_record};
+use miden_node_tracing::{ErrorReport, instrument, miden_span_record};
 
 use crate::server::proof_kind::ProofKind;
 use crate::server::service::ProverService;
@@ -10,7 +10,7 @@ impl grpc::server::miden_remote_prover_v1_prover_service::Prove for ProverServic
     type Input = (ProofKind, grpc::miden::remote_prover::v1::ProveRequest);
     type Output = grpc::miden::remote_prover::v1::ProveResponse;
 
-    #[instrument_v2(name = "remote_prover.prove")]
+    #[instrument(name = "remote_prover.prove")]
     async fn handle(
         &self,
         (proof_kind, request): Self::Input,

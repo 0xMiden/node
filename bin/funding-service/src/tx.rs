@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{RpcClient, UsdcxFaucet};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{instrument_v2, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::BlockHeader;
@@ -52,7 +52,7 @@ pub struct ExecutionInputs {
 }
 
 /// Executes one transaction which consumes `deposits` and creates `outputs`.
-#[instrument_v2(
+#[instrument(
     name = "funding.execute",
     fields(
         account.id = inputs.funder.id(),
@@ -410,7 +410,7 @@ mod tests {
 
         let (telemetry, _guard) = Telemetry::capture();
         let result = Box::pin(prover.prove(executed))
-            .instrument(miden_node_tracing::info_span_v2!("test_transaction"))
+            .instrument(miden_node_tracing::info_span!("test_transaction"))
             .await;
 
         assert!(result.is_err(), "a remote prover failure must not be proven in process");

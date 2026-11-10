@@ -14,7 +14,7 @@ use miden_node_store::allowlist::{
     InvitationCode,
     InvitationEntry,
 };
-use miden_node_tracing::{ErrorReport, info_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{ErrorReport, info, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use serde::{Deserialize, Serialize};
@@ -46,7 +46,7 @@ impl AdminServer {
     }
 
     pub(crate) async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        info_v2!(
+        info!(
             "Sequencer admin server ready",
             admin.listen = self
                 .listener
@@ -92,7 +92,7 @@ struct InvitationRequest {
     account_id: Option<String>,
 }
 
-#[instrument_v2(name = "admin.allowlist.put_invitation", err)]
+#[instrument(name = "admin.allowlist.put_invitation", err)]
 async fn put_invitation(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -122,7 +122,7 @@ async fn put_invitation(
     })
 }
 
-#[instrument_v2(name = "admin.allowlist.put_account", err)]
+#[instrument(name = "admin.allowlist.put_account", err)]
 async fn put_account(
     State(state): State<AdminState>,
     Path(account): Path<String>,
@@ -155,7 +155,7 @@ struct InvitationStatusResponse {
     allowlisted_at: Option<i64>,
 }
 
-#[instrument_v2(name = "admin.allowlist.invitation_status", err)]
+#[instrument(name = "admin.allowlist.invitation_status", err)]
 async fn invitation_status(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -189,7 +189,7 @@ struct AccountStatusResponse {
     allowlisted_at: i64,
 }
 
-#[instrument_v2(name = "admin.allowlist.account_status", err)]
+#[instrument(name = "admin.allowlist.account_status", err)]
 async fn account_status(
     State(state): State<AdminState>,
     Path(account): Path<String>,

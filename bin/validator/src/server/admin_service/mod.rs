@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use axum::Router;
 use axum::routing::{get, post};
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 
@@ -53,7 +53,7 @@ impl ValidatorAdminServer {
     ) -> anyhow::Result<()> {
         let endpoint =
             listener.local_addr().context("failed to read validator admin listen address")?;
-        info_v2!(
+        info!(
             "Validator admin server ready",
             service.name = "miden-validator-admin",
             validator.admin_listen = endpoint.to_string()

@@ -12,7 +12,7 @@ use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{ForeignAccount, RpcClient};
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug_v2, error_v2, info_v2, instrument_v2, warn_v2};
+use miden_node_tracing::{debug, error, info, instrument, warn};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
@@ -229,7 +229,7 @@ impl IncrementService {
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
-    #[instrument_v2(
+    #[instrument(
         parent = None,
         name = "network_monitor.counter.try_resync_wallet_account",
         fields(
@@ -246,14 +246,14 @@ impl IncrementService {
         )
         .await
         .inspect_err(|e| {
-            error_v2!(
+            error!(
                 e,
                 "Failed to re-sync wallet account from RPC",
                 account.id = self.tx.wallet_account.id()
             );
         })?;
 
-        debug_v2!("Wallet account re-synced from RPC", account.id = self.tx.wallet_account.id());
+        debug!("Wallet account re-synced from RPC", account.id = self.tx.wallet_account.id());
         self.tx.wallet_account = fresh_account;
         // The pending note may have been consumed by a transaction whose success was missed, and
         // re-offering a spent note fails every increment. Drop it; the top-up check will request a
@@ -290,7 +290,7 @@ impl IncrementService {
     /// Create and submit a network note that increments the counter account.
     ///
     /// The transaction consumes `funding_note` when one is given.
-    #[instrument_v2(
+    #[instrument(
         parent = None,
         name = "network_monitor.counter.submit_increment",
         level = "info",
@@ -388,7 +388,7 @@ impl IncrementService {
         let block_height = self.submission_client.submit(&proven_tx, &tx_inputs).await?;
 
         let tx_id = proven_tx.id().to_hex();
-        info_v2!("Submitted proven transaction to RPC", transaction.id = tx_id.as_str());
+        info!("Submitted proven transaction to RPC", transaction.id = tx_id.as_str());
 
         Ok((tx_id, account_patch, block_height))
     }
@@ -422,7 +422,7 @@ impl IncrementService {
             return;
         }
 
-        info_v2!(
+        info!(
             "Wallet fee balance is low, requesting a faucet top-up",
             account.id = self.tx.wallet_account.id(),
             asset.balance = balance
@@ -434,7 +434,7 @@ impl IncrementService {
                 self.details.fee_topup_error = None;
             },
             Err(err) => {
-                error_v2!(&err, "Faucet top-up failed");
+                error!(&err, "Faucet top-up failed");
                 self.details.fee_topup_error = Some(format!("{err:#}"));
             },
         }
@@ -484,7 +484,7 @@ impl Service for IncrementService {
                 guard.pending_started = Some(Instant::now());
             },
             Err(e) => {
-                error_v2!(&e, "Failed to create and submit network note");
+                error!(&e, "Failed to create and submit network note");
                 self.details.failure_count += 1;
                 self.failures.record_failure();
                 last_error = Some(format!("create/submit note failed: {e}"));
@@ -576,7 +576,7 @@ impl CounterTrackingService {
             // Counter value not available yet, but not an error.
             Ok(None) => return None,
             Err(e) => {
-                error_v2!(&e, "Failed to fetch counter value");
+                error!(&e, "Failed to fetch counter value");
                 return Some(format!("fetch counter value failed: {e}"));
             },
         };
@@ -597,7 +597,7 @@ impl CounterTrackingService {
             // Wallet not on-chain yet (no committed increment): leave `expected` unknown.
             Ok(None) => {},
             Err(e) => {
-                error_v2!(&e, "Failed to fetch expected wallet counter value");
+                error!(&e, "Failed to fetch expected wallet counter value");
                 last_error = Some(format!("fetch expected value failed: {e}"));
             },
         }
@@ -642,7 +642,7 @@ impl CounterTrackingService {
             if Instant::now().saturating_duration_since(started)
                 >= self.config.counter_latency_timeout
             {
-                warn_v2!(
+                warn!(
                     "Latency measurement timed out",
                     counter.latency.timeout_ms =
                         self.config.counter_latency_timeout.as_millis() as u64,
@@ -746,10 +746,10 @@ async fn initialize_tracking_state(
         Ok(Some(observed)) => {
             details.current_value = Some(observed);
             details.last_updated = Some(current_unix_timestamp_secs());
-            info_v2!("Initialized counter tracking", counter.value.observed = observed);
+            info!("Initialized counter tracking", counter.value.observed = observed);
         },
-        Ok(None) => warn_v2!("Counter account not found at init"),
-        Err(e) => error_v2!(&e, "Failed to fetch initial counter value"),
+        Ok(None) => warn!("Counter account not found at init"),
+        Err(e) => error!(&e, "Failed to fetch initial counter value"),
     }
 
     match fetch_slot_value(rpc_client, wallet_account.id(), WALLET_COUNTER_SLOT_NAME.as_str()).await
@@ -757,7 +757,7 @@ async fn initialize_tracking_state(
         Ok(Some(expected)) => details.expected_value = Some(expected),
         Ok(None) => {},
         Err(e) => {
-            error_v2!(&e, "Failed to fetch initial expected wallet value");
+            error!(&e, "Failed to fetch initial expected wallet value");
         },
     }
 
@@ -844,7 +844,7 @@ fn update_expected_and_pending(
     if expected >= observed_value {
         details.pending_increments = Some(expected - observed_value);
     } else {
-        warn_v2!(
+        warn!(
             "Expected counter value is less than current value, setting pending to 0",
             counter.value.expected = expected,
             counter.value.observed = observed_value

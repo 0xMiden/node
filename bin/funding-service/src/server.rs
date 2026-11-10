@@ -7,7 +7,7 @@ use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tower_http::timeout::TimeoutLayer;
@@ -63,7 +63,7 @@ impl FundingServer {
         let endpoint = listener
             .local_addr()
             .context("failed to read the funding service listen address")?;
-        info_v2!(
+        info!(
             "Funding service HTTP API listening",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),

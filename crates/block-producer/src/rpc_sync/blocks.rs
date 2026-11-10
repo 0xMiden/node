@@ -5,7 +5,7 @@ use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::BlockSubscriptionRequest;
 use miden_node_store::state::{BlockWriter, State};
-use miden_node_tracing::{Instrument, info_span_v2, info_v2, instrument_v2, warn_v2};
+use miden_node_tracing::{Instrument, info, info_span, instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
@@ -38,7 +38,7 @@ impl BlockSync {
         .retry(retry::constant(RECONNECT_DELAY, None))
         .context(self)
         .notify(|err, _| {
-            warn_v2!(err, "Block sync failed, retrying", retry.delay_ms = RECONNECT_DELAY);
+            warn!(err, "Block sync failed, retrying", retry.delay_ms = RECONNECT_DELAY);
         });
 
         tokio::select! {
@@ -47,7 +47,7 @@ impl BlockSync {
         }
     }
 
-    #[instrument_v2(err)]
+    #[instrument(err)]
     pub(super) async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let local_tip = self.state.committed_tip();
         let (parent, _) = self.state.view().get_block_header(Some(local_tip), false).await?;
@@ -65,7 +65,7 @@ impl BlockSync {
         self.readiness.update(upstream_tip, local_tip).await;
 
         let block_from = local_tip.child().as_u32();
-        info_v2!("Connecting to upstream RPC for blocks", block.from = block_from);
+        info!("Connecting to upstream RPC for blocks", block.from = block_from);
 
         let mut stream = client
             .block_subscription(BlockSubscriptionRequest { block_from })
@@ -87,7 +87,7 @@ impl BlockSync {
             // Each synced block gets its own root span: the surrounding `sync` span lives for the
             // whole subscription, so parenting under it would chain every block into one
             // never-exported trace.
-            let block_span = info_span_v2!(
+            let block_span = info_span!(
                 parent: None,
                 "sync_block",
                 block.number = block.header().block_num().as_u32(),

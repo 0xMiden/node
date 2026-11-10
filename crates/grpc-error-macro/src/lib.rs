@@ -167,7 +167,7 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
 
                 let message = if api_error.is_internal() {
                     // The client only sees a generic message, so the cause is logged here.
-                    miden_node_tracing::error_v2!(value, "Internal error");
+                    miden_node_tracing::error!(value, "Internal error");
                     "Internal error".to_owned()
                 } else {
                     // Use ErrorReport trait to get detailed error message

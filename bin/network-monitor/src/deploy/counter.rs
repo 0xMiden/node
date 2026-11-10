@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
     Account,
@@ -47,7 +47,7 @@ pub static COUNTER_SLOT_NAME: LazyLock<StorageSlotName> = LazyLock::new(|| {
 /// - it allowlists (at zero price) the `FEE_SPONSORSHIP` note and the P2ID note funding its
 ///   creation fee;
 /// - it carries `BasicWallet`, since the P2ID script claims assets via `receive_asset`.
-#[instrument_v2(name = "create-counter-account")]
+#[instrument(name = "create-counter-account")]
 pub fn create_counter_account(
     owner_account_id: AccountId,
     fee_faucet_id: AccountId,

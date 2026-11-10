@@ -5,7 +5,7 @@ use clap::ArgGroup;
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_store::{DataDirectory, Db, State};
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 
@@ -37,7 +37,7 @@ pub struct BootstrapCommand {
 
 impl BootstrapCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
-        info_v2!(
+        info!(
             "Bootstrapping node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
@@ -57,7 +57,7 @@ impl BootstrapCommand {
             read_bootstrap_genesis_block(self.genesis_block_file.as_deref(), self.network).await?;
         let genesis_commitment = genesis_block.inner().header().commitment();
         State::bootstrap(genesis_block, &self.data_directory).await?;
-        info_v2!(
+        info!(
             "Node bootstrap complete",
             genesis.commitment = genesis_commitment,
             data.directory = self.data_directory.as_path()

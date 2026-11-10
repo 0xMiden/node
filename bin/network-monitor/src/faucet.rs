@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use hex;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug_v2, info_v2, instrument_v2, trace_v2, warn_v2};
+use miden_node_tracing::{debug, info, instrument, trace, warn};
 use miden_protocol::note::NoteId;
 use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -150,7 +150,7 @@ impl Service for FaucetService {
         // from the card.
         match self.faucet.metadata().await {
             Ok(metadata) => self.faucet_metadata = Some(metadata),
-            Err(e) => warn_v2!(&e, "Failed to fetch faucet metadata"),
+            Err(e) => warn!(&e, "Failed to fetch faucet metadata"),
         }
 
         let mint_result = self.faucet.request_tokens(&self.account_id, self.mint_amount).await;
@@ -158,12 +158,12 @@ impl Service for FaucetService {
             Ok(minted_tokens) => {
                 self.success_count += 1;
                 self.last_note_id = Some(minted_tokens.note_id.to_hex());
-                info_v2!("Faucet test successful", note.id = minted_tokens.note_id);
+                info!("Faucet test successful", note.id = minted_tokens.note_id);
                 None
             },
             Err(e) => {
                 self.failure_count += 1;
-                warn_v2!(&e, "Faucet test failed");
+                warn!(&e, "Faucet test failed");
                 Some(format!("{e:#}"))
             },
         };
@@ -185,7 +185,7 @@ impl Service for FaucetService {
 }
 
 /// Fetches the faucet's metadata from the `/get_metadata` endpoint.
-#[instrument_v2(
+#[instrument(
     parent = None,
     name = "network_monitor.faucet.fetch_faucet_metadata",
     level = "info",
@@ -208,7 +208,7 @@ pub(crate) async fn fetch_faucet_metadata(
 /// Requests `amount` base units from the faucet for `account_id`, solving the required
 /// proof-of-work challenge (`/pow`, solve, `/get_tokens`). The tokens arrive as a public P2ID note
 /// whose ID is returned. Used by the faucet health check and by [`crate::funding`].
-#[instrument_v2(
+#[instrument(
     parent = None,
     name = "network_monitor.faucet.request_tokens",
     level = "info",
@@ -221,7 +221,7 @@ pub(crate) async fn request_tokens(
     amount: u64,
     solve_timeout: Duration,
 ) -> anyhow::Result<GetTokensResponse> {
-    debug_v2!(
+    debug!(
         "Using recipient account ID",
         account.id = account_id,
         account.id.length = account_id.len()
@@ -237,12 +237,12 @@ pub(crate) async fn request_tokens(
     let response = client.get(pow_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/pow request failed")?;
-    debug_v2!("Faucet PoW response received");
+    debug!("Faucet PoW response received");
 
     let challenge_response: PowChallengeResponse =
         parse_faucet_response(&response_text).context("unexpected response from /pow")?;
 
-    debug_v2!(
+    debug!(
         "Received PoW challenge",
         pow.target = challenge_response.target,
         pow.challenge.prefix =
@@ -260,7 +260,7 @@ pub(crate) async fn request_tokens(
     .context("PoW solver task panicked")?
     .context("Failed to solve PoW challenge")?;
 
-    debug_v2!("Solved PoW challenge", pow.nonce = nonce);
+    debug!("Solved PoW challenge", pow.nonce = nonce);
 
     // Step 3: Request tokens with the solution
     let mut tokens_url = faucet_url.join("/get_tokens")?;
@@ -274,7 +274,7 @@ pub(crate) async fn request_tokens(
     let response = client.get(tokens_url).send().await?;
 
     let response_text = read_success_body(response).await.context("/get_tokens request failed")?;
-    debug_v2!("Faucet token response received");
+    debug!("Faucet token response received");
 
     let tokens_response: GetTokensResponse =
         parse_faucet_response(&response_text).context("unexpected response from /get_tokens")?;
@@ -318,7 +318,7 @@ where
 ///
 /// The nonce that solves the challenge, or an error if no solution is found within the attempt
 /// and time bounds.
-#[instrument_v2(
+#[instrument(
     parent = None,
     name = "network_monitor.faucet.solve_pow_challenge",
     level = "info",
@@ -339,7 +339,7 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
         let hash_as_u64 = u64::from_be_bytes(hash_result[..8].try_into().unwrap());
 
         if hash_as_u64 < target {
-            trace_v2!(
+            trace!(
                 "PoW solution found",
                 pow.nonce = nonce,
                 pow.hash = hash_as_u64,
@@ -358,7 +358,7 @@ fn solve_pow_challenge(challenge: &str, target: u64, timeout: Duration) -> anyho
                      {target})"
                 );
             }
-            trace_v2!(
+            trace!(
                 "PoW solve progress",
                 pow.nonce = nonce,
                 pow.hash = hash_as_u64,

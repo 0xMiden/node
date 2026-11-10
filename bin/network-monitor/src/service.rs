@@ -10,7 +10,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::{Builder as ClientBuilder, GrpcClient};
-use miden_node_tracing::debug_v2;
+use miden_node_tracing::debug;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use url::Url;
@@ -66,7 +66,7 @@ pub trait Service: Send + 'static {
                 interval.tick().await;
                 let status = self.check().await;
                 if tx.send(status).is_err() {
-                    debug_v2!("No receivers; shutting down service", service.name = self.name());
+                    debug!("No receivers; shutting down service", service.name = self.name());
                     return;
                 }
             }

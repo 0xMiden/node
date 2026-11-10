@@ -3,7 +3,7 @@
 use std::sync::LazyLock;
 
 use anyhow::{Context, Result};
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::Word;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::account::{
@@ -60,7 +60,7 @@ pub fn wallet_counter_component_code() -> Result<AccountComponentCode> {
 /// Create a wallet account with `RpoFalcon512` authentication and a self-counter component.
 ///
 /// Returns the created account and the secret key for authentication.
-#[instrument_v2(name = "create-wallet-account")]
+#[instrument(name = "create-wallet-account")]
 pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(rand::random());
     let secret_key = SecretKey::with_rng(&mut rng);

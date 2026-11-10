@@ -19,7 +19,7 @@ use anyhow::Context;
 use chain_state::ChainState;
 use clients::{RemoteTransactionProver, RpcClient};
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_tracing::{ErrorReport, warn_v2};
+use miden_node_tracing::{ErrorReport, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
@@ -547,7 +547,7 @@ impl NtxBuilderConfig {
         if !self.priority_accounts.is_empty()
             && self.priority_accounts.len() >= self.max_concurrent_txs
         {
-            warn_v2!(
+            warn!(
                 "priority accounts can occupy every build slot; raise --max-concurrent-txs",
                 account.ids.count = self.priority_accounts.len(),
                 ntx_builder.max_concurrent_txs = self.max_concurrent_txs

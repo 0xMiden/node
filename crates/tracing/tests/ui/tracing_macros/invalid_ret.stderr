@@ -1,17 +1,17 @@
-error: `ret` is not supported by `miden_instrument`
- --> tests/ui/tracing_macros/invalid_ret.rs:3:20
+error: `ret` is not supported by `instrument`
+ --> tests/ui/tracing_macros/invalid_ret.rs:5:14
   |
-3 | #[miden_instrument(ret)]
-  |                    ^^^
+5 | #[instrument(ret)]
+  |              ^^^
 
-error: `ret` is not supported by `miden_instrument`
- --> tests/ui/tracing_macros/invalid_ret.rs:8:20
-  |
-8 | #[miden_instrument(ret(Debug, level = "info"))]
-  |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-error: `ret` is not supported by `miden_instrument`
-  --> tests/ui/tracing_macros/invalid_ret.rs:13:25
+error: `ret` is not supported by `instrument`
+  --> tests/ui/tracing_macros/invalid_ret.rs:10:14
    |
-13 | #[miden_instrument(err, ret)]
-   |                         ^^^
+10 | #[instrument(ret(Debug, level = "info"))]
+   |              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: `ret` is not supported by `instrument`
+  --> tests/ui/tracing_macros/invalid_ret.rs:15:19
+   |
+15 | #[instrument(err, ret)]
+   |                   ^^^

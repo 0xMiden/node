@@ -1,6 +1,8 @@
-use miden_node_tracing::miden_instrument;
+miden_node_tracing::declare_targets! { default: "miden::test", }
 
-#[miden_instrument(skip(value))]
+use miden_node_tracing::instrument;
+
+#[instrument(skip(value))]
 fn records_implicit_argument(value: u32) {
     let _ = value;
 }

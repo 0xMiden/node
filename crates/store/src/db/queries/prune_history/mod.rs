@@ -1,7 +1,7 @@
 //! Deletes account history that can no longer serve a read inside the retention window.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
 
 use crate::db::queries::VALID_FOREVER;
@@ -39,7 +39,7 @@ pub const HISTORICAL_BLOCK_RETENTION: u32 = 50;
 ///
 /// # Returns
 /// A tuple of `(vault_assets_deleted, storage_map_values_deleted, account_codes_deleted)`
-#[instrument_v2(err, fields(cutoff_block,))]
+#[instrument(err, fields(cutoff_block,))]
 pub(crate) fn prune_history(
     tx: &WriteTx<'_>,
     prune_tip: BlockNumber,
@@ -79,7 +79,7 @@ pub(crate) fn prune_history(
 /// - Every `account_codes` row is inserted alongside an `accounts` row referencing it (see
 ///   [`upsert_accounts`](super::upsert_accounts)); an orphan code with no referencing row would
 ///   never become a candidate.
-#[instrument_v2(err, fields(cutoff_block,))]
+#[instrument(err, fields(cutoff_block,))]
 fn prune_account_codes(tx: &WriteTx<'_>, cutoff_block: i64) -> Result<usize, DatabaseError> {
     let prev_cutoff = tx
         .query(SQL_SELECT_PRUNE_PROGRESS, &[], |row| row.get::<i64>(0))?

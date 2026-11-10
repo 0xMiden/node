@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use miden_node_tracing::warn_v2;
+use miden_node_tracing::warn;
 
 mod prover;
 mod rpc;
@@ -15,7 +15,7 @@ pub(crate) fn log_transient_retry<E: std::error::Error + 'static>(
     err: &E,
     sleep: Duration,
 ) {
-    warn_v2!(
+    warn!(
         err,
         "ntx transient request failure; retrying after backoff",
         operation.name = operation,

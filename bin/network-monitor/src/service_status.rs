@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::miden::node::v1::{BlockProducerStatus, StatusResponse};
-use miden_node_tracing::warn_v2;
+use miden_node_tracing::warn;
 use miden_protocol::Word;
 use serde::{Deserialize, Serialize};
 
@@ -379,7 +379,7 @@ impl From<proto::miden::remote_prover::v1::ProxyWorkerStatus> for WorkerStatusDe
         let status = proto::miden::remote_prover::v1::WorkerHealthStatus::try_from(value.status)
             .map_or_else(
                 |_| {
-                    warn_v2!(
+                    warn!(
                         "Unknown worker health status discriminant",
                         worker.status.raw = value.status,
                         worker.name = value.name.as_str()
@@ -408,7 +408,7 @@ impl RemoteProverStatusDetails {
             proto::miden::remote_prover::v1::ProofType::try_from(status.supported_proof_type)
                 .map_or_else(
                     |_| {
-                        warn_v2!(
+                        warn!(
                             "Unknown supported proof type discriminant",
                             prover.proof_type.raw = status.supported_proof_type
                         );
@@ -435,7 +435,7 @@ impl RpcStatusDetails {
         let genesis_commitment = status.genesis_commitment.as_ref().and_then(|genesis| {
             Word::try_from(genesis)
                 .inspect_err(|err| {
-                    warn_v2!(err, "Invalid genesis commitment in RPC status");
+                    warn!(err, "Invalid genesis commitment in RPC status");
                 })
                 .ok()
                 .map(|genesis| genesis.to_hex())

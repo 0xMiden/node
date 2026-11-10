@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -81,7 +81,7 @@ impl Service for FundingService {
         )
     }
 
-    #[instrument_v2(name = "check-status.funding-service")]
+    #[instrument(name = "check-status.funding-service")]
     async fn check(&mut self) -> ServiceStatus {
         let mut details = FundingStatusDetails { url: self.url.to_string(), status: None };
         match self.fetch_status().await {

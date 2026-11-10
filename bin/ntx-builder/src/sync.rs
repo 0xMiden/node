@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use futures::{Stream, StreamExt};
-use miden_node_tracing::{debug_v2, info_v2, instrument_v2, warn_v2};
+use miden_node_tracing::{debug, info, instrument, warn};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
 
@@ -58,7 +58,7 @@ impl BlockFollower {
     }
 
     /// Applies a committed block before publishing its chain snapshot and reporting catch-up.
-    #[instrument_v2(name = "ntx.builder.apply_committed_block", fields(block.number = block.header().block_num(), tip.number = committed_tip))]
+    #[instrument(name = "ntx.builder.apply_committed_block", fields(block.number = block.header().block_num(), tip.number = committed_tip))]
     pub(crate) async fn apply(
         &mut self,
         db: &NtxDbWriter,
@@ -73,7 +73,7 @@ impl BlockFollower {
         persist_and_publish_chain_state(db, &mut self.chain, effects.clone(), next_chain).await?;
         if !self.is_synced && block_num == committed_tip {
             self.is_synced = true;
-            info_v2!("ntx-builder is now in sync", block.number = committed_tip);
+            info!("ntx-builder is now in sync", block.number = committed_tip);
         }
         Ok(effects)
     }
@@ -105,7 +105,7 @@ pub(crate) fn reconnecting_blocks(
     client: RpcClient,
     block_from: BlockNumber,
 ) -> impl Stream<Item = Result<BlockSubscriptionEvent, RpcError>> + Send + 'static {
-    debug_v2!("ntx-builder opening committed-block subscription", block.from = block_from);
+    debug!("ntx-builder opening committed-block subscription", block.from = block_from);
     futures::stream::unfold(
         (client, block_from, None, Instant::now()),
         |(client, mut next_from, mut inner, mut last_block)| async move {
@@ -116,14 +116,14 @@ pub(crate) fn reconnecting_blocks(
                     Some(stream) => stream,
                     None => match client.block_subscription_with_retry(next_from).await {
                         Ok(stream) => {
-                            info_v2!("block subscription connected", block.from = next_from);
+                            info!("block subscription connected", block.from = next_from);
                             // Reset the stall clock so time spent (re)connecting is not counted
                             // against the next block's arrival.
                             last_block = Instant::now();
                             inner.insert(stream)
                         },
                         Err(err) => {
-                            warn_v2!(
+                            warn!(
                                 &err,
                                 "failed to open block subscription, retrying",
                                 block.from = next_from
@@ -146,12 +146,12 @@ pub(crate) fn reconnecting_blocks(
                             (client, next_from, inner, last_block),
                         ));
                     },
-                    Ok(Some(Err(err))) => warn_v2!(
+                    Ok(Some(Err(err))) => warn!(
                         &err,
                         "block subscription failed, reconnecting",
                         block.from = next_from
                     ),
-                    Ok(None) => warn_v2!(
+                    Ok(None) => warn!(
                         "block subscription closed by node, reconnecting",
                         block.from = next_from
                     ),
@@ -160,14 +160,14 @@ pub(crate) fn reconnecting_blocks(
                         if idle < STALL_TIMEOUT {
                             // Quiet but not yet stalled: emit a liveness signal and keep polling
                             // the same stream instead of reconnecting.
-                            debug_v2!(
+                            debug!(
                                 "no block received recently; subscription still open",
                                 block.from = next_from,
                                 subscription.idle_ms = idle.as_millis() as u64
                             );
                             continue;
                         }
-                        warn_v2!(
+                        warn!(
                             "no block received within stall timeout; treating subscription as stalled, reconnecting",
                             block.from = next_from,
                             subscription.idle_ms = idle.as_millis() as u64,

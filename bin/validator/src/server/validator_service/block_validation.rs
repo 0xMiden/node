@@ -1,5 +1,5 @@
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{instrument_v2, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::block::{BlockHeader, BlockSignatures, ProposedBlock, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::transaction::TransactionHeader;
@@ -15,7 +15,7 @@ impl ValidatorService {
     ///    tip, validated against the previous block header.
     ///
     /// On success, returns the signature and validated signed block for persistence.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     pub async fn validate_block(
         &self,
         proposed_block: ProposedBlock,
@@ -106,7 +106,7 @@ impl ValidatorService {
     }
 
     /// Signs a block header using the validator's signer.
-    #[instrument_v2(
+    #[instrument(
         name = "sign_block",
         err,
         fields(

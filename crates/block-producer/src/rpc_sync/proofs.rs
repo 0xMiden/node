@@ -5,7 +5,7 @@ use miden_node_proto::DecodeMessage;
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::ProofSubscriptionRequest;
 use miden_node_store::state::{ProofWriter, State};
-use miden_node_tracing::{info_v2, warn_v2};
+use miden_node_tracing::{info, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
@@ -43,7 +43,7 @@ impl ProofSync {
         .retry(retry::constant(RECONNECT_DELAY, None))
         .context(self)
         .notify(|err, _| {
-            warn_v2!(err, "Proof sync failed, retrying", retry.delay_ms = RECONNECT_DELAY);
+            warn!(err, "Proof sync failed, retrying", retry.delay_ms = RECONNECT_DELAY);
         });
 
         tokio::select! {
@@ -55,7 +55,7 @@ impl ProofSync {
     pub(super) async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         // Subscribe from next proven tip.
         let starting_block = self.state.proven_tip().child();
-        info_v2!("Subscribing to block proof stream", block.from = starting_block);
+        info!("Subscribing to block proof stream", block.from = starting_block);
         let mut client = self.source_rpc.clone();
         let mut stream = client
             .proof_subscription(ProofSubscriptionRequest { block_from: starting_block.as_u32() })
