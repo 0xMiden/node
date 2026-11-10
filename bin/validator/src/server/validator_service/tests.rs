@@ -368,28 +368,23 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
     )
     .unwrap();
 
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details =
+        miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+
     // The account state changes, which is what keeps this from being rejected as an empty
     // transaction; no input or output notes are needed.
-    {
-        let update = account_update;
-        let logs = miden_protocol::transaction::TransactionLogs::default();
-        let log_details = if update.account_id().is_public() {
-            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-        } else {
-            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-        };
-        ProvenTransaction::new(
-            update,
-            Vec::<InputNoteCommitment>::new(),
-            Vec::<OutputNote>::new(),
-            BlockNumber::GENESIS,
-            Word::empty(),
-            BlockNumber::from(u32::from(seed) + 1),
-            miden_protocol::testing::dummy_execution_proof(),
-            log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
-        )
-    }
+    ProvenTransaction::new(
+        account_update,
+        Vec::<InputNoteCommitment>::new(),
+        Vec::<OutputNote>::new(),
+        BlockNumber::GENESIS,
+        Word::empty(),
+        BlockNumber::from(u32::from(seed) + 1),
+        miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        miden_protocol::block::code_tree::CodePatch::default(),
+    )
     .unwrap()
 }
 

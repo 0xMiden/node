@@ -156,28 +156,25 @@ impl Submission {
                     AccountUpdateDetails::Private,
                 )
                 .unwrap();
+                let logs = miden_protocol::transaction::TransactionLogs::default();
+                let log_details = if update.account_id().is_public() {
+                    miden_protocol::transaction::TransactionLogDetails::Public(logs)
+                } else {
+                    miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+                };
+
                 Arc::new(
-                    {
-                        let logs = miden_protocol::transaction::TransactionLogs::default();
-                        let log_details = if update.account_id().is_public() {
-                            miden_protocol::transaction::TransactionLogDetails::Public(logs)
-                        } else {
-                            miden_protocol::transaction::TransactionLogDetails::Private(
-                                logs.commitment(),
-                            )
-                        };
-                        ProvenTransaction::new(
-                            update,
-                            std::iter::empty::<InputNoteCommitment>(),
-                            std::iter::empty::<OutputNote>(),
-                            header.block_num(),
-                            header.commitment(),
-                            100.into(),
-                            dummy_execution_proof(),
-                            log_details,
-                            miden_protocol::block::code_tree::CodePatch::default(),
-                        )
-                    }
+                    ProvenTransaction::new(
+                        update,
+                        std::iter::empty::<InputNoteCommitment>(),
+                        std::iter::empty::<OutputNote>(),
+                        header.block_num(),
+                        header.commitment(),
+                        100.into(),
+                        dummy_execution_proof(),
+                        log_details,
+                        miden_protocol::block::code_tree::CodePatch::default(),
+                    )
                     .unwrap(),
                 )
             })

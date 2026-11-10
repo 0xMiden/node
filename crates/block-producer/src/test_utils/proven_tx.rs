@@ -153,26 +153,21 @@ impl MockProvenTxBuilder {
             .map(InputNoteCommitment::from)
             .chain(self.nullifiers.unwrap_or_default().into_iter().map(InputNoteCommitment::from))
             .collect();
-        {
-            let update = account_update;
-            let logs = miden_protocol::transaction::TransactionLogs::default();
-            let log_details = if update.account_id().is_public() {
-                miden_protocol::transaction::TransactionLogDetails::Public(logs)
-            } else {
-                miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-            };
-            ProvenTransaction::new(
-                update,
-                input_notes,
-                self.output_notes.unwrap_or_default(),
-                BlockNumber::GENESIS,
-                Word::empty(),
-                self.expiration_block_num,
-                miden_protocol::testing::dummy_execution_proof(),
-                log_details,
-                miden_protocol::block::code_tree::CodePatch::default(),
-            )
-        }
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+
+        ProvenTransaction::new(
+            account_update,
+            input_notes,
+            self.output_notes.unwrap_or_default(),
+            BlockNumber::GENESIS,
+            Word::empty(),
+            self.expiration_block_num,
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
         .unwrap()
     }
 }

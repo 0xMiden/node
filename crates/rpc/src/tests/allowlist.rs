@@ -311,25 +311,24 @@ impl TestStore {
             details,
         )
         .unwrap();
-        {
-            let logs = miden_protocol::transaction::TransactionLogs::default();
-            let log_details = if update.account_id().is_public() {
-                miden_protocol::transaction::TransactionLogDetails::Public(logs)
-            } else {
-                miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
-            };
-            ProvenTransaction::new(
-                update,
-                Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
-                Vec::<OutputNote>::new(),
-                0.into(),
-                self.genesis_commitment(),
-                u32::MAX.into(),
-                miden_protocol::testing::dummy_execution_proof(),
-                log_details,
-                miden_protocol::block::code_tree::CodePatch::default(),
-            )
-        }
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+
+        ProvenTransaction::new(
+            update,
+            Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
+            Vec::<OutputNote>::new(),
+            0.into(),
+            self.genesis_commitment(),
+            u32::MAX.into(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            miden_protocol::block::code_tree::CodePatch::default(),
+        )
         .unwrap()
     }
 }
