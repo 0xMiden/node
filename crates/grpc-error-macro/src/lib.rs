@@ -12,6 +12,8 @@
 //! use miden_node_grpc_error_macro::GrpcError;
 //! use thiserror::Error;
 //!
+//! miden_node_tracing::declare_targets! { default: "miden::rpc::server", }
+//!
 //! #[derive(Debug, Error, GrpcError)]
 //! pub enum GetNoteScriptByRootError {
 //!     #[error("database error")]
@@ -31,6 +33,9 @@ use quote::quote;
 use syn::{Data, DeriveInput, Fields, Ident, parse_macro_input};
 
 /// Derives the `GrpcError` trait for an error enum.
+///
+/// Internal error events use the diagnostic target declared by the calling crate with
+/// `miden_node_tracing::declare_targets!`.
 ///
 /// # Attributes
 ///
@@ -162,7 +167,7 @@ pub fn derive_grpc_error(input: TokenStream) -> TokenStream {
 
                 let message = if api_error.is_internal() {
                     // The client only sees a generic message, so the cause is logged here.
-                    miden_node_tracing::error!(value, "Internal error");
+                    miden_node_tracing::error_v2!(value, "Internal error");
                     "Internal error".to_owned()
                 } else {
                     // Use ErrorReport trait to get detailed error message
