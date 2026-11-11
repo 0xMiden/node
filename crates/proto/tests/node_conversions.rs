@@ -14,7 +14,6 @@ use miden_protocol::account::{
 };
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, OrderedBatches, ProvenBatch};
 use miden_protocol::block::account_tree::{AccountTree, AccountWitness};
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{

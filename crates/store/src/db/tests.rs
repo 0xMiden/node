@@ -33,7 +33,6 @@ use miden_protocol::account::{
     StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,

@@ -31,7 +31,6 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::asset::{NonFungibleAsset, NonFungibleAssetDetails};
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,

@@ -31,7 +31,6 @@ use miden_protocol::account::{
     StorageValuePatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,

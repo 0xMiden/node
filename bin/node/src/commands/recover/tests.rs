@@ -3,7 +3,6 @@ use std::collections::BTreeMap;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockBody,

@@ -272,7 +272,6 @@ impl TestStore {
                 .build()
                 .unwrap();
             let executed = Box::pin(context.execute()).await.unwrap();
-            let _inputs = executed.tx_inputs().clone();
             let proven = spawn_blocking_in_current_span(move || {
                 LocalTransactionProver::default().prove(executed)
             })
