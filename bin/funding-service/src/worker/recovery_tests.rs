@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use miden_node_proto::clients::ForeignAccount;
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{Note, NoteType};
+use miden_protocol::note::{Note, NoteType, Nullifier};
 use miden_standards::note::P2idNote;
 use opentelemetry::trace::Status;
 use tokio::time::Instant;
@@ -48,6 +50,7 @@ impl FunderSetup {
                     .unwrap(),
                 config: WorkerConfig {
                     max_notes_per_tx: 16.try_into().unwrap(),
+                    max_deposits_per_tx: 16.try_into().unwrap(),
                     expiration_delta: 50.try_into().unwrap(),
                     poll_interval: Duration::from_millis(1),
                 },
@@ -81,16 +84,12 @@ impl FunderSetup {
 }
 
 impl Funder {
-    async fn reserve_attempt(
-        &self,
-        notes: &[UsdcxP2Id],
-        deposit: Option<&Note>,
-    ) -> TransactionAttempt {
+    async fn reserve_attempt(&self, notes: &[UsdcxP2Id], deposits: &[Note]) -> TransactionAttempt {
         let attempt = TransactionAttempt {
             transaction_id: TransactionId::from_raw(Word::empty()),
             reference_block: 10.into(),
             expiration_block: 20.into(),
-            deposit_nullifier: deposit.map(Note::nullifier),
+            deposit_nullifiers: deposits.iter().map(Note::nullifier).collect(),
             note_ids: notes.iter().map(|note| note.note().id()).collect(),
         };
         self.setup.database.start_attempt(attempt.clone()).await.unwrap();
@@ -98,7 +97,9 @@ impl Funder {
     }
 }
 
-/// Populates the wallet through its normal synchronization path.
+/// Synchronizes the wallet and stores the deposits it finds before creating the worker.
+///
+/// The matching wallet and database cursors satisfy the worker's startup requirement.
 async fn with_deposits(
     mut setup: FunderSetup,
     mut chain: TestChain,
@@ -116,8 +117,55 @@ async fn with_deposits(
     let tip = chain.tip.into();
     let server = TestServer::start(chain).await;
     let update = setup.wallet.sync_to(&mut server.node.rpc_client(), tip).await.unwrap();
-    setup.wallet.apply(update).unwrap();
+    let scan = setup.wallet.apply(update).unwrap();
+    setup.database.record_deposit_scan(scan.next_sync, scan.deposits).await.unwrap();
+    setup.wallet.complete_deposit_scan(scan.next_sync);
     (Funder::new(server.node.clone(), Prover::local(), setup), server)
+}
+
+/// Loads stored deposits keyed by nullifier for order-independent comparison.
+async fn stored_deposits(database: &FundingDatabase) -> HashMap<Nullifier, Note> {
+    database
+        .deposits()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|deposit| (deposit.nullifier(), deposit.into_note()))
+        .collect()
+}
+
+/// Creates a test server with `notes` at genesis and returns its matching funding wallet.
+async fn genesis_server(
+    balance: u64,
+    base_fee: u32,
+    notes: &[Note],
+) -> (FundingWallet, TestServer) {
+    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
+    use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
+
+    let fixture = Fixture::new(balance, base_fee).unwrap();
+    let chain = fixture.chain.lock().await;
+    let header = chain.genesis_block_header().clone();
+    let witness = chain
+        .account_witnesses([fixture.funder.id()])
+        .remove(&fixture.funder.id())
+        .unwrap();
+    drop(chain);
+    let mut rpc_chain = TestChain::new(0);
+    rpc_chain.account = Some((fixture.funder, witness));
+    rpc_chain.chain_mmr = Some(SyncChainMmrResponse {
+        block_header: Some(header.into()),
+        mmr_delta: Some(
+            MmrDelta {
+                forest: Forest::new(0).unwrap(),
+                data: Vec::new(),
+            }
+            .into(),
+        ),
+        ..Default::default()
+    });
+    rpc_chain.notes = notes.iter().cloned().map(|note| (0, note)).collect();
+    (fixture.wallet, TestServer::start(rpc_chain).await)
 }
 
 #[tokio::test]
@@ -153,7 +201,7 @@ async fn a_failure_before_submission_releases_requests_for_retry() {
         .submit(
             inputs,
             Selection {
-                deposit: None,
+                deposits: vec![],
                 notes: vec![payout.clone()],
             },
         )
@@ -186,26 +234,85 @@ async fn state_conflict_discards_only_the_selected_deposit() {
         .unwrap();
     let status =
         tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
-    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+    let attempt = funder
+        .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+        .await;
     funder
         .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
         .await
         .unwrap();
 
     assert_eq!(
-        &funder
-            .setup
-            .wallet
-            .deposits()
-            .iter()
-            .map(|(key, deposit)| (*key, deposit.note().clone()))
-            .collect::<HashMap<_, _>>(),
-        &HashMap::from([(unselected.nullifier(), unselected)])
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(unselected.nullifier(), unselected)])
     );
     assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
     let span = telemetry.span("resolve_attempt");
     assert_eq!(attribute(&span, "funding.outcome"), Some("deposit_discarded".into()));
     assert!(matches!(span.status, Status::Error { .. }));
+}
+
+/// Rejects an attempt holding `selected` with a state conflict after `spent` were spent on chain.
+async fn reject_with_state_conflict(
+    funder: &mut Funder,
+    server: &TestServer,
+    selected: &[Note],
+    spent: &[&Note],
+) -> Result<Resolution> {
+    server
+        .chain
+        .lock()
+        .unwrap()
+        .spent
+        .extend(spent.iter().map(|note| (15, note.nullifier())));
+    let status =
+        tonic::Status::with_details(tonic::Code::InvalidArgument, "conflict", vec![2].into());
+    let attempt = funder.reserve_attempt(&[], selected).await;
+    funder.resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status))).await
+}
+
+#[tokio::test]
+async fn state_conflict_discards_only_the_spent_deposits_of_a_batch() {
+    let (_directory, setup) = FunderSetup::fixture().await;
+    let deposits: Vec<_> = (1..=4).map(|serial| setup.deposit(serial)).collect();
+    let (mut funder, server) = with_deposits(setup, TestChain::new(20), &deposits).await;
+
+    let resolution =
+        reject_with_state_conflict(&mut funder, &server, &deposits[..3], &[&deposits[1]])
+            .await
+            .unwrap();
+
+    assert!(resolution == Resolution::DepositDiscarded);
+    assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        [&deposits[0], &deposits[2], &deposits[3]]
+            .into_iter()
+            .map(|note| (note.nullifier(), note.clone()))
+            .collect::<HashMap<_, _>>()
+    );
+}
+
+#[tokio::test]
+async fn state_conflict_keeps_a_batch_of_unspent_deposits() {
+    let (_directory, setup) = FunderSetup::fixture().await;
+    let deposits: Vec<_> = (1..=2).map(|serial| setup.deposit(serial)).collect();
+    let (mut funder, server) = with_deposits(setup, TestChain::new(20), &deposits).await;
+
+    assert!(reject_with_state_conflict(&mut funder, &server, &deposits, &[]).await.is_err());
+
+    assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
+    assert_eq!(funder.setup.database.deposit_count().await.unwrap(), 2);
+    assert_eq!(
+        funder
+            .setup
+            .database
+            .largest_deposits(NonZeroUsize::new(10).unwrap())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[tokio::test]
@@ -225,7 +332,9 @@ async fn other_rejections_preserve_notes() {
             .unwrap();
         let status =
             tonic::Status::with_details(tonic::Code::InvalidArgument, "rejected", details.into());
-        let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+        let attempt = funder
+            .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+            .await;
         assert!(
             funder
                 .resolve_attempt(attempt, Some(SubmissionOutcome::Rejected(status)))
@@ -234,14 +343,8 @@ async fn other_rejections_preserve_notes() {
         );
 
         assert_eq!(
-            &funder
-                .setup
-                .wallet
-                .deposits()
-                .iter()
-                .map(|(key, deposit)| (*key, deposit.note().clone()))
-                .collect::<HashMap<_, _>>(),
-            &HashMap::from([(deposit.nullifier(), deposit)])
+            stored_deposits(&funder.setup.database).await,
+            HashMap::from([(deposit.nullifier(), deposit)])
         );
         assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([payout]));
         let span = telemetry.span("resolve_attempt");
@@ -291,8 +394,9 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             } else {
                 SubmissionOutcome::Unknown(tonic::Status::unavailable("connection lost"))
             };
-            let attempt =
-                funder.reserve_attempt(std::slice::from_ref(&payout), Some(&deposit)).await;
+            let attempt = funder
+                .reserve_attempt(std::slice::from_ref(&payout), std::slice::from_ref(&deposit))
+                .await;
             funder.resolve_attempt(attempt, Some(outcome)).await.unwrap();
             assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
 
@@ -327,18 +431,12 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
                 assert_eq!(stored.note, *payout.note());
                 assert_eq!(delivery.transaction_id, transaction_id);
                 assert_eq!(delivery.committed_in_block, BlockNumber::from(19));
-                assert!(funder.setup.wallet.deposits().is_empty());
+                assert!(stored_deposits(&funder.setup.database).await.is_empty());
                 assert_eq!(funder.pending_requests().await.unwrap(), VecDeque::from([waiting]));
             } else {
                 assert_eq!(
-                    &funder
-                        .setup
-                        .wallet
-                        .deposits()
-                        .iter()
-                        .map(|(key, deposit)| (*key, deposit.note().clone()))
-                        .collect::<HashMap<_, _>>(),
-                    &HashMap::from([(deposit.nullifier(), deposit)])
+                    stored_deposits(&funder.setup.database).await,
+                    HashMap::from([(deposit.nullifier(), deposit)])
                 );
                 assert_eq!(
                     funder.pending_requests().await.unwrap(),
@@ -351,33 +449,9 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
 
 #[tokio::test]
 async fn admission_uses_the_reference_blocks_fee() {
-    use miden_node_proto::generated::miden::node::v1::SyncChainMmrResponse;
-    use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta};
-
-    let fixture = Fixture::new(1_000, 100).unwrap();
-    let chain = fixture.chain.lock().await;
-    let header = chain.genesis_block_header().clone();
-    let witness = chain
-        .account_witnesses([fixture.funder.id()])
-        .remove(&fixture.funder.id())
-        .unwrap();
-    drop(chain);
-    let mut rpc_chain = TestChain::new(0);
-    rpc_chain.account = Some((fixture.funder, witness));
-    rpc_chain.chain_mmr = Some(SyncChainMmrResponse {
-        block_header: Some(header.into()),
-        mmr_delta: Some(
-            MmrDelta {
-                forest: Forest::new(0).unwrap(),
-                data: Vec::new(),
-            }
-            .into(),
-        ),
-        ..Default::default()
-    });
-    let server = TestServer::start(rpc_chain).await;
+    let (wallet, server) = genesis_server(1_000, 100, &[]).await;
     let (_directory, mut setup) = FunderSetup::fixture().await;
-    setup.wallet = fixture.wallet;
+    setup.wallet = wallet;
     let payout = setup.payout(1);
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
     funder
@@ -510,7 +584,7 @@ async fn a_restarted_worker_waits_for_the_recorded_attempt_before_retrying_reque
         transaction_id: TransactionId::from_raw(Word::empty()),
         reference_block: 10.into(),
         expiration_block: 20.into(),
-        deposit_nullifier: None,
+        deposit_nullifiers: vec![],
         note_ids: vec![payout.note().id()],
     };
     setup.database.start_attempt(attempt.clone()).await.unwrap();
@@ -599,7 +673,7 @@ async fn a_confirmed_batch_waits_for_its_delivery_record_even_if_the_node_goes_o
     chain.transactions.push((19, setup.wallet.account_id(), transaction_id));
     let server = TestServer::start(chain).await;
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), None).await;
+    let attempt = funder.reserve_attempt(std::slice::from_ref(&payout), &[]).await;
     let (writer, _reader) =
         miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
     writer
@@ -654,7 +728,7 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
     chain.unavailable_for = Some(("SyncTransactions", failures));
     let server = TestServer::start(chain).await;
     let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
-    let attempt = funder.reserve_attempt(&[payout], None).await;
+    let attempt = funder.reserve_attempt(&[payout], &[]).await;
     let (telemetry, _guard) = Telemetry::capture();
     funder
         .resolve_attempt(attempt, Some(SubmissionOutcome::Accepted))
@@ -676,4 +750,141 @@ async fn a_recovered_poll_error_does_not_mark_commitment_as_failed(#[case] failu
             event.attributes.iter().any(|attr| attr.key.as_str() == "exception.message")
         }));
     }
+}
+
+// DEPOSIT DISCOVERY
+// ================================================================================================
+
+/// Recreates the worker from a reopened database and a wallet resumed at its stored cursor.
+async fn restart(funder: Funder, directory: &tempfile::TempDir, server: &TestServer) -> Funder {
+    let mut setup = funder.setup;
+    let identity = setup.database.identity();
+    setup.database = Arc::new(
+        FundingDatabase::open_and_verify(
+            &directory.path().join(DATABASE_FILENAME),
+            identity.genesis_commitment,
+            identity.fee_asset_id,
+        )
+        .await
+        .unwrap(),
+    );
+    setup.wallet = FundingWallet::load_at(
+        &mut server.node.rpc_client(),
+        identity.funding_account_id,
+        setup.wallet.secret_key().clone(),
+        setup.fee_asset_id,
+        BlockNumber::GENESIS,
+        setup.database.deposit_sync().await.unwrap(),
+    )
+    .await
+    .unwrap();
+    Funder::new(server.node.clone(), Prover::local(), setup)
+}
+
+#[tokio::test]
+async fn a_restarted_worker_resumes_deposit_discovery_from_the_stored_cursor() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+
+    funder.read_chain_state().await.unwrap();
+    let expected = HashMap::from([(deposit.nullifier(), deposit)]);
+    assert_eq!(stored_deposits(&funder.setup.database).await, expected);
+
+    // This note lies before the stored cursor and must not be discovered after restart.
+    let unscanned = funder.setup.deposit(2);
+    server.chain.lock().unwrap().notes.push((0, unscanned));
+    let mut restarted = restart(funder, &directory, &server).await;
+    assert_eq!(restarted.setup.wallet.next_sync(), BlockNumber::from(1));
+
+    restarted.read_chain_state().await.unwrap();
+    assert_eq!(stored_deposits(&restarted.setup.database).await, expected);
+}
+
+#[tokio::test]
+async fn an_unchanged_tip_can_sync_while_the_database_writer_is_busy() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    funder.read_chain_state().await.unwrap();
+
+    let (writer, _reader) =
+        miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
+    let blocker = writer.begin_write().await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), funder.read_chain_state()).await;
+    blocker.commit().await.unwrap();
+    result
+        .expect("an unchanged scan must not wait for the database writer")
+        .unwrap();
+    assert_eq!(funder.setup.wallet.next_sync(), BlockNumber::from(1));
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(deposit.nullifier(), deposit)])
+    );
+}
+
+#[tokio::test]
+async fn a_scan_which_could_not_be_stored_is_repeated_on_the_next_sync() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    let (writer, _reader) =
+        miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
+    let set_trigger = async |sql: &'static str| {
+        writer
+            .write("change deposit scan trigger", move |tx| {
+                tx.execute(sql, &[])?;
+                Ok::<_, miden_node_db::DatabaseError>(())
+            })
+            .await
+            .unwrap();
+    };
+
+    set_trigger(
+        "CREATE TRIGGER reject_scan BEFORE UPDATE ON deposit_sync
+         BEGIN SELECT RAISE(FAIL, 'write failed'); END",
+    )
+    .await;
+    assert!(funder.read_chain_state().await.is_err());
+    assert_eq!(funder.setup.database.deposit_sync().await.unwrap(), BlockNumber::GENESIS);
+    assert!(stored_deposits(&funder.setup.database).await.is_empty());
+    assert_eq!(funder.setup.wallet.next_sync(), BlockNumber::GENESIS);
+
+    // An unchanged chain tip must not prevent the failed scan from being repeated.
+    set_trigger("DROP TRIGGER reject_scan").await;
+    funder.read_chain_state().await.unwrap();
+    assert_eq!(funder.setup.database.deposit_sync().await.unwrap(), BlockNumber::from(1));
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(deposit.nullifier(), deposit)])
+    );
+}
+
+#[tokio::test]
+async fn the_largest_stored_deposit_is_selected() {
+    let (_directory, mut setup) = FunderSetup::fixture().await;
+    let small = setup.deposit(1);
+    let large: Note = P2idNote::builder()
+        .sender(setup.fee_asset_id.faucet_id())
+        .target(setup.wallet.account_id())
+        .asset(FungibleAsset::new(setup.fee_asset_id.faucet_id(), 5_000).unwrap())
+        .note_type(NoteType::Public)
+        .serial_number(Word::from([2u32; 4]))
+        .build()
+        .unwrap()
+        .into();
+    let (wallet, server) = genesis_server(0, 0, &[small, large.clone()]).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    funder.read_chain_state().await.unwrap();
+
+    let selected = funder.setup.database.largest_deposits(NonZeroUsize::MIN).await.unwrap();
+    assert_eq!(selected.into_iter().map(UsdcxP2Id::into_note).collect::<Vec<_>>(), vec![large]);
+    assert_eq!(funder.setup.database.deposit_count().await.unwrap(), 2);
 }

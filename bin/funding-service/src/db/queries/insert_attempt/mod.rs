@@ -7,12 +7,7 @@ use crate::db::TransactionAttempt;
 pub fn insert_attempt(tx: &WriteTx<'_>, attempt: &TransactionAttempt) -> Result<(), DatabaseError> {
     tx.execute(
         include_str!("insert_attempt.sql"),
-        &[
-            &attempt.transaction_id,
-            &attempt.reference_block,
-            &attempt.expiration_block,
-            &attempt.deposit_nullifier,
-        ],
+        &[&attempt.transaction_id, &attempt.reference_block, &attempt.expiration_block],
     )?;
     Ok(())
 }

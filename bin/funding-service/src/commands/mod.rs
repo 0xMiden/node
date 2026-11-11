@@ -8,6 +8,7 @@ use clap::{ArgGroup, Parser};
 use miden_funding_service::{
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
+    DEFAULT_MAX_DEPOSITS_PER_TX,
     DEFAULT_MAX_NOTES_PER_TX,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_RPC_TIMEOUT,
@@ -37,6 +38,7 @@ const ENV_ACCOUNT_ID: &str = "MIDEN_FUNDING_ACCOUNT_ID";
 const ENV_SIGNING_KEY_FILE: &str = "MIDEN_FUNDING_SIGNING_KEY_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
+const ENV_MAX_DEPOSITS_PER_TX: &str = "MIDEN_FUNDING_MAX_DEPOSITS_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
 const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS";
@@ -154,6 +156,15 @@ pub enum FundingServiceCommand {
         )]
         max_notes_per_tx: NonZeroUsize,
 
+        /// Largest number of deposits one funding transaction consumes.
+        #[arg(
+            long = "max-deposits-per-tx",
+            env = ENV_MAX_DEPOSITS_PER_TX,
+            default_value_t = DEFAULT_MAX_DEPOSITS_PER_TX,
+            value_name = "NUM"
+        )]
+        max_deposits_per_tx: NonZeroUsize,
+
         /// Number of blocks after its reference block at which a funding transaction expires.
         #[arg(
             long = "tx-expiration-delta",
@@ -235,6 +246,7 @@ impl FundingServiceCommand {
             signing_key_file,
             max_amount,
             max_notes_per_tx,
+            max_deposits_per_tx,
             tx_expiration_delta,
             poll_interval,
             validator_signing_public_keys,
@@ -257,6 +269,7 @@ impl FundingServiceCommand {
             data.directory = data_directory.as_path(),
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
+            funding_service.max_deposits_per_tx = max_deposits_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
             funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
         );
@@ -274,6 +287,7 @@ impl FundingServiceCommand {
         .with_tx_prover_timeout(tx_prover_timeout)
         .with_max_amount(max_amount)
         .with_max_notes_per_tx(max_notes_per_tx)
+        .with_max_deposits_per_tx(max_deposits_per_tx)
         .with_tx_expiration_delta(tx_expiration_delta)
         .with_poll_interval(poll_interval)
         .build()

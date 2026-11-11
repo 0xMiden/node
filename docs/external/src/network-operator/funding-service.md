@@ -69,6 +69,7 @@ miden-funding-service start \
 | `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                 |
 | `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                               |
 | `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                |
+| `--max-deposits-per-tx`          | `32`         | Largest number of deposits one transaction consumes. Must not exceed 1024, the protocol's input-note limit.                                                          |
 | `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                           |
 | `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                          |
 | `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                      |
@@ -191,10 +192,12 @@ operator action, which is what the status code reports.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs at
-`--poll-interval`, which defaults to one second, while no transaction is in flight. At startup, the worker first scans
-from genesis through the current chain tip. It completes that discovery before it processes funding requests. A restart
-recovers unspent deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved
-cursor.
+`--poll-interval`, which defaults to one second, while no transaction is in flight.
+
+The service stores the unspent deposits it finds and how far it has scanned in its database. A restart resumes the scan
+from the recorded block, so it still finds deposits sent while the service was stopped without scanning the whole chain
+again. The first start after bootstrap, or after upgrading from a version that did not record this progress, scans from
+genesis once and can take noticeably longer.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
@@ -208,13 +211,15 @@ whatever they like.
 | It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
 
 A deposit and queued payouts can share one transaction and one fee, even when the account balance is zero. The worker
-handles node rejections immediately. A state-conflict rejection with error byte `2` discards only the selected deposit.
-The payouts remain queued. Accepted transactions and uncertain transport failures are monitored until commitment or
-expiration. Other rejections and expiration retain the notes for retry.
+handles node rejections immediately. A state-conflict rejection with error byte `2` discards the selected deposits that
+are already spent on chain, or the selected deposit when it is the only one. The payouts remain queued. Accepted
+transactions and uncertain transport failures are monitored until commitment or expiration. Other rejections and
+expiration retain the notes for retry.
 
 If the node cannot serve a deposit or check whether it has been spent, funding waits for synchronization to succeed. The
-service retries these failures automatically and checks the recovered deposits against the chain after a restart.
+service retries these failures automatically.
 
-One transaction consumes at most one deposit, selected by largest amount. A transaction that consumes a deposit and
-creates no funding note is only submitted when that deposit is worth more than the fee, so a note holding a single base
-unit cannot be used to make the account spend more than it gains.
+One transaction consumes up to `--max-deposits-per-tx` deposits, selected by largest amount, and pays one fee for all of
+them. A transaction that consumes deposits and creates no funding note is only submitted when those deposits together
+are worth more than the fee, so notes holding a single base unit cannot be used to make the account spend more than it
+gains. Small deposits, such as the batch fees the service collects, are consumed once enough of them add up.

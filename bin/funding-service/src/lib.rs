@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::UsdcxFaucet;
-use miden_node_tracing::{info, instrument, miden_span_record};
+use miden_node_tracing::{info, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -70,6 +70,16 @@ const _: () = assert!(DEFAULT_MAX_NOTES_PER_TX.get() <= MAX_NOTES_PER_TX.get());
 /// Hard bound on `--max-notes-per-tx`.
 pub const MAX_NOTES_PER_TX: NonZeroUsize = NonZeroUsize::new(100).expect("literal is non-zero");
 
+/// Default largest number of deposits one funding transaction consumes.
+pub const DEFAULT_MAX_DEPOSITS_PER_TX: NonZeroUsize =
+    NonZeroUsize::new(32).expect("literal is non-zero");
+
+const _: () = assert!(DEFAULT_MAX_DEPOSITS_PER_TX.get() <= MAX_DEPOSITS_PER_TX.get());
+
+/// Hard bound on `--max-deposits-per-tx`: the protocol's limit on input notes per transaction.
+pub const MAX_DEPOSITS_PER_TX: NonZeroUsize =
+    NonZeroUsize::new(miden_protocol::MAX_INPUT_NOTES_PER_TX).expect("the limit is non-zero");
+
 /// Default number of blocks after its reference block at which a funding transaction expires.
 pub const DEFAULT_TX_EXPIRATION_DELTA: NonZeroU16 =
     NonZeroU16::new(50).expect("literal is non-zero");
@@ -102,6 +112,7 @@ pub struct FundingServiceConfig {
     tx_prover_timeout: Duration,
     max_amount: u64,
     max_notes_per_tx: NonZeroUsize,
+    max_deposits_per_tx: NonZeroUsize,
     tx_expiration_delta: NonZeroU16,
     poll_interval: Duration,
 }
@@ -133,6 +144,7 @@ impl FundingServiceConfig {
             tx_prover_timeout: DEFAULT_TX_PROVER_TIMEOUT,
             max_amount: DEFAULT_MAX_AMOUNT,
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
+            max_deposits_per_tx: DEFAULT_MAX_DEPOSITS_PER_TX,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             poll_interval: DEFAULT_POLL_INTERVAL,
         }
@@ -176,6 +188,12 @@ impl FundingServiceConfig {
     }
 
     #[must_use]
+    pub fn with_max_deposits_per_tx(mut self, max_deposits_per_tx: NonZeroUsize) -> Self {
+        self.max_deposits_per_tx = max_deposits_per_tx;
+        self
+    }
+
+    #[must_use]
     pub fn with_tx_expiration_delta(mut self, delta: NonZeroU16) -> Self {
         self.tx_expiration_delta = delta;
         self
@@ -201,6 +219,12 @@ impl FundingServiceConfig {
             self.max_notes_per_tx <= MAX_NOTES_PER_TX,
             "--max-notes-per-tx must not exceed {MAX_NOTES_PER_TX} because the node limits how \
              many note IDs one lookup may hold",
+        );
+
+        anyhow::ensure!(
+            self.max_deposits_per_tx <= MAX_DEPOSITS_PER_TX,
+            "--max-deposits-per-tx must not exceed {MAX_DEPOSITS_PER_TX}, the protocol's limit on \
+             input notes per transaction",
         );
 
         anyhow::ensure!(!self.poll_interval.is_zero(), "--poll-interval must be greater than zero");
@@ -244,12 +268,26 @@ impl FundingServiceConfig {
             .await
             .context("failed to read the chain state from the node")?;
         let chain_tip = initial_header.block_num();
+        let deposit_sync = database
+            .deposit_sync()
+            .await
+            .context("failed to read the deposit sync cursor")?;
+        let deposit_count =
+            database.deposit_count().await.context("failed to count the stored deposits")?;
+        if deposit_sync > chain_tip + 1 {
+            warn!(
+                "The node's chain tip is behind the deposit sync cursor",
+                block.number = chain_tip,
+                deposit.sync.block = deposit_sync #[nonstandard]
+            );
+        }
         let wallet = FundingWallet::load_at(
             &mut node.rpc_client(),
             database.identity().funding_account_id,
             secret_key,
             fee_asset_id,
             chain_tip,
+            deposit_sync,
         )
         .await
         .context("failed to load the public funding account from the node")?;
@@ -283,8 +321,11 @@ impl FundingServiceConfig {
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),
             genesis.commitment = node.genesis_commitment(),
+            deposit.sync.block = deposit_sync #[nonstandard],
+            deposit.count = deposit_count,
             funding_service.max_amount = self.max_amount,
             funding_service.max_notes_per_tx = self.max_notes_per_tx.get(),
+            funding_service.max_deposits_per_tx = self.max_deposits_per_tx.get(),
             funding_service.tx_expiration_delta = self.tx_expiration_delta.get(),
             funding_service.remote_prover = matches!(prover, Prover::Remote(_))
         );
@@ -301,6 +342,7 @@ impl FundingServiceConfig {
             protocol_config,
             worker_config: WorkerConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
+                max_deposits_per_tx: self.max_deposits_per_tx,
                 expiration_delta: self.tx_expiration_delta,
                 poll_interval: self.poll_interval,
             },
