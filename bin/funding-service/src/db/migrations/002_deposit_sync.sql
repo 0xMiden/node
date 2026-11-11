@@ -9,8 +9,9 @@ INSERT INTO deposit_sync (singleton, next_sync_block) VALUES (1, 0);
 
 -- Deposits discovered before next_sync_block with no spend known when they were discovered. This
 -- table is the deposit pool: rows are added as discovery advances and removed when the service
--- consumes or discards them. The amount duplicates the note's asset so selection can order deposits
--- without decoding notes.
+-- consumes or discards them.
+--
+-- The amount duplicates the note's asset so selection can order deposits without decoding notes.
 CREATE TABLE deposits (
     nullifier BLOB PRIMARY KEY CHECK (length(nullifier) = 32),
     amount INTEGER NOT NULL CHECK (amount > 0),

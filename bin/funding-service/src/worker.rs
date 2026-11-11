@@ -521,8 +521,8 @@ struct Selection {
 }
 
 impl Selection {
-    /// Consumes every one of `deposits` and admits the queued notes they and the account balance
-    /// can fund.
+    /// Selects all supplied deposits and the queued notes their combined value and the account
+    /// balance can fund.
     ///
     /// Consuming several deposits in one transaction shares a single fee between them, so deposits
     /// too small to be worth a transaction on their own are collected together.

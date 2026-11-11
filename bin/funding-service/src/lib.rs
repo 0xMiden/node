@@ -267,7 +267,6 @@ impl FundingServiceConfig {
             .await
             .context("failed to read the chain state from the node")?;
         let chain_tip = initial_header.block_num();
-        // Resume deposit discovery from the stored cursor.
         let deposit_sync = database
             .deposit_sync()
             .await
