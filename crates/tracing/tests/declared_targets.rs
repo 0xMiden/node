@@ -9,14 +9,14 @@ miden_node_tracing::declare_targets! {
 mod unexecuted {
     #[expect(dead_code, reason = "Target discovery must not require executing this function.")]
     pub fn emit() {
-        miden_node_tracing::info_v2!("unexecuted");
+        miden_node_tracing::info!("unexecuted");
     }
 }
 
 mod duplicate {
     #[expect(dead_code, reason = "Target discovery must not require executing this function.")]
     pub fn emit() {
-        miden_node_tracing::info_v2!("duplicate");
+        miden_node_tracing::info!("duplicate");
     }
 }
 
@@ -27,8 +27,9 @@ fn declarations_are_available_without_executing_callsites() {
         vec![
             "inventory::shared",
             "inventory::unexecuted",
-            "miden::rpc::server",
-            "miden::tracing"
+            "miden",
+            "miden::admin",
+            "miden::rpc::server"
         ],
     );
 }

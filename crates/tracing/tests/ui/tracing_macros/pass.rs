@@ -1,3 +1,5 @@
+miden_node_tracing::declare_targets! { default: "miden::test", }
+
 use std::fmt::{self, Display, Formatter};
 
 use miden_node_tracing::{
@@ -5,7 +7,7 @@ use miden_node_tracing::{
     error,
     info,
     RecordAttribute,
-    miden_instrument,
+    instrument,
     miden_span_record,
     trace,
     warn,
@@ -55,7 +57,7 @@ fn records_events() {
     error!(ApprovedError, target: "test", "error.event", block.number = 2);
     error!(anyhow::anyhow!("anyhow error"), "anyhow.error.event");
 }
-#[miden_instrument(
+#[instrument(
     target = "miden-node-tracing-test",
     name = "records_fields",
 )]
@@ -71,12 +73,12 @@ fn records_fields() {
     );
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_user_defined_attribute() {
     miden_span_record!(transaction.id = ApprovedAttribute("approved"));
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_with_default_instrument_args(not_debug: NotDebug) {
     let _ = not_debug;
     let value = 1;
@@ -86,7 +88,7 @@ fn records_with_default_instrument_args(not_debug: NotDebug) {
     );
 }
 
-#[miden_instrument(
+#[instrument(
     fields(
         transaction.id = ApprovedAttribute("0x1234"),
         account.updated,
@@ -94,21 +96,21 @@ fn records_with_default_instrument_args(not_debug: NotDebug) {
 )]
 fn records_allowed_instrument_fields() {}
 
-#[miden_instrument(
+#[instrument(
     fields(
         custom.attribute = ApprovedAttribute("explicit") #[nonstandard],
     ),
 )]
 fn records_nonstandard_instrument_field() {}
 
-#[miden_instrument(
+#[instrument(
     fields(
         dice_roll = dice_roll,
     ),
 )]
 fn records_allowed_shorthand_instrument_field(dice_roll: f64) {}
 
-#[miden_instrument]
+#[instrument]
 fn records_same_field_more_than_once() {
     let value = 1;
     let updated = 2;
@@ -121,12 +123,12 @@ fn records_same_field_more_than_once() {
     );
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_nonstandard_delayed_field() {
     miden_span_record!(custom.attribute = ApprovedAttribute("delayed") #[nonstandard]);
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_allowed_canonical_fields() {
     let tx_id = ApprovedAttribute("0x1234");
     let account_id = ApprovedAttribute("0xabcd");
@@ -145,15 +147,15 @@ fn records_allowed_canonical_fields() {
     );
 }
 
-#[miden_instrument(fields(unregistered.item.count = item_count))]
+#[instrument(fields(unregistered.item.count = item_count))]
 fn records_count_without_registration(item_count: usize) {}
 
 fn main() {
-    let parent = miden_node_tracing::info_span_v2!(target: "explicit", "parent");
-    let _ = miden_node_tracing::trace_span_v2!(target: "explicit", parent: &parent, "trace");
-    let _ = miden_node_tracing::debug_span_v2!(target: "explicit", "debug");
-    let _ = miden_node_tracing::warn_span_v2!(target: "explicit", "warn");
-    let _ = miden_node_tracing::error_span_v2!(target: "explicit", "error");
+    let parent = miden_node_tracing::info_span!(target: "explicit", "parent");
+    let _ = miden_node_tracing::trace_span!(target: "explicit", parent: &parent, "trace");
+    let _ = miden_node_tracing::debug_span!(target: "explicit", "debug");
+    let _ = miden_node_tracing::warn_span!(target: "explicit", "warn");
+    let _ = miden_node_tracing::error_span!(target: "explicit", "error");
     records_fields();
     records_user_defined_attribute();
     records_with_default_instrument_args(NotDebug);

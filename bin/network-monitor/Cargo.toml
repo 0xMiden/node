@@ -46,3 +46,4 @@ url                 = { features = ["serde"], workspace = true }
 [dev-dependencies]
 miden-protocol = { features = ["std", "testing"], workspace = true }
 miden-testing  = { workspace = true }
+tokio          = { features = ["test-util"], workspace = true }

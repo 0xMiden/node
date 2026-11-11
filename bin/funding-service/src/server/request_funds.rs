@@ -42,7 +42,7 @@ impl From<&Note> for RequestFundsResponse {
 
 /// Creates a public P2ID note which holds `amount` base units of the native asset and targets
 /// `account_id`, and persists it for the worker to create on chain.
-#[miden_node_tracing::instrument_v2(
+#[miden_node_tracing::instrument(
     name = "request_funds",
     fields (
         account.id = request.account_id,

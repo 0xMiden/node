@@ -137,7 +137,7 @@ impl Tasks {
                 // A failure is already recorded as the root cause; later failures are often
                 // knock-on effects of it, so log them rather than mask it.
                 (Err(_), Err(err)) => {
-                    warn!(&err, "task failed during shutdown", task.name = task);
+                    warn!(&err, target: "miden", "task failed during shutdown", task.name = task);
                 },
                 // A failure is already recorded and this task exited cleanly: nothing to add.
                 (Err(_), Ok(())) => {},

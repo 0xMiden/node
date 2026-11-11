@@ -1,6 +1,8 @@
+miden_node_tracing::declare_targets! { default: "miden::test", }
+
 use std::fmt::{self, Display};
 
-use miden_node_tracing::{RecordAttribute, miden_instrument, miden_span_record};
+use miden_node_tracing::{RecordAttribute, instrument, miden_span_record};
 
 struct AccountId;
 
@@ -18,7 +20,7 @@ impl Display for AccountId {
     }
 }
 
-#[miden_instrument]
+#[instrument]
 fn records_collection_with_singular_field() {
     miden_span_record!(account.id = vec![AccountId]);
 }

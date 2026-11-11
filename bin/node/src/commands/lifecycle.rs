@@ -38,17 +38,16 @@ pub struct BootstrapCommand {
 impl BootstrapCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         info!(
-            target: crate::LOG_TARGET,
             "Bootstrapping node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
-            genesis.source.kind =
-                if self.genesis_block_file.is_some() { "file" } else { "network" },
+            genesis.source.kind = if self.genesis_block_file.is_some() {
+                "file"
+            } else {
+                "network"
+            },
             genesis.source = self.genesis_block_file.as_ref().map_or_else(
-                || self.network.map_or_else(
-                    || "custom".to_owned(),
-                    |network| network.to_string(),
-                ),
+                || self.network.map_or_else(|| "custom".to_owned(), |network| network.to_string(),),
                 |path| path.display().to_string(),
             ),
             data.directory = self.data_directory.as_path()
@@ -59,7 +58,6 @@ impl BootstrapCommand {
         let genesis_commitment = genesis_block.inner().header().commitment();
         State::bootstrap(genesis_block, &self.data_directory).await?;
         info!(
-            target: crate::LOG_TARGET,
             "Node bootstrap complete",
             genesis.commitment = genesis_commitment,
             data.directory = self.data_directory.as_path()

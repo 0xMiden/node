@@ -1,5 +1,6 @@
 miden_node_tracing::declare_targets! {
-    default: "miden::validation",
+    default: "miden",
+    "miden_validator::commands::bootstrap" => "miden::storage",
     "miden_validator::commands::dkg" => "miden::privacy::dkg",
 }
 

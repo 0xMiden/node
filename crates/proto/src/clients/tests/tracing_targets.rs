@@ -44,7 +44,7 @@ async fn connection_target<T: GrpcClient + Send + 'static>(url: url::Url) {
     tokio::time::timeout(
         Duration::from_secs(10),
         async {
-            miden_node_tracing::info_v2!("caller.started", dependency.name = "test-caller");
+            miden_node_tracing::info!("caller.started", dependency.name = "test-caller");
             builder.monitor::<T>("test-service", shutdown).await;
         }
         .with_subscriber(subscriber),

@@ -2,7 +2,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::account::AccountId;
 use reqwest::Client;
 use serde::Serialize;
@@ -40,8 +40,8 @@ impl FundingClient {
 
     /// Requests the configured amount and waits for the funding service to queue the note. This
     /// method does not retry failed requests.
-    #[instrument_v2(
-        name = "account.funding",
+    #[instrument(
+        name = "funding",
         fields(account.id = account_id, asset.amount = self.amount.get()),
         err,
     )]

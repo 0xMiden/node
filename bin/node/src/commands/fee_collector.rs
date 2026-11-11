@@ -85,7 +85,6 @@ impl CreateCommand {
         file.write_all(&account_file.to_bytes())?;
         file.sync_all()?;
         info!(
-            target: crate::LOG_TARGET,
             "Saved new fee collector account",
             account.id = account_file.account().id(),
             account.file = output.as_path()

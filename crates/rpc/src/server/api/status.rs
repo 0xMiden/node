@@ -1,6 +1,6 @@
 use miden_node_block_producer::{BlockProducerStatus, MempoolStats};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, instrument_v2};
+use miden_node_tracing::{debug, instrument};
 
 use super::{ProtoMempoolStats, Request, RpcBackend, RpcService};
 
@@ -17,7 +17,7 @@ impl proto::server::miden_node_v1_node_service::Status for RpcService {
         Ok(output)
     }
 
-    #[instrument_v2(name = "status")]
+    #[instrument(name = "status")]
     async fn handle(
         &self,
         _input: Self::Input,
@@ -37,7 +37,7 @@ impl proto::server::miden_node_v1_node_service::Status for RpcService {
                 .and_then(|response| response.into_inner().block_producer),
         };
 
-        debug_v2!("Getting status");
+        debug!("Getting status");
 
         Ok(proto::miden::node::v1::StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),

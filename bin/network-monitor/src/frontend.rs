@@ -12,12 +12,12 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use maud::Markup;
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info, instrument};
 use tokio::sync::watch;
 
 use crate::config::MonitorConfig;
 use crate::status::{NetworkStatus, ServiceStatus};
-use crate::{COMPONENT, LOG_TARGET, view};
+use crate::view;
 
 // SERVER STATE
 // ================================================================================================
@@ -47,12 +47,8 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
-    info!(
-        target: LOG_TARGET,
-        "Starting web server",
-        network_monitor.listen = bind_address.as_str()
-    );
-    info!(target: LOG_TARGET, "Dashboard available", port = config.port);
+    info!("Starting web server", network_monitor.listen = bind_address.as_str());
+    info!("Dashboard available", port = config.port);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .expect("Failed to bind to address");
@@ -62,20 +58,14 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
 // HTML ROUTES
 // ================================================================================================
 
-#[miden_instrument(
-    target = COMPONENT,
-    name = "frontend.get-dashboard",
-)]
+#[instrument(name = "get_dashboard")]
 async fn get_dashboard(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
     view::page(&server_state)
 }
 
-#[miden_instrument(
-    target = COMPONENT,
-    name = "frontend.get-status-fragment",
-)]
+#[instrument(name = "get_status_fragment")]
 async fn get_status_fragment(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
@@ -85,10 +75,7 @@ async fn get_status_fragment(
 // JSON ROUTE
 // ================================================================================================
 
-#[miden_instrument(
-    target = COMPONENT,
-    name = "frontend.get-status",
-)]
+#[instrument(name = "get_status")]
 async fn get_status(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> axum::response::Json<NetworkStatus> {

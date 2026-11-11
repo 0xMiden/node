@@ -1,7 +1,7 @@
 use miden_node_proto::generated::miden::node::v1::CommittedNote;
 use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_store::NoteRecord;
-use miden_node_tracing::{debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::note::NoteId;
 
@@ -24,7 +24,7 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
         Ok(proto::miden::node::v1::GetNotesByIdResponse { notes })
     }
 
-    #[instrument_v2(name = "get_notes_by_id")]
+    #[instrument(name = "get_notes_by_id")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -36,7 +36,7 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
             note.ids = &note_ids[..note_ids.len().min(10)],
             note.count = note_ids.len()
         );
-        debug_v2!(
+        debug!(
             "Getting notes by ID",
             note.ids = &note_ids[..note_ids.len().min(10)],
             note.count = note_ids.len()

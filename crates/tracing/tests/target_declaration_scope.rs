@@ -1,4 +1,4 @@
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 
 const DEFAULT_TARGET: &str = "miden::default";
 const DATABASE_TARGET: &str = "miden::database";
@@ -9,20 +9,20 @@ miden_node_tracing::declare_targets! {
     "target_declaration_scope::context" => module_path!(),
 }
 
-#[instrument_v2]
+#[instrument]
 fn default_target() -> &'static str {
     tracing::Span::current().metadata().unwrap().target()
 }
 
 mod database {
-    #[miden_node_tracing::instrument_v2]
+    #[miden_node_tracing::instrument]
     pub fn target() -> &'static str {
         tracing::Span::current().metadata().unwrap().target()
     }
 }
 
 mod context {
-    #[miden_node_tracing::instrument_v2]
+    #[miden_node_tracing::instrument]
     pub fn target() -> &'static str {
         tracing::Span::current().metadata().unwrap().target()
     }

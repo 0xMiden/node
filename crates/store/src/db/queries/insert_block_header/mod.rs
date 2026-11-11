@@ -1,7 +1,7 @@
 //! Inserts a block header and the signatures that committed it.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::{BlockHeader, BlockSignatures};
 
 use crate::db::BlockHeaderCommitment;
@@ -17,7 +17,7 @@ const SQL: &str = include_str!("insert_block_header.sql");
 /// # Returns
 ///
 /// The number of affected rows.
-#[instrument_v2(err)]
+#[instrument(err)]
 pub(crate) fn insert_block_header(
     tx: &WriteTx<'_>,
     block_header: &BlockHeader,

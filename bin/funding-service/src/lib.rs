@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_proto::clients::UsdcxFaucet;
-use miden_node_tracing::{info_v2, instrument_v2, miden_span_record, warn_v2};
+use miden_node_tracing::{info, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -206,8 +206,9 @@ impl FundingServiceConfig {
     }
 
     /// Connects to the node and builds the service.
-    #[instrument_v2(
-        name = "funding.initialize",
+    #[instrument(
+        target = "miden",
+        name = "initialize",
         fields(
             funding_service.remote_prover = self.tx_prover_url.is_some(),
         ),
@@ -274,7 +275,7 @@ impl FundingServiceConfig {
         let deposit_count =
             database.deposit_count().await.context("failed to count the stored deposits")?;
         if deposit_sync > chain_tip + 1 {
-            warn_v2!(
+            warn!(
                 "The node's chain tip is behind the deposit sync cursor",
                 block.number = chain_tip,
                 deposit.sync.block = deposit_sync #[nonstandard]
@@ -315,7 +316,7 @@ impl FundingServiceConfig {
             None => Prover::local(),
         };
 
-        info_v2!(
+        info!(target: "miden",
             "Funding service initialized",
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),

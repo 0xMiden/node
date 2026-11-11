@@ -3,14 +3,13 @@
 
 use std::time::Duration;
 
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_check_response::ServingStatus;
 use tonic_health::pb::health_client::HealthClient;
 use tonic_health::pb::{HealthCheckRequest, HealthCheckResponse};
 use url::Url;
 
-use crate::COMPONENT;
 use crate::service::Service;
 use crate::status::{NoteTransportStatusDetails, ServiceDetails, ServiceStatus};
 
@@ -52,10 +51,7 @@ impl Service for NoteTransportService {
         )
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "check-status.note-transport",
-    )]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let details = NoteTransportStatusDetails { url: self.url.to_string() };
         let health = self

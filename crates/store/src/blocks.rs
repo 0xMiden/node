@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use miden_node_persistence::generated::BlockStoreFormat;
 use miden_node_persistence::prost::Message;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
 
 use crate::genesis::GenesisBlock;
@@ -33,8 +33,8 @@ impl BlockStore {
     /// # Errors
     ///
     /// Uses [`std::fs::create_dir`] and therefore has the same error conditions.
-    #[instrument_v2(
-        name = "store.block_store.bootstrap",
+    #[instrument(
+        name = "bootstrap",
         err,
         fields(
             path = store_dir,
@@ -109,8 +109,8 @@ impl BlockStore {
         }
     }
 
-    #[instrument_v2(
-        name = "store.block_store.save_block",
+    #[instrument(
+        name = "save_block",
         err,
         fields(
             block.number = block_num,
@@ -138,8 +138,8 @@ impl BlockStore {
     // PROOF STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[instrument_v2(
-        name = "store.block_store.save_proof",
+    #[instrument(
+        name = "save_proof",
         err,
         fields(
             block.number = block_num,
@@ -166,8 +166,8 @@ impl BlockStore {
     // PROVING INPUTS STORAGE
     // --------------------------------------------------------------------------------------------
 
-    #[instrument_v2(
-        name = "store.block_store.save_proving_inputs",
+    #[instrument(
+        name = "save_proving_inputs",
         err,
         fields(
             block.number = block_num,

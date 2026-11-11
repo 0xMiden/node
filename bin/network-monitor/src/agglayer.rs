@@ -4,12 +4,11 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::miden_instrument;
+use miden_node_tracing::instrument;
 use reqwest::Client;
 use serde::Deserialize;
 use url::Url;
 
-use crate::COMPONENT;
 use crate::service::Service;
 use crate::status::{
     AgglayerDirectionDetails,
@@ -70,10 +69,7 @@ impl Service for AgglayerService {
         )
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "check-status.agglayer",
-    )]
+    #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let body = match self.fetch_status().await {
             Ok(body) => body,

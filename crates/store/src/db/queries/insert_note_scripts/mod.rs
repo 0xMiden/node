@@ -1,7 +1,7 @@
 //! Inserts the note scripts held by a block's notes.
 
 use miden_node_db::sqlite::WriteTx;
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::Word;
 
 use crate::db::NoteRecord;
@@ -15,7 +15,7 @@ const SQL: &str = include_str!("insert_note_script.sql");
 /// # Returns
 ///
 /// The number of affected rows.
-#[instrument_v2(err)]
+#[instrument(err)]
 pub(crate) fn insert_note_scripts<'a>(
     tx: &WriteTx<'_>,
     notes: impl IntoIterator<Item = &'a NoteRecord>,

@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{Instrument, info_span_v2, instrument_v2};
+use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
@@ -16,12 +16,12 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
     type Input = grpc::miden::validator::v1::SignBlockRequest;
     type Output = (Signature, Word, PublicKey);
 
-    #[instrument_v2(err)]
+    #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    #[instrument_v2(err)]
+    #[instrument(err)]
     fn encode(
         output: Self::Output,
     ) -> tonic::Result<grpc::miden::validator::v1::SignBlockResponse> {
@@ -49,7 +49,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         let _permit = self
             .sign_block_semaphore
             .acquire()
-            .instrument(info_span_v2!("acquire_permit"))
+            .instrument(info_span!("acquire_permit"))
             .await
             .or_internal("sign_block semaphore closed")?;
 

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error_v2, info_v2, instrument_v2};
+use miden_node_tracing::{error, info, instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -173,8 +173,8 @@ pub struct NetworkTransactionOutcome {
 
 impl NetworkTransactionContext {
     /// Builds, proves and submits one network transaction for `account_id`.
-    #[instrument_v2(
-        name = "ntx.build",
+    #[instrument(
+        name = "build",
         fields(
             account.id = account_id,
             reference_block.number = chain.chain_tip_header.block_num(),
@@ -305,7 +305,7 @@ impl NetworkTransactionContext {
             .map(|sponsored| sponsored.feature.as_note().nullifier())
             .collect();
 
-        info_v2!(
+        info!(
             "executing network transaction",
             account.id = account_id,
             note.ids = note_ids.as_slice(),
@@ -320,7 +320,7 @@ impl NetworkTransactionContext {
                 oversized_notes,
                 fetched_scripts,
             }) => {
-                info_v2!(
+                info!(
                     "network transaction executed",
                     account.id = account_id,
                     transaction.id = tx_id,
@@ -345,7 +345,7 @@ impl NetworkTransactionContext {
                 NetworkTransactionResult::Submitted { tx_id }
             },
             Err(err) => {
-                error_v2!(
+                error!(
                     &err,
                     "network transaction failed",
                     account.id = account_id,
@@ -361,7 +361,7 @@ impl NetworkTransactionContext {
                         feature_nullifiers
                             .into_iter()
                             .map(|nullifier| {
-                                info_v2!(
+                                info!(
                                     error.as_ref(),
                                     "note failed: transaction execution error",
                                     note.nullifier = nullifier

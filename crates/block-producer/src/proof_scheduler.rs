@@ -19,7 +19,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::state::{ProofWriter, State};
-use miden_node_tracing::{Instrument, debug_v2, info_v2, instrument_v2};
+use miden_node_tracing::{Instrument, debug, info, instrument};
 use miden_node_utils::retry::{self, Retryable};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
@@ -111,7 +111,7 @@ pub(crate) async fn run(
     max_concurrent_proofs: NonZeroUsize,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    info_v2!("Proof scheduler started");
+    info!("Proof scheduler started");
 
     // In-flight proving tasks.
     let mut proving_tasks = ProofTaskJoinSet::new();
@@ -153,7 +153,7 @@ pub(crate) async fn run(
             // New chain tip received - re-enter the scheduling loop on next iteration.
             result = chain_tip_rx.changed() => {
                 if result.is_err() {
-                    debug_v2!("Chain tip channel closed, proof scheduler exiting");
+                    debug!("Chain tip channel closed, proof scheduler exiting");
                     return Ok(());
                 }
             },
@@ -196,7 +196,7 @@ pub async fn prove_pending_blocks(
 // ================================================================================================
 
 /// Proves a single block and returns the proof bytes on success.
-#[instrument_v2(
+#[instrument(
     name = "prove_block",
     fields(
         block.number = block_num
@@ -216,7 +216,7 @@ async fn prove_block(
         // is retried like any other transient failure.
         let result = (|| {
             attempt += 1;
-            let attempt_span = miden_node_tracing::info_span_v2!(
+            let attempt_span = miden_node_tracing::info_span!(
                 "prove_attempt",
                 attempt,
                 error = miden_node_tracing::field::Empty,
@@ -266,8 +266,8 @@ async fn prove_block(
 }
 
 /// Generates a block proof by loading inputs from the block store and invoking the block prover.
-#[instrument_v2(
-    name = "prove_block.generate",
+#[instrument(
+    name = "generate_block_proof",
     fields(
         block.number = block_num
     ),

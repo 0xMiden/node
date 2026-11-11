@@ -30,7 +30,7 @@ const DEFAULT_STDOUT_FILTER: &str = concat!(
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,",
     "miden::production=debug,miden::mempool=debug,miden::proving=debug,miden::sync=debug,",
     "miden::validation=debug,miden::privacy=debug,miden::admin=debug,",
-    "miden::funding=debug,miden_prover=warn",
+    "miden::funding=debug,miden::monitor=debug,miden::http::server=debug,miden_prover=warn",
 );
 
 /// Default OpenTelemetry resource attributes for this process.
@@ -423,7 +423,10 @@ mod tests {
     #[test]
     fn default_stdout_preserves_storage_and_operator_debug_events() {
         let events = default_stdout_events(|| {
-            tracing::debug!(target: "user::miden-node", "operator debug");
+            tracing::info!(target: "miden", "process info");
+            tracing::debug!(target: "miden", "process debug");
+            tracing::debug!(target: "miden::monitor", "probe debug");
+            tracing::debug!(target: "miden::http::server", "dashboard debug");
             tracing::debug!(target: "miden::storage", "storage lifecycle");
             tracing::debug!(target: "miden::storage::sqlite", "database debug");
             tracing::trace!(target: "miden::storage", "storage trace");
@@ -436,7 +439,9 @@ mod tests {
         assert_eq!(
             events,
             [
-                ("user::miden-node", tracing::Level::DEBUG),
+                ("miden", tracing::Level::INFO),
+                ("miden::monitor", tracing::Level::DEBUG),
+                ("miden::http::server", tracing::Level::DEBUG),
                 ("miden::storage", tracing::Level::DEBUG),
                 ("miden::storage::sqlite", tracing::Level::DEBUG),
                 ("other_dependency", tracing::Level::INFO),

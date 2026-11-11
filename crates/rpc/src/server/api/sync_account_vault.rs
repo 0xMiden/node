@@ -1,7 +1,7 @@
 use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::DatabaseError;
-use miden_node_tracing::{debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_protocol::Word;
 
 use super::error_codes::SyncAccountVaultErrorCode;
@@ -26,7 +26,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService 
         Ok(output)
     }
 
-    #[instrument_v2(name = "sync_account_vault")]
+    #[instrument(name = "sync_account_vault")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -44,7 +44,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService 
             block_range.to = range.block_to
         );
 
-        debug_v2!(
+        debug!(
             "Syncing account vault",
             account.id = account_id,
             block_range.from = range.block_from,

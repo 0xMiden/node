@@ -1,6 +1,6 @@
 //! Block header reads.
 
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::crypto::merkle::mmr::MmrProof;
 
@@ -12,7 +12,7 @@ impl StateView {
     ///
     /// If [None] is given as the value of `block_num`, the data for the latest [BlockHeader] is
     /// returned. Returns `(None, None)` for blocks beyond this view's chain tip.
-    #[instrument_v2(level = "debug", err(level = "debug"))]
+    #[instrument(level = "debug", err(level = "debug"))]
     pub async fn get_block_header(
         &self,
         block_num: Option<BlockNumber>,

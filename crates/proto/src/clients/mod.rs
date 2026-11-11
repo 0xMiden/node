@@ -32,7 +32,7 @@ use std::time::Duration;
 
 use http::header::ACCEPT;
 use miden_node_tracing::grpc::OtelInterceptor;
-use miden_node_tracing::{debug_v2, info_v2, warn_v2};
+use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
@@ -659,7 +659,7 @@ impl Builder<WantsConnection> {
 
             match result {
                 Ok(Ok(_client)) => {
-                    info_v2!(
+                    info!(
                         "Configured service reachable",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str()
@@ -668,7 +668,7 @@ impl Builder<WantsConnection> {
                     return;
                 },
                 Ok(Err(err)) if first_failure => {
-                    warn_v2!(
+                    warn!(
                         &err,
                         "Configured service unreachable",
                         dependency.name = dependency_name,
@@ -676,7 +676,7 @@ impl Builder<WantsConnection> {
                     );
                 },
                 Err(_elapsed) if first_failure => {
-                    warn_v2!(
+                    warn!(
                         "Configured service connection timed out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),
@@ -684,7 +684,7 @@ impl Builder<WantsConnection> {
                     );
                 },
                 Ok(Err(err)) => {
-                    debug_v2!(
+                    debug!(
                         &err,
                         "Configured service still unreachable",
                         dependency.name = dependency_name,
@@ -692,7 +692,7 @@ impl Builder<WantsConnection> {
                     );
                 },
                 Err(_elapsed) => {
-                    debug_v2!(
+                    debug!(
                         "Configured service connection still timing out",
                         dependency.name = dependency_name,
                         dependency.endpoint = endpoint.as_str(),

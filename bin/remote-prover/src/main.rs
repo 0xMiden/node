@@ -4,10 +4,12 @@ extern crate miden_node_tracing as tracing;
 use anyhow::Context;
 use clap::Parser;
 
-mod server;
+miden_node_tracing::declare_targets! {
+    default: "miden::rpc::server",
+    "miden_remote_prover::server::prover" => "miden::proving",
+}
 
-const COMPONENT: &str = "miden-prover";
-const LOG_TARGET: &str = "user::miden-prover";
+mod server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

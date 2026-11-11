@@ -2,7 +2,7 @@
 //!
 //! These values are part of the client API. Do not renumber or reuse them.
 
-use miden_node_tracing::error_v2;
+use miden_node_tracing::error;
 use tonic::{Code, Status};
 
 macro_rules! error_codes {
@@ -79,6 +79,6 @@ pub(super) fn internal_error(message: impl Into<String>) -> Status {
 /// The causes stay in the node's logs because they can describe node internals, such as database
 /// errors, that a public client should not see.
 pub(crate) fn log_internal_error<E: std::error::Error + 'static>(err: &E) -> Status {
-    error_v2!(err, "Internal error");
+    error!(err, "Internal error");
     internal_error(err.to_string())
 }

@@ -1,5 +1,5 @@
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{instrument_v2, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
@@ -15,7 +15,7 @@ impl BatchProver {
         Self(LocalBatchProver::default().skip_precompile_proof_generation(true))
     }
 
-    #[instrument_v2(name = "batch_builder.prove_batch", err)]
+    #[instrument(name = "prove_batch", err)]
     pub(crate) async fn prove(
         &self,
         proposed_batch: ProposedBatch,

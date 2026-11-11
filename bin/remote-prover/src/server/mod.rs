@@ -17,7 +17,6 @@ use tokio::task::JoinHandle;
 use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::LOG_TARGET;
 use crate::server::service::ProverService;
 
 mod proof_kind;
@@ -77,7 +76,6 @@ impl Server {
             .port();
 
         info!(
-            target: LOG_TARGET,
             "Remote prover ready",
             service.name = "miden-remote-prover",
             service.version = env!("CARGO_PKG_VERSION"),

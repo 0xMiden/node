@@ -5,11 +5,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_persistence::ProtobufValue;
 use miden_node_persistence::prost::Message;
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info, instrument};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteDetails, NoteHeader, NoteTag};
-
-use crate::{COMPONENT, LOG_TARGET};
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
@@ -79,21 +77,21 @@ pub struct FetchPage {
 }
 
 /// Creates a database with the current schema. The path must not exist.
-#[miden_instrument(target = COMPONENT, err)]
+#[instrument(err)]
 pub fn bootstrap(path: &Path) -> anyhow::Result<()> {
     let migrator = migrator()?;
     migrator.create_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Applies pending migrations to an existing database.
-#[miden_instrument(target = COMPONENT, err)]
+#[instrument(err)]
 pub fn migrate(path: &Path) -> anyhow::Result<()> {
     let migrator = migrator()?;
     migrator.open_database(path)?.migrate_to(migrator.latest_version())
 }
 
 /// Verifies the schema and opens the database handles.
-#[miden_instrument(target = COMPONENT, err)]
+#[instrument(err)]
 pub fn load(path: &Path) -> anyhow::Result<(DbWriter, DbReader)> {
     migrator()?.verify_latest_schema(path)?;
     Ok(miden_node_db::sqlite::open(path)?)
@@ -106,7 +104,7 @@ pub fn encoded_note_payload_len(header: &NoteHeader, details: &NoteDetails) -> O
 
 /// Stores a validated note and removes up to ten expired notes in the same transaction. A retry
 /// preserves the first record for the note ID and does not remove expired notes.
-#[miden_instrument(target = COMPONENT, err(level = "debug"))]
+#[instrument(err(level = "debug"))]
 pub async fn store_note(
     writer: &DbWriter,
     note: NewNote,
@@ -161,7 +159,7 @@ pub async fn store_note(
 }
 
 /// Returns one bounded page from a single database snapshot, in cursor order.
-#[miden_instrument(target = COMPONENT, err(level = "debug"))]
+#[instrument(err(level = "debug"))]
 pub async fn fetch_notes(
     reader: &DbReader,
     tags: Vec<u32>,
@@ -199,7 +197,7 @@ pub async fn fetch_notes(
 }
 
 /// Records the retained byte count when the service starts.
-#[miden_instrument(target = COMPONENT, err)]
+#[instrument(err)]
 pub async fn record_retained_bytes(reader: &DbReader) -> Result<(), StorageError> {
     let retained = reader.read("retained_bytes", queries::select_retained_bytes).await?;
     record_storage_usage(retained);
@@ -207,7 +205,7 @@ pub async fn record_retained_bytes(reader: &DbReader) -> Result<(), StorageError
 }
 
 fn record_storage_usage(retained: i64) {
-    info!(target: LOG_TARGET, "Note transport storage usage", note_transport.retained_bytes = retained);
+    info!("Note transport storage usage", note_transport.retained_bytes = retained);
 }
 
 #[cfg(test)]

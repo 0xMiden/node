@@ -4,14 +4,7 @@ use std::time::Duration;
 
 use backon::ExponentialBuilder;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{
-    ErrorSpanExt,
-    Instrument,
-    info_v2,
-    instrument_v2,
-    miden_span_record,
-    warn_v2,
-};
+use miden_node_tracing::{ErrorSpanExt, Instrument, info, instrument, miden_span_record, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -241,7 +234,7 @@ impl NtxContext {
     /// transaction builds against gives exactly the state the transaction must start from. The
     /// response is checked against the reference block header rather than trusted: its witness must
     /// open to the block's account root, and the account state must match the witness.
-    #[instrument_v2(name = "ntx.load_account", err)]
+    #[instrument(name = "load_account", err)]
     pub async fn load_account(
         &self,
         account_id: AccountId,
@@ -302,7 +295,7 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[instrument_v2(name = "ntx.execute_transaction", err)]
+    #[instrument(name = "execute_transaction", err)]
     pub fn execute_transaction(
         self,
         account: PartialAccount,
@@ -398,7 +391,7 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[instrument_v2(name = "ntx.execute_transaction.filter_notes", err)]
+    #[instrument(name = "filter_notes", err)]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -431,14 +424,14 @@ impl NtxContext {
 
         for failed_note in &failed {
             if let Some(error) = failed_note.error() {
-                info_v2!(
+                info!(
                     error,
                     "note failed consumability check",
                     note.id = failed_note.note().id(),
                     note.nullifier = failed_note.note().nullifier()
                 );
             } else {
-                info_v2!(
+                info!(
                     "note rejected with its bundle",
                     note.id = failed_note.note().id(),
                     note.nullifier = failed_note.note().nullifier()
@@ -522,7 +515,7 @@ impl NtxContext {
                 successful.is_empty() && failed.iter().any(|f| f.num_cycles().is_some())
             },
             Err(err) => {
-                warn_v2!(
+                warn!(
                     &err,
                     "isolation re-check for a cycle-limited note failed; treating it as deferrable",
                     note.id = note.id()
@@ -533,7 +526,7 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[instrument_v2(name = "ntx.execute_transaction.execute", err)]
+    #[instrument(name = "execute", err)]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -560,7 +553,7 @@ impl NtxContext {
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the caller can mark the batch failed.
-    #[instrument_v2(name = "ntx.execute_transaction.submit", err)]
+    #[instrument(name = "submit", err)]
     async fn submit(
         &self,
         proven_tx: &ProvenTransaction,

@@ -15,7 +15,7 @@ The stdout filter is selected from the first non-empty value in this order:
 
 1. `MIDEN_STDOUT_FILTER`
 2. `RUST_LOG`
-3. `info,user=debug,miden::storage=debug,miden::rpc::server=debug,miden_prover=warn` (default)
+3. The default levels described under [User-facing targets](#user-facing-targets).
 
 `MIDEN_STDOUT_FILTER` uses the
 [`tracing_subscriber` filter syntax](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html).
@@ -65,42 +65,71 @@ OpenTelemetry.
 
 The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
 `miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`,
-`miden::admin`, and `miden::funding`. The compact stdout format does not print the target name, but the filter still
-matches it.
+`miden::admin`, `miden::funding`, `miden::monitor`, and `miden::http::server`. The compact stdout format does not print
+the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
 use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other targets default to
 `info`. The `miden_prover` dependency is limited to `warn`.
 
-| Target                            | Events                                                        |
-| --------------------------------- | ------------------------------------------------------------- |
-| `user::miden-node`                | Node command startup, bootstrap, and recovery                 |
-| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions       |
-| `miden::production`               | Sequencer orchestration and fee-collector operations          |
-| `miden::production::transactions` | Network transaction scheduling, note selection, and execution |
-| `miden::production::batches`      | Transaction selection and batch assembly                      |
-| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks        |
-| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction   |
-| `miden::proving::transactions`    | Transaction proof requests and results                        |
-| `miden::proving::batches`         | Batch execution and proving                                   |
-| `miden::proving::blocks`          | Block proof scheduling, retries, and results                  |
-| `miden::sync`                     | Chain and account synchronization progress and readiness      |
-| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks          |
-| `miden::sync::proofs`             | Receiving and applying block proofs                           |
-| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                  |
-| `miden::storage`                  | Persistence and account, note, and storage lifecycle events   |
-| `miden::validation`               | Validator startup and configuration                           |
-| `miden::validation::transactions` | Transaction proof verification and re-execution               |
-| `miden::validation::blocks`       | Block validation and signing                                  |
-| `miden::privacy::dkg`             | Storage-key setup ceremonies                                  |
-| `miden::admin`                    | Private administration API diagnostics                        |
-| `miden::funding`                  | Funding requests, transaction construction, and delivery      |
-| `user::miden-prover`              | Remote prover lifecycle events                                |
-| `user::miden-network-monitor`     | Network monitor checks and end-to-end probes                  |
+| Target                            | Events                                                            |
+| --------------------------------- | ----------------------------------------------------------------- |
+| `miden`                           | General process startup, configuration, shutdown, and fatal exits |
+| `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions           |
+| `miden::production`               | Sequencer orchestration and fee-collector operations              |
+| `miden::production::transactions` | Network transaction scheduling, note selection, and execution     |
+| `miden::production::batches`      | Transaction selection and batch assembly                          |
+| `miden::production::blocks`       | Batch selection, block assembly, and committing blocks            |
+| `miden::mempool`                  | Transaction dependencies, readiness, capacity, and eviction       |
+| `miden::proving::transactions`    | Transaction proof requests and results                            |
+| `miden::proving::batches`         | Batch execution and proving                                       |
+| `miden::proving::blocks`          | Block proof scheduling, retries, and results                      |
+| `miden::sync`                     | Chain and account synchronization progress and readiness          |
+| `miden::sync::blocks`             | Receiving, validating, and applying committed blocks              |
+| `miden::sync::proofs`             | Receiving and applying block proofs                               |
+| `miden::rpc::client`              | Outgoing RPC requests and client diagnostics                      |
+| `miden::storage`                  | Persistence and account, note, and storage lifecycle events       |
+| `miden::validation`               | Transaction and block validation                                  |
+| `miden::validation::transactions` | Transaction proof verification and re-execution                   |
+| `miden::validation::blocks`       | Block validation and signing                                      |
+| `miden::privacy::dkg`             | Storage-key setup ceremonies                                      |
+| `miden::admin`                    | Private administration API diagnostics                            |
+| `miden::funding`                  | Funding requests, transaction construction, and delivery          |
+| `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup         |
+| `miden::http::server`             | HTTP dashboard requests and listener readiness                    |
+| `miden::cache`                    | In-memory cache lock spans                                        |
 
-A `miden-node` process contains multiple components. For example, a sequencer can emit `user::miden-node`,
-`miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
+Network monitor startup and configuration messages use the root `miden` target.
+
+Network monitor probes have separate child targets under `miden::monitor`: `rpc`, `prover`, `faucet`, `funding`,
+`explorer`, `validator`, `note_transport`, `agglayer`, and `transactions`. The transactions target includes account
+setup, fee funding, and wallet recovery for the end-to-end transaction probe. For example, enable detailed prover probe
+logs while keeping other monitor diagnostics at `info`:
+
+```text
+miden::monitor=info,miden::monitor::prover=debug
+```
+
+General process messages use the root `miden` target. Operational work uses activity targets such as `miden::storage`,
+`miden::sync`, and `miden::admin`. Set a baseline with `miden=info` and override individual activities as needed, for
+example `miden=info,miden::sync=debug`.
+
+A `miden-node` process contains multiple components. For example, a sequencer can emit `miden`, `miden::rpc::server`,
+`miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
+
+## Select a span
+
+Span names describe operations such as `build_block`; targets identify activities such as `miden::production::blocks`.
+Combine both to enable diagnostics within a particular operation:
+
+```text
+info,miden::production::blocks[build_block]=debug
+```
+
+The target matches by prefix and the span name matches exactly. The directive also enables debug output within that
+span's scope, including output from other targets. Use it with `MIDEN_STDOUT_FILTER`, `MIDEN_OTEL_FILTER`, or the
+administration API.
 
 ## OpenTelemetry filter
 
@@ -122,6 +151,10 @@ miden-node full ...
 
 If neither Miden-specific filter is set, `RUST_LOG` configures both outputs. See
 [Monitoring](/network-operator/monitoring) for exporter and resource configuration.
+
+Exported spans include their tracing target in the `target` attribute. Use it alongside `service.name` and the span name
+when filtering or grouping operations in the tracing backend. Short span names can occur under multiple targets or
+services, so dashboards and derived metrics should retain those dimensions when they need to distinguish the operations.
 
 ## Change filters while the service is running
 
