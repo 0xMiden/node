@@ -650,7 +650,7 @@ async fn migrating_an_active_attempt_preserves_delivery_and_expiration_recovery(
                 note_ids: vec![note_id],
             })
         );
-        assert!(database.pending_requests(NonZeroUsize::MIN).await.unwrap().is_empty());
+        assert_eq!(database.pending_requests(NonZeroUsize::MIN).await.unwrap(), []);
         assert_eq!(contents(&database).await, (BlockNumber::GENESIS, HashMap::new()));
 
         if committed {
@@ -673,8 +673,8 @@ async fn migrating_an_active_attempt_preserves_delivery_and_expiration_recovery(
             let delivery = stored.delivery.unwrap();
             assert_eq!(delivery.transaction_id, transaction_id);
             assert_eq!(delivery.committed_in_block, BlockNumber::from(15));
-            assert!(database.pending_requests(NonZeroUsize::MIN).await.unwrap().is_empty());
-            assert!(database.deposits().await.unwrap().is_empty());
+            assert_eq!(database.pending_requests(NonZeroUsize::MIN).await.unwrap(), []);
+            assert_eq!(database.deposits().await.unwrap(), []);
         } else {
             assert!(stored.delivery.is_none());
             assert_eq!(database.pending_requests(NonZeroUsize::MIN).await.unwrap(), vec![stored]);
