@@ -1,0 +1,670 @@
+// Proposed v2 public RPC API. Discussion only; not wired into server code generation.
+syntax = "proto3";
+package miden.node.v2;
+
+import "account.proto";
+import "asset.proto";
+import "batch.proto";
+import "block.proto";
+import "block_number.proto";
+import "note.proto";
+import "primitives.proto";
+import "protocol_config.proto";
+import "transaction.proto";
+import "types/submission.proto";
+
+import "google/protobuf/empty.proto";
+
+// All block-specific account requests select an explicit block. A zero block number selects
+// genesis; an omitted required block is invalid. Account reads never implicitly select latest.
+service NodeService {
+    // UNCHANGED FROM V1
+    // ----------------------------------------------------------------------------------------
+
+    // Node status and registration.
+    rpc Status(StatusRequest) returns (StatusResponse) {}
+    rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
+    rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
+    rpc RegisterAccount(RegisterAccountRequest) returns (RegisterAccountResponse) {}
+    rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
+    rpc IsInvitationCodeValid(IsInvitationCodeValidRequest) returns (IsInvitationCodeValidResponse) {}
+
+    // Block, note, and chain reads.
+    rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
+    rpc GetBlockHeaderByNumber(GetBlockHeaderByNumberRequest) returns (GetBlockHeaderByNumberResponse) {}
+    rpc GetNotesById(GetNotesByIdRequest) returns (GetNotesByIdResponse) {}
+    rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
+
+    // Transaction submission.
+    rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
+    rpc SubmitProvenTx(SubmitProvenTxRequest) returns (SubmitProvenTxResponse) {}
+    rpc SubmitProvenTxBatch(SubmitProvenTxBatchRequest) returns (SubmitProvenTxBatchResponse) {}
+
+    // Block and proof subscriptions.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
+
+    // NEW METHODS
+    // ----------------------------------------------------------------------------------------
+
+    // Account information and execution witnesses.
+
+    // Public account and storage headers, conditionally returned per account.
+    rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
+    // Account inclusion or non-inclusion at the requested block, including private accounts.
+    rpc GetAccountWitness(GetAccountWitnessRequest) returns (GetAccountWitnessResponse) {}
+    // Batched asset inclusion and non-inclusion proofs against the target vault root.
+    rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
+    // Batched key inclusion and non-inclusion proofs, grouped by storage map.
+    rpc GetAccountStorageWitnesses(GetAccountStorageWitnessesRequest) returns (GetAccountStorageWitnessesResponse) {}
+
+    // Code registry synchronization.
+
+    // Streams procedures first added to the registry within the inclusive block range.
+    rpc SyncCodeRegistry(SyncCodeRegistryRequest) returns (stream SyncCodeRegistryResponse) {}
+
+    // Complete account synchronization.
+
+    // Small-account contents as a snapshot or delta. No headers, code, or witnesses.
+    rpc SyncAccount(SyncAccountRequest) returns (SyncAccountResponse) {}
+    // Streams vault updates for accounts of any size at a fixed target.
+    rpc SyncAccountVault(SyncAccountVaultRequest) returns (stream SyncAccountVaultResponse) {}
+    // Streams storage-map updates for accounts of any size at a fixed target.
+    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (stream SyncAccountStorageMapsResponse) {}
+
+    // Streaming discovery and transaction lookup.
+    rpc SyncNullifiers(SyncNullifiersRequest) returns (stream SyncNullifiersResponse) {}
+    rpc SyncNotes(SyncNotesRequest) returns (stream SyncNotesResponse) {}
+    rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
+    rpc SyncTransactions(SyncTransactionsRequest) returns (stream SyncTransactionsResponse) {}
+    rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
+}
+
+// ACCOUNT INFORMATION
+// ================================================================================================
+
+message GetAccountInfosRequest {
+    message AccountQuery {
+        account.AccountId account_id = 1;
+        // Omit to request headers unconditionally. A match selects the unchanged response.
+        optional primitives.Word known_commitment = 2;
+    }
+    optional fixed32 block_num = 1;
+    // Unique public account IDs. GetLimits advertises the account_id request limit.
+    repeated AccountQuery accounts = 2;
+}
+
+message AccountHeaders {
+    account.AccountHeader account_header = 1;
+    account.AccountStorageHeader storage_header = 2;
+}
+
+message GetAccountInfosResponse {
+    message AccountInfo {
+        account.AccountId account_id = 1;
+        // Exactly one result. Unchanged means the supplied commitment matches at block_num.
+        oneof result {
+            AccountHeaders headers = 2;
+            google.protobuf.Empty unchanged = 3;
+        }
+    }
+    fixed32 block_num = 1;
+    // Exactly one result per requested account, in request order. Any invalid, missing, or private
+    // account fails the whole request; a successful response never silently omits an account.
+    repeated AccountInfo accounts = 2;
+}
+
+message GetAccountWitnessRequest {
+    account.AccountId account_id = 1;
+    optional fixed32 block_num = 2;
+}
+
+message GetAccountWitnessResponse {
+    fixed32 block_num = 1;
+    // Verify against the authenticated target block's account root. An empty commitment proves
+    // absence. This witness is returned even when the account has not changed since an earlier read.
+    account.AccountWitness witness = 2;
+}
+
+// CODE REGISTRY SYNCHRONIZATION
+// ================================================================================================
+
+message SyncCodeRegistryRequest {
+    // Required inclusive range [N, M]. Bootstrap with N = 0; after syncing through H, use N = H + 1.
+    // The registry only adds procedures. Reuse by another account does not add a new leaf.
+    BlockRange block_range = 1;
+}
+
+message SyncCodeRegistryResponse {
+    // Registry leaf identity. Verify against the supplied procedure before inserting it locally.
+    primitives.Word procedure_root = 1;
+    // Procedure and its dependencies. The exact payload follows the protocol's registry format.
+    primitives.MastForest procedure = 2;
+    fixed32 added_at = 3;
+}
+
+// SMALL-ACCOUNT SYNCHRONIZATION
+// ================================================================================================
+
+message SyncAccountRequest {
+    account.AccountId account_id = 1;
+    // Omit the lower bound for a snapshot, including genesis state.
+    StateDeltaRange range = 2;
+}
+
+message AccountContents {
+    message MapEntries {
+        string slot_name = 1;
+        repeated account.StorageMapEntry entries = 2;
+    }
+    message VaultEntry {
+        asset.AssetId asset_id = 1;
+        // Absence deletes the asset in a delta. Snapshots contain only present assets.
+        optional asset.Asset asset = 2;
+    }
+    repeated MapEntries maps = 1;
+    repeated VaultEntry vault = 2;
+}
+
+message SyncAccountResponse {
+    fixed32 block_num = 1;
+    // Both variants describe the requested target. Obtain its headers through GetAccountInfos.
+    oneof update {
+        // Replace all contents; empty maps are identified by the target storage header.
+        AccountContents snapshot = 2;
+        // Absolute target values. Empty map values and absent assets delete entries, including
+        // old keys lost through map removal/recreation. Use the target header for the slot layout.
+        AccountContents delta = 3;
+    }
+}
+
+// LAZY EXECUTION READS
+// ================================================================================================
+
+message GetAccountVaultWitnessesRequest {
+    account.AccountId account_id = 1;
+    optional fixed32 block_num = 2;
+    repeated asset.AssetId asset_ids = 3;
+}
+
+message GetAccountVaultWitnessesResponse {
+    fixed32 block_num = 1;
+    // Compact proof covering every requested ID, including absent assets. Verify against the
+    // vault root in the already authenticated account header. No full-vault substitution.
+    primitives.PartialSmt vault = 2;
+}
+
+message GetAccountStorageWitnessesRequest {
+    message MapQuery {
+        string slot_name = 1;
+        repeated primitives.Word keys = 2;
+    }
+    account.AccountId account_id = 1;
+    optional fixed32 block_num = 2;
+    repeated MapQuery maps = 3;
+}
+
+message GetAccountStorageWitnessesResponse {
+    message MapWitness {
+        string slot_name = 1;
+        // Covers every requested key, including absent keys. Verify against this slot's root
+        // in the already authenticated storage header. Unknown or value-only slots are errors.
+        primitives.PartialSmt map = 2;
+    }
+    fixed32 block_num = 1;
+    // Exactly one result per requested map, in request order. No account/storage headers.
+    repeated MapWitness maps = 2;
+}
+
+// RETAINED V1 MESSAGE SHAPES
+// ================================================================================================
+
+message RegisterAccountRequest {
+    // The original, nonempty invitation code. Codes are case-sensitive.
+    // Ignored when allowlist enforcement is disabled.
+    string invitation_code = 1;
+
+    // The account to register. Registration does not create the account on chain.
+    account.AccountId account_id = 2;
+}
+
+message RegisterAccountResponse {}
+
+message IsAccountAllowedRequest {
+    account.AccountId account_id = 1;
+}
+
+message IsAccountAllowedResponse {
+    bool allowed = 1;
+}
+
+message IsInvitationCodeValidRequest {
+    // The original, nonempty invitation code. Codes are case-sensitive.
+    // Ignored when allowlist enforcement is disabled.
+    string invitation_code = 1;
+}
+
+message IsInvitationCodeValidResponse {
+    bool valid = 1;
+
+    // The account registered with this code, if it has already been used. Omitted for unused or
+    // unknown codes and when account allowlist enforcement is disabled.
+    optional account.AccountId account_id = 2;
+}
+
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+message BlockSubscriptionResponse {
+    // The signed block.
+    blockchain.SignedBlock block = 1;
+
+    // The committed chain tip when this item was emitted.
+    fixed32 committed_chain_tip = 2;
+
+    // The active configuration. Included with the first response and when its commitment changes.
+    // Verify its commitment against the accompanying block header.
+    optional protocol_config.ProtocolConfig protocol_config = 3;
+}
+
+message ProofSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+message ProofSubscriptionResponse {
+    // The block number this proof corresponds to.
+    fixed32 block_num = 1;
+
+    // The execution proof for the block.
+    primitives.ExecutionProof proof = 2;
+
+    // The proven chain tip when this item was emitted.
+    fixed32 proven_chain_tip = 3;
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+    // The rpc component's running version.
+    string version = 1;
+
+    // The genesis commitment.
+    primitives.Word genesis_commitment = 2;
+
+    // Number of the latest block in the chain.
+    fixed32 chain_tip = 3;
+
+    // The block producer status.
+    BlockProducerStatus block_producer = 4;
+}
+
+message BlockProducerStatus {
+    // The block producer's running version.
+    string version = 1;
+
+    // The block producer's status.
+    string status = 2;
+
+    // The block producer's current view of the chain tip height.
+    //
+    // This is the height of the latest block that the block producer considers
+    // to be part of the canonical chain.
+    fixed32 chain_tip = 4;
+
+    // Statistics about the mempool.
+    MempoolStats mempool_stats = 3;
+}
+
+message MempoolStats {
+    // Number of transactions currently in the mempool waiting to be batched.
+    uint64 unbatched_transactions = 1;
+
+    // Number of batches currently being proven.
+    uint64 proposed_batches = 2;
+
+    // Number of proven batches waiting for block inclusion.
+    uint64 proven_batches = 3;
+
+    // Number of transactions that have not yet been committed.
+    uint64 uncommitted_transactions = 4;
+}
+
+message GetBlockHeaderByNumberRequest {
+    // The target block height, defaults to latest if not provided.
+    optional uint32 block_num = 1;
+    // Whether or not to return authentication data for the block header.
+    optional bool include_mmr_proof = 2;
+    // Whether to include the active configuration for the returned header.
+    optional bool include_protocol_config = 3;
+}
+
+message GetBlockHeaderByNumberResponse {
+    // The requested block header.
+    blockchain.BlockHeader block_header = 1;
+
+    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_length`.
+    optional primitives.MerklePath mmr_path = 2;
+
+    // Current chain length.
+    optional fixed32 chain_length = 3;
+
+    // Included when requested and the header exists. Verify its commitment against that header.
+    optional protocol_config.ProtocolConfig protocol_config = 4;
+}
+
+message GetBlockByNumberRequest {
+    fixed32 block_num = 1;
+    optional bool include_proof = 2;
+}
+
+message GetBlockByNumberResponse {
+    optional blockchain.SignedBlock block = 1;
+    optional primitives.ExecutionProof proof = 2;
+}
+
+message GetNotesByIdRequest {
+    repeated note.NoteId note_ids = 1;
+}
+
+message CommittedNote {
+    note.Note note = 1;
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
+message GetNotesByIdResponse {
+    repeated CommittedNote notes = 1;
+}
+
+message GetNoteScriptByRootRequest {
+    primitives.Word root = 1;
+}
+
+message GetNoteScriptByRootResponse {
+    // The script for a note by its root.
+    optional note.NoteScript script = 1;
+}
+
+message NoteSyncAttachment {
+    // The attachment scheme.
+    fixed32 scheme = 1;
+
+    oneof payload {
+        // The raw content of a single-word attachment.
+        primitives.Word value = 2;
+
+        // The commitment to the content of a multi-word attachment.
+        primitives.Word commitment = 3;
+    }
+}
+
+message NoteSyncMetadata {
+    // The account which sent the note.
+    account.AccountId sender = 1;
+
+    // The type of the note.
+    note.NoteType note_type = 2;
+
+    // A value which can be used by the recipient(s) to identify notes intended for them.
+    fixed32 tag = 3;
+
+    // The note's attachments in canonical order.
+    repeated NoteSyncAttachment attachments = 4;
+
+    note.NoteVersion version = 5;
+}
+
+message NoteSyncRecord {
+    // The sync metadata of the note.
+    NoteSyncMetadata metadata = 1;
+
+    // Proof of the note's inclusion in a block.
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
+enum FinalityLevel {
+    FINALITY_LEVEL_UNSPECIFIED = 0;
+    // Sync up to the latest committed block (chain tip).
+    FINALITY_LEVEL_COMMITTED = 1;
+    // Sync up to the latest proven block.
+    FINALITY_LEVEL_PROVEN = 2;
+}
+
+message SyncChainMmrRequest {
+    // Block number from which to synchronize. Set this to the last block
+    // already present in the caller's MMR so the delta begins at the next block.
+    fixed32 current_client_block_height = 1;
+
+    // Sync target: either the committed or the proven tip.
+    FinalityLevel finality_level = 2;
+}
+
+message SyncChainMmrResponse {
+    // For which block range the MMR delta is returned.
+    BlockRange block_range = 1;
+
+    // Data needed to update the partial MMR from `request.current_client_block_height + 1` to
+    // the sync target.
+    primitives.MmrDelta mmr_delta = 2;
+
+    // Block header for the sync target.
+    blockchain.BlockHeader block_header = 3;
+
+    // Validator signatures for the sync target, ordered positionally with respect to the
+    // validator set committed to by the parent block's header.
+    repeated primitives.Signature block_signatures = 4;
+
+    // The target header's active configuration. Included when the client starts at genesis or
+    // the starting and target headers have different configuration commitments.
+    // Verify its commitment against the target header.
+    optional protocol_config.ProtocolConfig protocol_config = 5;
+}
+
+message BlockRange {
+    // Block number from which to start (inclusive).
+    fixed32 block_from = 1;
+
+    // Block number up to which to check (inclusive).
+    fixed32 block_to = 2;
+}
+
+message TransactionRecord {
+    // Block number in which the transaction was included.
+    fixed32 block_num = 1;
+
+    // The transaction header.
+    transaction.TransactionHeader header = 2;
+
+    // Inclusion proofs for committed output notes. Erased notes (created and consumed
+    // within the same batch) can be identified by comparing note IDs here with
+    // `header.output_notes`. Any note present in the header but absent here was erased.
+    repeated note.NoteInclusionProof output_note_proofs = 3;
+
+    // Maps a consumed input note's nullifier to its note ID, for the public notes the node can
+    // resolve. Authenticated inputs in `header.input_notes` carry only a nullifier, so this lets a
+    // follower recover the consumed note via `GetNotesById`. Private notes are absent.
+    repeated ConsumedNoteRef consumed_note_refs = 4;
+}
+
+message ConsumedNoteRef {
+    // The nullifier of the consumed input note.
+    primitives.Word nullifier = 1;
+
+    // The ID of the note the nullifier resolves to.
+    note.NoteId note_id = 2;
+}
+
+enum NetworkNoteStatus {
+    // Default / unspecified status.
+    NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
+    // The note is awaiting execution or being retried after transient failures.
+    NETWORK_NOTE_STATUS_PENDING = 1;
+    // The note has been consumed by a transaction that was sent to the block producer.
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;
+    // The note exceeded the maximum retry count and will not be retried.
+    NETWORK_NOTE_STATUS_DISCARDED = 3;
+    // The note's consuming transaction has been committed on-chain.
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;
+}
+
+message GetNetworkNoteStatusRequest {
+    note.NoteId note_id = 1;
+}
+
+message GetNetworkNoteStatusResponse {
+    // Current lifecycle status of the note.
+    NetworkNoteStatus status = 1;
+    // The latest error message from execution, if any.
+    optional string last_error = 2;
+    // Number of failed execution attempts.
+    uint32 attempt_count = 3;
+    // Block number of the last failed attempt, if any.
+    optional fixed32 last_attempt_block_num = 4;
+}
+
+message GetLimitsRequest {}
+
+// SyncAccount.account_entries bounds storage slots + map entries + vault assets at the target.
+// Other parameters bound request lists, including keys across all requested maps.
+message GetLimitsResponse {
+    // Maps RPC endpoint names to their parameter limits.
+    // Key: endpoint name (e.g., "SyncNullifiers")
+    // Value: map of parameter names to their limit values
+    map<string, EndpointLimits> endpoints = 1;
+}
+
+message EndpointLimits {
+    // Maps parameter names to their limit values.
+    // Key: parameter name (e.g., "nullifier", "account_id")
+    // Value: limit value
+    map<string, uint32> parameters = 1;
+}
+
+message GetTransactionEncryptionKeyRequest {}
+
+message GetTransactionEncryptionKeyResponse {
+    submission.TransactionEncryptionKey key = 1;
+}
+
+message SubmitProvenTxRequest {
+    submission.ProvenTransactionSubmission submission = 1;
+}
+
+message SubmitProvenTxResponse {
+    fixed32 block_num = 1;
+}
+
+message SubmitProvenTxBatchRequest {
+    submission.TransactionBatch submission = 1;
+}
+
+message SubmitProvenTxBatchResponse {
+    fixed32 block_num = 1;
+}
+
+// STREAMING SYNCHRONIZATION
+// ================================================================================================
+
+message StateDeltaRange {
+    // Absence includes genesis. A present value excludes that block and must not exceed the target.
+    optional fixed32 from_block_exclusive = 1;
+
+    // Required by validation. Zero selects genesis.
+    optional fixed32 to_block_inclusive = 2;
+}
+
+message SyncAccountVaultRequest {
+    // Changes over (C, N], where C is the synchronized account state or a completed scan checkpoint.
+    // After interruption in block B, use C = B - 1 to replay B; omit C for genesis. Keep N fixed
+    // during each request. N must remain within retained history; C may be older.
+    StateDeltaRange range = 1;
+
+    // Public account whose asset vault should be synchronized.
+    account.AccountId account_id = 2;
+}
+
+message SyncAccountVaultResponse {
+    // Vault key associated with the asset.
+    primitives.Word vault_key = 1;
+
+    // Asset value related to the vault key.
+    // If not present, the asset was removed from the vault.
+    optional asset.Asset asset = 2;
+
+    // Block number at which the above asset was updated in the account vault.
+    fixed32 last_updated_at = 3;
+}
+
+message SyncAccountStorageMapsRequest {
+    // Use the synchronized account state or completed scan checkpoint as the exclusive lower bound.
+    // After interruption in block B, use B - 1 to replay B; omit the lower bound for genesis.
+    // Keep the target fixed per request and within retained history; the lower bound may be older.
+    StateDeltaRange range = 1;
+    account.AccountId account_id = 2;
+}
+
+// Emit deletions for old keys lost through map removal/recreation, including recreation under
+// the same name. A completed stream must reconstruct the target with its storage header.
+message SyncAccountStorageMapsResponse {
+    string slot_name = 1;
+    primitives.Word key = 2;
+    primitives.Word value = 3;
+    fixed32 last_updated_at = 4;
+}
+
+message SyncNotesRequest {
+    StateDeltaRange range = 1;
+    repeated fixed32 note_tags = 2;
+}
+
+message SyncNotesResponse {
+    oneof item {
+        NoteBlockStart block = 1;
+        NoteSyncRecord note = 2;
+    }
+}
+
+message NoteBlockStart {
+    blockchain.BlockHeader block_header = 1;
+    primitives.MerklePath mmr_path = 2;
+}
+
+message SyncAccountCommitmentsRequest {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+
+message SyncAccountCommitmentsResponse {
+    fixed32 last_updated_at = 1;
+    account.AccountWitness witness = 2;
+}
+
+message GetTransactionsByIdRequest {
+    optional fixed32 target_block_num = 1;
+    repeated transaction.TransactionId transaction_ids = 2;
+}
+
+message GetTransactionsByIdResponse { TransactionRecord transaction = 1; }
+
+message SyncTransactionsRequest {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+
+message SyncTransactionsResponse { TransactionRecord transaction = 1; }
+
+message SyncNullifiersRequest {
+    StateDeltaRange range = 1;
+    uint32 prefix_len = 2;
+    repeated uint32 nullifiers = 3;
+}
+
+message SyncNullifiersResponse {
+    primitives.Word nullifier = 1;
+
+    // Block number at which the nullifier was recorded.
+    fixed32 last_updated_at = 2;
+}
