@@ -62,7 +62,7 @@ impl KmsSigner {
     /// },
     /// ```
     pub async fn new(key_id: impl Into<String>) -> anyhow::Result<Self> {
-        let version = aws_config::BehaviorVersion::v2026_01_12();
+        let version = aws_config::BehaviorVersion::v2026_11_10();
         let config = aws_config::load_defaults(version).await;
         let client = aws_sdk_kms::Client::new(&config);
         let key_id = key_id.into();
@@ -130,7 +130,7 @@ impl KmsSigner {
 /// Note that unlike [`KmsSigner`], where the private key never leaves KMS, the decrypted key
 /// material is returned to and held by the calling process.
 pub async fn decrypt_key_material(ciphertext: Vec<u8>) -> anyhow::Result<Vec<u8>> {
-    let version = aws_config::BehaviorVersion::v2026_01_12();
+    let version = aws_config::BehaviorVersion::v2026_11_10();
     let config = aws_config::load_defaults(version).await;
     let client = aws_sdk_kms::Client::new(&config);
 
