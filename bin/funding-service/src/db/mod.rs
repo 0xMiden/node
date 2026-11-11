@@ -358,10 +358,10 @@ impl FundingDatabase {
     /// Stores the deposits found by a scan and advances the scan cursor to `next_sync` in one
     /// database transaction.
     ///
-    /// `deposits` must hold the unspent deposits discovered before `next_sync` that are not yet
-    /// stored. Deposits already stored are kept unchanged, so repeating a scan whose result was
-    /// saved has no effect. An earlier cursor is rejected because a rescan could restore deposits
-    /// the service has since consumed.
+    /// `deposits` must hold the unspent deposits discovered since the stored cursor. A scan ending
+    /// at the stored cursor is ignored, and an earlier cursor is rejected, so replaying a saved
+    /// scan cannot restore deposits the service has since consumed or discarded. Deposits already
+    /// stored are kept unchanged.
     pub async fn record_deposit_scan(
         &self,
         next_sync: BlockNumber,
@@ -376,6 +376,9 @@ impl FundingDatabase {
                     next_sync >= stored,
                     "the deposit scan cannot move from block {stored} back to block {next_sync}",
                 );
+                if next_sync == stored {
+                    return Ok(());
+                }
                 queries::update_deposit_sync(tx, next_sync)?;
                 for deposit in &deposits {
                     ensure!(

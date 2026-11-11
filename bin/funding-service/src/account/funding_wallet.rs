@@ -135,7 +135,6 @@ impl FundingWallet {
     }
 
     /// Returns the first block to include in the next deposit scan.
-    #[cfg(test)]
     pub fn next_sync(&self) -> BlockNumber {
         self.next_sync
     }

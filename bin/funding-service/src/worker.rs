@@ -428,12 +428,14 @@ impl Funder {
         // The cursor advances only after the scan is stored, so a failed write is retried by
         // rescanning the same blocks on the next poll.
         let next_sync = scan.next_sync;
-        self.setup
-            .database
-            .record_deposit_scan(next_sync, scan.deposits)
-            .await
-            .context("failed to store the deposit scan")?;
-        self.setup.wallet.complete_deposit_scan(next_sync);
+        if next_sync > self.setup.wallet.next_sync() {
+            self.setup
+                .database
+                .record_deposit_scan(next_sync, scan.deposits)
+                .await
+                .context("failed to store the deposit scan")?;
+            self.setup.wallet.complete_deposit_scan(next_sync);
+        }
 
         Ok(ChainState { reference_header, blockchain })
     }

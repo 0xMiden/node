@@ -607,6 +607,116 @@ async fn migrating_a_database_keeps_its_requests_and_resumes_deposit_discovery_f
 }
 
 #[tokio::test]
+async fn migrating_an_active_attempt_preserves_delivery_and_expiration_recovery() {
+    for committed in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("funding.sqlite3");
+        migrator().unwrap().create_database(&path).unwrap().migrate_to(1).unwrap();
+        let request = note(1);
+        let deposit = deposit(2);
+        let transaction_id = transaction(1);
+        let note_id = request.note().id();
+        let nullifier = deposit.nullifier();
+        let (target, amount, serial) =
+            (request.target(), request.amount(), request.note().recipient().serial_num());
+        let (writer, reader) = miden_node_db::sqlite::open(&path).unwrap();
+        writer
+            .write("populate an active version 1 attempt", move |tx| {
+                queries::insert_database_identity(tx, &identity())?;
+                queries::insert_request(tx, note_id, target, amount, serial, UNIX_EPOCH)?;
+                tx.execute(
+                    "INSERT INTO transaction_attempt
+                     (singleton, transaction_id, reference_block, expiration_block, deposit_nullifier)
+                     VALUES (1, ?1, 10, 20, ?2)",
+                    &[&transaction_id, &nullifier],
+                )?;
+                queries::assign_request_to_attempt(tx, note_id, transaction_id)?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .unwrap();
+        drop(writer);
+        drop(reader);
+
+        FundingDatabase::migrate(&path).unwrap();
+        let database = reopen(&dir).await;
+        assert_eq!(
+            database.active_attempt().await.unwrap(),
+            Some(TransactionAttempt {
+                transaction_id,
+                reference_block: 10.into(),
+                expiration_block: 20.into(),
+                deposit_nullifiers: vec![],
+                note_ids: vec![note_id],
+            })
+        );
+        assert!(database.pending_requests(NonZeroUsize::MIN).await.unwrap().is_empty());
+        assert_eq!(contents(&database).await, (BlockNumber::GENESIS, HashMap::new()));
+
+        if committed {
+            database
+                .record_delivery(vec![note_id], transaction_id, 15.into())
+                .await
+                .unwrap();
+            save(&database, 21, &[]).await;
+        } else {
+            database.release_attempt(transaction_id, vec![]).await.unwrap();
+            save(&database, 21, &[&deposit]).await;
+        }
+        drop(database);
+
+        let database = reopen(&dir).await;
+        assert!(database.active_attempt().await.unwrap().is_none());
+        let stored = database.request(note_id).await.unwrap().unwrap();
+        assert_eq!(stored.note, request.into_note());
+        if committed {
+            let delivery = stored.delivery.unwrap();
+            assert_eq!(delivery.transaction_id, transaction_id);
+            assert_eq!(delivery.committed_in_block, BlockNumber::from(15));
+            assert!(database.pending_requests(NonZeroUsize::MIN).await.unwrap().is_empty());
+            assert!(database.deposits().await.unwrap().is_empty());
+        } else {
+            assert!(stored.delivery.is_none());
+            assert_eq!(database.pending_requests(NonZeroUsize::MIN).await.unwrap(), vec![stored]);
+            assert_eq!(database.deposits().await.unwrap(), vec![deposit]);
+        }
+    }
+}
+
+#[tokio::test]
+async fn replaying_a_saved_scan_does_not_restore_consumed_or_discarded_deposits() {
+    for committed in [true, false] {
+        let (dir, database) = database().await;
+        let selected = deposit(1);
+        save(&database, 11, &[&selected]).await;
+        let transaction_id = transaction(1);
+        database
+            .start_attempt(TransactionAttempt {
+                transaction_id,
+                reference_block: 10.into(),
+                expiration_block: 20.into(),
+                deposit_nullifiers: vec![selected.nullifier()],
+                note_ids: vec![],
+            })
+            .await
+            .unwrap();
+        if committed {
+            database.record_delivery(vec![], transaction_id, 15.into()).await.unwrap();
+        } else {
+            database
+                .release_attempt(transaction_id, vec![selected.nullifier()])
+                .await
+                .unwrap();
+        }
+        drop(database);
+
+        let database = reopen(&dir).await;
+        save(&database, 11, &[&selected]).await;
+        assert_eq!(contents(&database).await, (11.into(), HashMap::new()));
+    }
+}
+
+#[tokio::test]
 async fn recorded_scans_add_to_the_stored_deposits_and_reopen_with_their_cursor() {
     let (dir, database) = database().await;
     let (first, second, third) = (deposit(1), deposit(2), deposit(3));

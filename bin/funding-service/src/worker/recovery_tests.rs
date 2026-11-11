@@ -816,6 +816,30 @@ async fn a_restarted_worker_resumes_deposit_discovery_from_the_stored_cursor() {
 }
 
 #[tokio::test]
+async fn an_unchanged_tip_can_sync_while_the_database_writer_is_busy() {
+    let (directory, mut setup) = FunderSetup::fixture().await;
+    let deposit = setup.deposit(1);
+    let (wallet, server) = genesis_server(0, 0, std::slice::from_ref(&deposit)).await;
+    setup.wallet = wallet;
+    let mut funder = Funder::new(server.node.clone(), Prover::local(), setup);
+    funder.read_chain_state().await.unwrap();
+
+    let (writer, _reader) =
+        miden_node_db::sqlite::open(&directory.path().join(DATABASE_FILENAME)).unwrap();
+    let blocker = writer.begin_write().await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(5), funder.read_chain_state()).await;
+    blocker.commit().await.unwrap();
+    result
+        .expect("an unchanged scan must not wait for the database writer")
+        .unwrap();
+    assert_eq!(funder.setup.wallet.next_sync(), BlockNumber::from(1));
+    assert_eq!(
+        stored_deposits(&funder.setup.database).await,
+        HashMap::from([(deposit.nullifier(), deposit)])
+    );
+}
+
+#[tokio::test]
 async fn a_scan_which_could_not_be_stored_is_repeated_on_the_next_sync() {
     let (directory, mut setup) = FunderSetup::fixture().await;
     let deposit = setup.deposit(1);
