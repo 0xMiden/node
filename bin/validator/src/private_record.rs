@@ -662,9 +662,11 @@ pub enum PrivateRecordError {
 #[cfg(test)]
 mod tests {
     use golden_ehtdh1::DecryptionShare;
+    use miden_node_proto::generated as proto;
     use miden_protocol::Word;
     use miden_protocol::account::auth::AuthScheme;
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+    use miden_protocol::testing::assembler::assemble_test_package;
     use miden_protocol::transaction::TransactionInputs;
     use miden_protocol::utils::serde::Deserializable;
     use miden_testing::{Auth, MockChainBuilder};
@@ -1065,7 +1067,7 @@ mod tests {
         };
 
         let inputs = transaction_inputs();
-        let package = miden_protocol::testing::assembler::assemble_test_package(
+        let package = assemble_test_package(
             "private-record-patch",
             "test::private_record_patch",
             "pub proc entry push.1 drop end",
@@ -1107,8 +1109,7 @@ mod tests {
             .logs(logs)
             .code_patch(patch)
             .build();
-        let bytes = miden_node_proto::generated::transaction::TransactionEffects::from(&effects)
-            .encode_to_vec();
+        let bytes = proto::transaction::TransactionEffects::from(&effects).encode_to_vec();
         let keys = operator_keys();
         let original = threshold_record(&keys[0], effects.transaction_id(), 20, &bytes);
         let record: StoredPrivateRecord =
@@ -1122,12 +1123,10 @@ mod tests {
             .unwrap()
             .open(&request, &record, &shares)
             .unwrap();
-        let decoded = miden_node_proto::generated::transaction::TransactionEffects::decode(
-            plaintext.as_slice(),
-        )
-        .unwrap()
-        .decode_and_verify()
-        .unwrap();
+        let decoded = proto::transaction::TransactionEffects::decode(plaintext.as_slice())
+            .unwrap()
+            .decode_and_verify()
+            .unwrap();
         assert_eq!(decoded.transaction_id(), effects.transaction_id());
         assert_eq!(decoded.logs(), effects.logs());
         assert_eq!(decoded.code_patch(), effects.code_patch());

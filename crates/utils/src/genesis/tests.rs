@@ -10,6 +10,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::utils::serde::Deserializable;
 
 use super::*;
@@ -39,7 +40,7 @@ fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
         Word::empty(),
         Word::empty(),
         Word::empty(),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         body.compute_block_note_tree().root(),
         body.compute_transactions_commitment(),
         ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),

@@ -65,6 +65,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockSignatures,
     FeeParameters,
@@ -329,7 +330,7 @@ fn build_test_proven_tx_with_fee(
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -377,7 +378,7 @@ fn build_test_proven_tx_with_id(
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -395,7 +396,7 @@ fn replace_transaction_proof(
         transaction.expiration_block_num(),
         proof,
         transaction.log_details().clone(),
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap()
 }

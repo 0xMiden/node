@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 
@@ -326,7 +327,7 @@ impl TestStore {
             u32::MAX.into(),
             miden_protocol::testing::dummy_execution_proof(),
             log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
+            CodePatch::default(),
         )
         .unwrap()
     }

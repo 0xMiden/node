@@ -8,7 +8,13 @@ use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Reques
 use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient;
 use miden_node_proto::generated::miden::remote_prover::v1::{ProveRequest, ProveResponse};
-use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
+use miden_node_proto::{
+    BlockProofRequest,
+    BuildUnchecked,
+    DecodeMessage,
+    VerifyWith,
+    generated as proto,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
@@ -347,9 +353,7 @@ async fn malformed_transaction_inputs_are_rejected() {
         .expect("server should spawn");
 
     let request = ProveRequest {
-        request: Some(Request::Transaction(
-            miden_node_proto::generated::transaction::TransactionWitness::default(),
-        )),
+        request: Some(Request::Transaction(proto::transaction::TransactionWitness::default())),
     };
     let mut client = Client::connect(port).await;
     let err = client.submit_request(request).await.unwrap_err();

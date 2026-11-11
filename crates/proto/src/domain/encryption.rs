@@ -493,6 +493,7 @@ impl TransactionInputsSealer {
 #[cfg(test)]
 mod tests {
     use assert_matches::assert_matches;
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 
@@ -511,7 +512,7 @@ mod tests {
             Word::from([0, 0, seed, 0]),
             Word::from([0, 0, 0, seed]),
             miden_protocol::transaction::TransactionLogs::default().commitment(),
-            miden_protocol::block::code_tree::CodePatch::default().commitment(),
+            CodePatch::default().commitment(),
         )
     }
 

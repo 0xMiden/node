@@ -122,6 +122,7 @@ impl CommittedBlockEffects {
 mod tests {
     use anyhow::Context;
     use miden_protocol::Word;
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{
         BlockAccountUpdate,
         BlockBody,
@@ -161,7 +162,7 @@ mod tests {
             InputNotes::new_unchecked(Vec::new()),
             Vec::new(),
             miden_protocol::transaction::TransactionLogs::default().commitment(),
-            miden_protocol::block::code_tree::CodePatch::default().commitment(),
+            CodePatch::default().commitment(),
         )?;
         let body = BlockBody::new_unchecked(vec![update], Vec::new(), Vec::new(), {
             let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
@@ -219,7 +220,7 @@ mod tests {
                     InputNotes::default(),
                     vec![],
                     miden_protocol::transaction::TransactionLogs::default().commitment(),
-                    miden_protocol::block::code_tree::CodePatch::default().commitment(),
+                    CodePatch::default().commitment(),
                 )
                 .unwrap();
                 state = next;

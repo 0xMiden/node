@@ -642,6 +642,7 @@ mod protocol_config_tests {
     use miden_protocol::Word;
     use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{BlockHeader, BlockNumber, FeeParameters};
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::protocol_config::ProtocolConfig;
 
     use super::{ProtocolConfigTracker, decode_startup_header_response, startup_header_request};
@@ -669,7 +670,7 @@ mod protocol_config_tests {
             Word::empty(),
             Word::empty(),
             Word::empty(),
-            CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+            CodeTree::<Smt>::default().root(),
             Word::empty(),
             Word::empty(),
             fixture.header().validator_config().clone(),

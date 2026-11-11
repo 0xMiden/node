@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
+use miden_node_proto::generated as proto;
 use miden_node_store::{BlockWriter, DataDirectory, GenesisState, State, WriterTask};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
@@ -31,6 +32,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
@@ -611,9 +613,9 @@ async fn apply_block(
     let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
     let block_size: usize = miden_node_proto::prost::Message::encoded_len(
-        &miden_node_proto::generated::blockchain::BlockHeader::from(&header),
+        &proto::blockchain::BlockHeader::from(&header),
     ) + miden_node_proto::prost::Message::encoded_len(
-        &miden_node_proto::generated::blockchain::BlockBody::from(&body),
+        &proto::blockchain::BlockBody::from(&body),
     );
     let signature = signer.sign(header.commitment());
     let signatures = BlockSignatures::new(vec![signature]).unwrap();
@@ -987,7 +989,7 @@ fn create_consume_note_tx(
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap();
 
@@ -1086,7 +1088,7 @@ fn create_emit_note_tx(
             u32::MAX.into(),
             miden_protocol::testing::dummy_execution_proof(),
             log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
+            CodePatch::default(),
         )
     }
     .unwrap()
