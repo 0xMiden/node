@@ -171,6 +171,12 @@ impl ValidatorService {
 
         grpc::transaction::TransactionInputs::decode(plaintext.as_slice())
             .map_err(|err| Status::invalid_argument(format!("Invalid transaction inputs: {err}")))?
+            // SAFETY: This checks input consistency and note inclusion against the supplied headers.
+            // New transaction IDs pass proof verification and re-execution before storage.
+            // Previously validated IDs use the handler's duplicate-submission shortcut.
+            //
+            // FIXME: Authenticate the supplied headers against the validator's chain state.
+            // Neither unsealing nor re-execution establishes that chain membership.
             .decode_and_build_unchecked()
             .or_invalid_argument("Invalid transaction inputs")
     }
