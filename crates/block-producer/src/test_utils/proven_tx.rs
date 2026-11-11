@@ -5,6 +5,7 @@ use itertools::Itertools;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
@@ -166,7 +167,7 @@ impl MockProvenTxBuilder {
             self.expiration_block_num,
             miden_protocol::testing::dummy_execution_proof(),
             log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
+            CodePatch::default(),
         )
         .unwrap()
     }

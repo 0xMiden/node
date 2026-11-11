@@ -13,6 +13,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::sync::mpsc;
@@ -157,7 +158,7 @@ async fn coalescer_rejects_protocol_config_disagreement() {
         Word::empty(),
         Word::empty(),
         Word::empty(),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         Word::empty(),
         Word::empty(),
         validators.clone(),
@@ -173,7 +174,7 @@ async fn coalescer_rejects_protocol_config_disagreement() {
         Word::empty(),
         Word::empty(),
         Word::empty(),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         body.compute_block_note_tree().root(),
         body.compute_transactions_commitment(),
         validators,

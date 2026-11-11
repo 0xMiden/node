@@ -59,8 +59,10 @@ pub(crate) fn read_inputs(path: &Path) -> Result<Vec<TransactionInputs>> {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::generated as proto;
     use miden_protocol::account::{Account, AccountCode, AccountStorage, AccountUpdateDetails};
     use miden_protocol::asset::AssetVault;
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{BlockHeader, BlockNumber};
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
@@ -96,7 +98,7 @@ mod tests {
             (seed + 1).into(),
             miden_protocol::testing::dummy_execution_proof(),
             log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
+            CodePatch::default(),
         )
         .unwrap()
     }
@@ -175,9 +177,7 @@ mod tests {
         fs_err::write(
             &path,
             BenchmarkTransactionInputs {
-                inputs: vec![
-                    miden_node_proto::generated::transaction::TransactionInputs::default(),
-                ],
+                inputs: vec![proto::transaction::TransactionInputs::default()],
             }
             .encode_to_vec(),
         )

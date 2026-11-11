@@ -40,6 +40,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::testing::account_id::AccountIdBuilder;
 use miden_protocol::{EMPTY_WORD, Felt, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
@@ -254,7 +255,7 @@ fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         Word::default(),
         Word::default(),
         ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),

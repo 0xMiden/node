@@ -319,6 +319,7 @@ mod tests {
         StorageSlotPatch,
         StorageValuePatch,
     };
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{BlockAccountUpdate, BlockBody};
     use miden_protocol::note::{
         NoteAttachments,
@@ -382,7 +383,7 @@ mod tests {
             input_notes,
             vec![persisted_header, erased_header],
             miden_protocol::transaction::TransactionLogs::default().commitment(),
-            miden_protocol::block::code_tree::CodePatch::default().commitment(),
+            CodePatch::default().commitment(),
         )
         .expect("test transaction header should be valid");
         let transaction_id = transaction.id();

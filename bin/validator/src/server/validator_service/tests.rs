@@ -28,6 +28,7 @@ use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
@@ -383,7 +384,7 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
         BlockNumber::from(u32::from(seed) + 1),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -888,7 +889,7 @@ async fn unknown_transactions_rejected() {
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
         miden_protocol::transaction::TransactionLogs::default().commitment(),
-        miden_protocol::block::code_tree::CodePatch::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .unwrap();
     let tx_id = tx_header.id();
@@ -960,7 +961,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
         miden_protocol::transaction::TransactionLogs::default().commitment(),
-        miden_protocol::block::code_tree::CodePatch::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .unwrap();
     let tx_id = tx_header.id();
@@ -1017,8 +1018,8 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
     assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
     assert_eq!(
-        miden_node_proto::generated::block_proving::BlockInputs::from(&restored.block_inputs),
-        miden_node_proto::generated::block_proving::BlockInputs::from(&block_inputs)
+        proto::block_proving::BlockInputs::from(&restored.block_inputs),
+        proto::block_proving::BlockInputs::from(&block_inputs)
     );
     let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
     restored.validate_against(&signed).unwrap();

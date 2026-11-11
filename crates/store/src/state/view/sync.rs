@@ -213,6 +213,7 @@ mod tests {
     use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{BlockBody, SignedBlock, ValidatorConfig};
     use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use miden_protocol::testing::random_secret_key::random_secret_key;
 
@@ -244,7 +245,7 @@ mod tests {
                 mmr.peaks().hash_peaks(),
                 parent.account_root(),
                 parent.nullifier_root(),
-                CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+                CodeTree::<Smt>::default().root(),
                 body.compute_block_note_tree().root(),
                 body.compute_transactions_commitment(),
                 parent.validator_config().clone(),

@@ -11,7 +11,7 @@ use miden_protocol::account::{
     AccountType,
     AccountUpdateDetails,
 };
-use miden_protocol::block::code_tree::CodeTree;
+use miden_protocol::block::code_tree::{CodePatch, CodeTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{
     BlockBody,
@@ -22,7 +22,9 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::mmr::Mmr;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::Nullifier;
+use miden_protocol::testing::assembler::assemble_test_package;
 use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::testing::random_secret_key::random_secret_key;
@@ -149,7 +151,7 @@ impl Fixture {
             expiration.into(),
             dummy_execution_proof(),
             log_details,
-            miden_protocol::block::code_tree::CodePatch::default(),
+            CodePatch::default(),
         )
         .unwrap()
     }
@@ -166,7 +168,7 @@ impl Fixture {
             mmr.peaks().hash_peaks(),
             self.genesis.account_root(),
             tree.root(),
-            CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+            CodeTree::<Smt>::default().root(),
             body.compute_block_note_tree().root(),
             body.compute_transactions_commitment(),
             self.genesis.validator_config().clone(),
@@ -182,12 +184,11 @@ impl Fixture {
 
 #[tokio::test]
 async fn decorator_stripping_preserves_logs_and_code_patch() {
-    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::code::ProcedureRoot;
     use miden_protocol::transaction::TransactionLogDetails;
     let fixture = Fixture::new().await;
     let base = fixture.transaction(fixture.account.id(), &[], 2);
-    let package = miden_protocol::testing::assembler::assemble_test_package(
+    let package = assemble_test_package(
         "rpc-code-patch",
         "test::rpc_patch",
         "pub proc entry push.1 drop end",

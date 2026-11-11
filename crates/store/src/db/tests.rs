@@ -33,7 +33,7 @@ use miden_protocol::account::{
     StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
-use miden_protocol::block::code_tree::CodeTree;
+use miden_protocol::block::code_tree::{CodePatch, CodePatchCommitment, CodeTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -46,6 +46,7 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::crypto::rand::RandomCoin;
 use miden_protocol::note::{
     Note,
@@ -404,7 +405,7 @@ fn mock_block(block_num: BlockNumber) -> (BlockHeader, BlockSignatures) {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -970,7 +971,7 @@ fn db_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -1005,7 +1006,7 @@ fn db_block_header() {
         num_to_word(14),
         num_to_word(15),
         num_to_word(16),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         num_to_word(17),
         num_to_word(18),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -2057,7 +2058,7 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         input_notes,
         output_notes,
         miden_protocol::transaction::TransactionLogs::default().commitment(),
-        miden_protocol::block::code_tree::CodePatch::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .expect("test transaction header should be valid")
 }
@@ -2095,7 +2096,7 @@ fn mock_block_transaction_with_output_notes(
         input_notes,
         output_notes,
         miden_protocol::transaction::TransactionLogs::default().commitment(),
-        miden_protocol::block::code_tree::CodePatch::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .expect("test transaction header should be valid")
 }
@@ -2734,7 +2735,7 @@ fn serialization_symmetry_core_types() {
         num_to_word(3),
         num_to_word(4),
         miden_protocol::transaction::TransactionLogs::default().commitment(),
-        miden_protocol::block::code_tree::CodePatch::default().commitment(),
+        CodePatch::default().commitment(),
     );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();
@@ -2755,7 +2756,7 @@ fn serialization_symmetry_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -2843,7 +2844,7 @@ fn db_roundtrip_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -3502,7 +3503,6 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::{StorageMapPatch, StorageSlotPatch, StorageValuePatch};
-    use miden_protocol::crypto::merkle::smt::Smt;
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -4037,7 +4037,7 @@ fn transaction_records_preserve_commitments_after_reopen() {
         base.input_notes().clone(),
         base.output_notes().to_vec(),
         Word::from([17_u32; 4]),
-        miden_protocol::block::code_tree::CodePatchCommitment::from_raw(Word::from([23_u32; 4])),
+        CodePatchCommitment::from_raw(Word::from([23_u32; 4])),
     )
     .unwrap();
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
@@ -4097,7 +4097,6 @@ fn transaction_records_preserve_commitments_after_reopen() {
 
 fn multi_batch_erasure_fixture()
 -> (miden_protocol::block::SignedBlock, Vec<TransactionHeader>, [Note; 4]) {
-    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{BlockBody, SignedBlock};
     use miden_protocol::transaction::{OutputNote, PrivateOutputNote, TransactionLogs};
 
@@ -4268,8 +4267,6 @@ fn multi_batch_block_roundtrip_preserves_grouping() {
 
 #[test]
 fn transaction_records_paginate_with_new_commitments() {
-    use miden_protocol::block::code_tree::CodePatchCommitment;
-
     let db = &TestDb::new();
     let block_num = BlockNumber::ONE;
     let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();

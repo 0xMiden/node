@@ -15,6 +15,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockHeader;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
 use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::transaction::{
@@ -173,7 +174,7 @@ impl Submission {
                         100.into(),
                         dummy_execution_proof(),
                         log_details,
-                        miden_protocol::block::code_tree::CodePatch::default(),
+                        CodePatch::default(),
                     )
                     .unwrap(),
                 )

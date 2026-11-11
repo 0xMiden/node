@@ -14,7 +14,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, OrderedBatches, ProvenBatch};
 use miden_protocol::block::account_tree::{AccountTree, AccountWitness};
-use miden_protocol::block::code_tree::CodeTree;
+use miden_protocol::block::code_tree::{CodePatch, CodeTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{
     BlockHeader,
@@ -27,6 +27,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::{Note, NoteInclusionProof, Nullifier};
 use miden_protocol::protocol_config::NextProtocolConfig;
 use miden_protocol::transaction::{
@@ -116,7 +117,7 @@ fn nonempty_block_request() -> BlockProofRequest {
         partial_blockchain.peaks().hash_peaks(),
         account_tree.root(),
         nullifier_tree.root(),
-        CodeTree::<miden_protocol::crypto::merkle::smt::Smt>::default().root(),
+        CodeTree::<Smt>::default().root(),
         note_tree.root(),
         Word::empty(),
         validator_config,
@@ -164,7 +165,7 @@ fn nonempty_block_request() -> BlockProofRequest {
                 input_notes.clone(),
                 Vec::new(),
                 miden_protocol::transaction::TransactionLogs::default().commitment(),
-                miden_protocol::block::code_tree::CodePatch::default().commitment(),
+                CodePatch::default().commitment(),
             )
             .unwrap();
             let update = BatchAccountUpdate::new(

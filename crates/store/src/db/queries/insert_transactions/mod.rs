@@ -91,6 +91,7 @@ fn estimated_sync_record_size(header: &TransactionHeader) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::generated::miden::node::v1 as node;
     use miden_node_proto::prost::Message;
     use miden_protocol::Word;
     use miden_protocol::block::code_tree::CodePatchCommitment;
@@ -127,12 +128,12 @@ mod tests {
             CodePatchCommitment::from_raw(Word::from([4_u32; 4])),
         )
         .unwrap();
-        let record = miden_node_proto::generated::miden::node::v1::TransactionRecord {
+        let record = node::TransactionRecord {
             header: Some((&header).into()),
             block_num: u32::MAX,
             consumed_note_refs: notes
                 .iter()
-                .map(|note| miden_node_proto::generated::miden::node::v1::ConsumedNoteRef {
+                .map(|note| node::ConsumedNoteRef {
                     nullifier: Some(note.nullifier().as_word().into()),
                     note_id: Some((&note.id()).into()),
                 })
@@ -159,7 +160,7 @@ mod tests {
             CodePatchCommitment::from_raw(Word::from([4_u32; 4])),
         )
         .unwrap();
-        let record = miden_node_proto::generated::miden::node::v1::TransactionRecord {
+        let record = node::TransactionRecord {
             header: Some((&header).into()),
             block_num: u32::MAX,
             ..Default::default()

@@ -17,6 +17,7 @@ use miden_protocol::account::{
     AssetCallbackFlag,
 };
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
@@ -60,7 +61,7 @@ fn transaction_and_inputs() -> (Arc<ProvenTransaction>, TransactionInputs) {
         BlockNumber::from(100),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap();
     let inputs = TransactionInputs {
@@ -156,7 +157,7 @@ fn note_authentication_preserves_ids_across_serialization() {
         tx.expiration_block_num(),
         miden_protocol::testing::dummy_execution_proof(),
         tx.log_details().clone(),
-        miden_protocol::block::code_tree::CodePatch::default(),
+        CodePatch::default(),
     )
     .unwrap();
     inputs.nullifiers = tx.nullifiers().map(|nullifier| (nullifier, None)).collect();
