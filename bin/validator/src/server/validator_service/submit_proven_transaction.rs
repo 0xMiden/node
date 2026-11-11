@@ -4,7 +4,7 @@ use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
 use miden_node_proto::prost::Message;
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{Instrument, info_span, miden_instrument, miden_span_record};
+use miden_node_tracing::{Instrument, info_span, instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
 use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
@@ -12,7 +12,7 @@ use tonic::Status;
 
 use super::{StatusResultExt, ValidatorService};
 use crate::tx_validation::validate_transaction;
-use crate::{COMPONENT, PrivateRecordContext, PrivateRecordId};
+use crate::{PrivateRecordContext, PrivateRecordId};
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
@@ -21,10 +21,7 @@ impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
     type Input = Input;
     type Output = ();
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "submit_proven_transaction",
-    )]
+    #[instrument(name = "submit_proven_transaction")]
     async fn handle(
         &self,
         input: Self::Input,

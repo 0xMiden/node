@@ -12,7 +12,6 @@ use miden_node_tracing::warn;
 use miden_protocol::Word;
 use serde::{Deserialize, Serialize};
 
-use crate::LOG_TARGET;
 use crate::faucet::FaucetTestDetails;
 use crate::funding_service::FundingStatusResponse;
 use crate::remote_prover::{ProofType, ProverTestDetails};
@@ -381,7 +380,6 @@ impl From<proto::miden::remote_prover::v1::ProxyWorkerStatus> for WorkerStatusDe
             .map_or_else(
                 |_| {
                     warn!(
-                        target: LOG_TARGET,
                         "Unknown worker health status discriminant",
                         worker.status.raw = value.status,
                         worker.name = value.name.as_str()
@@ -411,7 +409,6 @@ impl RemoteProverStatusDetails {
                 .map_or_else(
                     |_| {
                         warn!(
-                            target: LOG_TARGET,
                             "Unknown supported proof type discriminant",
                             prover.proof_type.raw = status.supported_proof_type
                         );
@@ -438,7 +435,7 @@ impl RpcStatusDetails {
         let genesis_commitment = status.genesis_commitment.as_ref().and_then(|genesis| {
             Word::try_from(genesis)
                 .inspect_err(|err| {
-                    warn!(err, target: LOG_TARGET, "Invalid genesis commitment in RPC status");
+                    warn!(err, "Invalid genesis commitment in RPC status");
                 })
                 .ok()
                 .map(|genesis| genesis.to_hex())

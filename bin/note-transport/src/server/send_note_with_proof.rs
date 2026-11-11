@@ -5,14 +5,14 @@ use miden_node_proto::generated::miden::note_transport::v1::{
 };
 use miden_node_proto::server::miden_note_transport_v1_note_transport_service::SendNoteWithProof;
 use miden_node_proto::{DecodeMessage, Verify};
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::BLOCK_NOTE_TREE_DEPTH;
 use miden_protocol::note::{NoteDetails, NoteHeader, NoteInclusionProof};
 use tonic::codegen::http::Extensions;
 use tonic::metadata::MetadataMap;
 
 use super::{Server, decode_note};
-use crate::{COMPONENT, db};
+use crate::db;
 
 #[tonic::async_trait]
 impl SendNoteWithProof for Server {
@@ -42,7 +42,7 @@ impl SendNoteWithProof for Server {
         Ok(SendNoteWithProofResponse {})
     }
 
-    #[miden_instrument(target = COMPONENT)]
+    #[instrument]
     async fn handle(
         &self,
         (header, details, proof): Self::Input,

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error, info, miden_instrument};
+use miden_node_tracing::{error, info, instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -26,7 +26,7 @@ use crate::selection::{
     select_candidate,
     sponsorship_failures,
 };
-use crate::{LOG_TARGET, NoteError, execute};
+use crate::{NoteError, execute};
 
 // NETWORK TRANSACTION CONTEXT
 // ================================================================================================
@@ -177,8 +177,8 @@ pub struct NetworkTransactionOutcome {
 
 impl NetworkTransactionContext {
     /// Builds, proves and submits one network transaction for `account_id`.
-    #[miden_instrument(
-        name = "ntx.build",
+    #[instrument(
+        name = "build",
         fields(
             account.id = account_id,
             reference_block.number = chain.chain_tip_header.block_num(),
@@ -310,7 +310,6 @@ impl NetworkTransactionContext {
             .collect();
 
         info!(
-            target: LOG_TARGET,
             "executing network transaction",
             account.id = account_id,
             note.ids = note_ids.as_slice(),
@@ -327,7 +326,6 @@ impl NetworkTransactionContext {
                 fetched_scripts,
             }) => {
                 info!(
-                    target: LOG_TARGET,
                     "network transaction executed",
                     account.id = account_id,
                     transaction.id = tx_id,
@@ -359,7 +357,6 @@ impl NetworkTransactionContext {
             Err(err) => {
                 error!(
                     &err,
-                    target: LOG_TARGET,
                     "network transaction failed",
                     account.id = account_id,
                     note.ids = note_ids.as_slice()
@@ -380,7 +377,6 @@ impl NetworkTransactionContext {
                             .map(|nullifier| {
                                 info!(
                                     error.as_ref(),
-                                    target: LOG_TARGET,
                                     "note failed: transaction execution error",
                                     note.nullifier = nullifier
                                 );

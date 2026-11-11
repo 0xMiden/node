@@ -6,8 +6,6 @@ use axum::response::{IntoResponse, Response};
 use miden_node_tracing::{ErrorReport, error};
 use serde::Serialize;
 
-use crate::LOG_TARGET;
-
 #[derive(Debug)]
 pub(super) struct ApiError {
     pub(super) status: StatusCode,
@@ -34,12 +32,11 @@ impl ApiError {
     /// `cause` is logged rather than returned — the event macro records its display value and
     /// source chain as `exception.message` — because it describes the validator's internals rather
     /// than anything about the request. Logging is the only record of it: these are plain axum
-    /// handlers, so they are not covered by the `miden_instrument(err)` fault reporting the gRPC
+    /// handlers, so they are not covered by the `instrument(err)` fault reporting the gRPC
     /// services get.
     pub(super) fn internal(message: &'static str, cause: &(impl ErrorReport + 'static)) -> Self {
         error!(
             cause,
-            target: LOG_TARGET,
             "validator admin API internal error",
             response.message = message #[nonstandard]
         );

@@ -1,11 +1,11 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use backon::ExponentialBuilder;
 use futures::stream::{BoxStream, TryStreamExt};
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use miden_node_proto::clients::{Builder, RpcClient as InnerRpcClient};
 use miden_node_proto::domain::account::{
     AccountDetails,
@@ -35,7 +35,7 @@ use miden_node_proto::generated::miden::node::v1::{
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
-use miden_node_tracing::{ErrorReport, debug, info, miden_instrument, warn};
+use miden_node_tracing::{ErrorReport, info, instrument, warn};
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -59,8 +59,6 @@ use tokio::sync::RwLock;
 use tonic::Status;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
-
-use crate::COMPONENT;
 
 #[cfg(test)]
 #[path = "rpc/vault_tests.rs"]
@@ -114,22 +112,6 @@ impl ProtocolConfigTracker {
         Ok(())
     }
 }
-
-/// Delay between block-subscription reconnect attempts, paced so a node that immediately closes the
-/// connection cannot spin the reconnect loop. Connection *failures* are already backed off
-/// exponentially inside [`RpcClient::block_subscription_with_retry`].
-const RECONNECT_DELAY: Duration = Duration::from_secs(5);
-
-/// How long a single `stream.next()` poll waits before re-evaluating liveness.
-const BLOCK_POLL_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Maximum time without a committed block before treating the subscription as stalled and forcing a
-/// reconnect.
-///
-/// This is a defensive backstop for a silently dropped connection that never surfaces an error on
-/// its own (client HTTP/2 keepalive is the primary, faster detector). It must be comfortably larger
-/// than the node's block interval so a legitimately quiet chain is not mistaken for a stall.
-const STALL_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Thin wrapper around the node RPC gRPC service that the ntx-builder uses to consume the
 /// committed-block subscription stream.
@@ -190,7 +172,6 @@ impl RpcClient {
         max_decoding_message_size: usize,
     ) -> anyhow::Result<Self> {
         info!(
-            target: COMPONENT,
             "Initializing RPC client",
             dependency.name = "rpc",
             dependency.endpoint = rpc_url.to_string()
@@ -275,7 +256,6 @@ impl RpcClient {
         .notify(|err, dur| {
             warn!(
                 err,
-                target: COMPONENT,
                 "RPC request failed while verifying the persisted chain tip, retrying",
                 retry.delay_ms = dur
             );
@@ -290,9 +270,8 @@ impl RpcClient {
     /// chain tip, and an optional protocol configuration. The configuration is present for the
     /// first response and for each transition. The committed chain tip is the latest block the node
     /// believes is committed when it emits the response.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "rpc.client.block_subscription_with_retry",
+    #[instrument(
+        name = "block_subscription_with_retry",
         fields(
             block.from = block_from,
         ),
@@ -315,7 +294,7 @@ impl RpcClient {
 
             // Box the stream so its type is named and explicitly `'static` (it owns the cloned
             // client, borrowing nothing from `self`). This keeps the return type from capturing
-            // `&self`, so callers like `block_subscription_reconnecting` can store it freely.
+            // `&self`, so the block follower can retain it independently of this borrow.
             let decoded = stream
                 .map_err(RpcError::GrpcClientError)
                 .and_then(|response| async move {
@@ -339,7 +318,6 @@ impl RpcClient {
         .notify(|err: &RpcError, dur| {
             warn!(
                 err,
-                target: COMPONENT,
                 "RPC connection failed while opening block subscription, retrying",
                 retry.delay_ms = dur
             );
@@ -347,112 +325,7 @@ impl RpcClient {
         .await
     }
 
-    /// Opens a committed-block subscription that transparently reconnects whenever the gRPC
-    /// connection is closed.
-    ///
-    /// Each reconnection resumes from the block after the last one yielded, so no committed block
-    /// is skipped or replayed. A closed or errored subscription is logged and re-opened, paced by
-    /// the client's exponential backoff schedule.
-    pub fn block_subscription_reconnecting(
-        &self,
-        block_from: BlockNumber,
-    ) -> impl Stream<Item = BlockSubscriptionItem> + Send + 'static {
-        let client = self.clone();
-
-        futures::stream::unfold(
-            (client, block_from, None, Instant::now()),
-            |(client, mut next_from, mut inner, mut last_block)| async move {
-                loop {
-                    // Open the subscription if we don't hold a live one. The connect itself retries
-                    // indefinitely with exponential backoff.
-                    let stream = match &mut inner {
-                        Some(stream) => stream,
-                        None => match client.block_subscription_with_retry(next_from).await {
-                            Ok(stream) => {
-                                info!(
-                                    target: COMPONENT,
-                                    "block subscription connected",
-                                    block.from = next_from
-                                );
-                                // Reset the stall clock so time spent (re)connecting is not counted
-                                // against the next block's arrival.
-                                last_block = Instant::now();
-                                inner.insert(stream)
-                            },
-                            Err(err) => {
-                                warn!(
-                                    &err,
-                                    target: COMPONENT,
-                                    "failed to open block subscription, retrying",
-                                    block.from = next_from
-                                );
-                                tokio::time::sleep(RECONNECT_DELAY).await;
-                                continue;
-                            },
-                        },
-                    };
-
-                    // Poll on a short timeout so a silently dropped connection stays observable.
-                    // Each quiet poll emits a liveness log; once no block has arrived for
-                    // `STALL_TIMEOUT` the subscription is treated as stalled and reconnected.
-                    match tokio::time::timeout(BLOCK_POLL_TIMEOUT, stream.next()).await {
-                        Ok(Some(Ok((block, committed_tip, protocol_config)))) => {
-                            next_from = block.header().block_num().child();
-                            last_block = Instant::now();
-                            return Some((
-                                Ok((block, committed_tip, protocol_config)),
-                                (client, next_from, inner, last_block),
-                            ));
-                        },
-                        Ok(Some(Err(err))) => warn!(
-                            &err,
-                            target: COMPONENT,
-                            "block subscription failed, reconnecting",
-                            block.from = next_from
-                        ),
-                        Ok(None) => warn!(
-                            target: COMPONENT,
-                            "block subscription closed by node, reconnecting",
-                            block.from = next_from
-                        ),
-                        Err(_elapsed) => {
-                            let idle = last_block.elapsed();
-                            if idle < STALL_TIMEOUT {
-                                // Quiet but not yet stalled: emit a liveness signal and keep
-                                // polling the same stream instead of reconnecting.
-                                debug!(
-                                    target: COMPONENT,
-                                    "no block received recently; subscription still open",
-                                    block.from = next_from,
-                                    subscription.idle_ms = idle.as_millis() as u64
-                                );
-                                continue;
-                            }
-                            warn!(
-                                target: COMPONENT,
-                                "no block received within stall timeout; treating subscription as stalled, reconnecting",
-                                block.from = next_from,
-                                subscription.idle_ms = idle.as_millis() as u64,
-                                subscription.stall_timeout_ms = STALL_TIMEOUT.as_millis() as u64
-                            );
-                        },
-                    }
-
-                    // Reached on an error/close/stall branch: discard the stream, pace the
-                    // reconnect, and resume from the next un-applied block on the following
-                    // iteration.
-                    inner = None;
-                    tokio::time::sleep(RECONNECT_DELAY).await;
-                }
-            },
-        )
-    }
-
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "ntx.rpc.client.submit_proven_tx",
-        err,
-    )]
+    #[instrument(name = "submit_proven_tx", err)]
     pub async fn submit_proven_tx(
         &self,
         proven_tx: &ProvenTransaction,
@@ -495,7 +368,6 @@ impl RpcClient {
             stale_key.store(true, Ordering::Relaxed);
             warn!(
                 status,
-                target: COMPONENT,
                 "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
                 transaction.id = tx_id
             );
@@ -679,11 +551,7 @@ impl RpcClient {
     }
 
     /// Fetches a note script by its root, returning `None` if the node does not know it.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "ntx.rpc.client.get_note_script_by_root",
-        err,
-    )]
+    #[instrument(name = "get_note_script_by_root", err)]
     pub async fn get_note_script_by_root(
         &self,
         script_root: Word,

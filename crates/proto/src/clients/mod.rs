@@ -133,6 +133,7 @@ impl tonic::service::Interceptor for Interceptor {
 #[cfg(test)]
 mod tests {
     mod message_size;
+    mod tracing_targets;
     use super::*;
 
     #[test]

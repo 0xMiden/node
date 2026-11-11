@@ -11,7 +11,6 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::utils::serde::Deserializable;
 use url::Url;
 
 // MONITOR CONFIGURATION CONSTANTS
@@ -29,6 +28,8 @@ const DEFAULT_WALLET_FUNDING_AMOUNT: NonZeroU64 = NonZeroU64::new(1_000_000).unw
 /// This struct contains the configuration for the monitor.
 #[derive(Debug, Clone, Parser)]
 pub struct MonitorConfig {
+    #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
     #[command(flatten)]
     pub grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// The URL of the RPC service.
@@ -163,7 +164,8 @@ pub struct MonitorConfig {
     )]
     pub disable_ntx_service: bool,
 
-    /// Hex-encoded validator signing public keys trusted to attest the transaction encryption key.
+    /// `0x`-prefixed hex validator signing public keys trusted to attest the transaction encryption
+    /// key.
     ///
     /// Accepts repeated arguments or a comma-separated list.
     /// Required when network transaction checks are enabled.
@@ -308,10 +310,9 @@ impl MonitorConfig {
         self.validator_signing_public_keys
             .iter()
             .map(|encoded| {
-                let bytes = hex::decode(encoded)
-                    .context("validator signing public key must be hex encoded")?;
-                ValidatorPublicKey::read_from_bytes(&bytes)
-                    .context("validator signing public key must be a valid K256 public key")
+                ValidatorPublicKey::from_hex(encoded).with_context(|| {
+                    format!("validator signing public key {encoded} is not a valid K256 public key")
+                })
             })
             .collect()
     }
@@ -320,7 +321,7 @@ impl MonitorConfig {
 #[cfg(test)]
 mod tests {
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-    use miden_protocol::utils::serde::Serializable;
+    use miden_protocol::utils::serde::Deserializable;
 
     use super::*;
 
@@ -412,7 +413,7 @@ mod tests {
     fn accepts_all_configured_validator_keys() {
         let keys =
             [1, 3, 4].map(|seed| SigningKey::read_from_bytes(&[seed; 32]).unwrap().public_key());
-        let encoded = keys.each_ref().map(|key| hex::encode(key.to_bytes()));
+        let encoded = keys.each_ref().map(ToString::to_string);
         for arguments in [
             vec!["--validator-signing-public-key".to_owned(), encoded.join(",")],
             encoded

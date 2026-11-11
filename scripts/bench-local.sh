@@ -13,13 +13,13 @@
 #
 # Assumes these binaries are on $PATH (install with `make install-node`,
 # `make install-validator`, `make install-ntx-builder`,
-# `make install-remote-prover`, `make install-benchmark`, `make install-usdcx-genesis`):
+# `make install-remote-prover`, `make install-benchmark`, `make install-genesis`):
 #   - miden-node
 #   - miden-validator
 #   - miden-ntx-builder
 #   - miden-remote-prover
 #   - miden-benchmark
-#   - miden-usdcx-genesis
+#   - miden-genesis
 #
 # Usage:
 #   Export MIDEN_VALIDATOR_STORAGE_KEY_FILE with the path to a completed bundle first.
@@ -43,7 +43,7 @@ BATCH_BUILDER_WALLET_ACCOUNT_ID="${BATCH_BUILDER_WALLET_ACCOUNT_ID:-0xcc00000000
 # Insecure, hard-coded local dev validator signing key and its public key (committed at
 # genesis). Generate a fresh pair with `miden-validator keygen`.
 VALIDATOR_SIGNING_KEY_HEX="${VALIDATOR_SIGNING_KEY_HEX:-0101010101010101010101010101010101010101010101010101010101010101}"
-VALIDATOR_SIGNING_PUBLIC_KEY="${VALIDATOR_SIGNING_PUBLIC_KEY:-031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f}"
+VALIDATOR_SIGNING_PUBLIC_KEY="${VALIDATOR_SIGNING_PUBLIC_KEY:-0x031b84c5567b126440995d3ed5aaba0565d71e1834604819ff9c17f5e9d5dd078f}"
 # Insecure, hard-coded local dev shared transaction encryption key.
 ENCRYPTION_KEY_HEX="${ENCRYPTION_KEY_HEX:-0303030303030303030303030303030303030303030303030303030303030303}"
 
@@ -104,7 +104,7 @@ wait_for_port() {
 }
 
 # --- preflight ----------------------------------------------------------------
-required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark miden-usdcx-genesis)
+required_bins=(miden-node miden-validator miden-ntx-builder miden-remote-prover miden-benchmark miden-genesis)
 for bin in "${required_bins[@]}"; do
     command -v "$bin" >/dev/null || die "$bin not on PATH"
 done
@@ -126,31 +126,23 @@ say "creating the native USDCx faucet and funding account"
 mkdir "$DATA/usdcx"
 (
     cd "$DATA/usdcx"
-    DISTRIBUTOR_OUTPUT="$(miden-usdcx-genesis new-distributor)"
+    DISTRIBUTOR_OUTPUT="$(miden-genesis new-distributor)"
     printf '%s\n' "$DISTRIBUTOR_OUTPUT"
     DISTRIBUTOR_ID="$(printf '%s\n' "$DISTRIBUTOR_OUTPUT" | sed -n 's/^  hex: *//p')"
-    [ -n "$DISTRIBUTOR_ID" ] || die "USDCx genesis did not report the distributor account ID"
+    [ -n "$DISTRIBUTOR_ID" ] || die "genesis did not report the distributor account ID"
 
     # Benchmark accounts have no native assets to pay transaction fees.
-    cat > config.json <<EOF
-{
-  "accounts": { "owner": "$DISTRIBUTOR_ID" },
-  "faucet": {
-    "seed": "0x55534443582d4641554345540000000000000000000000000000000000000000",
-    "token_supply": 1000000000000000,
-    "domain": 10007,
-    "min_burn_amount": 1,
-    "verification_base_fee": 0,
-    "attesters": []
-  }
-}
-EOF
-    miden-usdcx-genesis faucet
-    miden-usdcx-genesis prefund
+    miden-genesis faucet \
+        --owner "${DISTRIBUTOR_ID}" \
+        --seed 0x55534443582d4641554345540000000000000000000000000000000000000000 \
+        --token-supply 1000000000000000 \
+        --min-burn-amount 1 \
+        --verification-base-fee 0
+    miden-genesis prefund
 ) > "$LOGS/bootstrap-usdcx.log" 2>&1
 
 say "building genesis block"
-miden-validator genesis \
+miden-genesis build \
     --genesis-block-directory "$DATA/genesis" \
     --accounts-directory      "$DATA/accounts" \
     --native-faucet            "$DATA/usdcx/usdcx-faucet.mac" \

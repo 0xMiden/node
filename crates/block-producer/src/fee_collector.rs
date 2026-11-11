@@ -6,7 +6,7 @@ use anyhow::Context;
 use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{info, miden_instrument, miden_span_record};
+use miden_node_tracing::{info, instrument, miden_span_record};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::Account;
 use miden_protocol::batch::ProposedBatch;
@@ -18,7 +18,6 @@ use crate::batch_builder::BatchProver;
 use crate::block_builder::{BlockBuilder, SelectedBlock};
 use crate::block_prover::BlockProver;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, LOG_TARGET};
 
 #[cfg(test)]
 mod tests;
@@ -32,7 +31,7 @@ mod faucet;
 ///
 /// The deployment requires no funds and pays no fee. The sequencer must be stopped.
 /// Returns without creating a block if the matching collector is already deployed.
-#[miden_instrument(target = COMPONENT, name = "deploy_fee_collector", err)]
+#[instrument(name = "deploy_fee_collector", err)]
 pub async fn deploy_fee_collector(
     state: &State,
     block_writer: &mut BlockWriter,
@@ -54,7 +53,7 @@ pub async fn deploy_fee_collector(
     let mut deployed_account = account_file.account().clone();
     deployed_account.set_nonce(ONE)?;
     if collector_is_deployed(state, &deployed_account).await? {
-        info!(target: LOG_TARGET, "Fee collector is already deployed");
+        info!("Fee collector is already deployed");
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
@@ -132,7 +131,7 @@ pub async fn deploy_fee_collector(
         )
         .await?;
     proof_writer.apply_proof(block_number, proof.to_bytes()).await?;
-    info!(target: LOG_TARGET, "Deployed batch builder collection account", block.number = block_number);
+    info!("Deployed batch builder collection account", block.number = block_number);
     Ok(())
 }
 

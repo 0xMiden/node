@@ -10,7 +10,7 @@ sidebar_position: 8
 Use `MIDEN_STDOUT_FILTER` to enable detailed output for the affected component. For example:
 
 ```bash
-MIDEN_STDOUT_FILTER='info,user=debug,user::miden-rpc=trace' miden-node full ...
+MIDEN_STDOUT_FILTER='info,user=debug,miden::storage=debug,miden::rpc::server=trace' miden-node full ...
 ```
 
 See [Logging](/logging) for filter precedence, all user-facing targets, container and systemd examples, and independent

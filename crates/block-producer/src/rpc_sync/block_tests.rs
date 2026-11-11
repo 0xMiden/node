@@ -2,7 +2,11 @@ use std::collections::BTreeMap;
 
 use miden_node_proto::clients::Builder;
 use miden_node_proto::generated as proto;
-use miden_node_proto::generated::miden::node::v1::{BlockSubscriptionResponse, StatusResponse};
+use miden_node_proto::generated::miden::node::v1::{
+    BlockSubscriptionRequest,
+    BlockSubscriptionResponse,
+    StatusResponse,
+};
 use miden_node_proto::generated::server::miden_node_v1_node_service;
 use miden_node_store::GenesisState;
 use miden_node_utils::clap::StorageOptions;

@@ -103,12 +103,7 @@ impl OnFailure<GrpcFailureClass> for GrpcOnFailure {
     ) {
         if let GrpcFailureClass::Error(message) = classification {
             let error = FailureMessage(message);
-            tracing::error!(
-                parent: span,
-                error = &error as &(dyn std::error::Error + 'static),
-                latency = ?latency,
-                "response failed"
-            );
+            crate::error!(&error, parent: span, "response failed", latency = format!("{latency:?}") #[nonstandard]);
         }
     }
 }
@@ -129,21 +124,18 @@ fn record_status(status: &tonic::Status, latency: Duration, span: &tracing::Span
 fn log_failure(level: Level, status: &tonic::Status, latency: Duration, span: &tracing::Span) {
     if level == Level::ERROR {
         let error = FailureMessage(status.message().to_owned());
-        tracing::error!(
-            parent: span,
-            error = &error as &(dyn std::error::Error + 'static),
-            grpc.code = ?status.code(),
-            grpc.message = status.message(),
-            latency = ?latency,
-            "request failed"
+        crate::error!(
+            &error, parent: span, "request failed",
+            grpc.code = format!("{:?}", status.code()) #[nonstandard],
+            grpc.message = status.message() #[nonstandard],
+            latency = format!("{latency:?}") #[nonstandard]
         );
     } else {
-        tracing::info!(
-            parent: span,
-            grpc.code = ?status.code(),
-            grpc.message = status.message(),
-            latency = ?latency,
-            "request failed"
+        crate::info!(
+            parent: span, "request failed",
+            grpc.code = format!("{:?}", status.code()) #[nonstandard],
+            grpc.message = status.message() #[nonstandard],
+            latency = format!("{latency:?}") #[nonstandard]
         );
     }
 }
@@ -181,7 +173,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
 
     // Create a span with a generic, static name. Fields to be recorded after needs to be
     // initialized as empty since otherwise the assignment will have no effect.
-    let span = tracing::info_span!(
+    let span = crate::info_span!(
         "rpc",
         otel.name = field::Empty,
         rpc.service = service,

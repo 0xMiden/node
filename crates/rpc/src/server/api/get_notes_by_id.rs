@@ -1,13 +1,12 @@
 use miden_node_proto::generated::miden::node::v1::CommittedNote;
 use miden_node_proto::{DecodeMessage, generated as proto};
 use miden_node_store::NoteRecord;
-use miden_node_tracing::{debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNoteIdLimit;
 use miden_protocol::note::NoteId;
 
 use super::error_codes::GetNotesByIdErrorCode;
 use super::{RpcService, check, database_error_to_status};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
@@ -25,10 +24,7 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
         Ok(proto::miden::node::v1::GetNotesByIdResponse { notes })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "get_notes_by_id",
-    )]
+    #[instrument(name = "get_notes_by_id")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -41,7 +37,6 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
             note.count = note_ids.len()
         );
         debug!(
-            target: LOG_TARGET,
             "Getting notes by ID",
             note.ids = &note_ids[..note_ids.len().min(10)],
             note.count = note_ids.len()

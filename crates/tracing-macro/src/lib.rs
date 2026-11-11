@@ -24,7 +24,7 @@ use syn::{
 
 mod instrument;
 
-/// Instruments a function using canonical tracing attributes.
+/// Instruments a function using canonical tracing attributes and a scoped target.
 ///
 /// Field values must implement `RecordAttribute`, and their names must be registered for the value
 /// type. A field whose name ends in `.count` accepts any `usize` without registration. Append
@@ -35,8 +35,67 @@ mod instrument;
 /// Errors must implement `std::error::Error + 'static` or dereference to that trait.
 /// `err(level = "warn")` sets the event level. Error formatters are not supported.
 /// Return value logging with `ret` is not supported.
+///
+/// Uses the target declared for this module unless an explicit `target` is supplied.
+/// An explicit target works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro_attribute]
-pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
+pub fn instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let attr = TokenStream2::from(attr);
+    let item = TokenStream2::from(item);
+    let explicit_target = split_top_level_args(attr.clone()).iter().any(|arg| {
+        matches!(arg.clone().into_iter().next(), Some(TokenTree::Ident(ident)) if ident == "target")
+    });
+
+    if explicit_target {
+        expand_instrument(attr.into(), item.into())
+    } else {
+        // Constants use item-name resolution, so hygiene alone cannot prevent collisions. Choose a
+        // name absent from both the function and its instrumentation arguments.
+        let mut name = "__MIDEN_TRACING_TARGET".to_owned();
+        while contains_ident(item.clone(), &name) || contains_ident(attr.clone(), &name) {
+            name.push('_');
+        }
+        let target = Ident::new(&name, proc_macro2::Span::mixed_site());
+        // Upstream requires parent and follows_from options to precede the target.
+        let args = split_top_level_args(attr);
+        expand_instrument(
+            quote!(#(#args,)* target = #target).into(),
+            quote! {
+                #[::miden_node_tracing::__with_tracing_target(#target)]
+                #item
+            }
+            .into(),
+        )
+    }
+}
+
+fn contains_ident(tokens: TokenStream2, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == name,
+        TokenTree::Group(group) => contains_ident(group.stream(), name),
+        _ => false,
+    })
+}
+
+/// Binds the lexical target after upstream instrumentation has generated its function body.
+///
+/// The upstream attribute accepts only literals or identifiers for targets. Inserting this
+/// constant after expansion makes it visible to both generated spans and automatic error events.
+#[doc(hidden)]
+#[proc_macro_attribute]
+pub fn __with_tracing_target(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let target = parse_macro_input!(attr as Ident);
+    let mut function = parse_macro_input!(item as ItemFn);
+    function.block.stmts.insert(
+        0,
+        syn::parse_quote! {
+            const #target: &str = tracing_target!();
+        },
+    );
+    quote!(#function).into()
+}
+
+fn expand_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr = match rewrite_explicit_fields(TokenStream2::from(attr)) {
         Ok(attr) => attr,
         Err(error) => return error.into_compile_error().into(),
@@ -54,7 +113,7 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
     let statements = &function.block.stmts;
     let block: Block = parse_quote! {{
         #[allow(unused_macros)]
-        macro_rules! __miden_span_record_must_be_used_within_miden_instrument {
+        macro_rules! __miden_span_record_must_be_used_within_instrument {
             () => {};
         }
 
@@ -89,11 +148,16 @@ pub fn miden_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::trace;
 ///
+/// miden_node_tracing::declare_targets! { default: "miden", }
+///
 /// trace!(target: "node", "block.received", block.number = 42_u32);
 ///
 /// let source = std::io::Error::other("invalid block");
 /// trace!(&source, "block.rejected", block.number = 42_u32);
 /// ```
+///
+/// Uses the target declared for this module. An explicit `target:` overrides it and
+/// works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro]
 pub fn trace(input: TokenStream) -> TokenStream {
     expand_event(input, "trace", false)
@@ -118,11 +182,16 @@ pub fn trace(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::debug;
 ///
+/// miden_node_tracing::declare_targets! { default: "miden", }
+///
 /// debug!("block.queued", block.number = 42_u32);
 ///
 /// let source = std::io::Error::other("upstream unavailable");
 /// debug!(&source, "block.retrying", block.number = 42_u32);
 /// ```
+///
+/// Uses the target declared for this module. An explicit `target:` overrides it and
+/// works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro]
 pub fn debug(input: TokenStream) -> TokenStream {
     expand_event(input, "debug", false)
@@ -147,12 +216,17 @@ pub fn debug(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::info;
 ///
+/// miden_node_tracing::declare_targets! { default: "miden", }
+///
 /// let parent = tracing::info_span!("block");
 /// info!(parent: &parent, "block.accepted", block.number = 42_u32);
 ///
 /// let source = std::io::Error::other("used fallback");
 /// info!(&source, "block.fallback_used", block.number = 42_u32);
 /// ```
+///
+/// Uses the target declared for this module. An explicit `target:` overrides it and
+/// works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro]
 pub fn info(input: TokenStream) -> TokenStream {
     expand_event(input, "info", false)
@@ -177,11 +251,16 @@ pub fn info(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::warn;
 ///
+/// miden_node_tracing::declare_targets! { default: "miden", }
+///
 /// warn!("block.delayed", block.number = 42_u32);
 ///
 /// let source = std::io::Error::other("upstream unavailable");
 /// warn!(&source, "block.retrying", block.number = 42_u32);
 /// ```
+///
+/// Uses the target declared for this module. An explicit `target:` overrides it and
+/// works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro]
 pub fn warn(input: TokenStream) -> TokenStream {
     expand_event(input, "warn", false)
@@ -205,12 +284,87 @@ pub fn warn(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::error;
 ///
+/// miden_node_tracing::declare_targets! { default: "miden", }
+///
 /// let source = std::io::Error::other("database unavailable");
 /// error!(source, target: "node", "block.store_failed", block.number = 42_u32);
 /// ```
+///
+/// Uses the target declared for this module. An explicit `target:` overrides it and
+/// works without a declaration; otherwise a missing scope is a compile error.
 #[proc_macro]
 pub fn error(input: TokenStream) -> TokenStream {
     expand_event(input, "error", true)
+}
+
+/// Creates a trace-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::trace_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn trace_span(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "trace_span")
+}
+
+/// Creates a debug-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::debug_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn debug_span(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "debug_span")
+}
+
+/// Creates an info-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::info_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn info_span(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "info_span")
+}
+
+/// Creates a warn-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::warn_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn warn_span(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "warn_span")
+}
+
+/// Creates an error-level span using the lexically visible `tracing_target!` target.
+///
+/// Accepts the same arguments as `tracing::error_span!`. A leading `target:` overrides the
+/// scope and can be used without a target declaration.
+#[proc_macro]
+pub fn error_span(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "error_span")
+}
+
+/// Checks subscriber interest at a level using the lexically visible `tracing_target!` target.
+///
+/// Accepts a level followed by optional field names, just like `tracing::enabled!`. A leading
+/// `target:` overrides the scope and can be used without one. Otherwise, a `tracing_target!` declaration must be in lexical scope.
+/// This is an interest hint, not a guarantee that a particular span or event will be recorded.
+#[proc_macro]
+pub fn enabled(input: TokenStream) -> TokenStream {
+    expand_scoped_macro(input, "enabled")
+}
+
+fn expand_scoped_macro(input: TokenStream, name: &str) -> TokenStream {
+    let name = Ident::new(name, proc_macro2::Span::call_site());
+    let input = TokenStream2::from(input);
+    let mut tokens = input.clone().into_iter();
+    let explicit_target = matches!(tokens.next(), Some(TokenTree::Ident(name)) if name == "target")
+        && matches!(tokens.next(), Some(TokenTree::Punct(punct)) if punct.as_char() == ':');
+
+    if explicit_target {
+        quote! { ::miden_node_tracing::__private::#name!(#input) }
+    } else {
+        quote! { ::miden_node_tracing::__private::#name!(target: tracing_target!(), #input) }
+    }
+    .into()
 }
 
 fn expand_event(input: TokenStream, level: &str, error_required: bool) -> TokenStream {
@@ -356,16 +510,22 @@ impl Event {
             }
         });
         let fields = self.fields.iter().map(RecordField::instrument_tokens);
+        let args = quote! {
+            #target
+            #parent
+            message = #name
+            #error
+            #(, #fields)*
+        };
+        let event = if self.target.is_none() {
+            quote! { ::miden_node_tracing::__private::#level!(target: tracing_target!(), #args) }
+        } else {
+            quote! { ::miden_node_tracing::__private::#level!(#args) }
+        };
 
         quote! {{
             #error_import
-            ::miden_node_tracing::__private::#level!(
-                #target
-                #parent
-                message = #name
-                #error
-                #(, #fields)*
-            )
+            #event
         }}
     }
 }
@@ -443,7 +603,7 @@ fn reject_skip_directives(args: &[TokenStream2]) -> Result<()> {
             return Err(syn::Error::new_spanned(
                 arg,
                 format!(
-                    "`{ident}` is not supported by `miden_instrument`; function arguments are \
+                    "`{ident}` is not supported by `instrument`; function arguments are \
                      always skipped, record fields explicitly with `fields(...)`"
                 ),
             ));
@@ -551,7 +711,7 @@ fn ends_with_comma(tokens: &TokenStream2) -> bool {
     )
 }
 
-/// Records canonical attributes on the current `miden_instrument` span.
+/// Records canonical attributes on the current `instrument` span.
 ///
 /// Field values must implement `RecordAttribute`, and their names must be registered for the value
 /// type. A field whose name ends in `.count` accepts any `usize` without registration. Append
@@ -573,7 +733,7 @@ pub fn miden_span_record(input: TokenStream) -> TokenStream {
     });
 
     quote! {
-        __miden_span_record_must_be_used_within_miden_instrument!();
+        __miden_span_record_must_be_used_within_instrument!();
         #(#records)*
     }
     .into()

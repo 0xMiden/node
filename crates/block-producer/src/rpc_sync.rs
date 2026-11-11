@@ -2,24 +2,20 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
-use anyhow::Context;
 use miden_node_proto::clients::RpcClient;
-use miden_node_proto::generated::miden::node::v1::{
-    BlockSubscriptionRequest,
-    ProofSubscriptionRequest,
-};
-use miden_node_proto::{DecodeMessage, DecodeMessageExt};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
-use miden_node_tracing::{Instrument, debug, info, info_span, miden_instrument, warn};
-use miden_node_utils::retry::{self, RetryableWithContext};
+use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::BlockNumber;
-use tokio_stream::StreamExt;
 use tonic_health::ServingStatus;
 use tonic_health::server::HealthReporter;
 
-use crate::{COMPONENT, LOG_TARGET};
+mod blocks;
+mod proofs;
+
+use blocks::BlockSync;
+use proofs::ProofSync;
 
 pub(crate) const RECONNECT_DELAY: Duration = Duration::from_secs(5);
 
@@ -73,7 +69,6 @@ impl RpcReadiness {
         match self.record_transition(ready) {
             ReadinessTransition::BecameReady => {
                 info!(
-                    target: LOG_TARGET,
                     "Node ready",
                     service.name = "miden-node",
                     service.version = env!("CARGO_PKG_VERSION"),
@@ -86,7 +81,6 @@ impl RpcReadiness {
             },
             ReadinessTransition::BecameNotReady => {
                 warn!(
-                    target: LOG_TARGET,
                     "Node no longer ready",
                     block.number = local_tip,
                     sync.upstream_block = upstream_tip,
@@ -96,7 +90,6 @@ impl RpcReadiness {
             },
             ReadinessTransition::InitialNotReady => {
                 debug!(
-                    target: LOG_TARGET,
                     "Node synchronizing",
                     block.number = local_tip,
                     sync.upstream_block = upstream_tip,
@@ -156,203 +149,6 @@ impl RpcSync {
         tasks.spawn("proof-sync", proof_sync.run(shutdown.clone()));
 
         tasks.join_next_or_cancelled(shutdown).await
-    }
-}
-
-// SYNC LOOP
-// ================================================================================================
-
-struct BlockSync {
-    state: Arc<State>,
-    writer: BlockWriter,
-    source_rpc: RpcClient,
-    readiness: RpcReadiness,
-}
-
-impl BlockSync {
-    async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        // `sync` needs `&mut self` (it applies blocks through the writer capability), so the retry
-        // closure cannot lend out a borrow of a capture; thread `self` through as owned context
-        // instead.
-        let retry = (|mut sync: Self| {
-            let shutdown = shutdown.clone();
-            async move {
-                let result = sync
-                    .sync(shutdown)
-                    .await
-                    .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")));
-                (sync, result)
-            }
-        })
-        .retry(retry::constant(RECONNECT_DELAY, None))
-        .context(self)
-        .notify(|err, _| {
-            warn!(
-                err,
-                target: LOG_TARGET,
-                "Block sync failed, retrying",
-                retry.delay_ms = RECONNECT_DELAY
-            );
-        });
-
-        tokio::select! {
-            (_, result) = retry => result,
-            () = shutdown.cancelled() => Ok(()),
-        }
-    }
-
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
-    async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        let local_tip = self.state.committed_tip();
-        let (parent, _) = self.state.view().get_block_header(Some(local_tip), false).await?;
-        let mut parent = parent.context("local chain tip header not found")?;
-        let mut client = self.source_rpc.clone();
-        let upstream_tip = BlockNumber::from(
-            client
-                .status(tonic::Request::new(
-                    miden_node_proto::generated::miden::node::v1::StatusRequest {},
-                ))
-                .await?
-                .into_inner()
-                .chain_tip,
-        );
-        self.readiness.update(upstream_tip, local_tip).await;
-
-        let block_from = local_tip.child().as_u32();
-        info!(
-            target: LOG_TARGET,
-            "Connecting to upstream RPC for blocks",
-            block.from = block_from
-        );
-
-        let mut stream = client
-            .block_subscription(BlockSubscriptionRequest { block_from })
-            .await?
-            .into_inner();
-
-        loop {
-            let result = tokio::select! {
-                () = shutdown.cancelled() => return Ok(()),
-                result = stream.next() => result,
-            };
-            let Some(result) = result else {
-                return Ok(());
-            };
-            let (block, upstream_tip, protocol_config) = result?
-                .decode_and_verify_with(&parent)
-                .context("failed to verify block from upstream")?;
-            let next_parent = block.header().clone();
-            // Each synced block gets its own root span: the surrounding `sync` span lives for the
-            // whole subscription, so parenting under it would chain every block into one
-            // never-exported trace.
-            let block_span = info_span!(
-                target: COMPONENT,
-                parent: None,
-                "sync_block",
-                block.number = block.header().block_num().as_u32(),
-            );
-            self.writer.apply_block(block, protocol_config).instrument(block_span).await?;
-            parent = next_parent;
-
-            let local_tip = self.state.committed_tip();
-            self.readiness.update(upstream_tip, local_tip).await;
-        }
-    }
-}
-
-struct ProofSync {
-    state: Arc<State>,
-    writer: ProofWriter,
-    source_rpc: RpcClient,
-}
-
-impl ProofSync {
-    /// Synchronizes block proofs from an upstream RPC service.
-    ///
-    /// Proof sync is intentionally coupled to block sync via the committed tip: a proof is only applied
-    /// once its block has been committed locally. This means proof sync can stall if block sync falls
-    /// behind, but that is acceptable — there is no value in streaming proofs for blocks that have not
-    /// yet been applied.
-    async fn run(self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        // `sync` needs `&mut self` (it commits proofs through the writer capability), so the retry
-        // closure cannot lend out a borrow of a capture; thread `self` through as owned context
-        // instead.
-        let retry = (|mut sync: Self| {
-            let shutdown = shutdown.clone();
-            async move {
-                let result = sync
-                    .sync(shutdown)
-                    .await
-                    .and_then(|()| Err(anyhow::anyhow!("unexpected end of stream")));
-                (sync, result)
-            }
-        })
-        .retry(retry::constant(RECONNECT_DELAY, None))
-        .context(self)
-        .notify(|err, _| {
-            warn!(
-                err,
-                target: LOG_TARGET,
-                "Proof sync failed, retrying",
-                retry.delay_ms = RECONNECT_DELAY
-            );
-        });
-
-        tokio::select! {
-            (_, result) = retry => result,
-            () = shutdown.cancelled() => Ok(()),
-        }
-    }
-
-    async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
-        // Subscribe from next proven tip.
-        let starting_block = self.state.proven_tip().child();
-        info!(
-            target: LOG_TARGET,
-            "Subscribing to block proof stream",
-            block.from = starting_block
-        );
-        let mut client = self.source_rpc.clone();
-        let mut stream = client
-            .proof_subscription(ProofSubscriptionRequest { block_from: starting_block.as_u32() })
-            .await?
-            .into_inner();
-
-        let mut expected = starting_block;
-        let mut committed_tip_rx = self.state.subscribe_committed_tip();
-        loop {
-            let result = tokio::select! {
-                () = shutdown.cancelled() => return Ok(()),
-                result = stream.next() => result,
-            };
-            let Some(result) = result else {
-                return Ok(());
-            };
-            let event = result?.decode_fields().context("failed to decode proof from upstream")?;
-            let block_num = BlockNumber::from(event.block_num);
-
-            anyhow::ensure!(
-                block_num == expected,
-                "upstream sent out-of-sequence proof: expected block {expected}, got {block_num}",
-            );
-
-            // Ensure the block is committed before applying its proof so that proven tip never
-            // exceeds committed tip.
-            tokio::select! {
-                () = shutdown.cancelled() => return Ok(()),
-                result = committed_tip_rx.wait_for(|committed_tip| *committed_tip >= block_num) => {
-                    result.context("committed tip channel closed")?;
-                },
-            }
-
-            let proof = event.proof;
-            self.writer.apply_proof(block_num, proof.to_bytes()).await?;
-
-            expected = expected.child();
-        }
     }
 }
 

@@ -38,7 +38,6 @@ impl ConnectedPeer {
             .notify(|error, delay| {
                 warn!(
                     error,
-                    target: miden_validator::LOG_TARGET,
                     "Retrying DKG peer connection",
                     dkg.peer.endpoint = peer_endpoint.to_string() #[nonstandard],
                     retry.delay_ms = delay

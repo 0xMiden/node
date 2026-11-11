@@ -2,7 +2,7 @@ mod data_store;
 
 pub use data_store::TransactionInputsDataStore;
 use miden_node_tracing::spawn::{spawn_blocking_in_current_span, spawn_blocking_in_span};
-use miden_node_tracing::{Instrument, info_span, miden_instrument};
+use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::errors::TransactionVerifierError;
 use miden_protocol::transaction::{
@@ -14,8 +14,6 @@ use miden_protocol::transaction::{
 };
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{TransactionExecutor, TransactionExecutorError};
-
-use crate::COMPONENT;
 
 // TRANSACTION VALIDATION ERROR
 // ================================================================================================
@@ -42,7 +40,7 @@ pub enum TransactionValidationError {
 /// Returns the effects of the re-executed transaction. The effects hold the account state
 /// commitments, the account patch, the input and output notes, the reference block and the
 /// expiration block.
-#[miden_instrument(target = COMPONENT)]
+#[instrument]
 pub async fn validate_transaction(
     proven_tx: ProvenTransaction,
     tx_inputs: TransactionInputs,

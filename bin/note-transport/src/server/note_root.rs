@@ -6,16 +6,15 @@ use miden_node_proto::generated::miden::node::v1::{
     GetBlockHeaderByNumberResponse,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
-use miden_node_tracing::{error, miden_instrument, miden_span_record};
+use miden_node_tracing::{error, instrument, miden_span_record};
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 
 use super::Server;
-use crate::{COMPONENT, LOG_TARGET};
 
 impl Server {
     /// Returns the trusted node's note root for the requested block.
-    #[miden_instrument(target = COMPONENT)]
+    #[instrument]
     pub(super) async fn get_note_root(&self, block_num: BlockNumber) -> tonic::Result<Word> {
         miden_span_record!(block.number = block_num);
         if let Some(root) = self.note_root_cache.get(&block_num) {
@@ -31,7 +30,7 @@ impl Server {
             // The configured node supplies the canonical header. No parent check is required.
             .and_then(|header| header.build_unchecked().context("block_header"))
             .map_err(|error| {
-                error!(error, target: LOG_TARGET, "Invalid node block header");
+                error!(error, "Invalid node block header");
                 tonic::Status::unavailable("node returned an invalid block header")
             })?;
         if header.block_num() != block_num {
@@ -100,7 +99,7 @@ fn lookup_status(error: &tonic::Status) -> tonic::Status {
             tonic::Status::deadline_exceeded("block header lookup timed out")
         },
         _ => {
-            error!(error, target: LOG_TARGET, "Block header lookup failed");
+            error!(error, "Block header lookup failed");
             tonic::Status::unavailable("block header lookup failed")
         },
     }

@@ -1,11 +1,10 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, instrument};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::vm::ExecutionProof;
 
-use super::super::{COMPONENT, RpcService, log_internal_error};
+use super::super::{RpcService, log_internal_error};
 use super::stream::{StreamItem, SubscriptionStream};
-use crate::LOG_TARGET;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService {
@@ -31,8 +30,7 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
         })
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
+    #[instrument(
         name = "proof_subscription",
         fields(
             block.from = input,
@@ -44,7 +42,7 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        debug!(target: LOG_TARGET, "Subscribing to block proofs");
+        debug!("Subscribing to block proofs");
 
         let from = input;
         SubscriptionStream::proofs(self, from)

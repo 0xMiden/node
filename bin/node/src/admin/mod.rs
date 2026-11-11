@@ -14,13 +14,11 @@ use miden_node_store::allowlist::{
     InvitationCode,
     InvitationEntry,
 };
-use miden_node_tracing::{ErrorReport, info, miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorReport, info, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
-
-use crate::LOG_TARGET;
 
 mod client;
 pub(crate) use client::AdminClient;
@@ -49,9 +47,12 @@ impl AdminServer {
 
     pub(crate) async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         info!(
-            target: crate::LOG_TARGET,
             "Sequencer admin server ready",
-            admin.listen = self.listener.local_addr().context("failed to read admin listen address")?.to_string()
+            admin.listen = self
+                .listener
+                .local_addr()
+                .context("failed to read admin listen address")?
+                .to_string()
         );
         axum::serve(self.listener, router(self.allowlist, self.funding))
             .with_graceful_shutdown(shutdown.cancelled_owned())
@@ -73,8 +74,9 @@ fn router(allowlist: Arc<AccountAllowlist>, funding: Option<FundingClient>) -> R
             get(invitation_status).put(put_invitation),
         )
         .route("/admin/allowlist/accounts/{account_id}", get(account_status).put(put_account))
-        .layer(middleware::map_response(no_store))
         .with_state(AdminState { allowlist, funding })
+        .merge(miden_node_tracing::admin::router())
+        .layer(middleware::map_response(no_store))
 }
 
 async fn no_store(mut response: Response) -> Response {
@@ -90,7 +92,7 @@ struct InvitationRequest {
     account_id: Option<String>,
 }
 
-#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.put_invitation", err)]
+#[instrument(name = "put_invitation", err)]
 async fn put_invitation(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -120,7 +122,7 @@ async fn put_invitation(
     })
 }
 
-#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.put_account", err)]
+#[instrument(name = "put_account", err)]
 async fn put_account(
     State(state): State<AdminState>,
     Path(account): Path<String>,
@@ -153,7 +155,7 @@ struct InvitationStatusResponse {
     allowlisted_at: Option<i64>,
 }
 
-#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.invitation_status", err)]
+#[instrument(name = "invitation_status", err)]
 async fn invitation_status(
     State(state): State<AdminState>,
     Path(digest): Path<String>,
@@ -187,7 +189,7 @@ struct AccountStatusResponse {
     allowlisted_at: i64,
 }
 
-#[miden_instrument(target = LOG_TARGET, name = "admin.allowlist.account_status", err)]
+#[instrument(name = "account_status", err)]
 async fn account_status(
     State(state): State<AdminState>,
     Path(account): Path<String>,

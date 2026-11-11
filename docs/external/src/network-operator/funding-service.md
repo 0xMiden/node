@@ -15,15 +15,14 @@ that source, and it gives an operator a single account to keep funded.
 ## Provision the funding account
 
 Prepare a public account using standard `AuthSingleSig` authentication, with a nonzero nonce and a balance of the native
-asset. Pass its account file to `miden-validator genesis --funding-account`. Keep its account ID for bootstrap and its
+asset. Pass its account file to `miden-genesis build --funding-account`. Keep its account ID for bootstrap and its
 signing key for startup. The service reads the current public account state from the node.
 
 The signing-key file contains the binary serialization of `AuthSecretKey`, including its signature scheme. It supports
-ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-usdcx-genesis new-distributor` writes this file as
-`distributor.secret` alongside the account file; see the
-[genesis tool documentation](https://github.com/0xMiden/node/tree/main/crates/usdcx-genesis). For an existing account,
-export its key in the same format. Restrict the key file to its owner and keep it outside the database directory; the
-database contains no signing key.
+ECDSA secp256k1/Keccak and Falcon512Poseidon2. `miden-genesis new-distributor` writes this file as `distributor.secret`
+alongside the account file; see the [genesis tool documentation](https://github.com/0xMiden/node/tree/main/bin/genesis).
+For an existing account, export its key in the same format. Restrict the key file to its owner and keep it outside the
+database directory; the database contains no signing key.
 
 ## Initialize the database
 
@@ -60,21 +59,22 @@ miden-funding-service start \
   --validator-signing-public-key <validator-signing-public-key>
 ```
 
-| Option                           | Default      | Purpose                                                                                                                                                                 |
-| -------------------------------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--data-directory`               | required     | Directory containing the bootstrapped funding database.                                                                                                                 |
-| `--listen`                       | required     | Socket address of the HTTP API.                                                                                                                                         |
-| `--rpc.url`                      | required     | The node RPC API the service reads from and submits to.                                                                                                                 |
-| `--signing-key-file`             | required     | Path to the funding account's serialized signing key.                                                                                                                   |
-| `--validator-signing-public-key` | required     | Hex-encoded validator signing public key trusted to attest the transaction encryption key. Repeat the flag, or pass a comma separated list, to trust more than one key. |
-| `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                    |
-| `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                                  |
-| `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                   |
-| `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                              |
-| `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                             |
-| `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                         |
-| `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                       |
-| `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                              |
+| Option                           | Default      | Purpose                                                                                                                                                              |
+| -------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--data-directory`               | required     | Directory containing the bootstrapped funding database.                                                                                                              |
+| `--listen`                       | required     | Socket address of the HTTP API.                                                                                                                                      |
+| `--rpc.url`                      | required     | The node RPC API the service reads from and submits to.                                                                                                              |
+| `--signing-key-file`             | required     | Path to the funding account's serialized signing key.                                                                                                                |
+| `--validator-signing-public-key` | required     | `0x`-prefixed validator signing public key trusted to attest the transaction encryption key. Repeat the flag, or pass a comma separated list, to trust several keys. |
+| `--tx-prover.url`                | none         | Remote transaction prover. Without it the service proves in process.                                                                                                 |
+| `--max-amount`                   | `1000000000` | Largest amount one request may ask for, in base units.                                                                                                               |
+| `--max-notes-per-tx`             | `16`         | Largest number of notes one transaction creates. Must not exceed 100.                                                                                                |
+| `--max-deposits-per-tx`          | `32`         | Largest number of deposits one transaction consumes. Must not exceed 1024, the protocol's input-note limit.                                                          |
+| `--tx-expiration-delta`          | `50`         | Largest number of blocks after its reference block at which a funding transaction expires.                                                                           |
+| `--poll-interval`                | `1s`         | Interval for syncing the wallet, discovering deposits, and checking submitted transactions.                                                                          |
+| `--http.timeout`                 | `30s`        | Largest duration allocated to one HTTP request.                                                                                                                      |
+| `--rpc.timeout`                  | `10s`        | Timeout of a request to the node.                                                                                                                                    |
+| `--tx-prover.timeout`            | `1m`         | Timeout of a request to the remote prover.                                                                                                                           |
 
 With `--tx-prover.url` set, the service proves only through the remote prover and never in process, so its host does not
 need the memory that proving requires. If the remote prover fails or times out, the affected requests stay queued and
@@ -192,10 +192,12 @@ operator action, which is what the status code reports.
 
 To refill the account, send it a **public** pay-to-ID note that holds the native asset. The service scans for those
 notes and consumes them on its own, so no operator action is needed beyond sending the note. The worker syncs at
-`--poll-interval`, which defaults to one second, while no transaction is in flight. At startup, the worker first scans
-from genesis through the current chain tip. It completes that discovery before it processes funding requests. A restart
-recovers unspent deposits, including deposits sent while the service was stopped. Periodic scans continue from the saved
-cursor.
+`--poll-interval`, which defaults to one second, while no transaction is in flight.
+
+The service stores the unspent deposits it finds and how far it has scanned in its database. A restart resumes the scan
+from the recorded block, so it still finds deposits sent while the service was stopped without scanning the whole chain
+again. The first start after bootstrap, or after upgrading from a version that did not record this progress, scans from
+genesis once and can take noticeably longer.
 
 A note is only collected when all of the following hold. Anything else is ignored, because the note tag encodes only the
 leading bits of an account ID, so notes for other accounts reach the service too, and anyone can send a note that holds
@@ -209,13 +211,15 @@ whatever they like.
 | It holds the native asset and nothing else | Another asset would sit in the vault without the service being able to spend it.         |
 
 A deposit and queued payouts can share one transaction and one fee, even when the account balance is zero. The worker
-handles node rejections immediately. A state-conflict rejection with error byte `2` discards only the selected deposit.
-The payouts remain queued. Accepted transactions and uncertain transport failures are monitored until commitment or
-expiration. Other rejections and expiration retain the notes for retry.
+handles node rejections immediately. A state-conflict rejection with error byte `2` discards the selected deposits that
+are already spent on chain, or the selected deposit when it is the only one. The payouts remain queued. Accepted
+transactions and uncertain transport failures are monitored until commitment or expiration. Other rejections and
+expiration retain the notes for retry.
 
 If the node cannot serve a deposit or check whether it has been spent, funding waits for synchronization to succeed. The
-service retries these failures automatically and checks the recovered deposits against the chain after a restart.
+service retries these failures automatically.
 
-One transaction consumes at most one deposit, selected by largest amount. A transaction that consumes a deposit and
-creates no funding note is only submitted when that deposit is worth more than the fee, so a note holding a single base
-unit cannot be used to make the account spend more than it gains.
+One transaction consumes up to `--max-deposits-per-tx` deposits, selected by largest amount, and pays one fee for all of
+them. A transaction that consumes deposits and creates no funding note is only submitted when those deposits together
+are worth more than the fee, so notes holding a single base unit cannot be used to make the account spend more than it
+gains. Small deposits, such as the batch fees the service collects, are consumed once enough of them add up.

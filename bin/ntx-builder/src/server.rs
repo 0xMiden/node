@@ -11,7 +11,6 @@ use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tonic_reflection::server;
 
-use crate::LOG_TARGET;
 use crate::db::NtxDbReader;
 
 mod get_network_note_status;
@@ -62,7 +61,6 @@ impl NtxBuilderRpcServer {
         let endpoint =
             listener.local_addr().context("failed to read NTX builder listen address")?;
         info!(
-            target: LOG_TARGET,
             "NTX builder ready",
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),

@@ -28,7 +28,7 @@ use miden_node_proto::generated::miden::node::v1::{
 use miden_node_proto::generated::submission::ProvenTransactionSubmission as ProtoProvenTransaction;
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug, info, miden_instrument, warn};
+use miden_node_tracing::{debug, info, instrument, warn};
 use miden_node_utils::retry;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
@@ -89,9 +89,14 @@ use url::Url;
 
 use crate::deploy::counter::create_counter_account;
 use crate::deploy::wallet::create_wallet_account;
-use crate::funding::{FeeFunder, FundingClient, counter_funding_amount};
+use crate::funding::{
+    FeeFunder,
+    FundingClient,
+    FundingWait,
+    PendingFunding,
+    counter_funding_amount,
+};
 use crate::registration::{MonitorAccountPair, RegistrationPool};
-use crate::{COMPONENT, LOG_TARGET};
 
 pub mod counter;
 pub mod wallet;
@@ -107,9 +112,9 @@ pub struct DeployedMonitorAccounts {
     pub secret_key: SecretKey,
     pub counter: Account,
     pub counter_anchor: CounterAnchor,
-    /// Faucet note funding the wallet's fees, consumed by its first increment transaction. `None`
-    /// on zero-fee chains.
-    pub wallet_funding_note: Option<UsdcxP2Id>,
+    /// Funding note for the wallet's fees, consumed by its first increment transaction once it
+    /// commits. `None` on zero-fee chains.
+    pub wallet_funding_note: Option<PendingFunding>,
 }
 
 /// RPC client and verified transaction-input sealer shared by monitor submission workflows.
@@ -205,7 +210,6 @@ impl TransactionSubmissionClient {
             .notify(|err: &anyhow::Error, delay: Duration| {
                 warn!(
                     err,
-                    target: COMPONENT,
                     "An unauthenticated input note is unknown to the node; retrying after backoff",
                     transaction.id = tx_id,
                     retry.delay_ms = delay
@@ -262,7 +266,6 @@ impl TransactionSubmissionClient {
             stale_key.store(true, Ordering::Relaxed);
             warn!(
                 status,
-                target: COMPONENT,
                 "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
                 transaction.id = tx_id
             );
@@ -369,7 +372,6 @@ pub async fn create_genesis_aware_rpc_client(
     .notify(|err: &anyhow::Error, sleep: Duration| {
         warn!(
             err,
-            target: COMPONENT,
             "RPC genesis discovery failed; retrying after backoff",
             retry.delay_ms = sleep
         );
@@ -379,19 +381,20 @@ pub async fn create_genesis_aware_rpc_client(
 
 /// Prepare an in-memory wallet/counter pair and deploy the counter to the network.
 ///
-/// Used both at startup and by the increment task when accounts are fundamentally outdated
-/// (e.g., after a network reset) and re-syncing from the RPC is not sufficient. The accounts
-/// are never persisted to disk; the monitor re-creates them on every restart. When a registration
-/// pool is provided, unresolved registrations reuse their existing accounts and codes. On a
-/// fee-charging chain the wallet receives `wallet_funding_amount` base units of the fee asset.
+/// Used at startup. The accounts are never persisted to disk; the monitor re-creates them on every
+/// restart. When a registration pool is provided, unresolved registrations reuse their existing
+/// accounts and codes. On a fee-charging chain the wallet receives `wallet_funding_amount` base
+/// units of the fee asset, and the counter is deployed only once its own funding note has
+/// committed; `on_wait` receives each unsuccessful check until then.
 pub async fn create_and_deploy_accounts(
     submission_client: &TransactionSubmissionClient,
     prover: &LocalTransactionProver,
     funding: Option<&FundingClient>,
     wallet_funding_amount: NonZeroU64,
     registration: Option<&mut RegistrationPool>,
+    on_wait: &(impl Fn(&FundingWait) + Sync),
 ) -> Result<DeployedMonitorAccounts> {
-    info!(target: LOG_TARGET, "Preparing monitor accounts");
+    info!("Preparing monitor accounts");
 
     let mut rpc_client = submission_client.rpc_client();
 
@@ -428,9 +431,13 @@ pub async fn create_and_deploy_accounts(
                 .fund(wallet_account.id(), wallet_funding_amount.get())
                 .await
                 .context("failed to fund the wallet account")?;
-            (Some(counter_note), Some(wallet_note))
+            (Some(PendingFunding::new(counter_note)), Some(PendingFunding::new(wallet_note)))
         },
         None => (None, None),
+    };
+    let counter_funding_note = match counter_funding_note {
+        Some(pending) => Some(pending.wait_until_committed(&mut rpc_client, on_wait).await),
+        None => None,
     };
 
     let creation_anchor =
@@ -468,10 +475,7 @@ pub async fn create_and_deploy_accounts(
     )
     .await?;
 
-    info!(
-        target: LOG_TARGET,
-        "Successfully created and deployed accounts"
-    );
+    info!("Successfully created and deployed accounts");
 
     Ok(DeployedMonitorAccounts {
         wallet: wallet_account,
@@ -689,7 +693,6 @@ async fn resolve_counter_anchor(
         {
             Ok(Some(anchor)) => {
                 info!(
-                    target: LOG_TARGET,
                     "Resolved counter FPI anchor",
                     account.id = committed_counter.id(),
                     block.number = anchor.block_header.block_num()
@@ -697,7 +700,6 @@ async fn resolve_counter_anchor(
                 return Ok(anchor);
             },
             Ok(None) => debug!(
-                target: LOG_TARGET,
                 "Counter account not yet committed in the expected state; retrying",
                 account.id = committed_counter.id(),
                 retry.attempt = attempt
@@ -705,7 +707,6 @@ async fn resolve_counter_anchor(
             Err(err) => {
                 debug!(
                     &err,
-                    target: LOG_TARGET,
                     "Counter anchor resolution attempt failed; retrying",
                     account.id = committed_counter.id(),
                     retry.attempt = attempt
@@ -1102,10 +1103,7 @@ pub async fn build_probe_transaction_inputs(
     clippy::too_many_arguments,
     reason = "the arguments describe the account, its complete transaction anchor, and submission"
 )]
-#[miden_instrument(
-    target = COMPONENT,
-    name = "deploy-counter-account",
-)]
+#[instrument(name = "deploy-counter-account")]
 pub async fn deploy_counter_account(
     counter_account: &Account,
     reference_header: BlockHeader,

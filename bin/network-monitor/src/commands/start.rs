@@ -3,21 +3,19 @@
 //! This module contains the implementation for starting the network monitoring service.
 
 use anyhow::Result;
-use miden_node_tracing::{OpenTelemetry, info, miden_instrument};
+use miden_node_tracing::{OpenTelemetry, info, instrument};
 
 use crate::config::MonitorConfig;
 use crate::frontend::ServerState;
 use crate::monitor::tasks::Tasks;
-use crate::{COMPONENT, LOG_TARGET};
 
 /// Start the network monitoring service.
 ///
 /// This function initializes all monitoring tasks including RPC status checking,
 /// remote prover testing, faucet testing, and the web frontend.
-#[miden_instrument(
+#[instrument(
     parent = None,
-    target = COMPONENT,
-    name = "network_monitor.start_monitor",
+    name = "start_monitor",
     level = "info",
     fields(
         port = config.port,
@@ -25,11 +23,23 @@ use crate::{COMPONENT, LOG_TARGET};
     err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
-    info!(target: LOG_TARGET, "Loaded configuration", port = config.port);
+    info!("Loaded configuration", port = config.port);
 
     let _otel_guard =
         miden_node_tracing::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;
 
+    miden_node_utils::shutdown::run_with_shutdown("miden-network-monitor", |shutdown| {
+        config.admin.run(shutdown.clone(), async move {
+            tokio::select! {
+                () = shutdown.cancelled() => Ok(()),
+                result = monitor(config) => result,
+            }
+        })
+    })
+    .await
+}
+
+async fn monitor(config: MonitorConfig) -> Result<()> {
     let mut tasks = Tasks::new();
 
     let rpc_rx = tasks.spawn_rpc_checker(&config);

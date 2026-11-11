@@ -1,21 +1,14 @@
 use std::path::Path;
 
 use miden_node_db::DatabaseError;
-use miden_node_tracing::{info, miden_instrument};
-
-use crate::{COMPONENT, LOG_TARGET};
+use miden_node_tracing::{info, instrument};
 
 include!(concat!(env!("OUT_DIR"), "/db_migrator.rs"));
 
-#[miden_instrument(
-    level = "debug",
-    target = COMPONENT,
-    err,
-)]
+#[instrument(level = "debug", err)]
 pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
     info!(
-        target: LOG_TARGET,
         "Bootstrapping database schema",
         migration.count = migrator.schema_hashes().len()
     );
@@ -27,39 +20,23 @@ pub fn bootstrap_database(database_filepath: &Path) -> std::result::Result<(), D
     Ok(())
 }
 
-#[miden_instrument(
-    level = "debug",
-    target = COMPONENT,
-    err,
-)]
+#[instrument(level = "debug", err)]
 pub fn migrate_database(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
-    info!(
-        target: LOG_TARGET,
-        "Applying database migrations",
-        migration.count = migrator.schema_hashes().len()
-    );
+    info!("Applying database migrations", migration.count = migrator.schema_hashes().len());
 
     migrator
         .open_database(database_filepath)
         .and_then(|mut database| database.migrate_to(migrator.latest_version()))
         .map_err(DatabaseError::migration)?;
-    info!(target: LOG_TARGET, "Database migrations completed");
+    info!("Database migrations completed");
     Ok(())
 }
 
-#[miden_instrument(
-    level = "debug",
-    target = COMPONENT,
-    err,
-)]
+#[instrument(level = "debug", err)]
 pub fn verify_latest_schema(database_filepath: &Path) -> std::result::Result<(), DatabaseError> {
     let migrator = migrator().map_err(DatabaseError::migration)?;
-    info!(
-        target: LOG_TARGET,
-        "Verifying database schema",
-        migration.count = migrator.schema_hashes().len()
-    );
+    info!("Verifying database schema", migration.count = migrator.schema_hashes().len());
 
     migrator
         .verify_latest_schema(database_filepath)

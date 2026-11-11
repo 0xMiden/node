@@ -56,7 +56,6 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
     ensure!(marker.version == 1, "unsupported block store version {}", marker.version);
 
     info!(
-        target: crate::LOG_TARGET,
         "Importing blocks into SQLite",
         migration.blocks.total = total #[nonstandard]
     );
@@ -86,7 +85,6 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
         imported += 1;
         if last_progress.elapsed() >= Duration::from_secs(10) {
             info!(
-                target: crate::LOG_TARGET,
                 "Importing blocks into SQLite",
                 migration.blocks.imported = imported #[nonstandard],
                 migration.blocks.total = total #[nonstandard],
@@ -96,7 +94,6 @@ fn import_blocks(tx: &Transaction<'_>) -> anyhow::Result<()> {
         }
     }
     info!(
-        target: crate::LOG_TARGET,
         "Block import finished",
         migration.blocks.imported = imported #[nonstandard],
         migration.elapsed_seconds = started.elapsed().as_secs() #[nonstandard]
@@ -114,7 +111,6 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
         return Ok(());
     }
     info!(
-        target: crate::LOG_TARGET,
         "Rebuilding transaction links",
         migration.transaction_links.total = total #[nonstandard]
     );
@@ -141,7 +137,6 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
         position = last_position.query_row([], |row| Ok((row.get(0)?, row.get(1)?)))?;
         if last_progress.elapsed() >= Duration::from_secs(10) {
             info!(
-                target: crate::LOG_TARGET,
                 "Rebuilding transaction links",
                 migration.transaction_links.copied = copied #[nonstandard],
                 migration.transaction_links.total = total #[nonstandard],
@@ -151,7 +146,6 @@ fn copy_transaction_links(tx: &Transaction<'_>) -> anyhow::Result<()> {
         }
     }
     info!(
-        target: crate::LOG_TARGET,
         "Transaction links copied; finalizing migration",
         migration.transaction_links.copied = copied #[nonstandard],
         migration.elapsed_seconds = started.elapsed().as_secs() #[nonstandard]

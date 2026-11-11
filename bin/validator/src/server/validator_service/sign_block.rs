@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{Instrument, info_span, miden_instrument};
+use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockNumber, ProposedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
@@ -10,25 +10,18 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use super::{StatusResultExt, ValidatorService};
-use crate::COMPONENT;
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
     type Input = grpc::miden::validator::v1::SignBlockRequest;
     type Output = (Signature, Word, PublicKey);
 
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
         Ok(request)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     fn encode(
         output: Self::Output,
     ) -> tonic::Result<grpc::miden::validator::v1::SignBlockResponse> {

@@ -4,7 +4,7 @@ use std::task::{Context, Poll};
 
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
-use miden_node_tracing::{ErrorReport, error, info, miden_instrument, miden_span_record};
+use miden_node_tracing::{ErrorReport, error, info, instrument, miden_span_record};
 use miden_protocol::block::BlockNumber;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
@@ -12,7 +12,6 @@ use tonic::Status;
 use tonic::codegen::tokio_stream::Stream;
 
 use super::ValidatorService;
-use crate::COMPONENT;
 
 type BlockStream =
     Pin<Box<dyn Stream<Item = tonic::Result<BlockSubscriptionResponse>> + Send + 'static>>;
@@ -46,10 +45,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
         Ok(item)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "validator.block_subscription",
-    )]
+    #[instrument(name = "block_subscription")]
     async fn handle(
         &self,
         request: Self::Input,

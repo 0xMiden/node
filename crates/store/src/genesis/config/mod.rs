@@ -25,7 +25,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha20Rng;
 use serde::{Deserialize, Serialize};
 
-use crate::{GenesisState, LOG_TARGET};
+use crate::GenesisState;
 
 mod errors;
 use self::errors::GenesisConfigError;
@@ -187,7 +187,6 @@ impl GenesisConfig {
             wallet_configs.into_iter().enumerate()
         {
             debug!(
-                target: LOG_TARGET,
                 "Adding wallet account",
                 account.index = index,
                 account.assets.count = assets.len()
@@ -257,7 +256,6 @@ impl GenesisConfig {
                 let slot = updated_faucet.token_config_slot_value();
                 faucet_account.storage_mut().set_item(slot.name(), slot.value())?;
                 debug!(
-                    target: LOG_TARGET,
                     "Setting faucet account issuance",
                     account.id = faucet_id,
                     asset.symbol = symbol.to_string(),
@@ -265,7 +263,6 @@ impl GenesisConfig {
                 );
             } else {
                 debug!(
-                    target: LOG_TARGET,
                     "No wallet references faucet asset",
                     account.id = faucet_id,
                     asset.symbol = symbol.to_string()
@@ -494,7 +491,6 @@ fn prepare_fungible_asset_update(
 
             let issuance: &mut u64 = faucet_issuance.entry(faucet_id).or_default();
             debug!(
-                target: LOG_TARGET,
                 "Updating faucet issuance",
                 account.id = faucet_id,
                 asset.symbol = symbol.to_string(),

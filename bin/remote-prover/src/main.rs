@@ -4,10 +4,12 @@ extern crate miden_node_tracing as tracing;
 use anyhow::Context;
 use clap::Parser;
 
-mod server;
+miden_node_tracing::declare_targets! {
+    default: "miden::rpc::server",
+    "miden_remote_prover::server::prover" => "miden::proving",
+}
 
-const COMPONENT: &str = "miden-prover";
-const LOG_TARGET: &str = "user::miden-prover";
+mod server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -16,9 +18,15 @@ async fn main() -> anyhow::Result<()> {
     let _otel_guard = miden_node_tracing::setup_tracing(server.open_telemetry())?;
 
     miden_node_utils::shutdown::run_with_shutdown("miden-remote-prover", |shutdown| async move {
-        let (handle, _port) = server.spawn(shutdown).await.context("failed to spawn server")?;
+        server
+            .admin
+            .run(shutdown.clone(), async move {
+                let (handle, _port) =
+                    server.spawn(shutdown).await.context("failed to spawn server")?;
 
-        handle.await.context("proof server panicked").flatten()
+                handle.await.context("proof server panicked").flatten()
+            })
+            .await
     })
     .await
 }

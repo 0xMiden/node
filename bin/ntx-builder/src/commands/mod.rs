@@ -47,6 +47,8 @@ pub enum NtxBuilderCommand {
     /// Starts the network transaction builder component.
     Start {
         #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
+        #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
         /// Socket address at which to serve the ntx-builder's gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
@@ -214,17 +216,17 @@ impl NtxBuilderCommand {
                 network,
             } => {
                 info!(
-                    target: miden_ntx_builder::LOG_TARGET,
                     "Bootstrapping NTX builder",
                     service.name = "miden-ntx-builder",
                     service.version = env!("CARGO_PKG_VERSION"),
-                    genesis.source.kind =
-                        if genesis_block_file.is_some() { "file" } else { "network" },
+                    genesis.source.kind = if genesis_block_file.is_some() {
+                        "file"
+                    } else {
+                        "network"
+                    },
                     genesis.source = genesis_block_file.as_ref().map_or_else(
-                        || network.map_or_else(
-                            || "custom".to_owned(),
-                            |network| network.to_string(),
-                        ),
+                        || network
+                            .map_or_else(|| "custom".to_owned(), |network| network.to_string(),),
                         |path| path.display().to_string(),
                     ),
                     data.directory = data_directory.as_path()
@@ -238,7 +240,6 @@ impl NtxBuilderCommand {
                     .await
                     .context("failed to bootstrap ntx-builder database")?;
                 info!(
-                    target: miden_ntx_builder::LOG_TARGET,
                     "NTX builder bootstrap complete",
                     genesis.commitment = genesis_commitment,
                     data.directory = data_directory.as_path()
@@ -253,7 +254,15 @@ impl NtxBuilderCommand {
     }
 
     async fn start(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+        let Self::Start { admin, .. } = &self else {
+            unreachable!("start is only called for the Start variant")
+        };
+        admin.run(shutdown.clone(), self.start_service(shutdown)).await
+    }
+
+    async fn start_service(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let Self::Start {
+            admin: _,
             grpc_message_size,
             listen,
             grpc_timeout,
@@ -275,7 +284,6 @@ impl NtxBuilderCommand {
         };
 
         info!(
-            target: miden_ntx_builder::LOG_TARGET,
             "Starting NTX builder",
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),

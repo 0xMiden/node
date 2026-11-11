@@ -5,11 +5,91 @@ layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
 
+## Administration API
+
+Merge `miden_node_tracing::admin::router()` into a private administration router after calling `setup_tracing`. It
+provides independent stdout and OpenTelemetry filter updates and declared target listing. The caller must provide
+external authentication and network isolation. See [Logging](../../docs/external/src/logging.md) for the HTTP contract
+and operating procedure.
+
+## Scoped targets
+
+Use `declare_targets!` once at the crate root, before child module declarations, to give `#[instrument]`, events, manual
+spans, and enabled checks a shared diagnostic target without repeating it at each call site:
+
+```rust
+miden_node_tracing::declare_targets! {
+    default: "miden::storage",
+    "miden_node_store::db" => "miden::storage::sqlite",
+    "miden_node_store::accounts" => "miden::storage::rocksdb",
+    "miden_node_store::blocks" => "miden::storage::files",
+}
+
+mod accounts;
+mod blocks;
+mod db;
+```
+
+The most specific matching module prefix wins, regardless of rule order. Rules match complete module names and their
+descendants: `miden_node_store::db` includes `db::queries`, but not `db_backup`. Modules outside the configured subtrees
+use the default target. Resolution happens at compile time; generic functions use the module where they are defined.
+Update the map when moving or renaming a configured module.
+
+The declaration generates an inventory of compiled call sites in test builds and a test requiring every mapping rule to
+win for at least one call site. Registration uses the inventory re-exported by this crate, so callers need no extra
+dependency. This detects stale and shadowed rules without executing the instrumented code. The check covers the features
+compiled into the test binary.
+
+`miden_node_tracing::declared_targets()` returns the default and override targets declared by linked crates, sorted and
+deduplicated. This list is available at startup without executing instrumented code or enabling tracing output. It
+includes only declarations enabled for the build; explicit call site overrides and dependency targets are not included
+unless they also appear in a declaration.
+
+Use `#[instrument(target = "miden::rpc::server")]` to override the scoped target for one function. An explicit target
+also works without a scope; otherwise a missing scope is a compile error. The attribute records canonical fields, infers
+fields from `miden_span_record!`, and reports typed errors. Function arguments are always skipped.
+
+The scoped target applies to the function's span, its automatic `err` event, and calls to `trace!`, `debug!`, `info!`,
+`warn!`, and `error!`. These event macros accept typed errors, canonical fields, and an optional `parent:`. An explicit
+`target:` overrides the scope and works without one; otherwise a missing scope is a compile error.
+
+```rust
+miden_node_tracing::info!("account.loaded", block.number = 42_u32);
+miden_node_tracing::warn!(error, parent: &span, "account.load_failed");
+miden_node_tracing::info!(target: "miden::rpc::server", "request.completed");
+```
+
+Event targets follow their lexical scope, independently of the current span or an explicit event parent. Overriding a
+function's span target with `#[instrument(target = "...")]` does not change the target of explicit events in its body.
+Manual span macros (`trace_span!`, `debug_span!`, `info_span!`, `warn_span!`, and `error_span!`) use the same scoped
+targets and accept upstream tracing span fields and explicit `target:` overrides.
+
+Use `enabled!(Level::DEBUG)` to check subscriber interest before preparing diagnostic data. The check inherits the same
+target as scoped spans and events. It also accepts optional field names, such as `enabled!(Level::DEBUG, block.number)`,
+and an explicit `target:` override that works without a scope. Like `tracing::enabled!`, this is an interest hint:
+filters that depend on event/span kind, source location, or additional fields can still treat an individual span or
+event differently. If an event overrides its target, use that same override in its enabled check.
+
+If the compiler reports a missing `tracing_target` macro, invoke `declare_targets!` at the crate root before child
+modules, or supply an explicit target. For instrumentation, use `#[instrument(target = "miden::storage")]`; for an
+event, use `info!(target: "miden::storage", "account.loaded")`.
+
+## Span names
+
+Name spans after the operation, without a component or module prefix: use `build_block` rather than
+`block_builder.build_block`. The scoped target identifies the activity. Use the function name when it describes the
+operation, and an explicit `name` when it adds useful meaning. Keep qualifiers that distinguish the work being timed,
+such as `prove_local`, `prove_remote`, and `build_batch_job`.
+
+Span names can repeat across targets. Select an operation with both its target and name, for example
+`miden::production::blocks[build_block]=debug`. In OpenTelemetry, the tracing target is exported as the span attribute
+`target`. Include the service, target, and span name when grouping operations in dashboards or metrics.
+
 ## Error events
 
-`#[miden_instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")`
-records an explicit typed error event. The optional error argument to `trace!`, `debug!`, `info!`, and `warn!` uses the
-same representation.
+`#[instrument(err)]` emits one typed error event when the function returns `Err`. `error!(error, "event.name")` records
+an explicit typed error event. The optional error argument to `trace!`, `debug!`, `info!`, and `warn!` uses the same
+representation.
 
 The default OpenTelemetry layer records the outer message as `exception.message` and the source messages as the
 `exception.stacktrace` array. The subscriber traverses the source chain. This array contains error messages from
@@ -39,13 +119,14 @@ argument so the subscriber can record both fields.
 ## gRPC servers
 
 `grpc::grpc_trace_layer()` creates a root span for each request and records the response's gRPC status code as
-`rpc.grpc.status_code`. It logs each failed request once, with its status code and message. `INTERNAL`, `DATA_LOSS` and
-`UNAVAILABLE` are logged at `ERROR`, which sets the span status to error. Other codes describe the request, so they are
-logged at `INFO`.
+`rpc.grpc.status_code`. These spans and the layer's failure events use `miden::rpc::server`, regardless of the service
+or the caller that instantiated the layer. It logs each failed request once, with its status code and message.
+`INTERNAL`, `DATA_LOSS` and `UNAVAILABLE` are logged at `ERROR`, which sets the span status to error. Other codes
+describe the request, so they are logged at `INFO`.
 
-A function that handles requests does not need `#[miden_instrument(err)]`, because the trace layer already logs the
-failure at the level its status code calls for. Log an internal error with its causes where it is converted to a status
-instead, since the status message should not expose node internals to clients.
+A function that handles requests does not need `#[instrument(err)]`, because the trace layer already logs the failure at
+the level its status code calls for. Log an internal error with its causes where it is converted to a status instead,
+since the status message should not expose node internals to clients.
 
 ## License
 

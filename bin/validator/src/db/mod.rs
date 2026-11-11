@@ -5,14 +5,14 @@ use std::path::{Path, PathBuf};
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_proto::BlockProofRequest;
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info, instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::TransactionId;
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::metrics::InitialMetrics;
-use crate::{COMPONENT, LOG_TARGET, StorageKeyEpoch, StoredPrivateRecord};
+use crate::{StorageKeyEpoch, StoredPrivateRecord};
 
 mod migrations;
 mod queries;
@@ -82,9 +82,7 @@ impl ValidatorDbReader {
 
     /// Loads the chain tip, or `None` if no block header has been persisted yet (i.e. bootstrap has
     /// not been run).
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument()]
     pub(crate) async fn load_chain_tip(&self) -> Result<Option<BlockHeader>, DatabaseError> {
         self.reader.read("load_chain_tip", queries::load_chain_tip).await
     }
@@ -237,9 +235,7 @@ impl ValidatorDbWriter {
 
     /// Inserts a validated transaction and its encrypted private record, returning the number of
     /// inserted rows. The count is zero if the transaction was already recorded.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument()]
     pub async fn insert_validated_private_transaction(
         &self,
         record: StoredPrivateRecord,
@@ -261,9 +257,7 @@ impl ValidatorDbWriter {
     /// transactions of the new block. Only tests use this method. Server code uses
     /// [`Self::insert_signed_block`] and [`Self::replace_signed_block`].
     #[cfg(test)]
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument()]
     pub(crate) async fn upsert_block_header_with_protocol_config(
         &self,
         header: BlockHeader,
@@ -287,9 +281,7 @@ impl ValidatorDbWriter {
     /// `proving_inputs` must be the request `block` was built from. It is stored without being
     /// checked, because rebuilding the block to compare it would repeat the signing path's most
     /// expensive step; [`ValidatorDbReader::load_block_backup`] checks it when it is read back.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument()]
     pub(crate) async fn insert_signed_block(
         &self,
         block: SignedBlock,
@@ -317,9 +309,7 @@ impl ValidatorDbWriter {
     /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
     /// then persists the new header, links, and proving request exactly as
     /// [`Self::insert_signed_block`] does.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument()]
     pub(crate) async fn replace_signed_block(
         &self,
         block: SignedBlock,
@@ -463,18 +453,14 @@ pub(crate) async fn delete_protocol_config_for_test(
 // ================================================================================================
 
 /// Opens a connection pool after verifying that the database is at the latest schema version.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument()]
 pub async fn load(database_filepath: PathBuf) -> Result<ValidatorDbWriter, DatabaseError> {
     load_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
 }
 
 /// Opens a connection pool with a specific pool size after verifying that the database is at the
 /// latest schema version.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument()]
 pub async fn load_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
@@ -499,17 +485,13 @@ pub async fn load_with_retention(
 }
 
 /// Creates a new database, applies all migrations, and opens a connection pool.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument()]
 pub async fn setup(database_filepath: PathBuf) -> Result<ValidatorDbWriter, DatabaseError> {
     setup_with_pool_size(database_filepath, miden_node_db::default_connection_pool_size()).await
 }
 
 /// Creates a new database with a specific pool size and applies all migrations.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument()]
 async fn setup_with_pool_size(
     database_filepath: PathBuf,
     connection_pool_size: NonZeroUsize,
@@ -522,8 +504,7 @@ async fn setup_with_pool_size(
 /// Creates and initializes the database, then stores the genesis block as the chain tip.
 ///
 /// Returns an error if the database has already been bootstrapped or the supplied block is not genesis.
-#[miden_instrument(
-    target = COMPONENT,
+#[instrument(
     fields(path = database_filepath),
     err,
 )]
@@ -548,9 +529,7 @@ pub async fn bootstrap(
 }
 
 /// Applies all pending migrations to an existing DB.
-#[miden_instrument(
-    target = COMPONENT,
-)]
+#[instrument()]
 pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
     migrate_database(database_filepath.as_ref())?;
     Ok(())
@@ -563,7 +542,6 @@ fn open_with_pool_size(
     let (writer, reader) =
         miden_node_db::sqlite::open_with_pool_size(database_filepath, connection_pool_size)?;
     info!(
-        target: LOG_TARGET,
         "Connected to the database",
         path = database_filepath,
         db.sqlite.connection_pool_size = connection_pool_size.get()

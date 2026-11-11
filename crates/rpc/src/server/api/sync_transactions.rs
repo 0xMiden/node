@@ -1,11 +1,10 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{DatabaseError, NoteSyncRecord, TransactionRecord};
-use miden_node_tracing::{debug, miden_instrument, miden_span_record};
+use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 
 use super::error_codes::SyncTransactionsErrorCode;
 use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
-use crate::{COMPONENT, LOG_TARGET};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService {
@@ -27,10 +26,7 @@ impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService 
         Ok(output)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "sync_transactions",
-    )]
+    #[instrument(name = "sync_transactions")]
     async fn handle(
         &self,
         request: Self::Input,
@@ -52,7 +48,6 @@ impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService 
         );
 
         debug!(
-            target: LOG_TARGET,
             "Syncing transactions",
             block_range.from = range.block_from,
             block_range.to = range.block_to,

@@ -8,6 +8,7 @@ use clap::{ArgGroup, Parser};
 use miden_funding_service::{
     DEFAULT_HTTP_TIMEOUT,
     DEFAULT_MAX_AMOUNT,
+    DEFAULT_MAX_DEPOSITS_PER_TX,
     DEFAULT_MAX_NOTES_PER_TX,
     DEFAULT_POLL_INTERVAL,
     DEFAULT_RPC_TIMEOUT,
@@ -23,7 +24,6 @@ use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genes
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::utils::serde::Deserializable;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -38,6 +38,7 @@ const ENV_ACCOUNT_ID: &str = "MIDEN_FUNDING_ACCOUNT_ID";
 const ENV_SIGNING_KEY_FILE: &str = "MIDEN_FUNDING_SIGNING_KEY_FILE";
 const ENV_MAX_AMOUNT: &str = "MIDEN_FUNDING_MAX_AMOUNT";
 const ENV_MAX_NOTES_PER_TX: &str = "MIDEN_FUNDING_MAX_NOTES_PER_TX";
+const ENV_MAX_DEPOSITS_PER_TX: &str = "MIDEN_FUNDING_MAX_DEPOSITS_PER_TX";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_FUNDING_TX_EXPIRATION_DELTA";
 const ENV_POLL_INTERVAL: &str = "MIDEN_FUNDING_POLL_INTERVAL";
 const ENV_VALIDATOR_SIGNING_PUBLIC_KEYS: &str = "MIDEN_FUNDING_VALIDATOR_SIGNING_PUBLIC_KEYS";
@@ -83,6 +84,8 @@ pub enum FundingServiceCommand {
 
     /// Starts the funding service.
     Start {
+        #[command(flatten)]
+        admin: miden_node_utils::admin::AdminOptions,
         #[command(flatten)]
         grpc_message_size: miden_node_utils::clap::GrpcMessageSizeOptions,
 
@@ -153,6 +156,15 @@ pub enum FundingServiceCommand {
         )]
         max_notes_per_tx: NonZeroUsize,
 
+        /// Largest number of deposits one funding transaction consumes.
+        #[arg(
+            long = "max-deposits-per-tx",
+            env = ENV_MAX_DEPOSITS_PER_TX,
+            default_value_t = DEFAULT_MAX_DEPOSITS_PER_TX,
+            value_name = "NUM"
+        )]
+        max_deposits_per_tx: NonZeroUsize,
+
         /// Number of blocks after its reference block at which a funding transaction expires.
         #[arg(
             long = "tx-expiration-delta",
@@ -172,13 +184,13 @@ pub enum FundingServiceCommand {
         )]
         poll_interval: Duration,
 
-        /// Hex-encoded validator signing public key trusted to attest the transaction encryption
-        /// key.
+        /// `0x`-prefixed hex validator signing public key trusted to attest the transaction
+        /// encryption key.
         #[arg(
             long = "validator-signing-public-key",
             env = ENV_VALIDATOR_SIGNING_PUBLIC_KEYS,
             value_delimiter = ',',
-            value_parser = parse_validator_public_key,
+            value_parser = ValidatorPublicKey::from_hex,
             required = true,
             value_name = "HEX"
         )]
@@ -202,8 +214,7 @@ impl FundingServiceCommand {
                     _ => unreachable!("clap requires exactly one genesis block source"),
                 };
                 lifecycle::bootstrap(&data_directory, account_id, &genesis).await?;
-                info!(
-                    target: miden_funding_service::LOG_TARGET,
+                info!(target: "miden::storage",
                     "Funding service bootstrap complete",
                     genesis.commitment = genesis.inner().header().commitment(),
                     data.directory = data_directory.as_path()
@@ -215,7 +226,15 @@ impl FundingServiceCommand {
     }
 
     async fn start(self, shutdown: CancellationToken) -> Result<()> {
+        let Self::Start { admin, .. } = &self else {
+            unreachable!("start is only called for the Start variant")
+        };
+        admin.run(shutdown.clone(), self.start_service(shutdown)).await
+    }
+
+    async fn start_service(self, shutdown: CancellationToken) -> Result<()> {
         let Self::Start {
+            admin: _,
             grpc_message_size,
             data_directory,
             listen,
@@ -227,6 +246,7 @@ impl FundingServiceCommand {
             signing_key_file,
             max_amount,
             max_notes_per_tx,
+            max_deposits_per_tx,
             tx_expiration_delta,
             poll_interval,
             validator_signing_public_keys,
@@ -236,7 +256,6 @@ impl FundingServiceCommand {
         };
 
         info!(
-            target: miden_funding_service::LOG_TARGET,
             "Starting the funding service",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
@@ -250,6 +269,7 @@ impl FundingServiceCommand {
             data.directory = data_directory.as_path(),
             funding_service.max_amount = max_amount,
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
+            funding_service.max_deposits_per_tx = max_deposits_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
             funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
         );
@@ -267,6 +287,7 @@ impl FundingServiceCommand {
         .with_tx_prover_timeout(tx_prover_timeout)
         .with_max_amount(max_amount)
         .with_max_notes_per_tx(max_notes_per_tx)
+        .with_max_deposits_per_tx(max_deposits_per_tx)
         .with_tx_expiration_delta(tx_expiration_delta)
         .with_poll_interval(poll_interval)
         .build()
@@ -289,12 +310,4 @@ impl FundingServiceCommand {
             Self::Bootstrap { .. } | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }
-}
-
-/// Decodes a hex-encoded validator signing public key.
-fn parse_validator_public_key(value: &str) -> Result<ValidatorPublicKey> {
-    let bytes = hex::decode(value.trim_start_matches("0x"))
-        .context("a validator signing public key must be hex encoded")?;
-    ValidatorPublicKey::read_from_bytes(&bytes)
-        .context("a validator signing public key must be a valid K256 public key")
 }

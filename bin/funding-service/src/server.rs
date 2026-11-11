@@ -13,7 +13,6 @@ use tokio::net::TcpListener;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::LOG_TARGET;
 use crate::db::FundingDatabase;
 use crate::status::StatusSnapshot;
 
@@ -65,7 +64,6 @@ impl FundingServer {
             .local_addr()
             .context("failed to read the funding service listen address")?;
         info!(
-            target: LOG_TARGET,
             "Funding service HTTP API listening",
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),

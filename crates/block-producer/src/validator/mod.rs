@@ -9,7 +9,7 @@ use miden_node_proto::domain::encryption::{
 use miden_node_proto::domain::validator::SignBlockResponse;
 use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, VerifyWith, generated as proto};
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info, instrument};
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
@@ -19,8 +19,6 @@ use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
 use miden_protocol::utils::serde::Serializable;
 use thiserror::Error;
 use url::Url;
-
-use crate::{COMPONENT, LOG_TARGET};
 
 #[cfg(test)]
 mod tests;
@@ -63,7 +61,6 @@ impl BlockProducerValidatorClient {
             .map(|validator_url| {
                 let endpoint = format_endpoint(&validator_url);
                 info!(
-                    target: LOG_TARGET,
                     "Initializing validator client",
                     dependency.name = "validator",
                     dependency.endpoint = endpoint.as_str()
@@ -85,7 +82,7 @@ impl BlockProducerValidatorClient {
     }
 
     /// Validates a transaction with every validator before it can appear in a signed block.
-    #[miden_instrument(target = COMPONENT, name = "validator.client.validate_transaction", err)]
+    #[instrument(name = "validate_transaction", err)]
     pub(crate) async fn validate_transaction(
         &self,
         transaction: &ProvenTransaction,
@@ -132,11 +129,7 @@ impl BlockProducerValidatorClient {
     ///
     /// Fails if any validator fails to respond, since every validator in the parent's set must
     /// sign for the block to reach quorum.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "validator.client.validate_block",
-        err,
-    )]
+    #[instrument(name = "validate_block", err)]
     pub async fn sign_block(
         &self,
         proposed_block: &ProposedBlock,
@@ -176,9 +169,8 @@ struct Validator {
 
 impl Validator {
     /// Submits a proven transaction, retrying service unavailability and connection failures.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "validator.client.submit_proven_transaction",
+    #[instrument(
+        name = "submit_proven_transaction",
         fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
         err,
     )]
@@ -202,9 +194,8 @@ impl Validator {
     }
 
     /// Requests and decodes a block signature from this validator.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "validator.client.sign_block",
+    #[instrument(
+        name = "sign_block",
         fields(dependency.name = "validator", dependency.endpoint = self.endpoint),
         err,
     )]

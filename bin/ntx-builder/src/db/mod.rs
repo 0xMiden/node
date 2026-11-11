@@ -7,7 +7,7 @@ use miden_node_db::DatabaseError;
 #[cfg(test)]
 use miden_node_db::SqlTypeConvert;
 use miden_node_db::sqlite::{DbReader, DbWriter};
-use miden_node_tracing::{info, miden_instrument};
+use miden_node_tracing::{info, instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock, ValidatorConfig};
@@ -24,7 +24,7 @@ use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_
 use crate::db::queries::NoteStatusRow;
 #[cfg(test)]
 use crate::sponsorship::SponsorshipNote;
-use crate::{COMPONENT, NoteError, db};
+use crate::{NoteError, db};
 
 pub(crate) mod eligibility;
 pub(crate) mod queries;
@@ -317,9 +317,8 @@ impl NtxDbWriter {
 // ================================================================================================
 
 /// Opens an async connection pool after verifying the database is at the latest schema version.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "ntx_builder.database.load",
+#[instrument(
+    name = "load",
     fields(path = database_filepath),
     err,
 )]
@@ -329,9 +328,8 @@ pub async fn load(database_filepath: PathBuf) -> anyhow::Result<NtxDbWriter> {
 
 /// Opens an async connection pool with a specific pool size after verifying the database is at the
 /// latest schema version.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "ntx_builder.database.load",
+#[instrument(
+    name = "load",
     fields(path = database_filepath),
     err,
 )]
@@ -345,7 +343,7 @@ pub async fn load_with_pool_size(
 }
 
 /// Applies all pending migrations to an existing DB.
-#[miden_instrument(target = COMPONENT)]
+#[instrument]
 pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
     migrate_database(database_filepath.as_ref())?;
     Ok(())
@@ -360,7 +358,6 @@ fn open_with_pool_size(
             .context("failed to build connection pool")?;
 
     info!(
-        target: COMPONENT,
         "Connected to the database",
         path = database_filepath,
         db.sqlite.connection_pool_size = connection_pool_size.get()
@@ -377,9 +374,8 @@ fn open_with_pool_size(
 /// to consume it from the committed-block subscription on startup.
 ///
 /// Returns an error if the database has already been bootstrapped.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "ntx_builder.database.bootstrap",
+#[instrument(
+    name = "bootstrap",
     fields(path = database_filepath),
     err,
 )]

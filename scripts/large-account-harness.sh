@@ -158,11 +158,12 @@ if [[ "$SKIP_BUILD" != "1" ]]; then
         -p miden-node \
         -p miden-validator \
         -p miden-ntx-builder \
-        -p miden-remote-prover
+        -p miden-remote-prover \
+        -p miden-genesis
 fi
 
 for bin in "$BENCH_BIN" "$VALIDATOR_BIN" "$BIN_DIR/miden-node" \
-    "$BIN_DIR/miden-ntx-builder" "$BIN_DIR/miden-remote-prover"; do
+    "$BIN_DIR/miden-ntx-builder" "$BIN_DIR/miden-remote-prover" "$BIN_DIR/miden-genesis"; do
     [[ -x "$bin" ]] || { echo "error: missing binary $bin (run without SKIP_BUILD=1)" >&2; exit 1; }
 done
 
@@ -194,14 +195,15 @@ EOF
 phase "Starting the local network" "$STACK_LOG"
 STACK_START_EPOCH=$(date +%s)
 ACCOUNTS_CONFIG="$ACCOUNTS_CONFIG_FILE" \
-MIDEN_VALIDATOR_GENESIS_NATIVE_FAUCET="$SEEDED_DIR/faucet.mac" \
-MIDEN_VALIDATOR_GENESIS_FUNDING_ACCOUNT="$SEEDED_DIR/wallet.mac" \
-MIDEN_VALIDATOR_GENESIS_VERIFICATION_BASE_FEE=0 \
+MIDEN_GENESIS_NATIVE_FAUCET="$SEEDED_DIR/faucet.mac" \
+MIDEN_GENESIS_FUNDING_ACCOUNT="$SEEDED_DIR/wallet.mac" \
+MIDEN_GENESIS_VERIFICATION_BASE_FEE=0 \
 ENABLE_FULL_NODES=false \
 MIDEN_NODE_BIN="$BIN_DIR/miden-node" \
 MIDEN_VALIDATOR_BIN="$VALIDATOR_BIN" \
 MIDEN_NTX_BUILDER_BIN="$BIN_DIR/miden-ntx-builder" \
 MIDEN_REMOTE_PROVER_BIN="$BIN_DIR/miden-remote-prover" \
+MIDEN_GENESIS_BIN="$BIN_DIR/miden-genesis" \
     ./scripts/run-node.sh > "$STACK_LOG" 2>&1 &
 STACK_PID=$!
 

@@ -12,7 +12,7 @@ use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::clients::{ForeignAccount, RpcClient};
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{debug, error, info, miden_instrument, warn};
+use miden_node_tracing::{debug, error, info, instrument, warn};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{
@@ -46,9 +46,10 @@ use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
-use tokio::sync::{Mutex, watch};
+use tokio::sync::Mutex;
 
 use crate::config::MonitorConfig;
+use crate::current_unix_timestamp_secs;
 use crate::deploy::counter::COUNTER_SLOT_NAME;
 use crate::deploy::wallet::WALLET_COUNTER_SLOT_NAME;
 use crate::deploy::{
@@ -56,13 +57,18 @@ use crate::deploy::{
     DeployedMonitorAccounts,
     MonitorDataStore,
     TransactionSubmissionClient,
-    create_and_deploy_accounts,
     create_genesis_aware_rpc_client,
     fetch_account_at_tip,
     refresh_counter_anchor,
 };
-use crate::funding::{FeeFunder, FundingClient, wallet_topup_threshold};
-use crate::registration::RegistrationPool;
+use crate::funding::{
+    FeeFunder,
+    FundingClient,
+    FundingWait,
+    PendingFunding,
+    wallet_budget_per_increment,
+    wallet_topup_threshold,
+};
 use crate::service::Service;
 use crate::status::{
     CounterTrackingDetails,
@@ -71,19 +77,9 @@ use crate::status::{
     ServiceDetails,
     ServiceStatus,
 };
-use crate::{COMPONENT, LOG_TARGET, current_unix_timestamp_secs};
 
 /// Number of consecutive increment failures before re-syncing the wallet account from the RPC.
 const RESYNC_FAILURE_THRESHOLD: usize = 3;
-
-/// Number of consecutive increment failures before regenerating accounts from scratch.
-const REGENERATE_FAILURE_THRESHOLD: usize = 10;
-
-/// Minimum time between account regeneration attempts once one has succeeded.
-const REGENERATE_COOLDOWN: Duration = Duration::from_hours(1);
-
-/// Minimum time before retrying a regeneration attempt that *failed*.
-const REGENERATE_RETRY_COOLDOWN: Duration = Duration::from_mins(1);
 
 /// Number of consecutive polls observing the pending-increments gap above
 /// [`MonitorConfig::counter_pending_unhealthy_threshold`] before flipping the Network Transactions
@@ -98,17 +94,6 @@ pub struct LatencyState {
     pending: Option<PendingLatencyDetails>,
     pending_started: Option<Instant>,
     last_latency_blocks: Option<u32>,
-}
-
-/// The wallet/counter pair shared from [`IncrementService`] to [`CounterTrackingService`].
-///
-/// Republished whenever the increment task regenerates accounts after persistent failures, so the
-/// tracker switches to the new pair without polling disk. The tracker reads `expected` from the
-/// wallet's on-chain counter slot and `observed` from the counter account's slot.
-#[derive(Clone)]
-pub struct TrackedAccounts {
-    pub wallet: Account,
-    pub counter: Account,
 }
 
 // TX BUILDER
@@ -129,23 +114,15 @@ struct TxBuilder {
 // FAILURE TRACKER
 // ================================================================================================
 
-/// Tracks consecutive increment failures and gates re-sync / regeneration actions.
+/// Tracks consecutive increment failures and gates the wallet re-sync.
+///
+/// The monitor never replaces its accounts on its own: a new pair needs new funding, and
+/// requesting it while failures continue would only add to the funding service's backlog.
+/// Restarting the monitor creates a fresh pair.
+#[derive(Default)]
 struct FailureTracker {
     consecutive_failures: usize,
     resynced_this_streak: bool,
-    last_regeneration_attempt: Option<Instant>,
-    regeneration_cooldown: Duration,
-}
-
-impl Default for FailureTracker {
-    fn default() -> Self {
-        Self {
-            consecutive_failures: 0,
-            resynced_this_streak: false,
-            last_regeneration_attempt: None,
-            regeneration_cooldown: REGENERATE_COOLDOWN,
-        }
-    }
 }
 
 impl FailureTracker {
@@ -165,26 +142,6 @@ impl FailureTracker {
     fn mark_resynced(&mut self) {
         self.resynced_this_streak = true;
     }
-
-    fn should_regenerate(&self) -> bool {
-        self.consecutive_failures >= REGENERATE_FAILURE_THRESHOLD
-            && self
-                .last_regeneration_attempt
-                .is_none_or(|t| t.elapsed() >= self.regeneration_cooldown)
-    }
-
-    /// Records that a regeneration attempt is starting.
-    fn mark_regeneration_attempt(&mut self) {
-        self.last_regeneration_attempt = Some(Instant::now());
-        self.regeneration_cooldown = REGENERATE_COOLDOWN;
-    }
-
-    /// Records that the regeneration attempt failed: shorten its cooldown and re-arm the re-sync
-    /// path, so the streak is not left with both recovery paths disabled.
-    fn mark_regeneration_failed(&mut self) {
-        self.regeneration_cooldown = REGENERATE_RETRY_COOLDOWN;
-        self.resynced_this_streak = false;
-    }
 }
 
 // INCREMENT SERVICE
@@ -193,24 +150,18 @@ impl FailureTracker {
 /// Periodically submits a network note that increments the counter account.
 pub struct IncrementService {
     config: MonitorConfig,
-    /// Registration budget transferred from bootstrap to account regeneration.
-    pub(crate) registration: Option<RegistrationPool>,
     rpc_client: RpcClient,
     tx: TxBuilder,
     prover: LocalTransactionProver,
     failures: FailureTracker,
     details: IncrementDetails,
     latency_state: Arc<Mutex<LatencyState>>,
-    /// Publishes the current wallet/counter pair to [`CounterTrackingService`]. A new value is sent
-    /// whenever the increment task regenerates accounts after persistent failures, so the tracker
-    /// can switch to the new account IDs without polling disk.
-    accounts_sender: watch::Sender<TrackedAccounts>,
     /// Shared client for attestation verification, sealing, and transaction submission.
     submission_client: TransactionSubmissionClient,
     /// The funding service client; `None` when none is configured (zero-fee chains only).
     funding: Option<FundingClient>,
-    /// Committed faucet note to be consumed by the next increment. Cleared once consumed.
-    pending_funding_note: Option<UsdcxP2Id>,
+    /// Funding note for the wallet, consumed by the first increment after it commits.
+    pending_funding_note: Option<PendingFunding>,
 }
 
 impl IncrementService {
@@ -223,7 +174,6 @@ impl IncrementService {
         accounts: DeployedMonitorAccounts,
         prover: LocalTransactionProver,
         submission_client: TransactionSubmissionClient,
-        accounts_sender: watch::Sender<TrackedAccounts>,
         latency_state: Arc<Mutex<LatencyState>>,
         funding: Option<FundingClient>,
     ) -> Result<Self> {
@@ -237,14 +187,12 @@ impl IncrementService {
         )?;
         Ok(Self {
             config,
-            registration: None,
             rpc_client,
             tx,
             prover,
             failures: FailureTracker::default(),
             details,
             latency_state,
-            accounts_sender,
             submission_client,
             funding,
             pending_funding_note,
@@ -258,15 +206,22 @@ impl IncrementService {
     /// The authoritative `expected` value lives in the wallet's on-chain counter slot (read by
     /// [`CounterTrackingService`]); the returned success count is used purely as a best-effort
     /// latency target — on a fresh wallet/counter pair both start at zero and advance together.
-    fn handle_increment_success(&mut self, account_patch: &AccountPatch, tx_id: String) -> u64 {
+    fn handle_increment_success(
+        &mut self,
+        account_patch: &AccountPatch,
+        tx_id: String,
+        consumed_funding: bool,
+    ) -> u64 {
         // The wallet is created in-memory and never separately deployed, so its first increment
         // doubles as the account-creation transaction. `apply_patch` handles that patch as well.
         self.tx
             .wallet_account
             .apply_patch(account_patch)
             .expect("successful tx should apply patch correctly");
-        // The transaction consumed the pending funding note; do not offer it again.
-        self.pending_funding_note = None;
+        if consumed_funding {
+            // The transaction consumed the pending funding note; do not offer it again.
+            self.pending_funding_note = None;
+        }
         self.details.success_count += 1;
         self.details.last_tx_id = Some(tx_id);
 
@@ -274,10 +229,9 @@ impl IncrementService {
     }
 
     /// Re-sync the wallet account from the RPC after repeated failures.
-    #[miden_instrument(
+    #[instrument(
         parent = None,
-        target = COMPONENT,
-        name = "network_monitor.counter.try_resync_wallet_account",
+        name = "try_resync_wallet_account",
         fields(
             account.id = self.tx.wallet_account.id(),
         ),
@@ -294,17 +248,12 @@ impl IncrementService {
         .inspect_err(|e| {
             error!(
                 e,
-                target: LOG_TARGET,
                 "Failed to re-sync wallet account from RPC",
                 account.id = self.tx.wallet_account.id()
             );
         })?;
 
-        debug!(
-            target: LOG_TARGET,
-            "Wallet account re-synced from RPC",
-            account.id = self.tx.wallet_account.id()
-        );
+        debug!("Wallet account re-synced from RPC", account.id = self.tx.wallet_account.id());
         self.tx.wallet_account = fresh_account;
         // The pending note may have been consumed by a transaction whose success was missed, and
         // re-offering a spent note fails every increment. Drop it; the top-up check will request a
@@ -313,60 +262,44 @@ impl IncrementService {
         Ok(())
     }
 
-    /// Regenerate accounts from scratch when re-sync is ineffective.
+    /// Returns the funding note the next increment consumes, or the wait which holds it back.
     ///
-    /// Builds a fresh wallet/counter pair in memory, deploys the counter to the network, swaps
-    /// the local [`TxBuilder`] state, and publishes the new counter on [`Self::counter_sender`]
-    /// so the tracker switches over without polling disk.
-    #[miden_instrument(
-        parent = None,
-        target = COMPONENT,
-        name = "network_monitor.counter.try_regenerate_accounts",
-        level = "warn",
-        err,
-    )]
-    async fn try_regenerate_accounts(&mut self) -> Result<()> {
-        let accounts = Box::pin(create_and_deploy_accounts(
-            &self.submission_client,
-            &self.prover,
-            self.funding.as_ref(),
-            self.config.wallet_funding_amount,
-            self.registration.as_mut(),
-        ))
-        .await
-        .context("failed to regenerate accounts")?;
-
-        let tracked = TrackedAccounts {
-            wallet: accounts.wallet.clone(),
-            counter: accounts.counter.clone(),
+    /// A note is consumed only once it has committed. Until then the wallet keeps paying from its
+    /// balance, and increments wait once that balance no longer covers one.
+    async fn next_funding_note(&mut self) -> Result<Option<UsdcxP2Id>, FundingWait> {
+        let verification_base_fee =
+            self.tx.counter_anchor.block_header.fee_parameters().verification_base_fee();
+        let can_pay = self.fee_balance() >= wallet_budget_per_increment(verification_base_fee);
+        let Some(pending) = self.pending_funding_note.as_ref() else {
+            return Ok(None);
         };
-        self.pending_funding_note = accounts.wallet_funding_note;
-        let (tx, details) = setup_increment_task(
-            accounts.wallet,
-            accounts.secret_key,
-            accounts.counter.id(),
-            accounts.counter_anchor,
-        )?;
-        self.tx = tx;
-        self.details = details;
 
-        self.accounts_sender
-            .send(tracked)
-            .context("counter tracker dropped before regeneration completed")?;
+        pending.next_transaction_note(&mut self.rpc_client, can_pay).await
+    }
 
-        debug!(target: LOG_TARGET, "Account regeneration completed, increment task re-initialized");
-        Ok(())
+    /// The wallet's balance of the chain's fee asset, in base units.
+    fn fee_balance(&self) -> u64 {
+        let fee_faucet_id = self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id();
+        self.tx
+            .wallet_account
+            .vault()
+            .get_balance(AssetId::new_fungible(fee_faucet_id))
+            .map_or(0, |amount| amount.as_u64())
     }
 
     /// Create and submit a network note that increments the counter account.
-    #[miden_instrument(
+    ///
+    /// The transaction consumes `funding_note` when one is given.
+    #[instrument(
         parent = None,
-        target = COMPONENT,
-        name = "network_monitor.counter.submit_increment",
+        name = "submit_increment",
         level = "info",
         err,
     )]
-    async fn submit_increment(&mut self) -> Result<(String, AccountPatch, BlockNumber)> {
+    async fn submit_increment(
+        &mut self,
+        funding_note: Option<UsdcxP2Id>,
+    ) -> Result<(String, AccountPatch, BlockNumber)> {
         let anchor = refresh_counter_anchor(
             &mut self.rpc_client,
             &self.tx.counter_anchor,
@@ -397,10 +330,10 @@ impl IncrementService {
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
         tx_args.add_output_note_recipient(Box::new(note_recipient));
 
-        // A pending faucet note rides along as an unauthenticated input note; its assets land
+        // A committed funding note rides along as an unauthenticated input note; its assets land
         // before the epilogue withdraws the fee.
-        let input_notes = match &self.pending_funding_note {
-            Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note.note().clone())])
+        let input_notes = match funding_note {
+            Some(note) => InputNotes::new(vec![InputNote::unauthenticated(note.into_note())])
                 .context("failed to build the funding input notes")?,
             None => InputNotes::default(),
         };
@@ -455,11 +388,7 @@ impl IncrementService {
         let block_height = self.submission_client.submit(&proven_tx, &tx_inputs).await?;
 
         let tx_id = proven_tx.id().to_hex();
-        info!(
-            target: LOG_TARGET,
-            "Submitted proven transaction to RPC",
-            transaction.id = tx_id.as_str()
-        );
+        info!("Submitted proven transaction to RPC", transaction.id = tx_id.as_str());
 
         Ok((tx_id, account_patch, block_height))
     }
@@ -480,13 +409,7 @@ impl IncrementService {
         };
 
         let fee_faucet_id = self.tx.counter_anchor.protocol_config.fee_asset_id().faucet_id();
-        let fee_asset = AssetId::new_fungible(fee_faucet_id);
-        let balance = self
-            .tx
-            .wallet_account
-            .vault()
-            .get_balance(fee_asset)
-            .map_or(0, |amount| amount.as_u64());
+        let balance = self.fee_balance();
         self.details.fee_balance = Some(balance);
 
         let funding_amount = self.config.wallet_funding_amount;
@@ -495,12 +418,11 @@ impl IncrementService {
             return;
         }
         if self.pending_funding_note.is_some() {
-            // A requested note is waiting to be consumed by the next increment.
+            // A requested note is waiting to commit or to be consumed by the next increment.
             return;
         }
 
         info!(
-            target: LOG_TARGET,
             "Wallet fee balance is low, requesting a faucet top-up",
             account.id = self.tx.wallet_account.id(),
             asset.balance = balance
@@ -508,11 +430,11 @@ impl IncrementService {
         let mut funder = FeeFunder::new(funding, fee_faucet_id);
         match funder.fund(self.tx.wallet_account.id(), funding_amount.get()).await {
             Ok(note) => {
-                self.pending_funding_note = Some(note);
+                self.pending_funding_note = Some(PendingFunding::new(note));
                 self.details.fee_topup_error = None;
             },
             Err(err) => {
-                error!(&err, target: LOG_TARGET, "Faucet top-up failed");
+                error!(&err, "Faucet top-up failed");
                 self.details.fee_topup_error = Some(format!("{err:#}"));
             },
         }
@@ -540,10 +462,20 @@ impl Service for IncrementService {
 
         self.maybe_topup_fee_funding().await;
 
-        match self.submit_increment().await {
+        // Waiting for a funding note is not a failed increment, so it never triggers recovery.
+        let funding_note = match self.next_funding_note().await {
+            Ok(funding_note) => funding_note,
+            Err(wait) => {
+                return wait.status(Self::NAME, ServiceDetails::NtxIncrement(self.details.clone()));
+            },
+        };
+        let consumes_funding = funding_note.is_some();
+
+        match self.submit_increment(funding_note).await {
             Ok((tx_id, account_patch, block_height)) => {
                 self.failures.reset();
-                let target_value = self.handle_increment_success(&account_patch, tx_id);
+                let target_value =
+                    self.handle_increment_success(&account_patch, tx_id, consumes_funding);
                 let mut guard = self.latency_state.lock().await;
                 guard.pending = Some(PendingLatencyDetails {
                     submit_height: block_height.as_u32(),
@@ -552,33 +484,13 @@ impl Service for IncrementService {
                 guard.pending_started = Some(Instant::now());
             },
             Err(e) => {
-                error!(&e, target: LOG_TARGET, "Failed to create and submit network note");
+                error!(&e, "Failed to create and submit network note");
                 self.details.failure_count += 1;
                 self.failures.record_failure();
                 last_error = Some(format!("create/submit note failed: {e}"));
 
-                let resynced_now =
-                    self.failures.should_resync() && self.try_resync_wallet_account().await.is_ok();
-                if resynced_now {
+                if self.failures.should_resync() && self.try_resync_wallet_account().await.is_ok() {
                     self.failures.mark_resynced();
-                }
-
-                if !resynced_now && self.failures.should_regenerate() {
-                    warn!(
-                        target: LOG_TARGET,
-                        "re-sync ineffective, regenerating accounts from scratch",
-                        counter.failures.consecutive = self.failures.consecutive_failures
-                    );
-                    self.failures.mark_regeneration_attempt();
-                    match self.try_regenerate_accounts().await {
-                        Ok(()) => self.failures.reset(),
-                        Err(regen_err) => {
-                            self.failures.mark_regeneration_failed();
-                            last_error =
-                                Some(format!("account regeneration failed: {regen_err:#}"));
-                            error!(&regen_err, target: LOG_TARGET, "Account regeneration failed");
-                        },
-                    }
                 }
             },
         }
@@ -604,8 +516,6 @@ pub struct CounterTrackingService {
     wallet_account: Account,
     /// Source of the `observed` value: the counter account's slot.
     counter_account: Account,
-    /// Observes regenerations of the wallet/counter pair from [`IncrementService`].
-    accounts_receiver: watch::Receiver<TrackedAccounts>,
     details: CounterTrackingDetails,
     latency_state: Arc<Mutex<LatencyState>>,
     /// Consecutive polls that observed `pending_increments > counter_pending_unhealthy_threshold`.
@@ -618,9 +528,11 @@ impl CounterTrackingService {
     /// [`crate::monitor::tasks`].
     pub const NAME: &'static str = "Network Transactions";
 
+    /// Tracks the given wallet/counter pair, which [`IncrementService`] drives.
     pub async fn new(
         config: MonitorConfig,
-        accounts_receiver: watch::Receiver<TrackedAccounts>,
+        wallet_account: Account,
+        counter_account: Account,
         latency_state: Arc<Mutex<LatencyState>>,
     ) -> Result<Self> {
         let (mut rpc_client, _) = create_genesis_aware_rpc_client(
@@ -629,10 +541,6 @@ impl CounterTrackingService {
             config.grpc.max_decoding_message_size.get(),
         )
         .await?;
-        let TrackedAccounts {
-            wallet: wallet_account,
-            counter: counter_account,
-        } = accounts_receiver.borrow().clone();
 
         let mut details = CounterTrackingDetails::default();
         initialize_tracking_state(&mut rpc_client, &wallet_account, &counter_account, &mut details)
@@ -643,45 +551,10 @@ impl CounterTrackingService {
             rpc_client,
             wallet_account,
             counter_account,
-            accounts_receiver,
             details,
             latency_state,
             over_threshold_streak: 0,
         })
-    }
-
-    /// If [`IncrementService`] regenerated accounts and published a new pair, adopt it and reset
-    /// tracking state.
-    async fn reload_counter_account_if_changed(&mut self) {
-        if !self.accounts_receiver.has_changed().unwrap_or(false) {
-            return;
-        }
-        let reloaded = self.accounts_receiver.borrow_and_update().clone();
-        if reloaded.counter.id() == self.counter_account.id()
-            && reloaded.wallet.id() == self.wallet_account.id()
-        {
-            return;
-        }
-
-        info!(
-            target: LOG_TARGET,
-            "monitor accounts changed, resetting tracking state",
-            counter.account.id.old = self.counter_account.id(),
-            counter.account.id.new = reloaded.counter.id(),
-            wallet.account.id.old = self.wallet_account.id(),
-            wallet.account.id.new = reloaded.wallet.id()
-        );
-        self.wallet_account = reloaded.wallet;
-        self.counter_account = reloaded.counter;
-        self.details = CounterTrackingDetails::default();
-        self.over_threshold_streak = 0;
-        initialize_tracking_state(
-            &mut self.rpc_client,
-            &self.wallet_account,
-            &self.counter_account,
-            &mut self.details,
-        )
-        .await;
     }
 
     /// Poll the counter once, updating details and latency tracking state.
@@ -703,7 +576,7 @@ impl CounterTrackingService {
             // Counter value not available yet, but not an error.
             Ok(None) => return None,
             Err(e) => {
-                error!(&e, target: LOG_TARGET, "Failed to fetch counter value");
+                error!(&e, "Failed to fetch counter value");
                 return Some(format!("fetch counter value failed: {e}"));
             },
         };
@@ -724,11 +597,7 @@ impl CounterTrackingService {
             // Wallet not on-chain yet (no committed increment): leave `expected` unknown.
             Ok(None) => {},
             Err(e) => {
-                error!(
-                    &e,
-                    target: LOG_TARGET,
-                    "Failed to fetch expected wallet counter value"
-                );
+                error!(&e, "Failed to fetch expected wallet counter value");
                 last_error = Some(format!("fetch expected value failed: {e}"));
             },
         }
@@ -774,7 +643,6 @@ impl CounterTrackingService {
                 >= self.config.counter_latency_timeout
             {
                 warn!(
-                    target: LOG_TARGET,
                     "Latency measurement timed out",
                     counter.latency.timeout_ms =
                         self.config.counter_latency_timeout.as_millis() as u64,
@@ -810,7 +678,6 @@ impl Service for CounterTrackingService {
     }
 
     async fn check(&mut self) -> ServiceStatus {
-        self.reload_counter_account_if_changed().await;
         let last_error = self.poll_counter_once().await;
         self.update_over_threshold_streak();
         build_tracking_status(
@@ -846,7 +713,7 @@ impl CounterTrackingService {
 
 /// Build the increment script and transaction state needed to produce network notes from a
 /// freshly-created wallet/counter pair. The accounts and the counter's FPI anchor are passed in
-/// already constructed by [`create_and_deploy_accounts`]; there is no file I/O.
+/// already constructed by [`crate::deploy::create_and_deploy_accounts`]; there is no file I/O.
 fn setup_increment_task(
     wallet_account: Account,
     secret_key: SecretKey,
@@ -879,14 +746,10 @@ async fn initialize_tracking_state(
         Ok(Some(observed)) => {
             details.current_value = Some(observed);
             details.last_updated = Some(current_unix_timestamp_secs());
-            info!(
-                target: LOG_TARGET,
-                "Initialized counter tracking",
-                counter.value.observed = observed
-            );
+            info!("Initialized counter tracking", counter.value.observed = observed);
         },
-        Ok(None) => warn!(target: LOG_TARGET, "Counter account not found at init"),
-        Err(e) => error!(&e, target: LOG_TARGET, "Failed to fetch initial counter value"),
+        Ok(None) => warn!("Counter account not found at init"),
+        Err(e) => error!(&e, "Failed to fetch initial counter value"),
     }
 
     match fetch_slot_value(rpc_client, wallet_account.id(), WALLET_COUNTER_SLOT_NAME.as_str()).await
@@ -894,7 +757,7 @@ async fn initialize_tracking_state(
         Ok(Some(expected)) => details.expected_value = Some(expected),
         Ok(None) => {},
         Err(e) => {
-            error!(&e, target: LOG_TARGET, "Failed to fetch initial expected wallet value");
+            error!(&e, "Failed to fetch initial expected wallet value");
         },
     }
 
@@ -982,7 +845,6 @@ fn update_expected_and_pending(
         details.pending_increments = Some(expected - observed_value);
     } else {
         warn!(
-            target: LOG_TARGET,
             "Expected counter value is less than current value, setting pending to 0",
             counter.value.expected = expected,
             counter.value.observed = observed_value
@@ -1267,7 +1129,6 @@ mod tests {
     use crate::counter::{
         FailureTracker,
         PENDING_UNHEALTHY_CONFIRMATION_POLLS,
-        REGENERATE_FAILURE_THRESHOLD,
         RESYNC_FAILURE_THRESHOLD,
         build_tracking_status,
         create_increment_script,
@@ -1618,83 +1479,27 @@ mod tests {
         Ok(())
     }
 
-    /// A failed regeneration must not park the service with both recovery paths disabled: the full
-    /// cooldown only applies once an attempt has succeeded, and the re-sync path is re-armed so the
-    /// streak keeps trying to recover.
+    /// A successful re-sync is not repeated within a failure streak, and a successful increment
+    /// re-arms it for the next streak.
     #[test]
-    fn failed_regeneration_leaves_a_recovery_path_open() {
-        let mut failures = FailureTracker::default();
-        for _ in 0..REGENERATE_FAILURE_THRESHOLD {
-            failures.record_failure();
-        }
-        failures.mark_resynced();
-        assert!(failures.should_regenerate());
-
-        failures.mark_regeneration_attempt();
-        failures.mark_regeneration_failed();
-
-        assert!(
-            failures.should_resync(),
-            "a failed regeneration must re-arm the cheaper re-sync path"
-        );
-        assert_eq!(
-            failures.regeneration_cooldown,
-            super::REGENERATE_RETRY_COOLDOWN,
-            "a failed regeneration must be retried on the short cooldown, not the hourly one"
-        );
-    }
-
-    /// A successful regeneration keeps the hourly cooldown: it deploys a new counter account and
-    /// restarts the on-chain count, so it must not be repeated while its accounts are settling.
-    #[test]
-    fn successful_regeneration_keeps_the_full_cooldown() {
-        let mut failures = FailureTracker::default();
-        for _ in 0..REGENERATE_FAILURE_THRESHOLD {
-            failures.record_failure();
-        }
-
-        failures.mark_regeneration_attempt();
-        failures.reset();
-
-        assert_eq!(failures.regeneration_cooldown, super::REGENERATE_COOLDOWN);
-        assert!(!failures.should_regenerate(), "a cleared streak must not regenerate");
-
-        for _ in 0..REGENERATE_FAILURE_THRESHOLD {
-            failures.record_failure();
-        }
-        assert!(
-            !failures.should_regenerate(),
-            "a fresh failure streak must still wait out the hourly cooldown"
-        );
-    }
-
-    /// Recovery must escalate: re-sync the wallet, then regenerate if failures keep coming. A
-    /// re-sync that reset the counter would cap it below the regeneration threshold forever,
-    /// leaving no recovery path for a counter account or FPI anchor invalidated by a chain reset.
-    #[test]
-    fn recovery_escalates_from_resync_to_regeneration() {
+    fn resync_runs_once_per_failure_streak() {
         let mut failures = FailureTracker::default();
 
         for _ in 0..RESYNC_FAILURE_THRESHOLD {
             failures.record_failure();
         }
         assert!(failures.should_resync(), "a re-sync should be attempted at the threshold");
-        assert!(!failures.should_regenerate());
 
-        // A re-sync that succeeded must not repeat, so the counter can climb.
         failures.mark_resynced();
         failures.record_failure();
         assert!(!failures.should_resync(), "a successful re-sync must not repeat");
 
-        while failures.consecutive_failures < REGENERATE_FAILURE_THRESHOLD {
-            failures.record_failure();
-        }
-        assert!(failures.should_regenerate(), "regeneration must become reachable");
-
-        // A successful increment clears the escalation.
         failures.reset();
         assert!(!failures.should_resync());
-        assert!(!failures.should_regenerate());
+        for _ in 0..RESYNC_FAILURE_THRESHOLD {
+            failures.record_failure();
+        }
+        assert!(failures.should_resync(), "a new failure streak must re-sync again");
     }
 
     /// A re-sync that *fails* must be retried, since the transient RPC errors that make a re-sync

@@ -17,7 +17,6 @@ use tokio::task::JoinHandle;
 use tonic_web::GrpcWebLayer;
 use tower_http::catch_panic::CatchPanicLayer;
 
-use crate::LOG_TARGET;
 use crate::server::service::ProverService;
 
 mod proof_kind;
@@ -32,6 +31,8 @@ mod tests;
 /// A gRPC server providing a proving service for the Miden blockchain.
 #[derive(clap::Parser)]
 pub struct Server {
+    #[command(flatten)]
+    pub admin: miden_node_utils::admin::AdminOptions,
     #[command(flatten)]
     grpc: miden_node_utils::clap::GrpcMessageSizeOptions,
     /// The port the gRPC server will be hosted on.
@@ -75,7 +76,6 @@ impl Server {
             .port();
 
         info!(
-            target: LOG_TARGET,
             "Remote prover ready",
             service.name = "miden-remote-prover",
             service.version = env!("CARGO_PKG_VERSION"),

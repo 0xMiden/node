@@ -29,7 +29,6 @@ use tonic::metadata::AsciiMetadataValue;
 use tonic_reflection::server;
 use tonic_web::GrpcWebLayer;
 
-use crate::LOG_TARGET;
 use crate::server::api::SequencerInternalService;
 use crate::server::health::HealthCheckLayer;
 
@@ -409,7 +408,6 @@ impl Rpc {
 
 fn log_node_ready(mode: &str, endpoint: impl Display, chain_tip: BlockNumber) {
     info!(
-        target: LOG_TARGET,
         "Node ready",
         service.name = "miden-node",
         service.version = env!("CARGO_PKG_VERSION"),
@@ -421,7 +419,6 @@ fn log_node_ready(mode: &str, endpoint: impl Display, chain_tip: BlockNumber) {
 
 fn log_node_synchronizing(mode: &str, endpoint: impl Display, readiness_threshold: u32) {
     info!(
-        target: LOG_TARGET,
         "Node started; synchronizing",
         service.name = "miden-node",
         service.version = env!("CARGO_PKG_VERSION"),
@@ -465,11 +462,7 @@ impl SequencerInternal {
             .listener
             .local_addr()
             .context("failed to read internal sequencer listen address")?;
-        info!(
-            target: LOG_TARGET,
-            "Internal sequencer server ready",
-            internal.listen = endpoint.to_string()
-        );
+        info!("Internal sequencer server ready", internal.listen = endpoint.to_string());
 
         let service = SequencerInternalService {
             state: self.state,

@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Result;
 use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
-use miden_node_tracing::{debug, error, info, miden_instrument};
+use miden_node_tracing::{debug, error, info, instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
@@ -26,7 +26,7 @@ use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::{BatchBudget, BlockBudget, Mempool, MempoolConfig, SharedMempool};
 use crate::store::get_tx_inputs;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, COMPONENT, LOG_TARGET, proof_scheduler};
+use crate::{CACHED_MEMPOOL_STATS_UPDATE_INTERVAL, proof_scheduler};
 
 #[cfg(test)]
 mod tests;
@@ -114,7 +114,7 @@ pub struct Sequencer {
 impl Sequencer {
     /// Checks the deployed collector, then starts the sequencer tasks and returns its API.
     pub async fn start(self, shutdown: CancellationToken) -> Result<SequencerHandle> {
-        info!(target: LOG_TARGET, "Initializing sequencer");
+        info!("Initializing sequencer");
         let state = self.state;
         let fee_collector_account =
             crate::fee_collector::load_deployed_collector(&state, self.fee_collector_account)
@@ -153,7 +153,7 @@ impl Sequencer {
             Arc::new(BlockProver::local())
         };
         let chain_tip_rx = api.state.subscribe_committed_tip();
-        info!(target: LOG_TARGET, "Sequencer initialized");
+        info!("Sequencer initialized");
 
         // Spawn batch builder, block builder, and proof scheduler. The builders communicate
         // indirectly via a shared mempool.
@@ -312,7 +312,6 @@ impl BlockProducerApi {
                     let Ok(mempool) = mempool.lock() else {
                         error!(
                             anyhow::anyhow!("mempool lock poisoned"),
-                            target: LOG_TARGET,
                             "Mempool lock poisoned, stopping mempool stats updater"
                         );
                         return;
@@ -329,16 +328,12 @@ impl BlockProducerApi {
     // ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_producer.api.submit_proven_tx",
-    )]
+    #[instrument(name = "submit_proven_tx")]
     pub async fn submit_proven_tx(
         &self,
         tx: ProvenTransaction,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         debug!(
-            target: LOG_TARGET,
             "Submitting transaction",
             transaction.id = tx.id(),
             account.id = tx.account_id(),
@@ -348,7 +343,7 @@ impl BlockProducerApi {
             transaction.output_notes = format_output_notes(tx.output_notes()),
             transaction.reference_block.commitment = tx.ref_block_commitment()
         );
-        debug!(target: COMPONENT, "Transaction proof received");
+        debug!("Transaction proof received");
 
         // Authenticate against the local store, then add to the mempool.
         let inputs = get_tx_inputs(&self.state, &tx).await?;
@@ -360,10 +355,7 @@ impl BlockProducerApi {
     }
 
     /// Adds a transaction that has already been authenticated.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_producer.api.submit_authenticated_tx",
-    )]
+    #[instrument(name = "submit_authenticated_tx")]
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
@@ -378,10 +370,7 @@ impl BlockProducerApi {
         result
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_producer.api.submit_proven_tx_batch",
-    )]
+    #[instrument(name = "submit_proven_tx_batch")]
     pub async fn submit_proven_tx_batch(
         &self,
         proof: ProvenBatch,
@@ -406,10 +395,7 @@ impl BlockProducerApi {
     ///
     /// Panics if the number of transactions in `batch` does not match the number of inputs in
     /// `inputs`.
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "block_producer.api.submit_authenticated_tx_batch",
-    )]
+    #[instrument(name = "submit_authenticated_tx_batch")]
     #[expect(clippy::let_and_return)]
     pub async fn submit_authenticated_tx_batch(
         &self,

@@ -2,13 +2,23 @@
 
 extern crate self as miden_node_tracing;
 
+crate::declare_targets! {
+    default: "miden",
+    "miden_node_tracing::admin" => "miden::admin",
+    "miden_node_tracing::filter_control" => "miden::admin",
+    "miden_node_tracing::grpc" => "miden::rpc::server",
+}
+
+pub mod admin;
 mod attribute;
+mod filter_control;
 pub mod grpc;
 mod instrument;
 mod logging;
 pub mod panic;
 mod span_ext;
 pub mod spawn;
+mod targets;
 
 #[doc(hidden)]
 pub use attribute::field_name_allowed;
@@ -23,18 +33,27 @@ pub use logging::{
     setup_tracing,
     setup_tracing_with_config,
 };
+#[doc(hidden)]
+pub use miden_node_tracing_macro::__with_tracing_target;
 pub use miden_node_tracing_macro::{
     debug,
+    debug_span,
+    enabled,
     error,
+    error_span,
     info,
-    miden_instrument,
+    info_span,
+    instrument,
     miden_span_record,
     trace,
+    trace_span,
     warn,
+    warn_span,
 };
 pub use span_ext::ErrorSpanExt;
+pub use targets::{TargetMap, declared_targets};
 // Used directly by applications and by expansions of `tracing::instrument`.
-pub use tracing::{Instrument, Level, Span, Value, enabled, field, info_span};
+pub use tracing::{Instrument, Level, Span, Value, field};
 /// Upstream `tracing` exports required by generated macro code.
 #[doc(hidden)]
 pub use tracing::{event, if_log_enabled, level_enabled, span};
@@ -42,9 +61,24 @@ pub use tracing::{event, if_log_enabled, level_enabled, span};
 /// Upstream attribute and event macros used by this crate's proc-macro expansions.
 #[doc(hidden)]
 pub mod __private {
-    pub use tracing::{debug, error, info, instrument, trace, warn};
+    pub use inventory;
+    pub use tracing::{
+        debug,
+        debug_span,
+        enabled,
+        error,
+        error_span,
+        info,
+        info_span,
+        instrument,
+        trace,
+        trace_span,
+        warn,
+        warn_span,
+    };
 
     pub use crate::instrument::AsDynError;
+    pub use crate::targets::DeclaredTargetMap;
 }
 
 /// Extends errors with a stable string representation of their source chain.

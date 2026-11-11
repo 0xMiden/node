@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use miden_node_proto::generated::miden::node::v1::get_account_request::account_d
     StorageRequest,
     VaultRequest,
 };
-use miden_node_tracing::{miden_instrument, warn};
+use miden_node_tracing::{instrument, warn};
 use miden_node_utils::retry::{self, RetryableWithContext};
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::Word;
@@ -32,39 +32,54 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::Nullifier;
 use miden_standards::account::auth::AuthSingleSig;
 
-use crate::COMPONENT;
 mod deposits;
 #[cfg(test)]
 mod tests;
 
 use deposits::spent_nullifiers;
 
-/// The funding wallet's account state, signing key, and unspent deposits.
+/// The funding wallet's account state, signing key, and deposit scan cursor.
 pub struct FundingWallet {
     account: Arc<Account>,
     secret_key: AuthSecretKey,
     fee_asset_id: AssetId,
-    /// The first block to include in the next deposit and nullifier sync.
+    /// The first block to include in the next deposit scan.
     next_sync: BlockNumber,
-    deposits: HashMap<Nullifier, UsdcxP2Id>,
 }
 
-/// The account state and unspent deposits at a reference block, ready to apply to the wallet.
+/// The account state at a reference block and the deposits discovered since the wallet's last scan,
+/// ready to apply to the wallet.
 #[must_use = "the update must be applied to change the wallet"]
 pub struct WalletUpdate {
     account: Account,
-    deposits: HashMap<Nullifier, UsdcxP2Id>,
+    /// The first block of the deposit scan.
+    from: BlockNumber,
+    /// Deposits created in the scanned range and not spent by its last block.
+    deposits: Vec<UsdcxP2Id>,
     block_num: BlockNumber,
 }
 
+/// The result of a deposit scan, to be stored before the wallet's cursor advances past it.
+#[must_use = "the scan must be recorded before the wallet's cursor advances"]
+#[derive(Debug)]
+pub struct DepositScan {
+    /// The first block to include in the following scan.
+    pub next_sync: BlockNumber,
+    /// The unspent deposits found by the scan.
+    pub deposits: Vec<UsdcxP2Id>,
+}
+
 impl FundingWallet {
-    /// Loads the public account at a reference block and checks its signing key.
+    /// Loads the public account at a reference block and verifies its signing key.
+    ///
+    /// Deposit discovery resumes at `next_sync`, the cursor stored in the funding database.
     pub async fn load_at(
         rpc_client: &mut RpcClient,
         account_id: AccountId,
         secret_key: AuthSecretKey,
         fee_asset_id: AssetId,
         block_num: BlockNumber,
+        next_sync: BlockNumber,
     ) -> Result<Self> {
         anyhow::ensure!(
             account_id.account_type() == AccountType::Public,
@@ -87,17 +102,27 @@ impl FundingWallet {
                 && scheme_id == Word::from([secret_key.auth_scheme().as_u8(), 0, 0, 0]),
             "the signing key does not match the funding account"
         );
-        Ok(Self::new(account, secret_key, fee_asset_id))
+        Ok(Self::with_next_sync(account, secret_key, fee_asset_id, next_sync))
     }
 
     /// Creates a wallet whose deposit history has not yet been synchronized.
+    #[cfg(test)]
     pub(crate) fn new(account: Account, secret_key: AuthSecretKey, fee_asset_id: AssetId) -> Self {
+        Self::with_next_sync(account, secret_key, fee_asset_id, BlockNumber::GENESIS)
+    }
+
+    /// Creates a wallet whose deposit discovery resumes at `next_sync`.
+    fn with_next_sync(
+        account: Account,
+        secret_key: AuthSecretKey,
+        fee_asset_id: AssetId,
+        next_sync: BlockNumber,
+    ) -> Self {
         Self {
             account: Arc::new(account),
             secret_key,
             fee_asset_id,
-            next_sync: BlockNumber::GENESIS,
-            deposits: HashMap::new(),
+            next_sync,
         }
     }
 
@@ -109,22 +134,17 @@ impl FundingWallet {
         &self.secret_key
     }
 
-    /// The unspent deposits discovered through the wallet's reference block.
-    pub fn deposits(&self) -> &HashMap<Nullifier, UsdcxP2Id> {
-        &self.deposits
+    /// Returns the first block to include in the next deposit scan.
+    pub fn next_sync(&self) -> BlockNumber {
+        self.next_sync
     }
 
-    /// Removes a consumed or rejected deposit from the wallet.
-    pub fn remove_deposit(&mut self, nullifier: Nullifier) {
-        self.deposits.remove(&nullifier);
-    }
-
-    /// Fetches an update to the specified block without changing the wallet.
+    /// Fetches the account at the specified block and the deposits created since the last scan,
+    /// without changing the wallet.
     ///
     /// Retries transient RPC failures with backoff. Apply the returned update with [`Self::apply`].
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "funding.wallet.sync_to",
+    #[instrument(
+        name = "sync_to",
         fields(account.id = self.account_id(), block.number = block_num),
         err,
     )]
@@ -153,7 +173,6 @@ impl FundingWallet {
         .notify(|err, delay| {
             warn!(
                 err,
-                target: COMPONENT,
                 "Funding wallet synchronization failed; retrying after backoff",
                 retry.delay_ms = delay
             );
@@ -179,31 +198,52 @@ impl FundingWallet {
         )
         .await?;
         let from = self.next_sync;
-        let mut deposits = self.deposits.clone();
-        deposits.extend(self.scan_deposits(rpc_client, from, block_num).await?);
+        let mut deposits = self.scan_deposits(rpc_client, from, block_num).await?;
         let nullifiers: Vec<_> = deposits.keys().copied().collect();
         let spent = spent_nullifiers(rpc_client, &nullifiers, from, block_num).await?;
         deposits.retain(|nullifier, _| !spent.contains(nullifier));
-        Ok(WalletUpdate { account, deposits, block_num })
+        Ok(WalletUpdate {
+            account,
+            from,
+            deposits: deposits.into_values().collect(),
+            block_num,
+        })
     }
 
-    /// Applies the account state and deposits together after validating the update.
-    pub fn apply(&mut self, update: WalletUpdate) -> Result<()> {
+    /// Applies the account state after validating the update and returns its deposit scan.
+    ///
+    /// The cursor does not move until the scan is stored and passed to
+    /// [`Self::complete_deposit_scan`], so a scan that fails to save is repeated by the next sync.
+    pub fn apply(&mut self, update: WalletUpdate) -> Result<DepositScan> {
         anyhow::ensure!(
             update.account.id() == self.account_id(),
             "the update belongs to another wallet"
         );
-        let next_sync = update.block_num + 1;
         anyhow::ensure!(
-            self.next_sync <= next_sync,
-            "cannot apply a wallet update from an earlier block",
+            update.from == self.next_sync,
+            "the wallet update does not continue the wallet's deposit scan",
         );
         let current_account = Arc::get_mut(&mut self.account)
             .context("cannot apply a wallet update while its account is in use")?;
         *current_account = update.account;
-        self.deposits = update.deposits;
-        self.next_sync = next_sync;
-        Ok(())
+        Ok(DepositScan {
+            next_sync: update.block_num + 1,
+            deposits: update.deposits,
+        })
+    }
+
+    /// Returns the given deposits whose nullifiers were recorded on chain by block `tip`.
+    pub async fn spent_deposits(
+        rpc_client: &mut RpcClient,
+        nullifiers: &[Nullifier],
+        tip: BlockNumber,
+    ) -> Result<HashSet<Nullifier>> {
+        spent_nullifiers(rpc_client, nullifiers, BlockNumber::GENESIS, tip).await
+    }
+
+    /// Advances the deposit cursor past a scan whose deposits are stored.
+    pub fn complete_deposit_scan(&mut self, next_sync: BlockNumber) {
+        self.next_sync = self.next_sync.max(next_sync);
     }
 
     /// Loads authenticated account state at the reference block.

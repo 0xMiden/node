@@ -20,11 +20,11 @@ use miden_protocol::transaction::TransactionArgs;
 use miden_standards::tx_script::ExpirationTransactionScript;
 use miden_tx::FailedNote;
 
+use crate::NoteError;
 use crate::allowlist::{NoteScriptNotAllowlisted, partition_by_allowlist};
 use crate::candidate::{SponsoredFeatureNote, TransactionCandidate};
 use crate::chain_state::ChainState;
 use crate::db::NtxDbReader;
-use crate::{LOG_TARGET, NoteError};
 
 /// Maximum number of `FEE_SPONSORSHIP` notes attached to a single feature note. A feature note with
 /// more pending sponsorships than this keeps a subset of this size.
@@ -95,7 +95,6 @@ pub(crate) async fn select_candidate(
         .collect::<Vec<_>>();
     if !rejected.is_empty() {
         info!(
-            target: LOG_TARGET,
             "dropping network notes whose script roots are not allowlisted",
             account.id = account_id,
             note.rejected.count = rejected.len()
@@ -174,7 +173,6 @@ pub(crate) fn attribute_failed_notes(
     for f in failed {
         let Some(error) = f.error() else {
             info!(
-                target: LOG_TARGET,
                 "note deferred after bundle rejection",
                 note.id = f.note().id(),
                 note.nullifier = f.note().nullifier()
@@ -184,7 +182,6 @@ pub(crate) fn attribute_failed_notes(
         let error_msg = error.as_report();
         info!(
             error,
-            target: LOG_TARGET,
             "note failed: consumability check",
             note.id = f.note().id(),
             note.nullifier = f.note().nullifier()
@@ -232,7 +229,6 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
         .into_iter()
         .map(|note| {
             warn!(
-                target: LOG_TARGET,
                 "note discarded: exceeds the per-tx cycle budget on its own and can never be consumed",
                 note.id = note.note().id(),
                 note.nullifier = note.note().nullifier(),
@@ -251,7 +247,6 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
 pub(crate) fn log_deferred_notes(deferred: Vec<FailedNote>) {
     for note in deferred {
         info!(
-            target: LOG_TARGET,
             "note deferred: exceeded per-tx cycle budget, will retry next round",
             note.id = note.note().id(),
             note.nullifier = note.note().nullifier(),

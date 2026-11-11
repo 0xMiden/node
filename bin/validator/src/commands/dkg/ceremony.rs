@@ -175,7 +175,6 @@ impl Ceremony {
                         Err(error) => {
                             warn!(
                                 &error,
-                                target: miden_validator::LOG_TARGET,
                                 "Ignoring failed incoming DKG connection"
                             );
                             continue;
@@ -201,7 +200,6 @@ impl Ceremony {
                 },
                 _ = progress.tick() => {
                     info!(
-                        target: miden_validator::LOG_TARGET,
                         "Waiting for DKG peers to connect and authenticate",
                         dkg.peers.authenticated = authenticated_peers.len() #[nonstandard],
                         dkg.peers.expected = self.peers.len() #[nonstandard]
@@ -416,9 +414,7 @@ impl ParticipateOptions {
             let [key, endpoint] = pair else {
                 anyhow::bail!("each --peer requires a public key followed by an endpoint");
             };
-            let key = super::super::parse_validator_public_key(key)
-                .map_err(anyhow::Error::msg)
-                .context("invalid peer validator public key")?;
+            let key = PublicKey::from_hex(key).context("invalid peer validator public key")?;
             ensure!(key != signer.public_key(), "peer keys contain the local validator key");
             ensure!(!validator_set.contains(&key), "peer validator keys contain duplicates");
             let peer = Self::parse_peer_endpoint(endpoint)?;

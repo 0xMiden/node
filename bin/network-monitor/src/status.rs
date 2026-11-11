@@ -8,10 +8,9 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
-use miden_node_tracing::{debug, miden_instrument};
+use miden_node_tracing::{debug, instrument};
 use url::Url;
 
-use crate::COMPONENT;
 use crate::service::{Service, build_tls_client};
 pub use crate::service_status::*;
 
@@ -119,10 +118,9 @@ impl Service for RpcService {
         )
     }
 
-    #[miden_instrument(
+    #[instrument(
         parent = None,
-        target = COMPONENT,
-        name = "network_monitor.status.check_rpc",
+        name = "check_rpc",
         level = "info",
     )]
     async fn check(&mut self) -> ServiceStatus {
@@ -139,7 +137,6 @@ impl Service for RpcService {
                     self.stale_tracker.update(rpc_details.chain_tip, current_unix_timestamp_secs())
                 {
                     debug!(
-                        target: COMPONENT,
                         "Chain tip is stale",
                         tip.number = rpc_details.chain_tip,
                         tip.stale_duration_secs = stale_duration
@@ -157,7 +154,7 @@ impl Service for RpcService {
                 ServiceStatus::healthy(self.name(), ServiceDetails::RpcStatus(rpc_details))
             },
             Err(e) => {
-                debug!(&e, target: COMPONENT, "RPC status check failed");
+                debug!(&e, "RPC status check failed");
                 ServiceStatus::error(self.name(), e)
             },
         }

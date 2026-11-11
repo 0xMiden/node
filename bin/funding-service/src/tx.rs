@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use miden_node_proto::clients::{RpcClient, UsdcxFaucet};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::BlockHeader;
@@ -26,7 +26,6 @@ use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransacti
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
 
-use crate::COMPONENT;
 use crate::data_store::InMemoryDataStore;
 
 // TRANSACTION EXECUTION
@@ -53,9 +52,8 @@ pub struct ExecutionInputs {
 }
 
 /// Executes one transaction which consumes `deposits` and creates `outputs`.
-#[miden_instrument(
-    target = COMPONENT,
-    name = "funding.execute",
+#[instrument(
+    name = "execute",
     fields(
         account.id = inputs.funder.id(),
         transaction.reference_block.number = inputs.reference_header.block_num(),
@@ -417,8 +415,8 @@ mod tests {
 
         assert!(result.is_err(), "a remote prover failure must not be proven in process");
         let root = telemetry.span("test_transaction");
-        let proving = telemetry.span("funding.prove");
-        let remote = telemetry.span("funding.prove.remote");
+        let proving = telemetry.span("prove");
+        let remote = telemetry.span("prove_remote");
         assert_eq!(proving.parent_span_id, root.span_context.span_id());
         assert_eq!(remote.parent_span_id, proving.span_context.span_id());
         assert!(matches!(remote.status, Status::Error { .. }));
@@ -489,6 +487,39 @@ mod tests {
         let balance = balance_after(&fixture, &executed_tx)?;
         assert!(balance > 0, "the deposit must raise the balance above zero");
         assert!(balance < 5_000_000, "the transaction must pay its fee from the deposit");
+
+        Ok(())
+    }
+
+    /// Several deposits are consumed together and pay a single fee.
+    #[tokio::test]
+    async fn one_transaction_consumes_several_deposits_for_one_fee() -> Result<()> {
+        let fixture = Fixture::new(0, TEST_BASE_FEE)?;
+        let mut rng = RandomCoin::new(Word::from([37u32; 4]));
+        let deposits: Vec<_> =
+            (1..=8).map(|serial| deposit_note(&fixture, 1_000_000, serial)).collect();
+        let collected = 8 * 1_000_000;
+
+        let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
+        let executed_tx = execute(inputs, deposits.clone(), Vec::new(), &mut rng).await?;
+
+        let consumed: Vec<_> = executed_tx.input_notes().iter().map(InputNote::id).collect();
+        assert_eq!(consumed.len(), deposits.len());
+        for deposit in &deposits {
+            assert!(consumed.contains(&deposit.id()), "deposit {} is not consumed", deposit.id());
+        }
+        let fee_notes = executed_tx
+            .output_notes()
+            .iter()
+            .filter(|note| {
+                note.recipient()
+                    .is_some_and(|recipient| recipient.script().root() == TxFeeNote::script_root())
+            })
+            .count();
+        assert_eq!(fee_notes, 1, "the deposits must share one fee");
+
+        let balance = balance_after(&fixture, &executed_tx)?;
+        assert!(balance > 0 && balance < collected, "unexpected balance {balance}");
 
         Ok(())
     }

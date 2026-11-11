@@ -8,14 +8,7 @@ use futures::TryFutureExt;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{
-    ErrorSpanExt,
-    Instrument,
-    Span,
-    error,
-    miden_instrument,
-    miden_span_record,
-};
+use miden_node_tracing::{ErrorSpanExt, Instrument, Span, error, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::AccountId;
@@ -37,7 +30,6 @@ use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
-use crate::{COMPONENT, LOG_TARGET};
 
 mod prover;
 pub(crate) use prover::BatchProver;
@@ -156,10 +148,9 @@ impl BatchBuilder {
         }
     }
 
-    #[miden_instrument(
+    #[instrument(
         parent = None,
-        target = COMPONENT,
-        name = "batch_builder.build_batch",
+        name = "build_batch",
     )]
     fn build_batch(&mut self, mempool: SharedMempool, batch: SelectedBatch) {
         miden_span_record!(
@@ -208,20 +199,14 @@ impl BatchBuilder {
         Ok(true)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.select_full_batch",
-    )]
+    #[instrument(name = "select_full_batch")]
     fn select_full_batch(
         mempool: &SharedMempool,
     ) -> Result<Option<SelectedBatch>, BuildBatchError> {
         Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_full_batch())
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.select_any_batch",
-    )]
+    #[instrument(name = "select_any_batch")]
     fn select_any_batch(mempool: &SharedMempool) -> Result<Option<SelectedBatch>, BuildBatchError> {
         Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_any_batch())
     }
@@ -256,11 +241,7 @@ impl BatchBuilder {
             Ok(Ok(())) => Ok(()),
             Ok(Err(err)) => Err(err),
             Err(crash) => {
-                error!(
-                    &crash,
-                    target: LOG_TARGET,
-                    "Batch worker pool panic'd"
-                );
+                error!(&crash, "Batch worker pool panic'd");
                 panic!("Batch worker pool panic: {crash}");
             },
         }
@@ -292,11 +273,7 @@ struct BatchInputs {
 }
 
 impl BatchJob {
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.build_batch_job",
-        err,
-    )]
+    #[instrument(name = "build_batch_job", err)]
     async fn build_batch(&self, batch: SelectedBatch) -> Result<(), BuildBatchError> {
         let batch_id = batch.id();
 
@@ -327,11 +304,7 @@ impl BatchJob {
         }
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.get_batch_inputs",
-        err,
-    )]
+    #[instrument(name = "get_batch_inputs", err)]
     async fn get_batch_inputs(
         &self,
         selected: SelectedBatch,
@@ -495,10 +468,7 @@ impl BatchJob {
         Ok(fee_collection_tx)
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.commit_batch",
-    )]
+    #[instrument(name = "commit_batch")]
     fn commit_batch(&self, batch: Arc<ProvenBatch>) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()
@@ -507,10 +477,7 @@ impl BatchJob {
         Ok(())
     }
 
-    #[miden_instrument(
-        target = COMPONENT,
-        name = "batch_builder.rollback_batch",
-    )]
+    #[instrument(name = "rollback_batch")]
     fn rollback_batch(&self, batch_id: SelectedBatchId) -> Result<(), BuildBatchError> {
         self.mempool
             .lock()

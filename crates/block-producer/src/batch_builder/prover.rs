@@ -1,10 +1,9 @@
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{miden_instrument, miden_span_record};
+use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::batch::{ProposedBatch, ProvenBatch};
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
-use crate::COMPONENT;
 use crate::errors::BuildBatchError;
 
 /// Proves batches locally without generating precompile proofs.
@@ -16,7 +15,7 @@ impl BatchProver {
         Self(LocalBatchProver::default().skip_precompile_proof_generation(true))
     }
 
-    #[miden_instrument(target = COMPONENT, name = "batch_builder.prove_batch", err)]
+    #[instrument(name = "prove_batch", err)]
     pub(crate) async fn prove(
         &self,
         proposed_batch: ProposedBatch,

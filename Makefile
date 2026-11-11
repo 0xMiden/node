@@ -194,9 +194,9 @@ install-network-monitor: ## Installs network monitor binary
 install-benchmark: ## Installs the benchmark binary
 	cargo install --path bin/benchmark --locked
 
-.PHONY: install-usdcx-genesis
-install-usdcx-genesis: ## Installs the USDCx genesis tool
-	cargo install --path crates/usdcx-genesis --locked
+.PHONY: install-genesis
+install-genesis: ## Installs the genesis tool
+	cargo install --path bin/genesis --locked
 
 .PHONY: install-large-account-benchmark
 install-large-account-benchmark: ## Installs the large account benchmark binary
@@ -235,7 +235,7 @@ docker-build: docker-build-node \
               docker-build-funding-service \
               docker-build-remote-prover \
               docker-build-benchmark \
-              docker-build-usdcx-genesis
+              docker-build-genesis
 
 .PHONY: docker-build-node
 docker-build-node: ## Builds the Miden node using Docker
@@ -342,8 +342,8 @@ docker-build-benchmark: ## Builds the benchmark image using Docker
                  --target runtime-tool \
                  -t miden-node-tps-benchmark .
 
-.PHONY: docker-build-usdcx-genesis
-docker-build-usdcx-genesis: ## Builds the USDCx genesis image using Docker
+.PHONY: docker-build-genesis
+docker-build-genesis: ## Builds the genesis tool image using Docker
 	@CREATED=$$(date -u +'%Y-%m-%dT%H:%M:%SZ') && \
 	VERSION="$(DOCKER_VERSION)" && \
 	COMMIT=$$(git rev-parse HEAD) && \
@@ -351,9 +351,9 @@ docker-build-usdcx-genesis: ## Builds the USDCx genesis image using Docker
                  --build-arg CREATED="$$CREATED" \
                  --build-arg VERSION="$$VERSION" \
                  --build-arg COMMIT="$$COMMIT" \
-                 --build-arg BIN=miden-usdcx-genesis \
+                 --build-arg BIN=miden-genesis \
                  --target runtime-tool \
-                 -t miden-usdcx-genesis .
+                 -t miden-genesis .
 
 ## --- setup --------------------------------------------------------------------------------------
 

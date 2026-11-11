@@ -57,7 +57,7 @@ where
         result = &mut service => result,
         result = &mut signal => {
             let signal = result?;
-            info!(
+            info!(target: "miden",
                 "Shutdown requested",
                 service.name = service_name,
                 shutdown.signal = signal.to_string()
@@ -67,6 +67,7 @@ where
             let Ok(result) = tokio::time::timeout(GRACE_PERIOD, &mut service).await else {
                 error!(
                     anyhow::anyhow!("graceful shutdown timed out"),
+                    target: "miden",
                     "Graceful shutdown timed out; exiting process",
                     service.name = service_name,
                     shutdown.grace_period_ms = GRACE_PERIOD
@@ -75,7 +76,7 @@ where
             };
 
             result?;
-            info!("Shutdown complete", service.name = service_name);
+            info!(target: "miden","Shutdown complete", service.name = service_name);
             Ok(())
         },
     }

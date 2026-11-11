@@ -135,6 +135,19 @@ description = "Added the funding service."
 }
 
 #[test]
+fn accepts_genesis_scope() {
+    let body = valid_body(
+        r#"[[entry]]
+scope       = "genesis"
+impact      = "added"
+description = "Added the genesis tool."
+"#,
+    );
+
+    verify_pr_body(&body).unwrap();
+}
+
+#[test]
 fn accepts_no_changelog_marker() {
     let body = valid_body(
         r#"changelog = "none"

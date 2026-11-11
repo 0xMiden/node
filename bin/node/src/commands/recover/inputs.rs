@@ -7,7 +7,6 @@ use miden_node_tracing::warn;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
 use super::RecoveredBlock;
-use crate::LOG_TARGET;
 
 /// Loads a local proving request and checks that it reconstructs the supplied block.
 ///
@@ -29,7 +28,7 @@ pub(super) async fn load_valid_local_inputs(
     match decoded {
         Ok(request) => Ok(Some(request)),
         Err(error) => {
-            warn!(error, target: LOG_TARGET, "Local proving inputs require recovery", block.number = height);
+            warn!(error, "Local proving inputs require recovery", block.number = height);
             Ok(None)
         },
     }

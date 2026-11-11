@@ -32,7 +32,6 @@ use url::Url;
 
 use super::ENV_DATA_DIRECTORY;
 use super::store::StoreOptions;
-use crate::LOG_TARGET;
 
 // RECOVER
 // ================================================================================================
@@ -129,12 +128,15 @@ impl RecoverCommand {
                     shutdown,
                 )
                 .await?;
-                info!(target: LOG_TARGET, "Recovery proving complete",
+                info!(target: "miden::proving::blocks", "Recovery proving complete",
                     block.number = state.proven_tip(), tip.number = state.committed_tip());
             } else {
-                info!(target: LOG_TARGET, "Recovered inputs are ready for proving",
-                    block.number = state.proven_tip(), tip.number = state.committed_tip(),
-                    sync.block_gap = state.committed_tip().as_u32() - state.proven_tip().as_u32());
+                info!(
+                    "Recovered inputs are ready for proving",
+                    block.number = state.proven_tip(),
+                    tip.number = state.committed_tip(),
+                    sync.block_gap = state.committed_tip().as_u32() - state.proven_tip().as_u32()
+                );
             }
             Ok(())
         }
@@ -214,8 +216,11 @@ async fn recover_from_validators(
         start = inputs::recovery_start(state, recovery_tip) => start?,
     };
     let Some(start) = start else {
-        info!(target: LOG_TARGET, "Local chain and proving inputs already cover recovery target",
-            block.number = state.committed_tip(), sync.upstream_block = recovery_tip);
+        info!(
+            "Local chain and proving inputs already cover recovery target",
+            block.number = state.committed_tip(),
+            sync.upstream_block = recovery_tip
+        );
         return Ok(());
     };
 
@@ -259,8 +264,12 @@ async fn run_recovery_pipeline(
     let parent = parent.context("recovery parent header not found")?;
     let block_from = start.as_u32();
     let block_count = u64::from(target.as_u32()) - u64::from(block_from) + 1;
-    info!(target: LOG_TARGET, "Recovering blocks and proving inputs from validators",
-        block.from = block_from, sync.upstream_block = target, validators.count = validators.len());
+    info!(
+        "Recovering blocks and proving inputs from validators",
+        block.from = block_from,
+        sync.upstream_block = target,
+        validators.count = validators.len()
+    );
 
     let mut block_streams = Vec::with_capacity(validators.len());
     for (url, mut validator) in validators {
@@ -290,7 +299,7 @@ async fn run_recovery_pipeline(
                 inputs::apply_recovered(state, writer, recovered).await
                     .with_context(|| format!("failed to recover block {height}"))?;
                 last_delivered = Some(height);
-                info!(target: LOG_TARGET, "Recovered block and proving inputs", block.number = height);
+                info!("Recovered block and proving inputs", block.number = height);
             },
         }
     }
@@ -303,7 +312,7 @@ async fn run_recovery_pipeline(
         }
     }
     anyhow::ensure!(last_delivered == Some(target), "recovery stream ended before target {target}");
-    info!(target: LOG_TARGET, "Block and proving input recovery complete", tip.number = target);
+    info!("Block and proving input recovery complete", tip.number = target);
     Ok(())
 }
 

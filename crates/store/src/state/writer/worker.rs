@@ -4,14 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
-use miden_node_tracing::{
-    ErrorReport,
-    Instrument,
-    debug,
-    miden_instrument,
-    miden_span_record,
-    warn,
-};
+use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -27,6 +20,7 @@ use thread_priority::{ThreadPriority, set_current_thread_priority};
 use tokio::sync::{mpsc, watch};
 
 use super::WriteRequest;
+use crate::HistoricalError;
 use crate::account_state_forest::{
     AccountStateForest,
     AccountStateForestBackend,
@@ -40,7 +34,6 @@ use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification};
-use crate::{COMPONENT, HistoricalError, LOG_TARGET};
 
 // WRITE WORKER
 // ================================================================================================
@@ -179,10 +172,7 @@ impl WriteWorker {
     ///   lag the DB by one block, which is detected by the consistency checks at startup (the same
     ///   crash semantics as the previous lock-based implementation).
     /// - the new snapshot is published atomically, making the block visible to readers.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     async fn write_block(
         &mut self,
         signed_block: SignedBlock,
@@ -311,7 +301,7 @@ impl WriteWorker {
         if let Some(block_lifecycle) = block_lifecycle {
             block_lifecycle.emit(&resolved_note_ids);
         }
-        debug!(target: LOG_TARGET, "Block applied");
+        debug!("Block applied");
 
         Ok(())
     }
@@ -324,10 +314,7 @@ impl WriteWorker {
     /// write-path CPU work lands on the pool. The returned forest update is bound to the forest
     /// state observed here; it remains valid until applied because the writer is the sole forest
     /// mutator.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     fn prepare_block_update(
         &self,
         signed_block: &SignedBlock,
@@ -396,9 +383,7 @@ impl WriteWorker {
     /// # Panics
     ///
     /// Panics if applying any prepared mutation fails; see above.
-    #[miden_instrument(
-        target = COMPONENT,
-    )]
+    #[instrument]
     fn apply_prepared_mutations(
         &mut self,
         block_num: BlockNumber,
@@ -442,10 +427,7 @@ impl WriteWorker {
     ///
     /// Consistency between the header and the block body is checked in
     /// [`Self::prepare_block_update`], where the hashing runs on the apply-block pool.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     async fn validate_block_header(&self, header: &BlockHeader) -> Result<Word, ApplyBlockError> {
         let block_num = header.block_num();
 
@@ -471,10 +453,7 @@ impl WriteWorker {
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
@@ -539,10 +518,7 @@ impl WriteWorker {
     }
 
     /// Builds note records with inclusion proofs from the block body.
-    #[miden_instrument(
-        target = COMPONENT,
-        err,
-    )]
+    #[instrument(err)]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,
@@ -611,7 +587,6 @@ fn raise_thread_priority() {
         WARN_ONCE.call_once(|| {
             warn!(
                 &error,
-                target: COMPONENT,
                 "failed to raise apply-block thread priority; continuing at normal priority"
             );
         });
