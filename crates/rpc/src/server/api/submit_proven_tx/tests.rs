@@ -11,7 +11,6 @@ use miden_protocol::account::{
     AccountType,
     AccountUpdateDetails,
 };
-#[cfg(test)]
 use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{

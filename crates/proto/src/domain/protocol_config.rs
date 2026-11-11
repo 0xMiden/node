@@ -1,8 +1,6 @@
 //! Protocol configuration validation at RPC boundaries.
 
 use miden_protocol::block::BlockHeader;
-#[cfg(test)]
-use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::protocol_config::ProtocolConfig;
 
 use crate::DecodeMessageExt;
@@ -42,6 +40,7 @@ mod tests {
     use miden_protocol::Word;
     use miden_protocol::asset::AssetId;
     use miden_protocol::block::FeeParameters;
+    use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
 
     use super::*;

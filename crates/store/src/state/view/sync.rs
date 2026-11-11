@@ -3,8 +3,6 @@ use std::ops::RangeInclusive;
 use miden_node_tracing::instrument_v2;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
-#[cfg(test)]
-use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
 
@@ -212,6 +210,7 @@ impl StateView {
 #[cfg(test)]
 mod tests {
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{BlockBody, SignedBlock, ValidatorConfig};
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
