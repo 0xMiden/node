@@ -7,7 +7,7 @@ use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, Decoded
 use miden_node_tracing::{ErrorReport, instrument};
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::block::ProposedBlock;
-use miden_protocol::transaction::TransactionInputs;
+use miden_protocol::transaction::TransactionWitness;
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 
@@ -66,11 +66,11 @@ impl Prover {
 #[instrument(target = "miden::proving::transactions")]
 fn prove_transaction(
     prover: &LocalTransactionProver,
-    input: Decoded<transaction::TransactionInputs>,
+    input: Decoded<transaction::TransactionWitness>,
 ) -> Result<ProofVariant, tonic::Status> {
     // SAFETY: Construction checks input consistency and note inclusion against supplied headers.
     // This stateless prover cannot authenticate the chain. The submitting client must do that.
-    let input: TransactionInputs = input.build_unchecked().map_err(|error| {
+    let input: TransactionWitness = input.build_unchecked().map_err(|error| {
         tonic::Status::invalid_argument(
             error.as_report_context("failed to build transaction inputs"),
         )

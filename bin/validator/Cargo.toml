@@ -70,6 +70,7 @@ itertools        = { workspace = true }
 miden-node-store = { workspace = true }
 miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+miden-standards  = { workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }

@@ -20,7 +20,7 @@ use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Reques
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionInputs};
+use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionWitness};
 use miden_tx::{LocalTransactionProver, TransactionProverError};
 use tokio::sync::{Mutex, Semaphore};
 use url::Url;
@@ -99,7 +99,7 @@ impl BenchmarkProver {
                     .context("local proving failed")
             },
             Self::Remote { prover, limiter, permits } => {
-                let tx_inputs: TransactionInputs = executed_tx.into();
+                let tx_inputs: TransactionWitness = executed_tx.into();
                 prove_remote_with_retry(prover, limiter, permits, &tx_inputs).await
             },
         }
@@ -110,7 +110,7 @@ async fn prove_remote_with_retry(
     prover: &RemoteTransactionProver,
     limiter: &Arc<RampingRateLimiter>,
     permits: &Arc<Semaphore>,
-    tx_inputs: &TransactionInputs,
+    tx_inputs: &TransactionWitness,
 ) -> Result<ProvenTransaction> {
     // Hold one in-flight permit across every retry so the concurrency cap accounts for
     // slow-but-still-progressing requests.
@@ -199,7 +199,7 @@ impl RemoteTransactionProver {
 
     async fn prove(
         &self,
-        tx_inputs: &TransactionInputs,
+        tx_inputs: &TransactionWitness,
     ) -> Result<ProvenTransaction, TransactionProverError> {
         let request = tonic::Request::new(ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),

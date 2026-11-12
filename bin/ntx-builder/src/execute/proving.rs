@@ -1,6 +1,6 @@
 use miden_node_tracing::instrument;
 use miden_node_utils::retry::Retryable;
-use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
+use miden_protocol::transaction::{ProvenTransaction, TransactionWitness};
 use miden_tx::TransactionProverError;
 
 use super::{NtxContext, NtxError, NtxResult};
@@ -14,7 +14,7 @@ impl NtxContext {
     #[instrument(name = "prove", err)]
     pub(super) async fn prove(
         &self,
-        tx_inputs: &TransactionInputs,
+        tx_inputs: &TransactionWitness,
     ) -> NtxResult<ProvenTransaction> {
         (|| async { self.prover.prove(tx_inputs).await })
             .retry(self.request_backoff())

@@ -15,6 +15,7 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::BlockHeader;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
 use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::transaction::{
@@ -156,6 +157,13 @@ impl Submission {
                     AccountUpdateDetails::Private,
                 )
                 .unwrap();
+                let logs = miden_protocol::transaction::TransactionLogs::default();
+                let log_details = if update.account_id().is_public() {
+                    miden_protocol::transaction::TransactionLogDetails::Public(logs)
+                } else {
+                    miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+                };
+
                 Arc::new(
                     ProvenTransaction::new(
                         update,
@@ -165,6 +173,8 @@ impl Submission {
                         header.commitment(),
                         100.into(),
                         dummy_execution_proof(),
+                        log_details,
+                        CodePatch::default(),
                     )
                     .unwrap(),
                 )

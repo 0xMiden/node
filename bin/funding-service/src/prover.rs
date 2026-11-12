@@ -121,7 +121,9 @@ impl RemoteProver {
     )]
     pub async fn prove(&self, executed_tx: &ExecutedTransaction) -> Result<ProvenTransaction> {
         let request = tonic::Request::new(ProveRequest {
-            request: Some(ProofRequestVariant::Transaction(executed_tx.tx_inputs().into())),
+            request: Some(ProofRequestVariant::Transaction(
+                miden_protocol::transaction::TransactionWitness::from(executed_tx.clone()).into(),
+            )),
         });
 
         let response = self

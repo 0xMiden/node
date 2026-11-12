@@ -171,7 +171,7 @@ pub(crate) fn attribute_failed_notes(
     let mut seen = HashSet::new();
     let mut attributed = Vec::new();
     for f in failed {
-        let Some(error) = f.error() else {
+        let Some(error) = note_failure_error(&f) else {
             info!(
                 "note deferred after bundle rejection",
                 note.id = f.note().id(),
@@ -179,13 +179,13 @@ pub(crate) fn attribute_failed_notes(
             );
             continue;
         };
-        let error_msg = error.as_report();
         info!(
             error,
             "note failed: consumability check",
             note.id = f.note().id(),
             note.nullifier = f.note().nullifier()
         );
+        let error_msg = error.as_report();
         let (nullifier, error_msg) = match sponsor_to_feature.get(&f.note().id()) {
             Some(feature_nullifier) => (
                 *feature_nullifier,
@@ -201,6 +201,17 @@ pub(crate) fn attribute_failed_notes(
     attributed
 }
 
+/// Returns the cause of a note failure, excluding collateral bundle rejections.
+fn note_failure_error(failed: &FailedNote) -> Option<&(dyn std::error::Error + 'static)> {
+    if let Some(error) = failed.execution_error() {
+        Some(error)
+    } else if let miden_tx::NoteFailure::Rejected { reason } = failed.failure() {
+        Some(reason.as_ref())
+    } else {
+        None
+    }
+}
+
 /// Returns `(nullifier, error)` pairs for the failed sponsorship notes in `failed`, keyed by the
 /// nullifier of each sponsorship. Each pair records the error on the sponsorship row. A sponsorship
 /// rejected only because its bundle was rejected has no error of its own and is skipped.
@@ -212,7 +223,8 @@ pub(crate) fn sponsorship_failures<'a>(
         .into_iter()
         .filter(|f| sponsor_to_feature.contains_key(&f.note().id()))
         .filter_map(|f| {
-            let error: NoteError = Arc::new(std::io::Error::other(f.error()?.as_report()));
+            let error: NoteError =
+                Arc::new(std::io::Error::other(note_failure_error(f)?.as_report()));
             Some((f.note().nullifier(), error))
         })
         .collect()
@@ -517,6 +529,23 @@ end";
     }
 
     #[test]
+    fn statically_rejected_notes_retain_their_failure() {
+        let note =
+            crate::test_utils::mock_single_target_note(mock_network_account_id(), 1).into_note();
+        let nullifier = note.nullifier();
+        let failed = vec![FailedNote::new(
+            note,
+            miden_tx::NoteFailure::Rejected {
+                reason: Box::new(std::io::Error::other("invalid fee sponsorship")),
+            },
+        )];
+        let attributed = attribute_failed_notes(failed, &HashMap::new());
+        assert_eq!(attributed.len(), 1);
+        assert_eq!(attributed[0].0, nullifier);
+        assert!(attributed[0].1.to_string().contains("invalid fee sponsorship"));
+    }
+
+    #[test]
     fn blamed_note_retains_its_error() {
         let note =
             crate::test_utils::mock_single_target_note(mock_network_account_id(), 1).into_note();
@@ -581,8 +610,8 @@ end";
         assert!(error.starts_with(&format!("sponsorship note {blamed_by} failed: ")));
     }
 
-    /// Each blamed sponsorship keeps its own error under its own nullifier. The feature note and
-    /// the collateral sponsorship produce no entry.
+    /// Each blamed or statically rejected sponsorship keeps its own error under its own nullifier.
+    /// The feature note and the collateral sponsorship produce no entry.
     #[test]
     fn sponsorship_failures_are_keyed_by_each_sponsorship() {
         let account_id = mock_network_account_id();
@@ -590,17 +619,22 @@ end";
         let collateral = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 2);
         let first = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 3);
         let second = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 4);
+        let rejected = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 5);
         let sponsors = HashMap::from([
             (collateral.id(), feature.nullifier()),
             (first.id(), feature.nullifier()),
             (second.id(), feature.nullifier()),
+            (rejected.id(), feature.nullifier()),
         ]);
         let blamed = |error| miden_tx::NoteFailure::Blamed {
             error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(error),
             num_cycles: None,
         };
-        let expected =
-            [(first.nullifier(), "first failure"), (second.nullifier(), "second failure")];
+        let expected = [
+            (first.nullifier(), "first failure"),
+            (second.nullifier(), "second failure"),
+            (rejected.nullifier(), "invalid sponsorship"),
+        ];
         let failed = vec![
             FailedNote::new(feature.clone(), blamed("feature failure")),
             FailedNote::new(
@@ -609,6 +643,12 @@ end";
             ),
             FailedNote::new(first, blamed("first failure")),
             FailedNote::new(second, blamed("second failure")),
+            FailedNote::new(
+                rejected,
+                miden_tx::NoteFailure::Rejected {
+                    reason: Box::new(std::io::Error::other("invalid sponsorship")),
+                },
+            ),
         ];
 
         let failures = sponsorship_failures(&failed, &sponsors);

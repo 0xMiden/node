@@ -28,6 +28,7 @@ use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::OrderedBatches;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
@@ -368,6 +369,10 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
     )
     .unwrap();
 
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details =
+        miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+
     // The account state changes, which is what keeps this from being rejected as an empty
     // transaction; no input or output notes are needed.
     ProvenTransaction::new(
@@ -378,6 +383,8 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
         Word::empty(),
         BlockNumber::from(u32::from(seed) + 1),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -386,15 +393,20 @@ fn replace_transaction_proof(
     transaction: &ProvenTransaction,
     proof: ExecutionProof,
 ) -> ProvenTransaction {
-    ProvenTransaction::new(
-        transaction.account_update().clone(),
-        transaction.input_notes().iter().cloned(),
-        transaction.output_notes().iter().cloned(),
-        transaction.ref_block_num(),
-        transaction.ref_block_commitment(),
-        transaction.expiration_block_num(),
-        proof,
-    )
+    {
+        let update = transaction.account_update().clone();
+        ProvenTransaction::new(
+            update,
+            transaction.input_notes().iter().cloned(),
+            transaction.output_notes().iter().cloned(),
+            transaction.ref_block_num(),
+            transaction.ref_block_commitment(),
+            transaction.expiration_block_num(),
+            proof,
+            transaction.log_details().clone(),
+            transaction.code_patch().clone(),
+        )
+    }
     .unwrap()
 }
 
@@ -444,21 +456,26 @@ async fn proven_transaction_fixture() -> &'static ProvenTransactionFixture {
 
             let context_a = chain
                 .build_transaction(account_a.id())
-                .authenticated_input_note(note_a.id())
+                .authenticated_input_note(note_a.clone())
                 .build()
                 .unwrap();
             let executed_a = Box::pin(context_a.execute()).await.unwrap();
             let inputs = executed_a.tx_inputs().clone();
-            let transaction = LocalTransactionProver::default().prove(inputs.clone()).unwrap();
+            let transaction = LocalTransactionProver::default().prove(executed_a).unwrap();
 
             let context_b = chain
                 .build_transaction(account_b.id())
-                .authenticated_input_note(note_b.id())
+                .authenticated_input_note(note_b.clone())
                 .build()
                 .unwrap();
             let mismatch_inputs = Box::pin(context_b.execute()).await.unwrap().tx_inputs().clone();
             let mut execution_failure_inputs = inputs.clone();
-            execution_failure_inputs.set_input_notes(vec![note_b]);
+            execution_failure_inputs.set_input_notes(
+                miden_protocol::transaction::InputNotes::new(vec![
+                    miden_protocol::transaction::InputNote::unauthenticated(note_b),
+                ])
+                .unwrap(),
+            );
 
             ProvenTransactionFixture {
                 transaction,
@@ -871,6 +888,8 @@ async fn unknown_transactions_rejected() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
+        miden_protocol::transaction::TransactionLogs::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .unwrap();
     let tx_id = tx_header.id();
@@ -941,6 +960,8 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         Word::default(),
         InputNotes::<InputNoteCommitment>::default(),
         vec![],
+        miden_protocol::transaction::TransactionLogs::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .unwrap();
     let tx_id = tx_header.id();
@@ -983,7 +1004,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         BTreeMap::new(),
         BTreeMap::new(),
     );
-    let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
+    let proposed = ProposedBlock::new(block_inputs.clone(), vec![batch]).unwrap();
     tv.call_sign_block(&proposed).await.expect("block should be signed");
 
     // Backup streaming retains the ordered nonempty batches and the original state witnesses.
@@ -996,14 +1017,10 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     let restored: miden_node_proto::BlockProofRequest =
         event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
     assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
-    let expected_inputs = BlockInputs::new(
-        proposed.prev_block_header().clone(),
-        proposed.partial_blockchain().clone(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
+    assert_eq!(
+        proto::block_proving::BlockInputs::from(&restored.block_inputs),
+        proto::block_proving::BlockInputs::from(&block_inputs)
     );
-    assert_eq!(restored.block_inputs.to_bytes(), expected_inputs.to_bytes());
     let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
     restored.validate_against(&signed).unwrap();
     drop(backup);
@@ -1200,8 +1217,9 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
         header_2.chain_commitment(),
         header_2.account_root(),
         header_2.nullifier_root(),
+        header_2.code_tree_root(),
         header_2.note_root(),
-        header_2.tx_commitment(),
+        header_2.transactions_commitment(),
         header_2.validator_config().clone(),
         header_2.fee_parameters().clone(),
         next_config.to_commitment(),
@@ -1641,13 +1659,26 @@ async fn correctly_sealed_inputs_reach_the_deserialization_stage() {
     tv.assert_transaction_absent(tx.id(), 0).await;
 }
 
+/// Native transaction inputs from protocol 0.18 cannot cross the coordinated protobuf cutover.
+#[tokio::test]
+async fn legacy_native_transaction_inputs_are_rejected_without_persistence() {
+    let tv = TestValidator::new().await;
+    let tx = dummy_proven_tx(10);
+    let bytes = include_bytes!("tests/transaction-inputs-v0.18.bin");
+    let envelope = tv.seal(tx.id(), bytes);
+    let status = tv.call_submit_proven_transaction(&tx, envelope).await.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("Invalid transaction inputs"));
+    tv.assert_transaction_absent(tx.id(), 0).await;
+}
+
 /// A failed proof must not store the authenticated transaction inputs.
 #[tokio::test]
 async fn failed_proof_verification_does_not_store_inputs() {
     let tv = TestValidator::new().await;
     let tx = dummy_proven_tx(11);
     let fixture = proven_transaction_fixture().await;
-    let sealed = tv.seal(tx.id(), &fixture.inputs.to_bytes());
+    let sealed = tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs));
 
     let status = tv.call_submit_proven_transaction(&tx, sealed).await.unwrap_err();
 
@@ -1665,7 +1696,7 @@ async fn invalid_deferred_proof_does_not_store_inputs() {
         &fixture.transaction,
         miden_protocol::testing::dummy_deferred_execution_proof(),
     );
-    let sealed = tv.seal(transaction.id(), &fixture.inputs.to_bytes());
+    let sealed = tv.seal(transaction.id(), &miden_node_persistence::encode(&fixture.inputs));
 
     let status = tv.call_submit_proven_transaction(&transaction, sealed).await.unwrap_err();
 
@@ -1679,9 +1710,12 @@ async fn valid_deferred_proof_stores_a_record() {
     let tv = TestValidator::new().await;
     let fixture = deferred_transaction_fixture().await;
     let tx = &fixture.transaction;
-    tv.call_submit_proven_transaction(tx, tv.seal(tx.id(), &fixture.inputs.to_bytes()))
-        .await
-        .unwrap();
+    tv.call_submit_proven_transaction(
+        tx,
+        tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs)),
+    )
+    .await
+    .unwrap();
     assert!(tv.transaction_exists(tx.id()).await);
     assert!(tv.server.db.load_private_record(tx.id()).await.unwrap().is_some());
     assert_eq!(tv.validated_transaction_count().await, 1);
@@ -1694,9 +1728,12 @@ async fn stored_record_holds_the_transaction_effects() {
     let tv = TestValidator::new().await;
     let fixture = deferred_transaction_fixture().await;
     let tx = &fixture.transaction;
-    tv.call_submit_proven_transaction(tx, tv.seal(tx.id(), &fixture.inputs.to_bytes()))
-        .await
-        .unwrap();
+    tv.call_submit_proven_transaction(
+        tx,
+        tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs)),
+    )
+    .await
+    .unwrap();
 
     let record = tv.server.db.load_private_record(tx.id()).await.unwrap().unwrap();
     assert_eq!(record.context().format_version(), PrivateRecordFormatVersion::V1);
@@ -1726,7 +1763,10 @@ async fn missing_deferred_witness_does_not_store_inputs() {
         proof_with_missing_deferred_witness(&fixture.transaction),
     );
     let status = tv
-        .call_submit_proven_transaction(&tx, tv.seal(tx.id(), &fixture.inputs.to_bytes()))
+        .call_submit_proven_transaction(
+            &tx,
+            tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs)),
+        )
         .await
         .unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
@@ -1740,7 +1780,8 @@ async fn failed_reexecution_does_not_store_inputs() {
     let tv = TestValidator::new().await;
     let fixture = proven_transaction_fixture().await;
     let tx = &fixture.transaction;
-    let sealed = tv.seal(tx.id(), &fixture.execution_failure_inputs.to_bytes());
+    let sealed =
+        tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.execution_failure_inputs));
 
     let status = tv.call_submit_proven_transaction(tx, sealed).await.unwrap_err();
 
@@ -1755,7 +1796,7 @@ async fn header_mismatch_does_not_store_inputs() {
     let tv = TestValidator::new().await;
     let fixture = proven_transaction_fixture().await;
     let tx = &fixture.transaction;
-    let sealed = tv.seal(tx.id(), &fixture.mismatch_inputs.to_bytes());
+    let sealed = tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.mismatch_inputs));
 
     let status = tv.call_submit_proven_transaction(tx, sealed).await.unwrap_err();
 
@@ -1770,8 +1811,8 @@ async fn valid_submission_stores_one_protected_record() {
     let tv = TestValidator::new().await;
     let fixture = proven_transaction_fixture().await;
     let tx = &fixture.transaction;
-    let first = tv.seal(tx.id(), &fixture.inputs.to_bytes());
-    let second = tv.seal(tx.id(), &fixture.inputs.to_bytes());
+    let first = tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs));
+    let second = tv.seal(tx.id(), &miden_node_persistence::encode(&fixture.inputs));
     assert_ne!(first.ciphertext, second.ciphertext);
 
     tv.call_submit_proven_transaction(tx, first.clone()).await.unwrap();
@@ -1795,13 +1836,16 @@ async fn failed_batch_item_does_not_store_inputs() {
     let valid_tx = &fixture.transaction;
     let rejected_tx = dummy_proven_tx(12);
 
-    tv.call_submit_proven_transaction(valid_tx, tv.seal(valid_tx.id(), &fixture.inputs.to_bytes()))
-        .await
-        .unwrap();
+    tv.call_submit_proven_transaction(
+        valid_tx,
+        tv.seal(valid_tx.id(), &miden_node_persistence::encode(&fixture.inputs)),
+    )
+    .await
+    .unwrap();
     let status = tv
         .call_submit_proven_transaction(
             &rejected_tx,
-            tv.seal(rejected_tx.id(), &fixture.inputs.to_bytes()),
+            tv.seal(rejected_tx.id(), &miden_node_persistence::encode(&fixture.inputs)),
         )
         .await
         .unwrap_err();

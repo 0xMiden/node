@@ -55,7 +55,7 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
             let executed = Box::pin(
                 chain
                     .build_transaction(account.id())
-                    .authenticated_input_note(note.id())
+                    .authenticated_input_note(note.clone())
                     .auth_args(auth_args)
                     .add_advice_map_entry(auth_args, advice)
                     .build()
@@ -100,6 +100,9 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
                 AccountUpdateDetails::Public(executed.account_patch().clone()),
             )
             .unwrap();
+            let logs = executed.logs().clone();
+            let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
+
             let transaction = ProvenTransaction::new(
                 account_update,
                 executed.input_notes().iter(),
@@ -112,11 +115,15 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
                 executed.block_header().commitment(),
                 executed.expiration_block_num(),
                 proof,
+                log_details,
+                executed.code_patch().clone(),
             )
             .unwrap();
+
             let outcome =
                 TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&transaction).unwrap();
             assert!(!outcome.is_complete());
+
             DeferredTransactionFixture { genesis, transaction, inputs }
         })
         .await

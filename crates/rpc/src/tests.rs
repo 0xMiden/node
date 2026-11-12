@@ -65,6 +65,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockSignatures,
     FeeParameters,
@@ -316,6 +317,9 @@ fn build_test_proven_tx_with_fee(
 
     let output_notes = fee.map(|asset| fee_output_note(account_id, asset));
 
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
+
     ProvenTransaction::new(
         account_update,
         Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
@@ -324,6 +328,8 @@ fn build_test_proven_tx_with_fee(
         genesis,
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -356,6 +362,8 @@ fn build_test_proven_tx_with_id(
         AccountUpdateDetails::Public(patch),
     )
     .unwrap();
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
 
     ProvenTransaction::new(
         account_update,
@@ -368,6 +376,8 @@ fn build_test_proven_tx_with_id(
         genesis,
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -384,6 +394,8 @@ fn replace_transaction_proof(
         transaction.ref_block_commitment(),
         transaction.expiration_block_num(),
         proof,
+        transaction.log_details().clone(),
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -430,18 +442,19 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
 
     let tx_context = mock_chain
         .build_transaction(account.id())
-        .authenticated_input_note(note.id())
+        .authenticated_input_note(note.clone())
         .auth_args(auth_args)
         .add_advice_map_entry(auth_args, advice)
         .build()
         .unwrap();
     let executed_tx = Box::pin(tx_context.execute()).await.unwrap();
-    let tx_inputs = executed_tx.tx_inputs().clone();
-    let proven_tx =
-        spawn_blocking_in_current_span(move || LocalTransactionProver::default().prove(tx_inputs))
-            .await
-            .unwrap()
-            .unwrap();
+    let _tx_inputs = executed_tx.tx_inputs().clone();
+    let proven_tx = spawn_blocking_in_current_span(move || {
+        LocalTransactionProver::default().prove(executed_tx)
+    })
+    .await
+    .unwrap()
+    .unwrap();
 
     if !include_fee {
         assert!(proven_tx.output_notes().is_empty());
@@ -902,6 +915,8 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
             .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());
         assert_eq!(forwarded.proof(), fixture.transaction.proof());
+        assert_eq!(forwarded.log_details(), fixture.transaction.log_details());
+        assert_eq!(forwarded.code_patch(), fixture.transaction.code_patch());
         assert_eq!(
             submissions[0].sealed_transaction_inputs,
             Some(test_sealed_transaction_inputs())
@@ -2565,7 +2580,6 @@ async fn next_block_with_protocol_config(
 ) -> SignedBlock {
     use miden_protocol::block::{BlockBody, BlockHeader};
     use miden_protocol::crypto::merkle::mmr::Mmr;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let view = store.state.view();
     let (parent, _) = view.get_block_header(None, false).await.unwrap();
@@ -2575,9 +2589,7 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
-    let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
-            .unwrap();
+    let body = BlockBody::new(vec![], vec![], vec![], Vec::new()).unwrap();
 
     let header = BlockHeader::new(
         parent.commitment(),
@@ -2585,8 +2597,9 @@ async fn next_block_with_protocol_config(
         mmr.peaks().hash_peaks(),
         parent.account_root(),
         parent.nullifier_root(),
+        parent.code_tree_root(),
         body.compute_block_note_tree().root(),
-        body.transaction_commitment(),
+        body.compute_transactions_commitment(),
         parent.validator_config().clone(),
         parent.fee_parameters().clone(),
         config.to_commitment(),

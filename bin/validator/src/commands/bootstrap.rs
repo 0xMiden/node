@@ -58,7 +58,7 @@ mod tests {
     use miden_node_store::genesis::config::{GenesisConfig, GenesisInputs};
     use miden_protocol::block::{BlockNumber, FeeParameters, ValidatorConfig};
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
-    use miden_protocol::utils::serde::{Deserializable, Serializable};
+    use miden_protocol::utils::serde::Deserializable;
     use miden_testing::{Auth, MockChainBuilder};
 
     use super::*;
@@ -159,7 +159,7 @@ mod tests {
         .into_block()
         .unwrap();
         let path = root.path().join("genesis.dat");
-        fs_err::write(&path, genesis.inner().to_bytes()).unwrap();
+        fs_err::write(&path, miden_node_persistence::encode(genesis.inner())).unwrap();
         let data_directory = root.path().join("data");
         assert!(bootstrap(&data_directory, NonZeroUsize::new(2).unwrap(), &path).await.is_err());
         assert!(!data_directory.join("validator.sqlite3").exists());

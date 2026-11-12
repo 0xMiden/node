@@ -5,6 +5,7 @@ use itertools::Itertools;
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
@@ -153,6 +154,10 @@ impl MockProvenTxBuilder {
             .map(InputNoteCommitment::from)
             .chain(self.nullifiers.unwrap_or_default().into_iter().map(InputNoteCommitment::from))
             .collect();
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+
         ProvenTransaction::new(
             account_update,
             input_notes,
@@ -161,6 +166,8 @@ impl MockProvenTxBuilder {
             Word::empty(),
             self.expiration_block_num,
             miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            CodePatch::default(),
         )
         .unwrap()
     }

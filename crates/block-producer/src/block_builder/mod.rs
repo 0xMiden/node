@@ -379,7 +379,12 @@ impl BlockBuilder {
             signed_block,
         } = block_commit;
         let header = signed_block.header().clone();
-        let num_transactions = signed_block.body().transactions().as_slice().len();
+        let num_transactions = signed_block
+            .body()
+            .transactions()
+            .iter()
+            .map(|batch| batch.as_slice().len())
+            .sum::<usize>();
 
         miden_span_record!(
             block.number = header.block_num(),

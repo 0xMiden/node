@@ -369,13 +369,14 @@ impl NtxContext {
 
                 // The committed account state is derived from the block that lands this
                 // transaction, so the patch the execution produced is not needed here.
-                let (tx_inputs, ..) = executed_tx.into_parts();
+                let witness = miden_protocol::transaction::TransactionWitness::from(executed_tx);
+                let tx_inputs = witness.tx_inputs();
 
                 // Prove transaction.
-                let proven_tx = Box::pin(self.prove(&tx_inputs)).await?;
+                let proven_tx = Box::pin(self.prove(&witness)).await?;
 
                 // Submit transaction through the RPC service.
-                self.submit(&proven_tx, &tx_inputs).await?;
+                self.submit(&proven_tx, tx_inputs).await?;
 
                 Ok(NtxExecutionResult {
                     tx_id: proven_tx.id(),
@@ -438,7 +439,7 @@ impl NtxContext {
             });
 
         for failed_note in &failed {
-            if let Some(error) = failed_note.error() {
+            if let Some(error) = failed_note.execution_error() {
                 info!(
                     error,
                     "note failed consumability check",

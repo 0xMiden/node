@@ -1,6 +1,7 @@
 use miden_node_persistence::encode;
 use miden_node_persistence::prost::Message;
 use miden_protocol::Word;
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockBody,
     BlockHeader,
@@ -9,8 +10,8 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
-use miden_protocol::transaction::OrderedTransactionHeaders;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::crypto::merkle::smt::Smt;
+use miden_protocol::utils::serde::Deserializable;
 
 use super::*;
 
@@ -31,12 +32,7 @@ fn official_network_endpoints() {
 }
 
 fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
-    let body = BlockBody::new_unchecked(
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        OrderedTransactionHeaders::new_unchecked(Vec::new()),
-    );
+    let body = BlockBody::new_unchecked(Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let key = SigningKey::read_from_bytes(&[7; 32]).unwrap();
     let header = BlockHeader::new(
         Word::empty(),
@@ -44,8 +40,9 @@ fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
         Word::empty(),
         Word::empty(),
         Word::empty(),
+        CodeTree::<Smt>::default().root(),
         body.compute_block_note_tree().root(),
-        body.transactions().commitment(),
+        body.compute_transactions_commitment(),
         ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
         FeeParameters::new(0),
         config.to_commitment(),
@@ -59,13 +56,13 @@ fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
 fn genesis_round_trip_preserves_block_and_config() {
     let config = ProtocolConfig::mock();
     let block = genesis(BlockNumber::GENESIS, &config);
-    let block_bytes = block.to_bytes();
+    let block_bytes = encode(&block);
     let genesis = GenesisBlock::new(block, config.clone()).unwrap();
     let bytes = encode(&genesis);
 
     // File downloads use the same decoder as local files.
     let decoded = deserialize_genesis_block(&bytes).unwrap();
-    assert_eq!(decoded.inner().to_bytes(), block_bytes);
+    assert_eq!(encode(decoded.inner()), block_bytes);
     assert_eq!(decoded.protocol_config(), &config);
 
     let root = tempfile::tempdir().unwrap();
@@ -73,7 +70,7 @@ fn genesis_round_trip_preserves_block_and_config() {
     fs_err::write(&path, &bytes).unwrap();
     let from_file = read_genesis_block(&path).unwrap();
     let (block, stored_config) = from_file.into_parts();
-    assert_eq!(block.to_bytes(), block_bytes);
+    assert_eq!(encode(&block), block_bytes);
     assert_eq!(stored_config, config);
 }
 
@@ -145,7 +142,7 @@ fn genesis_rejects_inconsistent_body() {
 fn genesis_rejects_incomplete_malformed_and_trailing_data() {
     let config = ProtocolConfig::mock();
     let block = genesis(BlockNumber::GENESIS, &config);
-    assert!(deserialize_genesis_block(&block.to_bytes()).is_err());
+    assert!(deserialize_genesis_block(&encode(&block)).is_err());
     assert!(deserialize_genesis_block(&[]).is_err());
     assert!(deserialize_genesis_block(&[0xff; 32]).is_err());
     let mut bytes = encode(&GenesisBlock::new(block, config).unwrap());

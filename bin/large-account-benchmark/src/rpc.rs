@@ -282,7 +282,7 @@ impl SubmissionClient {
     pub async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
-        tx_inputs: &[u8],
+        tx_inputs: &miden_protocol::transaction::TransactionInputs,
     ) -> Result<BlockNumber> {
         match self.try_submit(proven_tx, tx_inputs).await {
             Err(err) if is_stale_key(&err) => {
@@ -298,7 +298,7 @@ impl SubmissionClient {
     async fn try_submit(
         &self,
         proven_tx: &ProvenTransaction,
-        tx_inputs: &[u8],
+        tx_inputs: &miden_protocol::transaction::TransactionInputs,
     ) -> Result<BlockNumber> {
         let sealed = self
             .sealer()
