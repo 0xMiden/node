@@ -13,7 +13,7 @@ use miden_node_proto::domain::account::{
     AccountVaultDetails,
     StorageMapEntries,
 };
-use miden_node_tracing::{ErrorReport, instrument_v2, trace_v2};
+use miden_node_tracing::{ErrorReport, instrument, trace};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::account::{
     AccountId,
@@ -567,7 +567,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     /// assets if all hashed keys are known in the reverse-key LRU cache. Returns `Ok(None)` when at
     /// least one raw key is missing from the cache, so the caller should fall back to database
     /// reconstruction.
-    #[instrument_v2]
+    #[instrument]
     pub(crate) fn get_vault_details(
         &self,
         account_id: AccountId,
@@ -611,7 +611,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     }
 
     /// Returns proofs of inclusion or absence for the requested assets at a specific block.
-    #[instrument_v2]
+    #[instrument]
     pub(crate) fn get_vault_details_for_assets(
         &self,
         account_id: AccountId,
@@ -648,7 +648,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     ///
     /// Returns `None` if no storage root is tracked for this account/slot/block combination.
     /// Returns a `MerkleError` if the forest doesn't contain sufficient data for the proofs.
-    #[instrument_v2]
+    #[instrument]
     pub(crate) fn get_storage_map_details_for_keys(
         &self,
         account_id: AccountId,
@@ -722,7 +722,7 @@ impl<B: BackendReader> AccountStateForest<B> {
     /// Returns `AccountStorageMapResult::CannotReconstructKeysFromCache` when the forest has hashed
     /// entries but at least one raw key is missing from the reverse-key cache, so the caller
     /// should fall back to database reconstruction.
-    #[instrument_v2]
+    #[instrument]
     pub(crate) fn get_storage_map_details_for_all_entries(
         &self,
         account_id: AccountId,
@@ -864,7 +864,7 @@ impl<B: Backend> AccountStateForest<B> {
         for patch in &account_patches {
             self.cache_hashed_keys_from_patch(patch);
 
-            trace_v2!(
+            trace!(
                 "Updated forest with account patch",
                 account.id = patch.id(),
                 block.number = block_num

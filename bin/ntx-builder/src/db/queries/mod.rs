@@ -76,6 +76,12 @@ pub use select_genesis_commitment::select_genesis_commitment;
 mod select_genesis_validator_keys;
 pub use select_genesis_validator_keys::select_genesis_validator_keys;
 
+mod select_note_sponsorships;
+pub use select_note_sponsorships::{NoteSponsorshipRow, select_note_sponsorships};
+
+mod sponsorships_failed;
+pub use sponsorships_failed::sponsorships_failed;
+
 mod sponsorships_for_pending_notes;
 pub use sponsorships_for_pending_notes::select_sponsorships_for_pending_notes;
 

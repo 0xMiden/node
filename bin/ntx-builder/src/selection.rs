@@ -11,7 +11,7 @@ use std::num::{NonZeroU16, NonZeroUsize};
 use std::sync::Arc;
 
 use anyhow::Context;
-use miden_node_tracing::{ErrorReport, info_v2, warn_v2};
+use miden_node_tracing::{ErrorReport, info, warn};
 use miden_node_utils::formatting::format_opt;
 use miden_protocol::account::Account;
 use miden_protocol::block::BlockNumber;
@@ -94,7 +94,7 @@ pub(crate) async fn select_candidate(
         })
         .collect::<Vec<_>>();
     if !rejected.is_empty() {
-        info_v2!(
+        info!(
             "dropping network notes whose script roots are not allowlisted",
             account.id = account_id,
             note.rejected.count = rejected.len()
@@ -160,8 +160,10 @@ pub(crate) async fn select_candidate(
 /// Logs each failed note and returns `(nullifier, error)` pairs keyed by the nullifier the failure
 /// is recorded under: a feature note fails under its own nullifier, while a sponsorship's failure
 /// is charged to the feature note of its bundle (sponsorship notes have no row in the `notes`
-/// table). Multiple failures attributed to the same feature note collapse to a single entry, so a
-/// bundle never burns more than one attempt per round.
+/// table). The error of a sponsorship's failure starts with the ID of the sponsorship note, so the
+/// feature note's `last_error` identifies the sponsorship. Multiple failures attributed to the same
+/// feature note collapse to a single entry, so a bundle never burns more than one attempt per
+/// round.
 pub(crate) fn attribute_failed_notes(
     failed: Vec<FailedNote>,
     sponsor_to_feature: &HashMap<NoteId, Nullifier>,
@@ -169,35 +171,63 @@ pub(crate) fn attribute_failed_notes(
     let mut seen = HashSet::new();
     let mut attributed = Vec::new();
     for f in failed {
-        let error: &(dyn std::error::Error + 'static) = if let Some(error) = f.execution_error() {
-            error
-        } else if let miden_tx::NoteFailure::Rejected { reason } = f.failure() {
-            reason.as_ref()
-        } else {
-            info_v2!(
+        let Some(error) = note_failure_error(&f) else {
+            info!(
                 "note deferred after bundle rejection",
                 note.id = f.note().id(),
                 note.nullifier = f.note().nullifier()
             );
             continue;
         };
-        info_v2!(
+        info!(
             error,
             "note failed: consumability check",
             note.id = f.note().id(),
             note.nullifier = f.note().nullifier()
         );
         let error_msg = error.as_report();
-        let nullifier = sponsor_to_feature
-            .get(&f.note().id())
-            .copied()
-            .unwrap_or_else(|| f.note().nullifier());
+        let (nullifier, error_msg) = match sponsor_to_feature.get(&f.note().id()) {
+            Some(feature_nullifier) => (
+                *feature_nullifier,
+                format!("sponsorship note {} failed: {error_msg}", f.note().id()),
+            ),
+            None => (f.note().nullifier(), error_msg),
+        };
         if seen.insert(nullifier) {
             let error: NoteError = Arc::new(std::io::Error::other(error_msg));
             attributed.push((nullifier, error));
         }
     }
     attributed
+}
+
+/// Returns the cause of a note failure, excluding collateral bundle rejections.
+fn note_failure_error(failed: &FailedNote) -> Option<&(dyn std::error::Error + 'static)> {
+    if let Some(error) = failed.execution_error() {
+        Some(error)
+    } else if let miden_tx::NoteFailure::Rejected { reason } = failed.failure() {
+        Some(reason.as_ref())
+    } else {
+        None
+    }
+}
+
+/// Returns `(nullifier, error)` pairs for the failed sponsorship notes in `failed`, keyed by the
+/// nullifier of each sponsorship. Each pair records the error on the sponsorship row. A sponsorship
+/// rejected only because its bundle was rejected has no error of its own and is skipped.
+pub(crate) fn sponsorship_failures<'a>(
+    failed: impl IntoIterator<Item = &'a FailedNote>,
+    sponsor_to_feature: &HashMap<NoteId, Nullifier>,
+) -> Vec<(Nullifier, NoteError)> {
+    failed
+        .into_iter()
+        .filter(|f| sponsor_to_feature.contains_key(&f.note().id()))
+        .filter_map(|f| {
+            let error: NoteError =
+                Arc::new(std::io::Error::other(note_failure_error(f)?.as_report()));
+            Some((f.note().nullifier(), error))
+        })
+        .collect()
 }
 
 /// Logs each note discarded for exceeding the per-tx cycle budget on its own and returns their
@@ -210,7 +240,7 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
     oversized
         .into_iter()
         .map(|note| {
-            warn_v2!(
+            warn!(
                 "note discarded: exceeds the per-tx cycle budget on its own and can never be consumed",
                 note.id = note.note().id(),
                 note.nullifier = note.note().nullifier(),
@@ -228,7 +258,7 @@ pub(crate) fn log_oversized_notes(oversized: Vec<FailedNote>) -> Vec<Nullifier> 
 /// round with their `attempt_count` untouched.
 pub(crate) fn log_deferred_notes(deferred: Vec<FailedNote>) {
     for note in deferred {
-        info_v2!(
+        info!(
             "note deferred: exceeded per-tx cycle budget, will retry next round",
             note.id = note.note().id(),
             note.nullifier = note.note().nullifier(),
@@ -534,6 +564,7 @@ end";
         assert_eq!(attributed.len(), 1);
         assert_eq!(attributed[0].0, nullifier);
         assert!(attributed[0].1.to_string().contains("consumability failure"));
+        assert!(!attributed[0].1.to_string().contains("sponsorship note"));
     }
 
     #[test]
@@ -574,6 +605,59 @@ end";
         let attributed = attribute_failed_notes(failed, &sponsors);
         assert_eq!(attributed.len(), 1);
         assert_eq!(attributed[0].0, feature.nullifier());
-        assert!(attributed[0].1.to_string().contains("first failure"));
+        let error = attributed[0].1.to_string();
+        assert!(error.contains("first failure"));
+        assert!(error.starts_with(&format!("sponsorship note {blamed_by} failed: ")));
+    }
+
+    /// Each blamed or statically rejected sponsorship keeps its own error under its own nullifier.
+    /// The feature note and the collateral sponsorship produce no entry.
+    #[test]
+    fn sponsorship_failures_are_keyed_by_each_sponsorship() {
+        let account_id = mock_network_account_id();
+        let feature = crate::test_utils::mock_single_target_note(account_id, 1).into_note();
+        let collateral = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 2);
+        let first = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 3);
+        let second = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 4);
+        let rejected = crate::test_utils::mock_sponsorship_note(account_id, feature.id(), 5);
+        let sponsors = HashMap::from([
+            (collateral.id(), feature.nullifier()),
+            (first.id(), feature.nullifier()),
+            (second.id(), feature.nullifier()),
+            (rejected.id(), feature.nullifier()),
+        ]);
+        let blamed = |error| miden_tx::NoteFailure::Blamed {
+            error: miden_tx::TransactionExecutorError::AccountUpdateCommitment(error),
+            num_cycles: None,
+        };
+        let expected = [
+            (first.nullifier(), "first failure"),
+            (second.nullifier(), "second failure"),
+            (rejected.nullifier(), "invalid sponsorship"),
+        ];
+        let failed = vec![
+            FailedNote::new(feature.clone(), blamed("feature failure")),
+            FailedNote::new(
+                collateral,
+                miden_tx::NoteFailure::Collateral { blamed_by: first.id() },
+            ),
+            FailedNote::new(first, blamed("first failure")),
+            FailedNote::new(second, blamed("second failure")),
+            FailedNote::new(
+                rejected,
+                miden_tx::NoteFailure::Rejected {
+                    reason: Box::new(std::io::Error::other("invalid sponsorship")),
+                },
+            ),
+        ];
+
+        let failures = sponsorship_failures(&failed, &sponsors);
+        assert_eq!(failures.len(), expected.len());
+        for ((nullifier, error), (expected_nullifier, expected_error)) in
+            failures.iter().zip(expected)
+        {
+            assert_eq!(*nullifier, expected_nullifier);
+            assert!(error.to_string().contains(expected_error));
+        }
     }
 }

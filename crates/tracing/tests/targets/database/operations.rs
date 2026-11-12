@@ -1,14 +1,14 @@
-#[miden_node_tracing::instrument_v2]
+#[miden_node_tracing::instrument]
 pub fn parent() -> &'static str {
     tracing::Span::current().metadata().unwrap().target()
 }
 
-#[miden_node_tracing::instrument_v2(target = "miden::rpc::server")]
+#[miden_node_tracing::instrument(target = "miden::rpc::server")]
 pub fn explicit_override() -> &'static str {
     tracing::Span::current().metadata().unwrap().target()
 }
 
-#[miden_node_tracing::instrument_v2(
+#[miden_node_tracing::instrument(
     name = "database.load",
     level = "debug",
     fields(service.name = "store"),
@@ -19,10 +19,10 @@ pub fn configured() -> std::io::Result<()> {
     Err(std::io::Error::other("database unavailable"))
 }
 
-#[miden_node_tracing::instrument_v2(err, target = "miden::rpc::server")]
+#[miden_node_tracing::instrument(err, target = "miden::rpc::server")]
 pub fn explicit_error() -> std::io::Result<()> {
     Err(std::io::Error::other("rpc unavailable"))
 }
 
-#[miden_node_tracing::instrument_v2(parent = None, name = "scoped_root")]
+#[miden_node_tracing::instrument(parent = None, name = "scoped_root")]
 pub fn root() {}

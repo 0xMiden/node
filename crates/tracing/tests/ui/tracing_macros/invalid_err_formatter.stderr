@@ -1,11 +1,11 @@
 error: `err` formatters are not supported; errors are recorded as typed values
- --> tests/ui/tracing_macros/invalid_err_formatter.rs:3:24
+ --> tests/ui/tracing_macros/invalid_err_formatter.rs:5:18
   |
-3 | #[miden_instrument(err(Debug))]
-  |                        ^^^^^
+5 | #[instrument(err(Debug))]
+  |                  ^^^^^
 
 error: `err` formatters are not supported; errors are recorded as typed values
- --> tests/ui/tracing_macros/invalid_err_formatter.rs:8:24
-  |
-8 | #[miden_instrument(err(Display, level = "warn"))]
-  |                        ^^^^^^^
+  --> tests/ui/tracing_macros/invalid_err_formatter.rs:10:18
+   |
+10 | #[instrument(err(Display, level = "warn"))]
+   |                  ^^^^^^^

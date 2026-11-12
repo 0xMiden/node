@@ -3,7 +3,7 @@
 use anyhow::Context;
 use miden_node_proto::BlockProofRequest;
 use miden_node_store::{BlockWriter, State};
-use miden_node_tracing::warn_v2;
+use miden_node_tracing::warn;
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
 use super::RecoveredBlock;
@@ -28,7 +28,7 @@ pub(super) async fn load_valid_local_inputs(
     match decoded {
         Ok(request) => Ok(Some(request)),
         Err(error) => {
-            warn_v2!(error, "Local proving inputs require recovery", block.number = height);
+            warn!(error, "Local proving inputs require recovery", block.number = height);
             Ok(None)
         },
     }

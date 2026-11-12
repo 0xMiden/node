@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::{Stream, TryStreamExt};
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, error_v2, instrument_v2};
+use miden_node_tracing::{debug, error, instrument};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 
 use super::super::RpcService;
@@ -27,7 +27,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         Ok(event)
     }
 
-    #[instrument_v2(
+    #[instrument(
         name = "block_subscription",
         fields(
             block.from = input,
@@ -39,7 +39,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        debug_v2!("Subscribing to blocks");
+        debug!("Subscribing to blocks");
 
         let stream = SubscriptionStream::blocks(self, input)?;
         let state = Arc::clone(&self.state);
@@ -51,7 +51,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
                 };
                 let block =
                     miden_node_persistence::decode::<SignedBlock>(&event.data).map_err(|err| {
-                        error_v2!(err, "Failed to decode stored block", block.number = event.block);
+                        error!(err, "Failed to decode stored block", block.number = event.block);
                         tonic::Status::internal(format!(
                             "Failed to decode stored block {}.",
                             event.block

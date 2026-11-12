@@ -1,5 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, instrument_v2};
+use miden_node_tracing::{debug, instrument};
 
 use super::{Request, RpcBackend, RpcService};
 
@@ -20,7 +20,7 @@ impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for 
         Ok(proto::miden::node::v1::GetTransactionEncryptionKeyResponse { key: Some(output) })
     }
 
-    #[instrument_v2(name = "get_transaction_encryption_key")]
+    #[instrument(name = "get_transaction_encryption_key")]
     async fn handle(
         &self,
         _input: Self::Input,
@@ -29,7 +29,7 @@ impl proto::server::miden_node_v1_node_service::GetTransactionEncryptionKey for 
     ) -> tonic::Result<Self::Output> {
         let original_accept_header = metadata.get(http::header::ACCEPT.as_str()).cloned();
 
-        debug_v2!("Getting transaction encryption key");
+        debug!("Getting transaction encryption key");
 
         let mut forwarded_request = Request::new(());
         if let Some(accept) = original_accept_header {

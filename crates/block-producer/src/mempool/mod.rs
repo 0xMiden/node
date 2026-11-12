@@ -55,7 +55,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
 use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
-use miden_node_tracing::{ErrorReport, debug_v2, instrument_v2, miden_span_record};
+use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{OutputNote, TransactionHeader, TransactionId};
@@ -154,7 +154,7 @@ impl SharedMempool {
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[instrument_v2(name = "mempool.lock", err)]
+    #[instrument(name = "lock", err)]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
@@ -235,7 +235,7 @@ impl Mempool {
     ///
     /// Returns an error if the transaction would exceed the mempool capacity or if its initial
     /// conditions don't match the current state.
-    #[instrument_v2(name = "mempool.add_transaction")]
+    #[instrument(name = "add_transaction")]
     pub fn add_transaction(
         &mut self,
         tx: Arc<AuthenticatedTransaction>,
@@ -272,7 +272,7 @@ impl Mempool {
     ///
     /// The batch becomes available for block selection when its transaction dependencies are
     /// selected.
-    #[instrument_v2(name = "mempool.add_user_batch")]
+    #[instrument(name = "add_user_batch")]
     pub fn add_user_batch(
         &mut self,
         txs: &[Arc<AuthenticatedTransaction>],
@@ -329,7 +329,7 @@ impl Mempool {
     /// Transactions are returned in a valid execution ordering.
     ///
     /// Returns `None` if no transactions are available.
-    #[instrument_v2(name = "mempool.select_any_batch")]
+    #[instrument(name = "select_any_batch")]
     pub fn select_any_batch(&mut self) -> Option<SelectedBatch> {
         self.promote_user_batches();
         let parameters = BatchParameters {
@@ -357,7 +357,7 @@ impl Mempool {
     ///
     /// The transactions are only returned when the selected set saturates the batch budget or when
     /// another selectable transaction cannot fit into the remaining budget.
-    #[instrument_v2(name = "mempool.select_full_batch")]
+    #[instrument(name = "select_full_batch")]
     pub fn select_full_batch(&mut self) -> Option<SelectedBatch> {
         self.promote_user_batches();
         let parameters = BatchParameters {
@@ -402,7 +402,7 @@ impl Mempool {
     /// The transactions are re-queued for inclusion in a batch. Additionally, the batch's
     /// transactions have their failure count incremented, reverting them if they now exceed the
     /// failure limit.
-    #[instrument_v2(name = "mempool.rollback_batch")]
+    #[instrument(name = "rollback_batch")]
     pub(crate) fn rollback_batch(&mut self, batch: SelectedBatchId) {
         // Guards against bugs in the proof scheduler where a retry results in multiple results
         // coming back for the same batch. If the batch previously succeeded, then yanking it would
@@ -449,7 +449,7 @@ impl Mempool {
     }
 
     /// Marks a batch as proven if it exists.
-    #[instrument_v2(name = "mempool.commit_batch")]
+    #[instrument(name = "commit_batch")]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
         self.batches.submit_proof(proof);
         let telemetry = self.telemetry();
@@ -473,7 +473,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is already a block in flight.
-    #[instrument_v2(name = "mempool.select_block")]
+    #[instrument(name = "select_block")]
     pub fn select_block(&mut self) -> SelectedBlock {
         assert!(
             self.pending_block.is_none(),
@@ -509,7 +509,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument_v2(name = "mempool.commit_block")]
+    #[instrument(name = "commit_block")]
     pub fn commit_block(&mut self, block_header: &BlockHeader) {
         assert_eq!(self.committed_chain_tip.child(), block_header.block_num());
         let block = self
@@ -545,7 +545,7 @@ impl Mempool {
     /// # Panics
     ///
     /// Panics if there is no matching block in flight.
-    #[instrument_v2(name = "mempool.rollback_block")]
+    #[instrument(name = "rollback_block")]
     pub fn rollback_block(&mut self, block: BlockNumber) {
         // A block number identifies the pending block while only one block job can exist. Multiple
         // block variants at the same height would require identification by block commitment.
@@ -764,11 +764,11 @@ impl Mempool {
 }
 
 fn emit_transaction_added(tx: &AuthenticatedTransaction) {
-    if !miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG) {
         return;
     }
 
-    debug_v2!(
+    debug!(
         "Transaction added to mempool",
         transaction.id = tx.id(),
         account.id = tx.account_id(),
@@ -777,12 +777,12 @@ fn emit_transaction_added(tx: &AuthenticatedTransaction) {
 }
 
 fn emit_transaction_expirations(removal: &graph::TransactionRemoval, chain_tip: BlockNumber) {
-    if !miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG) {
         return;
     }
 
     for transaction_id in removal.direct() {
-        debug_v2!(
+        debug!(
             "Transaction expired from mempool",
             transaction.id = transaction_id,
             block.number = chain_tip
@@ -797,12 +797,12 @@ fn emit_transaction_evictions(
     direct_reason: &'static str,
     dependent_reason: &'static str,
 ) {
-    if !miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG) {
+    if !miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG) {
         return;
     }
 
     for transaction_id in removal.direct() {
-        debug_v2!(
+        debug!(
             "Transaction evicted from mempool",
             transaction.id = transaction_id,
             mempool.removal.reason = direct_reason
@@ -814,7 +814,7 @@ fn emit_transaction_evictions(
 
 fn emit_dependent_transaction_evictions(removal: &graph::TransactionRemoval, reason: &'static str) {
     for transaction_id in removal.dependents() {
-        debug_v2!(
+        debug!(
             "Transaction evicted from mempool",
             transaction.id = transaction_id,
             mempool.removal.reason = reason

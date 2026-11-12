@@ -172,7 +172,7 @@ async fn connection_errors_identify_each_validator_endpoint() {
     for endpoint in endpoints {
         let matching: Vec<_> = errors.iter().filter(|line| line.contains(&endpoint)).collect();
         assert_eq!(matching.len(), 1, "{output}");
-        assert!(matching[0].contains("validator.client.sign_block"), "{output}");
+        assert!(matching[0].contains("sign_block"), "{output}");
         assert!(matching[0].contains("dependency.name=\"validator\""), "{output}");
         assert!(matching[0].contains("dependency.endpoint="), "{output}");
         assert!(matching[0].contains("gRPC transport error"), "{output}");

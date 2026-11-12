@@ -1,6 +1,6 @@
 use miden_node_proto::generated as proto;
 use miden_node_store::StateSyncError;
-use miden_node_tracing::{debug_v2, instrument_v2};
+use miden_node_tracing::{debug, instrument};
 use miden_protocol::block::BlockNumber;
 
 use super::RpcService;
@@ -19,7 +19,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
         Ok(output)
     }
 
-    #[instrument_v2(
+    #[instrument(
         name = "sync_chain_mmr",
         fields(
             current_client_block_height = request.current_client_block_height,
@@ -32,7 +32,7 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
-        debug_v2!("Syncing chain MMR");
+        debug!("Syncing chain MMR");
 
         let current_client_block_height = BlockNumber::from(request.current_client_block_height);
 

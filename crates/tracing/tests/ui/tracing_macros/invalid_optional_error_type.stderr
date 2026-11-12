@@ -1,7 +1,7 @@
 error[E0599]: the method `as_dyn_error` exists for type `u32`, but its trait bounds were not satisfied
- --> tests/ui/tracing_macros/invalid_optional_error_type.rs:4:5
+ --> tests/ui/tracing_macros/invalid_optional_error_type.rs:6:5
   |
-4 |     debug!(42_u32, "test.debug");
+6 |     debug!(42_u32, "test.debug");
   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   |
   = note: the following trait bounds were not satisfied:

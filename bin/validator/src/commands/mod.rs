@@ -13,7 +13,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use base64::Engine;
 use clap::Parser;
-use miden_node_tracing::{OpenTelemetry, info_v2};
+use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
@@ -255,7 +255,7 @@ impl ValidatorCommand {
             } => {
                 let address = listen;
                 let operator_key = storage_key.load()?;
-                info_v2!(
+                info!(
                     "Starting validator",
                     service.name = "miden-validator",
                     service.version = env!("CARGO_PKG_VERSION"),

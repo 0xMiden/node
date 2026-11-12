@@ -8,6 +8,8 @@
 //! use miden_node_utils::retry::{self, Retryable};
 //! use miden_node_tracing::warn;
 //!
+//! miden_node_tracing::declare_targets! { default: "miden", }
+//!
 //! let value = (|| async { do_thing().await })
 //!     .retry(retry::exponential(min, max))
 //!     .when(|err| is_transient(err))

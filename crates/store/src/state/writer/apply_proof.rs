@@ -1,5 +1,5 @@
 use anyhow::{Context, ensure};
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::vm::ExecutionProof;
 
@@ -12,7 +12,7 @@ impl ProofWriter {
     ///
     /// - If proofs are not applied in strict ascending order (exactly one block past the proven tip)
     /// - If the proof's corresponding block was not already committed
-    #[instrument_v2(
+    #[instrument(
         err,
         fields(
             block.number = block_num

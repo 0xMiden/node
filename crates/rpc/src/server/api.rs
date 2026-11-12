@@ -9,7 +9,7 @@ use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolSt
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_node_utils::limiter::{
     QueryParamAccountIdLimit,
     QueryParamLimiter,
@@ -175,7 +175,7 @@ impl RpcService {
     /// Returns the given block's onchain header.
     ///
     /// This is retrieved from the local LRU cache, or otherwise from the store on cache miss.
-    #[instrument_v2(
+    #[instrument(
         name = "get_block_header",
         fields(
             block.number = block,

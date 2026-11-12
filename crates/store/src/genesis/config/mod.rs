@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 use indexmap::IndexMap;
-use miden_node_tracing::debug_v2;
+use miden_node_tracing::debug;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountBuilder, AccountId, AccountType};
@@ -186,7 +186,7 @@ impl GenesisConfig {
         for (index, WalletConfig { name, account_type, auth_scheme, assets }) in
             wallet_configs.into_iter().enumerate()
         {
-            debug_v2!(
+            debug!(
                 "Adding wallet account",
                 account.index = index,
                 account.assets.count = assets.len()
@@ -255,14 +255,14 @@ impl GenesisConfig {
                 let updated_faucet = current_faucet.with_token_supply(new_token_supply)?;
                 let slot = updated_faucet.token_config_slot_value();
                 faucet_account.storage_mut().set_item(slot.name(), slot.value())?;
-                debug_v2!(
+                debug!(
                     "Setting faucet account issuance",
                     account.id = faucet_id,
                     asset.symbol = symbol.to_string(),
                     asset.amount = total_issuance
                 );
             } else {
-                debug_v2!(
+                debug!(
                     "No wallet references faucet asset",
                     account.id = faucet_id,
                     asset.symbol = symbol.to_string()
@@ -490,7 +490,7 @@ fn prepare_fungible_asset_update(
             let faucet_id = faucet_account.id();
 
             let issuance: &mut u64 = faucet_issuance.entry(faucet_id).or_default();
-            debug_v2!(
+            debug!(
                 "Updating faucet issuance",
                 account.id = faucet_id,
                 asset.symbol = symbol.to_string(),

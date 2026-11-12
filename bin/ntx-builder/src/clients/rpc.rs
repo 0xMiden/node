@@ -35,7 +35,7 @@ use miden_node_proto::generated::miden::node::v1::{
 };
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::{DecodeMessageExt, VerifyWith};
-use miden_node_tracing::{ErrorReport, info_v2, instrument_v2, warn_v2};
+use miden_node_tracing::{ErrorReport, info, instrument, warn};
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -170,7 +170,7 @@ impl RpcClient {
         backoff: (Duration, Duration),
         max_decoding_message_size: usize,
     ) -> anyhow::Result<Self> {
-        info_v2!(
+        info!(
             "Initializing RPC client",
             dependency.name = "rpc",
             dependency.endpoint = rpc_url.to_string()
@@ -253,7 +253,7 @@ impl RpcClient {
         .retry(self.backoff)
         .when(|err| matches!(err, RpcError::GrpcClientError(_)))
         .notify(|err, dur| {
-            warn_v2!(
+            warn!(
                 err,
                 "RPC request failed while verifying the persisted chain tip, retrying",
                 retry.delay_ms = dur
@@ -269,8 +269,8 @@ impl RpcClient {
     /// chain tip, and an optional protocol configuration. The configuration is present for the
     /// first response and for each transition. The committed chain tip is the latest block the node
     /// believes is committed when it emits the response.
-    #[instrument_v2(
-        name = "rpc.client.block_subscription_with_retry",
+    #[instrument(
+        name = "block_subscription_with_retry",
         fields(
             block.from = block_from,
         ),
@@ -315,7 +315,7 @@ impl RpcClient {
         })
         .retry(self.backoff)
         .notify(|err: &RpcError, dur| {
-            warn_v2!(
+            warn!(
                 err,
                 "RPC connection failed while opening block subscription, retrying",
                 retry.delay_ms = dur
@@ -324,7 +324,7 @@ impl RpcClient {
         .await
     }
 
-    #[instrument_v2(name = "ntx.rpc.client.submit_proven_tx", err)]
+    #[instrument(name = "submit_proven_tx", err)]
     pub async fn submit_proven_tx(
         &self,
         proven_tx: &ProvenTransaction,
@@ -365,7 +365,7 @@ impl RpcClient {
         .when(|status: &Status| status.code() == tonic::Code::FailedPrecondition)
         .notify(|status: &Status, _| {
             stale_key.store(true, Ordering::Relaxed);
-            warn_v2!(
+            warn!(
                 status,
                 "Transaction inputs rejected as stale, refreshing the encryption key and retrying",
                 transaction.id = tx_id
@@ -550,7 +550,7 @@ impl RpcClient {
     }
 
     /// Fetches a note script by its root, returning `None` if the node does not know it.
-    #[instrument_v2(name = "ntx.rpc.client.get_note_script_by_root", err)]
+    #[instrument(name = "get_note_script_by_root", err)]
     pub async fn get_note_script_by_root(
         &self,
         script_root: Word,

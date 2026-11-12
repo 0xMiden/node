@@ -66,7 +66,7 @@ async fn startup_serves_the_loaded_balance_and_accepts_requests_while_recovery_w
         transaction_id: TransactionId::from_raw(Word::empty()),
         reference_block: initial_header.block_num(),
         expiration_block: initial_header.block_num() + 50,
-        deposit_nullifier: None,
+        deposit_nullifiers: vec![],
         note_ids: vec![note.note.id()],
     };
     database.start_attempt(attempt.clone()).await.unwrap();
@@ -86,6 +86,7 @@ async fn startup_serves_the_loaded_balance_and_accepts_requests_while_recovery_w
         protocol_config,
         worker_config: WorkerConfig {
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
+            max_deposits_per_tx: DEFAULT_MAX_DEPOSITS_PER_TX,
             expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             poll_interval: Duration::from_millis(1),
         },

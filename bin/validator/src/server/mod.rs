@@ -4,7 +4,7 @@ use anyhow::Context;
 use miden_node_proto::server::miden_validator_v1_validator_service;
 use miden_node_proto_build::validator_api_descriptor;
 use miden_node_tracing::grpc::grpc_trace_layer;
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc;
@@ -90,7 +90,7 @@ impl ValidatorServer {
         .await
         .context("failed to initialize validator server")?;
         let endpoint = listener.local_addr().context("failed to read validator listen address")?;
-        info_v2!(
+        info!(
             "Validator ready",
             service.name = "miden-validator",
             service.version = env!("CARGO_PKG_VERSION"),

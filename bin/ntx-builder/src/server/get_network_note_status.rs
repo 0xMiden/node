@@ -1,9 +1,10 @@
 use miden_node_proto::generated::miden::node::v1 as rpc;
 use miden_node_proto::generated::{self as grpc};
-use miden_node_tracing::error_v2;
+use miden_node_tracing::error;
 use miden_protocol::Word;
 
 use super::NtxBuilderRpcServer;
+use crate::db::queries::NoteSponsorshipRow;
 
 #[tonic::async_trait]
 impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::GetNetworkNoteStatus
@@ -28,7 +29,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         Ok(miden_protocol::note::NoteId::from_raw(note_id_digest))
     }
 
-    #[miden_node_tracing::instrument_v2(
+    #[miden_node_tracing::instrument(
         name = "get_network_note_status",
         fields (
             note.id = note_id,
@@ -42,7 +43,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         let row = self.db.get_note_status(note_id).await.map_err(|err| {
-            error_v2!(&err, "Failed to query note status from DB");
+            error!(&err, "Failed to query note status from DB");
             tonic::Status::internal("database error")
         })?;
 
@@ -67,6 +68,7 @@ impl grpc::server::miden_ntx_builder_v1_network_transaction_builder_service::Get
             last_error: row.last_error,
             attempt_count: response_attempt_count,
             last_attempt_block_num,
+            sponsorships: row.sponsorships.iter().map(sponsorship_to_proto).collect(),
         })
     }
 
@@ -92,6 +94,19 @@ fn derive_status(
         rpc::NetworkNoteStatus::Discarded
     } else {
         rpc::NetworkNoteStatus::Pending
+    }
+}
+
+/// Converts a `FEE_SPONSORSHIP` note row into its response message.
+fn sponsorship_to_proto(row: &NoteSponsorshipRow) -> rpc::NetworkNoteSponsorship {
+    let note = row.note.as_note();
+    rpc::NetworkNoteSponsorship {
+        note_id: Some((&note.id()).into()),
+        fee_asset: note.assets().iter().next().map(Into::into),
+        reclaim_height: row.note.reclaim_height().map(|block_num| block_num.as_u32()),
+        committed_block_num: row.committed_at.map(|block_num| block_num.as_u32()),
+        last_error: row.last_error.clone(),
+        last_attempt_block_num: row.last_attempt.map(|block_num| block_num.as_u32()),
     }
 }
 

@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use tokio::sync::{Mutex, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore};
 
 use crate::server::proof_kind::ProofKind;
@@ -24,14 +24,14 @@ impl ProverService {
         self.kind == kind
     }
 
-    #[instrument_v2]
+    #[instrument]
     pub(super) fn acquire_permit(&self) -> Result<OwnedSemaphorePermit, tonic::Status> {
         Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| tonic::Status::resource_exhausted("proof queue is full"))
     }
 
-    #[instrument_v2]
+    #[instrument]
     pub(super) async fn acquire_prover(&self) -> OwnedMutexGuard<Prover> {
         Arc::clone(&self.prover).lock_owned().await
     }

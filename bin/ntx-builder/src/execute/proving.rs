@@ -1,4 +1,4 @@
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_node_utils::retry::Retryable;
 use miden_protocol::transaction::{ProvenTransaction, TransactionWitness};
 use miden_tx::TransactionProverError;
@@ -11,7 +11,7 @@ impl NtxContext {
     ///
     /// Transient transport failures against the remote prover are retried in-place; intrinsic
     /// proving errors (witness rejected, malformed inputs) escape on the first attempt.
-    #[instrument_v2(name = "ntx.execute_transaction.prove", err)]
+    #[instrument(name = "prove", err)]
     pub(super) async fn prove(
         &self,
         tx_inputs: &TransactionWitness,

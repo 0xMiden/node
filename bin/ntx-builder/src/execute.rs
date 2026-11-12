@@ -4,14 +4,7 @@ use std::time::Duration;
 
 use backon::ExponentialBuilder;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{
-    ErrorSpanExt,
-    Instrument,
-    info_v2,
-    instrument_v2,
-    miden_span_record,
-    warn_v2,
-};
+use miden_node_tracing::{ErrorSpanExt, Instrument, info, instrument, miden_span_record, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
 use miden_protocol::Word;
@@ -154,6 +147,9 @@ pub struct NtxExecutionResult {
     /// Notes whose own consumption exceeds the per-tx cycle budget. They can never be consumed in
     /// any transaction and should be discarded immediately.
     pub oversized_notes: Vec<FailedNote>,
+    /// Sponsorship notes that failed while their feature note was consumed without them. Their
+    /// errors are recorded on the sponsorship. Their feature notes are not charged.
+    pub dropped_sponsorships: Vec<FailedNote>,
     /// Note scripts fetched from the remote RPC service that should be persisted to the local DB
     /// cache.
     pub fetched_scripts: Vec<(Word, NoteScript)>,
@@ -166,6 +162,7 @@ struct FilteredNotes {
     failed: Vec<FailedNote>,
     deferred: Vec<FailedNote>,
     oversized: Vec<FailedNote>,
+    dropped_sponsorships: Vec<FailedNote>,
 }
 
 // NETWORK TRANSACTION CONTEXT
@@ -241,7 +238,7 @@ impl NtxContext {
     /// transaction builds against gives exactly the state the transaction must start from. The
     /// response is checked against the reference block header rather than trusted: its witness must
     /// open to the block's account root, and the account state must match the witness.
-    #[instrument_v2(name = "ntx.load_account", err)]
+    #[instrument(name = "load_account", err)]
     pub async fn load_account(
         &self,
         account_id: AccountId,
@@ -302,7 +299,7 @@ impl NtxContext {
     /// - Transaction execution.
     /// - Proof generation.
     /// - Submission to the network.
-    #[instrument_v2(name = "ntx.execute_transaction", err)]
+    #[instrument(name = "execute_transaction", err)]
     pub fn execute_transaction(
         self,
         account: PartialAccount,
@@ -326,37 +323,49 @@ impl NtxContext {
                 let handle = tokio::runtime::Handle::current();
                 let span = miden_node_tracing::Span::current();
 
-                let (executed_tx, failed_notes, deferred_notes, oversized_notes, scripts_to_cache) =
-                    spawn_blocking_in_current_span(move || {
-                        let data_store = NtxDataStore::new(
-                            account,
-                            chain_state,
-                            ctx.rpc.clone(),
-                            ctx.script_cache.clone(),
-                            ctx.code_cache.clone(),
-                            ctx.db.clone(),
-                            ctx.request_backoff,
-                        )?;
-                        handle.block_on(
-                            async {
-                                let FilteredNotes { successful, failed, deferred, oversized } =
-                                    ctx.filter_notes(&data_store, notes).await?;
-                                let executed_tx =
-                                    Box::pin(ctx.execute(&data_store, successful)).await?;
-                                let scripts_to_cache = data_store.take_fetched_scripts();
-                                Ok::<_, NtxError>((
-                                    executed_tx,
-                                    failed,
-                                    deferred,
-                                    oversized,
-                                    scripts_to_cache,
-                                ))
-                            }
-                            .instrument(span),
-                        )
-                    })
-                    .await
-                    .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
+                let (
+                    executed_tx,
+                    failed_notes,
+                    deferred_notes,
+                    oversized_notes,
+                    dropped_sponsorships,
+                    scripts_to_cache,
+                ) = spawn_blocking_in_current_span(move || {
+                    let data_store = NtxDataStore::new(
+                        account,
+                        chain_state,
+                        ctx.rpc.clone(),
+                        ctx.script_cache.clone(),
+                        ctx.code_cache.clone(),
+                        ctx.db.clone(),
+                        ctx.request_backoff,
+                    )?;
+                    handle.block_on(
+                        async {
+                            let FilteredNotes {
+                                successful,
+                                failed,
+                                deferred,
+                                oversized,
+                                dropped_sponsorships,
+                            } = ctx.filter_notes(&data_store, notes).await?;
+                            let executed_tx =
+                                Box::pin(ctx.execute(&data_store, successful)).await?;
+                            let scripts_to_cache = data_store.take_fetched_scripts();
+                            Ok::<_, NtxError>((
+                                executed_tx,
+                                failed,
+                                deferred,
+                                oversized,
+                                dropped_sponsorships,
+                                scripts_to_cache,
+                            ))
+                        }
+                        .instrument(span),
+                    )
+                })
+                .await
+                .unwrap_or_else(|err| std::panic::resume_unwind(err.into_panic()))?;
 
                 // The committed account state is derived from the block that lands this
                 // transaction, so the patch the execution produced is not needed here.
@@ -374,6 +383,7 @@ impl NtxContext {
                     failed_notes,
                     deferred_notes,
                     oversized_notes,
+                    dropped_sponsorships,
                     fetched_scripts: scripts_to_cache,
                 })
             })
@@ -399,7 +409,7 @@ impl NtxContext {
     /// Returns an [`NtxError`] if:
     /// - The consumability check fails unexpectedly.
     /// - All notes fail the check (i.e., no note is consumable).
-    #[instrument_v2(name = "ntx.execute_transaction.filter_notes", err)]
+    #[instrument(name = "filter_notes", err)]
     async fn filter_notes(
         &self,
         data_store: &NtxDataStore,
@@ -421,25 +431,23 @@ impl NtxContext {
             .collect::<HashMap<_, _>>();
 
         // The checker can eliminate a single sponsorship and still accept its feature note. Do not
-        // record the failure of that sponsorship. The failure is charged to the feature note, and
-        // the feature note is submitted successfully.
-        let failed = failed
-            .into_iter()
-            .filter(|failed| {
+        // charge the feature note for that failure, because the feature note is submitted
+        // successfully. Return the sponsorship separately so that it records its own error.
+        let (failed, dropped_sponsorships): (Vec<_>, Vec<_>) =
+            failed.into_iter().partition(|failed| {
                 should_record_failure(failed.note().id(), &successful_ids, &sponsor_to_feature)
-            })
-            .collect::<Vec<_>>();
+            });
 
         for failed_note in &failed {
             if let Some(error) = failed_note.execution_error() {
-                info_v2!(
+                info!(
                     error,
                     "note failed consumability check",
                     note.id = failed_note.note().id(),
                     note.nullifier = failed_note.note().nullifier()
                 );
             } else {
-                info_v2!(
+                info!(
                     "note rejected with its bundle",
                     note.id = failed_note.note().id(),
                     note.nullifier = failed_note.note().nullifier()
@@ -458,7 +466,13 @@ impl NtxContext {
         let (cycle_limited, failed) = partition_cycle_limited(failed);
         let (deferred, oversized) = self.classify_cycle_limited(data_store, cycle_limited).await;
 
-        Ok(FilteredNotes { successful, failed, deferred, oversized })
+        Ok(FilteredNotes {
+            successful,
+            failed,
+            deferred,
+            oversized,
+            dropped_sponsorships,
+        })
     }
 
     /// Runs the consumability checker over `notes` and returns the notes it accepted alongside the
@@ -523,7 +537,7 @@ impl NtxContext {
                 successful.is_empty() && failed.iter().any(|f| f.num_cycles().is_some())
             },
             Err(err) => {
-                warn_v2!(
+                warn!(
                     &err,
                     "isolation re-check for a cycle-limited note failed; treating it as deferrable",
                     note.id = note.id()
@@ -534,7 +548,7 @@ impl NtxContext {
     }
 
     /// Creates an executes a transaction with the network account and the given set of notes.
-    #[instrument_v2(name = "ntx.execute_transaction.execute", err)]
+    #[instrument(name = "execute", err)]
     async fn execute(
         &self,
         data_store: &NtxDataStore,
@@ -561,7 +575,7 @@ impl NtxContext {
     ///
     /// Transient gRPC failures (`Unavailable`, `DeadlineExceeded`, ...) are retried in-place;
     /// content-rejection codes escape on the first attempt so the caller can mark the batch failed.
-    #[instrument_v2(name = "ntx.execute_transaction.submit", err)]
+    #[instrument(name = "submit", err)]
     async fn submit(
         &self,
         proven_tx: &ProvenTransaction,

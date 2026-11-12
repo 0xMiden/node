@@ -7,7 +7,7 @@ use miden_node_proto::server::{
 };
 use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
-use miden_node_tracing::{OpenTelemetry, info_v2};
+use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
@@ -75,7 +75,7 @@ impl Server {
             .expect("local address should exist for a tcp listener")
             .port();
 
-        info_v2!(
+        info!(
             "Remote prover ready",
             service.name = "miden-remote-prover",
             service.version = env!("CARGO_PKG_VERSION"),

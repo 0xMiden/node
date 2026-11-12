@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use miden_node_tracing::{error_v2, info_v2, instrument_v2};
+use miden_node_tracing::{error, info, instrument};
 use miden_node_utils::lru_cache::LruCache;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
@@ -24,6 +24,7 @@ use crate::selection::{
     log_deferred_notes,
     log_oversized_notes,
     select_candidate,
+    sponsorship_failures,
 };
 use crate::{NoteError, execute};
 
@@ -130,6 +131,9 @@ pub struct NoteUpdates {
     /// Notes whose attempt counter must be incremented, keyed by the nullifier the failure is
     /// recorded under.
     pub failed: Vec<(Nullifier, NoteError)>,
+    /// Failed `FEE_SPONSORSHIP` notes, keyed by the nullifier of each sponsorship. Only the latest
+    /// error is recorded for them. Their attempts are charged through [`Self::failed`].
+    pub failed_sponsorships: Vec<(Nullifier, NoteError)>,
     /// Notes that can never be consumed and must be marked permanently unconsumable.
     pub discarded: Vec<Nullifier>,
     /// Corrected eligibility blocks for notes whose stored block is earlier than the exact rule
@@ -173,8 +177,8 @@ pub struct NetworkTransactionOutcome {
 
 impl NetworkTransactionContext {
     /// Builds, proves and submits one network transaction for `account_id`.
-    #[instrument_v2(
-        name = "ntx.build",
+    #[instrument(
+        name = "build",
         fields(
             account.id = account_id,
             reference_block.number = chain.chain_tip_header.block_num(),
@@ -305,7 +309,7 @@ impl NetworkTransactionContext {
             .map(|sponsored| sponsored.feature.as_note().nullifier())
             .collect();
 
-        info_v2!(
+        info!(
             "executing network transaction",
             account.id = account_id,
             note.ids = note_ids.as_slice(),
@@ -318,9 +322,10 @@ impl NetworkTransactionContext {
                 failed_notes,
                 deferred_notes,
                 oversized_notes,
+                dropped_sponsorships,
                 fetched_scripts,
             }) => {
-                info_v2!(
+                info!(
                     "network transaction executed",
                     account.id = account_id,
                     transaction.id = tx_id,
@@ -339,21 +344,30 @@ impl NetworkTransactionContext {
 
                 let mut to_penalize = failed_notes;
                 to_penalize.extend(oversized_sponsorships);
+                // A dropped sponsorship records its own error, but its feature note is not charged.
+                notes.failed_sponsorships = sponsorship_failures(
+                    to_penalize.iter().chain(&dropped_sponsorships),
+                    &sponsor_to_feature,
+                );
                 notes.failed.extend(attribute_failed_notes(to_penalize, &sponsor_to_feature));
                 notes.discarded = log_oversized_notes(oversized_features);
 
                 NetworkTransactionResult::Submitted { tx_id }
             },
             Err(err) => {
-                error_v2!(
+                error!(
                     &err,
                     "network transaction failed",
                     account.id = account_id,
                     note.ids = note_ids.as_slice()
                 );
 
+                // Each failed sponsorship records its own error. A whole-transaction error has no
+                // single cause, so only the feature notes record it.
                 let failed = match err {
                     NtxError::AllNotesFailed(per_note) => {
+                        notes.failed_sponsorships =
+                            sponsorship_failures(&per_note, &sponsor_to_feature);
                         attribute_failed_notes(per_note, &sponsor_to_feature)
                     },
                     other => {
@@ -361,7 +375,7 @@ impl NetworkTransactionContext {
                         feature_nullifiers
                             .into_iter()
                             .map(|nullifier| {
-                                info_v2!(
+                                info!(
                                     error.as_ref(),
                                     "note failed: transaction execution error",
                                     note.nullifier = nullifier

@@ -25,7 +25,7 @@ use miden_node_rpc::{
 };
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
-use miden_node_tracing::{info_v2, warn_v2};
+use miden_node_tracing::{info, warn};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
@@ -184,7 +184,7 @@ impl SequencerCommand {
         funding: Option<FundingClient>,
     ) -> AccountAdmission {
         if self.disable_account_allowlist {
-            warn_v2!("Account allowlist enforcement is disabled");
+            warn!("Account allowlist enforcement is disabled");
             AccountAdmission::disabled(allowlist)
         } else {
             AccountAdmission::enabled(allowlist)
@@ -205,7 +205,7 @@ impl SequencerCommand {
     }
 
     fn log_starting(&self) {
-        info_v2!(
+        info!(
             "Starting node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),
@@ -478,7 +478,7 @@ impl FullNodeCommand {
     }
 
     fn log_starting(&self) {
-        info_v2!(
+        info!(
             "Starting node",
             service.name = "miden-node",
             service.version = env!("CARGO_PKG_VERSION"),

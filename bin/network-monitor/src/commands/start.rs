@@ -3,7 +3,7 @@
 //! This module contains the implementation for starting the network monitoring service.
 
 use anyhow::Result;
-use miden_node_tracing::{OpenTelemetry, info_v2, instrument_v2};
+use miden_node_tracing::{OpenTelemetry, info, instrument};
 
 use crate::config::MonitorConfig;
 use crate::frontend::ServerState;
@@ -13,9 +13,9 @@ use crate::monitor::tasks::Tasks;
 ///
 /// This function initializes all monitoring tasks including RPC status checking,
 /// remote prover testing, faucet testing, and the web frontend.
-#[instrument_v2(
+#[instrument(
     parent = None,
-    name = "network_monitor.start_monitor",
+    name = "start_monitor",
     level = "info",
     fields(
         port = config.port,
@@ -23,7 +23,7 @@ use crate::monitor::tasks::Tasks;
     err,
 )]
 pub async fn start_monitor(config: MonitorConfig) -> Result<()> {
-    info_v2!("Loaded configuration", port = config.port);
+    info!("Loaded configuration", port = config.port);
 
     let _otel_guard =
         miden_node_tracing::setup_tracing(OpenTelemetry::from_env().with_name("monitor"))?;

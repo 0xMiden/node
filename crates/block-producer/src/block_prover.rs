@@ -7,7 +7,7 @@ use miden_node_proto::clients::{Builder, RemoteProverClient};
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BlockProofRequest, DecodeMessage};
-use miden_node_tracing::instrument_v2;
+use miden_node_tracing::instrument;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
@@ -57,7 +57,7 @@ impl BlockProver {
         Ok(Self::Remote(Box::new(RemoteBlockProver::new(url, max_decoding_message_size)?)))
     }
 
-    #[instrument_v2(err)]
+    #[instrument(err)]
     pub async fn prove(
         &self,
         tx_batches: OrderedBatches,

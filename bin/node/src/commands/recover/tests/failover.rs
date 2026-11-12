@@ -393,7 +393,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
     )
     .into_block()?;
     let validator = start_validator(key, genesis.inner().clone(), config).await?;
-    let result = async {
+    let result = Box::pin(async {
         let mut parent = genesis.inner().header().clone();
         let mut chain = miden_protocol::transaction::PartialBlockchain::default();
         let mut blocks = Vec::new();
@@ -618,7 +618,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
         command.handle(CancellationToken::new()).await?;
         ensure!(tokio::time::timeout(Duration::ZERO, unreachable.accept()).await.is_err());
         anyhow::Ok(())
-    }
+    })
     .await;
     validator.stop().await?;
     result

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use miden_node_tracing::{debug, error, info, miden_instrument, miden_span_record, trace, warn};
+use miden_node_tracing::{debug, error, info, instrument, miden_span_record, trace, warn};
 use miden_protocol::block::BlockNumber;
 use tracing::field::{Field, Visit};
 use tracing::{Level, Subscriber};
@@ -156,7 +156,7 @@ impl FieldVisitor {
     }
 }
 
-#[miden_instrument(target = "miden-node-tracing-test", name = "records_delayed_fields")]
+#[instrument(target = "miden-node-tracing-test", name = "records_delayed_fields")]
 fn records_inferred_fields() {
     let parsed_value = 42;
     let parsed_text = "parsed";
@@ -170,7 +170,7 @@ fn records_inferred_fields() {
     );
 }
 
-#[miden_instrument(
+#[instrument(
     target = "miden-node-tracing-test",
     name = "records_explicit_fields",
     fields(
@@ -183,7 +183,7 @@ fn records_explicit_fields() {
     tracing::Span::current().record("account.updated", true);
 }
 
-#[miden_instrument(
+#[instrument(
     target = "miden-node-tracing-test",
     name = "records_explicit_argument_field",
     fields(
@@ -192,7 +192,7 @@ fn records_explicit_fields() {
 )]
 fn records_explicit_argument_field(service_name: &str) {}
 
-#[miden_instrument(
+#[instrument(
     target = "miden-node-tracing-test",
     name = "records_explicit_and_inferred_fields",
     fields(
@@ -206,7 +206,7 @@ fn records_explicit_and_inferred_fields() {
     miden_span_record!(block.number = block_number, service.name = "mixed-service");
 }
 
-#[miden_instrument(target = "miden-node-tracing-test", name = "records_fields_from_multiple_calls")]
+#[instrument(target = "miden-node-tracing-test", name = "records_fields_from_multiple_calls")]
 fn records_fields_from_multiple_calls() {
     let block_number = 14;
     let service_name = "multi-call-service";
@@ -215,24 +215,24 @@ fn records_fields_from_multiple_calls() {
     miden_span_record!(service.name = service_name);
 }
 
-#[miden_instrument(target = "miden-node-tracing-test", name = "records_canonical_types")]
+#[instrument(target = "miden-node-tracing-test", name = "records_canonical_types")]
 fn records_canonical_types() {
     miden_span_record!(block.number = BlockNumber::from(42));
 }
 
-#[miden_instrument(target = "miden-node-tracing-test", name = "records_count_field")]
+#[instrument(target = "miden-node-tracing-test", name = "records_count_field")]
 fn records_count_field() {
     miden_span_record!(unregistered.item.count = 3_usize);
 }
 
-#[miden_instrument(
+#[instrument(
     target = "miden-node-tracing-test",
     name = "records_nonstandard_explicit_field",
     fields(custom.explicit = value #[nonstandard]),
 )]
 fn records_nonstandard_explicit_field(value: &str) {}
 
-#[miden_instrument(target = "miden-node-tracing-test", name = "records_nonstandard_delayed_field")]
+#[instrument(target = "miden-node-tracing-test", name = "records_nonstandard_delayed_field")]
 fn records_nonstandard_delayed_field() {
     miden_span_record!(custom.delayed = "delayed" #[nonstandard]);
 }
@@ -434,7 +434,7 @@ fn scoped_targets_follow_module_boundaries() {
     );
 }
 
-#[miden_node_tracing::instrument_v2(target = "miden::rpc::client")]
+#[miden_node_tracing::instrument(target = "miden::rpc::client")]
 fn explicit_target_without_scope() -> &'static str {
     tracing::Span::current().metadata().unwrap().target()
 }
@@ -556,17 +556,17 @@ fn scoped_event_targets_are_independent_of_span_targets_and_parents() {
 
 #[test]
 fn explicit_event_targets_work_without_a_scope() {
-    use miden_node_tracing::{debug_v2, error_v2, info_v2, trace_v2, warn_v2};
+    use miden_node_tracing::{debug, error, info, trace, warn};
 
     const TARGET: &str = "miden::explicit";
     let recorded = RecordedEvents::default();
     let subscriber = tracing_subscriber::registry().with(recorded.clone());
     tracing::subscriber::with_default(subscriber, || {
-        trace_v2!(target: TARGET, "trace.event");
-        debug_v2!(target: TARGET, "debug.event");
-        info_v2!(target: TARGET, "info.event");
-        warn_v2!(target: TARGET, "warn.event");
-        error_v2!(OuterError(SourceError), target: TARGET, "error.event");
+        trace!(target: TARGET, "trace.event");
+        debug!(target: TARGET, "debug.event");
+        info!(target: TARGET, "info.event");
+        warn!(target: TARGET, "warn.event");
+        error!(OuterError(SourceError), target: TARGET, "error.event");
     });
 
     let events = recorded.events();
@@ -619,7 +619,7 @@ fn enabled_checks_follow_scopes_levels_and_explicit_overrides() {
                 "{filter}"
             );
             assert_eq!(
-                miden_node_tracing::enabled_v2!(target: OVERRIDE, Level::DEBUG),
+                miden_node_tracing::enabled!(target: OVERRIDE, Level::DEBUG),
                 expected[3],
                 "{filter}"
             );
@@ -637,11 +637,9 @@ fn enabled_checks_forward_field_names_to_subscribers() {
         assert!(!targets::database::child::debug_enabled());
         assert!(targets::database::child::fields_enabled());
         assert!(
-            miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, block.number)
+            miden_node_tracing::enabled!(target: "miden::explicit", Level::DEBUG, block.number)
         );
-        assert!(
-            !miden_node_tracing::enabled_v2!(target: "miden::explicit", Level::DEBUG, account.id)
-        );
+        assert!(!miden_node_tracing::enabled!(target: "miden::explicit", Level::DEBUG, account.id));
     });
 }
 
@@ -665,7 +663,7 @@ fn ui_tests() {
     tests.compile_fail("tests/ui/tracing_macros/invalid_instrument_formatter.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_err_formatter.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_ret.rs");
-    tests.compile_fail("tests/ui/tracing_macros/outside_miden_instrument.rs");
+    tests.compile_fail("tests/ui/tracing_macros/outside_instrument.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_name.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_field_type.rs");
     tests.compile_fail("tests/ui/tracing_macros/invalid_event_attribute.rs");

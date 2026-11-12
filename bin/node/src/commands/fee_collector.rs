@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::Context;
 use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, deploy_fee_collector};
 use miden_node_store::{DataDirectory, State};
-use miden_node_tracing::info_v2;
+use miden_node_tracing::info;
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
@@ -84,7 +84,7 @@ impl CreateCommand {
             options.open(&output).context("failed to create fee collector account file")?;
         file.write_all(&account_file.to_bytes())?;
         file.sync_all()?;
-        info_v2!(
+        info!(
             "Saved new fee collector account",
             account.id = account_file.account().id(),
             account.file = output.as_path()

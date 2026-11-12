@@ -12,7 +12,7 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use maud::Markup;
-use miden_node_tracing::{info_v2, instrument_v2};
+use miden_node_tracing::{info, instrument};
 use tokio::sync::watch;
 
 use crate::config::MonitorConfig;
@@ -47,8 +47,8 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
-    info_v2!("Starting web server", network_monitor.listen = bind_address.as_str());
-    info_v2!("Dashboard available", port = config.port);
+    info!("Starting web server", network_monitor.listen = bind_address.as_str());
+    info!("Dashboard available", port = config.port);
     let listener = tokio::net::TcpListener::bind(&bind_address)
         .await
         .expect("Failed to bind to address");
@@ -58,14 +58,14 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
 // HTML ROUTES
 // ================================================================================================
 
-#[instrument_v2(name = "frontend.get-dashboard")]
+#[instrument(name = "get_dashboard")]
 async fn get_dashboard(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
     view::page(&server_state)
 }
 
-#[instrument_v2(name = "frontend.get-status-fragment")]
+#[instrument(name = "get_status_fragment")]
 async fn get_status_fragment(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> Markup {
@@ -75,7 +75,7 @@ async fn get_status_fragment(
 // JSON ROUTE
 // ================================================================================================
 
-#[instrument_v2(name = "frontend.get-status")]
+#[instrument(name = "get_status")]
 async fn get_status(
     axum::extract::State(server_state): axum::extract::State<ServerState>,
 ) -> axum::response::Json<NetworkStatus> {

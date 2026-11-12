@@ -1,6 +1,8 @@
-use miden_node_tracing::miden_instrument;
+miden_node_tracing::declare_targets! { default: "miden::test", }
 
-#[miden_instrument(skip_all)]
+use miden_node_tracing::instrument;
+
+#[instrument(skip_all)]
 fn redundantly_skips_arguments(value: u32) {
     let _ = value;
 }

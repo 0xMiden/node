@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Context;
 use clap::{ArgGroup, Parser};
 use miden_node_store::genesis::GenesisBlock;
-use miden_node_tracing::{OpenTelemetry, info_v2};
+use miden_node_tracing::{OpenTelemetry, info};
 use miden_node_utils::clap::duration_to_human_readable_string;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::fs::ensure_empty_directory;
@@ -215,7 +215,7 @@ impl NtxBuilderCommand {
                 genesis_block_file,
                 network,
             } => {
-                info_v2!(
+                info!(
                     "Bootstrapping NTX builder",
                     service.name = "miden-ntx-builder",
                     service.version = env!("CARGO_PKG_VERSION"),
@@ -239,7 +239,7 @@ impl NtxBuilderCommand {
                 miden_ntx_builder::bootstrap(database_filepath, &genesis)
                     .await
                     .context("failed to bootstrap ntx-builder database")?;
-                info_v2!(
+                info!(
                     "NTX builder bootstrap complete",
                     genesis.commitment = genesis_commitment,
                     data.directory = data_directory.as_path()
@@ -283,7 +283,7 @@ impl NtxBuilderCommand {
             unreachable!("start is only called for the Start variant")
         };
 
-        info_v2!(
+        info!(
             "Starting NTX builder",
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),

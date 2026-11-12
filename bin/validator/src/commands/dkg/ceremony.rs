@@ -10,7 +10,7 @@ use golden_core::{ParticipantIndex, ParticipantRegistry};
 use iroh::endpoint::Builder;
 use iroh::endpoint::presets::{self, Preset};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
-use miden_node_tracing::{info_v2, warn_v2};
+use miden_node_tracing::{info, warn};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::utils::serde::Serializable;
 use miden_validator::{StorageKeyEpoch, ValidatorSigner};
@@ -173,7 +173,7 @@ impl Ceremony {
                     let connected_peer = match result.context("incoming connection task failed")? {
                         Ok(peer) => peer,
                         Err(error) => {
-                            warn_v2!(
+                            warn!(
                                 &error,
                                 "Ignoring failed incoming DKG connection"
                             );
@@ -199,7 +199,7 @@ impl Ceremony {
                     authenticated_peers.push(result.context("peer authentication task failed")??);
                 },
                 _ = progress.tick() => {
-                    info_v2!(
+                    info!(
                         "Waiting for DKG peers to connect and authenticate",
                         dkg.peers.authenticated = authenticated_peers.len() #[nonstandard],
                         dkg.peers.expected = self.peers.len() #[nonstandard]

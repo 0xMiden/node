@@ -1,5 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_tracing::{debug_v2, instrument_v2};
+use miden_node_tracing::{debug, instrument};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::vm::ExecutionProof;
 
@@ -30,7 +30,7 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
         })
     }
 
-    #[instrument_v2(
+    #[instrument(
         name = "proof_subscription",
         fields(
             block.from = input,
@@ -42,7 +42,7 @@ impl proto::server::miden_node_v1_node_service::ProofSubscription for RpcService
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        debug_v2!("Subscribing to block proofs");
+        debug!("Subscribing to block proofs");
 
         let from = input;
         SubscriptionStream::proofs(self, from)

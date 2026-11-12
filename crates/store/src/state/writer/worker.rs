@@ -4,14 +4,7 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
-use miden_node_tracing::{
-    ErrorReport,
-    Instrument,
-    debug_v2,
-    instrument_v2,
-    miden_span_record,
-    warn_v2,
-};
+use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -179,7 +172,7 @@ impl WriteWorker {
     ///   lag the DB by one block, which is detected by the consistency checks at startup (the same
     ///   crash semantics as the previous lock-based implementation).
     /// - the new snapshot is published atomically, making the block visible to readers.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     async fn write_block(
         &mut self,
         signed_block: SignedBlock,
@@ -309,7 +302,7 @@ impl WriteWorker {
         if let Some(block_lifecycle) = block_lifecycle {
             block_lifecycle.emit(&resolved_note_ids);
         }
-        debug_v2!("Block applied");
+        debug!("Block applied");
 
         Ok(())
     }
@@ -322,7 +315,7 @@ impl WriteWorker {
     /// write-path CPU work lands on the pool. The returned forest update is bound to the forest
     /// state observed here; it remains valid until applied because the writer is the sole forest
     /// mutator.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     fn prepare_block_update(
         &self,
         signed_block: &SignedBlock,
@@ -397,7 +390,7 @@ impl WriteWorker {
     /// # Panics
     ///
     /// Panics if applying any prepared mutation fails; see above.
-    #[instrument_v2]
+    #[instrument]
     fn apply_prepared_mutations(
         &mut self,
         block_num: BlockNumber,
@@ -441,7 +434,7 @@ impl WriteWorker {
     ///
     /// Consistency between the header and the block body is checked in
     /// [`Self::prepare_block_update`], where the hashing runs on the apply-block pool.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     async fn validate_block_header(&self, header: &BlockHeader) -> Result<Word, ApplyBlockError> {
         let block_num = header.block_num();
 
@@ -467,7 +460,7 @@ impl WriteWorker {
     }
 
     /// Computes nullifier and account tree mutations, validating roots against the block header.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     fn compute_tree_mutations(
         &self,
         header: &BlockHeader,
@@ -532,7 +525,7 @@ impl WriteWorker {
     }
 
     /// Builds note records with inclusion proofs from the block body.
-    #[instrument_v2(err)]
+    #[instrument(err)]
     fn build_note_records(
         header: &BlockHeader,
         body: &BlockBody,
@@ -599,7 +592,7 @@ fn raise_thread_priority() {
     static WARN_ONCE: Once = Once::new();
     if let Err(error) = set_current_thread_priority(ThreadPriority::Max) {
         WARN_ONCE.call_once(|| {
-            warn_v2!(
+            warn!(
                 &error,
                 "failed to raise apply-block thread priority; continuing at normal priority"
             );

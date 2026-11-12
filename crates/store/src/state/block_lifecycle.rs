@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use miden_node_tracing::{debug_v2, instrument_v2};
+use miden_node_tracing::{debug, instrument};
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountId,
@@ -25,7 +25,7 @@ pub(super) struct BlockLifecycle {
 }
 
 impl BlockLifecycle {
-    #[instrument_v2(name = "block_lifecycle.from_block_body")]
+    #[instrument(name = "from_block_body")]
     pub(super) fn from_block_body(block_num: BlockNumber, body: &BlockBody) -> Self {
         let persisted_note_ids =
             body.output_notes().map(|(_, note)| note.id()).collect::<BTreeSet<_>>();
@@ -86,10 +86,10 @@ impl BlockLifecycle {
             .collect()
     }
 
-    #[instrument_v2(name = "block_lifecycle.emit")]
+    #[instrument(name = "emit")]
     pub(super) fn emit(self, resolved_note_ids: &BTreeMap<Nullifier, NoteId>) {
         for account in self.registered_accounts {
-            debug_v2!(
+            debug!(
                 "Account registered",
                 account.id = account.account_id,
                 block.number = self.block_num,
@@ -98,7 +98,7 @@ impl BlockLifecycle {
         }
 
         for note in self.created_notes {
-            debug_v2!(
+            debug!(
                 "Note created",
                 note.id = note.note_id,
                 note.sender = note.sender,
@@ -110,7 +110,7 @@ impl BlockLifecycle {
 
         for note in self.consumed_notes {
             let note_id = note.note_id.or_else(|| resolved_note_ids.get(&note.nullifier).copied());
-            debug_v2!(
+            debug!(
                 "Note consumed",
                 note.id = note_id,
                 note.id_resolved = note_id.is_some(),
@@ -128,7 +128,7 @@ impl BlockLifecycle {
 
 /// Returns whether any subscriber is interested in user-facing lifecycle events.
 pub(super) fn lifecycle_events_enabled() -> bool {
-    miden_node_tracing::enabled_v2!(miden_node_tracing::Level::DEBUG)
+    miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG)
 }
 
 struct RegisteredAccount {
@@ -180,7 +180,7 @@ impl StorageChange {
                 operation,
                 value: Some(value),
             } => {
-                debug_v2!(
+                debug!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -196,7 +196,7 @@ impl StorageChange {
                 operation,
                 value: None,
             } => {
-                debug_v2!(
+                debug!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -212,7 +212,7 @@ impl StorageChange {
                 key,
                 value,
             } => {
-                debug_v2!(
+                debug!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,
@@ -231,7 +231,7 @@ impl StorageChange {
                 operation,
                 entries_count,
             } => {
-                debug_v2!(
+                debug!(
                     "Account storage updated",
                     account.id = account_id,
                     account.storage.slot = slot_name,

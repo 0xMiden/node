@@ -3,7 +3,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use miden_node_tracing::{ErrorReport, error_v2};
+use miden_node_tracing::{ErrorReport, error};
 use serde::Serialize;
 
 #[derive(Debug)]
@@ -32,10 +32,10 @@ impl ApiError {
     /// `cause` is logged rather than returned — the event macro records its display value and
     /// source chain as `exception.message` — because it describes the validator's internals rather
     /// than anything about the request. Logging is the only record of it: these are plain axum
-    /// handlers, so they are not covered by the `instrument_v2(err)` fault reporting the gRPC
+    /// handlers, so they are not covered by the `instrument(err)` fault reporting the gRPC
     /// services get.
     pub(super) fn internal(message: &'static str, cause: &(impl ErrorReport + 'static)) -> Self {
-        error_v2!(
+        error!(
             cause,
             "validator admin API internal error",
             response.message = message #[nonstandard]

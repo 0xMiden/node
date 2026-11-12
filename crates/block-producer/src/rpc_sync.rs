@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
-use miden_node_tracing::{debug_v2, info_v2, warn_v2};
+use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
 use miden_protocol::block::BlockNumber;
@@ -68,7 +68,7 @@ impl RpcReadiness {
 
         match self.record_transition(ready) {
             ReadinessTransition::BecameReady => {
-                info_v2!(
+                info!(
                     "Node ready",
                     service.name = "miden-node",
                     service.version = env!("CARGO_PKG_VERSION"),
@@ -80,7 +80,7 @@ impl RpcReadiness {
                 );
             },
             ReadinessTransition::BecameNotReady => {
-                warn_v2!(
+                warn!(
                     "Node no longer ready",
                     block.number = local_tip,
                     sync.upstream_block = upstream_tip,
@@ -89,7 +89,7 @@ impl RpcReadiness {
                 );
             },
             ReadinessTransition::InitialNotReady => {
-                debug_v2!(
+                debug!(
                     "Node synchronizing",
                     block.number = local_tip,
                     sync.upstream_block = upstream_tip,

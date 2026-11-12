@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::Result;
 use backon::{ExponentialBuilder, Retryable};
 use miden_node_proto::clients::RemoteProverClient;
-use miden_node_tracing::{debug_v2, error_v2, warn_v2};
+use miden_node_tracing::{debug, error, warn};
 use miden_node_utils::tasks::Tasks as SupervisedTasks;
 use miden_tx::LocalTransactionProver;
 use tokio::sync::watch::Receiver;
@@ -201,7 +201,7 @@ impl Tasks {
 
         let config = config.clone();
         self.handles.spawn_infallible("ntx", run_ntx(config, increment_tx, tracking_tx));
-        debug_v2!("Spawned service", service.name = "ntx");
+        debug!("Spawned service", service.name = "ntx");
 
         (increment_rx, tracking_rx)
     }
@@ -215,7 +215,7 @@ impl Tasks {
         let service_name = svc.name().to_string();
         self.handles
             .spawn_infallible(service_name.clone(), async move { svc.run(tx).await });
-        debug_v2!("Spawned service", service.name = service_name);
+        debug!("Spawned service", service.name = service_name);
         rx
     }
 
@@ -313,7 +313,7 @@ async fn run_ntx(
     .retry(backoff)
     .when(|err: &anyhow::Error| err.downcast_ref::<UnsupportedChainError>().is_none())
     .notify(|err: &anyhow::Error, sleep: Duration| {
-        warn_v2!(err, "NTX bootstrap failed; retrying after backoff", retry.delay_ms = sleep);
+        warn!(err, "NTX bootstrap failed; retrying after backoff", retry.delay_ms = sleep);
         publish_unhealthy(err);
     })
     .await;
@@ -321,10 +321,7 @@ async fn run_ntx(
     let (increment_svc, tracking_svc) = match result {
         Ok(services) => services,
         Err(err) => {
-            error_v2!(
-                &err,
-                "NTX bootstrap hit a permanent configuration error; aborting the monitor"
-            );
+            error!(&err, "NTX bootstrap hit a permanent configuration error; aborting the monitor");
             publish_unhealthy(&err);
             return;
         },
