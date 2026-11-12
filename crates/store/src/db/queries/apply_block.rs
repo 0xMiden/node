@@ -10,10 +10,12 @@ use miden_protocol::note::Nullifier;
 use crate::db::NoteRecord;
 use crate::db::queries::{
     PrecomputedPublicAccountStates,
+    PreparedTransactionLogs,
     insert_block_header,
     insert_note_scripts,
     insert_notes,
     insert_nullifiers_for_block,
+    insert_transaction_logs,
     insert_transactions,
     upsert_accounts,
 };
@@ -30,6 +32,7 @@ pub(crate) fn apply_block(
     notes: &[(NoteRecord, Option<Nullifier>)],
     precomputed_public_states: &PrecomputedPublicAccountStates,
     new_account_ids: &BTreeSet<AccountId>,
+    logs: &PreparedTransactionLogs,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
     // Note: ordering here is important as the relevant tables have FK dependencies.
@@ -43,9 +46,19 @@ pub(crate) fn apply_block(
     )?;
     count += insert_note_scripts(tx, notes.iter().map(|(note, _)| note))?;
     count += insert_notes(tx, notes)?;
+    let mut first_index = 0;
     for batch in block.body().transactions() {
-        count += insert_transactions(tx, block.header().block_num(), batch)?;
+        count += insert_transactions(
+            tx,
+            block.header().block_num(),
+            batch,
+            first_index,
+            &logs.public_log_counts,
+        )?;
+        first_index +=
+            u32::try_from(batch.as_slice().len()).expect("batch transaction count fits u32");
     }
+    count += insert_transaction_logs(tx, block.header().block_num(), logs)?;
     count += insert_nullifiers_for_block(
         tx,
         block.body().created_nullifiers(),

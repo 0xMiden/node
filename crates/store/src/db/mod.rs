@@ -41,6 +41,7 @@ use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::pagination::{Page, Paginated};
+use crate::db::queries::PreparedTransactionLogs;
 pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
     PrecomputedPublicAccountState,
@@ -119,6 +120,7 @@ fn insert_genesis(tx: &WriteTx<'_>, genesis: GenesisBlock) -> Result<()> {
         &[],
         &PrecomputedPublicAccountStates::new(),
         &new_account_ids,
+        &PreparedTransactionLogs::from_block(genesis_block.body())?,
     )?;
     Ok(())
 }
@@ -541,6 +543,7 @@ impl Db {
         new_account_ids: BTreeSet<AccountId>,
         unresolved_note_nullifiers: Vec<Nullifier>,
         prune_tip: BlockNumber,
+        logs: PreparedTransactionLogs,
     ) -> Result<BTreeMap<Nullifier, NoteId>> {
         self.writer
             .write::<_, DatabaseError, _>("apply block", move |tx| {
@@ -557,6 +560,7 @@ impl Db {
                     &notes,
                     &precomputed_public_states,
                     &new_account_ids,
+                    &logs,
                 )?;
                 queries::prune_history(tx, prune_tip)?;
                 Ok(())

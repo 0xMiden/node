@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
 use std::error::Error as _;
+use std::iter::once;
 
 use miden_node_proto::domain::proof_request::BlockProofRequest;
+use miden_node_proto::generated::block_proving::BlockProofRequest as ProtoBlockProofRequest;
+use miden_node_proto::generated::miden::remote_prover::v1::{ProveRequest, ProveResponse};
+use miden_node_proto::server::miden_remote_prover_v1_prover_service::{Prove, service};
 use miden_node_proto::{BuildUnchecked, DecodeMessage, DecodeMessageExt, Verify, generated};
+use miden_node_utils::grpc::tcp_incoming;
 use miden_objects::proto;
 use miden_protocol::Word;
 use miden_protocol::account::{
@@ -30,14 +35,22 @@ use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::{Note, NoteInclusionProof, Nullifier};
 use miden_protocol::protocol_config::NextProtocolConfig;
+use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
     PartialBlockchain,
+    PublicTransactionLogs,
     TransactionHeader,
 };
 use prost::Message;
+use tokio::net::TcpListener;
+use tokio::spawn;
+use tonic::codegen::http::Extensions;
+use tonic::metadata::MetadataMap;
+use tonic::transport::Server;
+use tonic::{Code, Result as TonicResult, Status};
 
 fn private_account_id(seed: u8) -> AccountId {
     AccountId::dummy(
@@ -83,6 +96,7 @@ fn empty_batch(reference_block_num: u32) -> ProvenBatch {
         Vec::new(),
         BlockNumber::from(reference_block_num + 1),
         OrderedTransactionHeaders::new_unchecked(Vec::new()),
+        PublicTransactionLogs::default(),
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
@@ -183,6 +197,7 @@ fn nonempty_block_request() -> BlockProofRequest {
                 Vec::new(),
                 BlockNumber::from(10),
                 OrderedTransactionHeaders::new_unchecked(vec![transaction]),
+                PublicTransactionLogs::default(),
                 miden_protocol::testing::dummy_execution_proof(),
             )
             .unwrap()
@@ -730,4 +745,159 @@ fn authentication_inputs_preserve_distinct_spent_and_unspent_nullifiers() {
     assert_eq!(inputs.nullifiers.len(), 2);
     assert_eq!(inputs.nullifiers[&unspent], None);
     assert_eq!(inputs.nullifiers[&spent].unwrap().get(), 10);
+}
+
+fn public_log_batch() -> ProvenBatch {
+    use miden_protocol::account::{
+        AccountCodePatch,
+        AccountPatch,
+        AccountStoragePatch,
+        AccountVaultPatch,
+    };
+    use miden_protocol::block::code_tree::CodePatch;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_protocol::transaction::{
+        LogTopic,
+        PublicTransactionLogs,
+        TransactionLog,
+        TransactionLogs,
+    };
+    let id = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap();
+    let patch = AccountPatch::new(
+        id,
+        AccountStoragePatch::default(),
+        AccountVaultPatch::default(),
+        AccountCodePatch::default(),
+        Some(2_u32.into()),
+    )
+    .unwrap();
+    let logs = TransactionLogs::new(vec![
+        TransactionLog::new(
+            id,
+            LogTopic::new(1_u32.into(), 2_u32.into()),
+            vec![Word::from([7_u32; 4]); 64],
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let header = TransactionHeader::new(
+        id,
+        Word::from([1_u32; 4]),
+        Word::from([2_u32; 4]),
+        InputNotes::default(),
+        vec![],
+        logs.commitment(),
+        CodePatch::default().commitment(),
+    )
+    .unwrap();
+    let public = PublicTransactionLogs::new(vec![(header.id(), logs)], once(&header)).unwrap();
+    let update = BatchAccountUpdate::new(
+        id,
+        Word::from([1_u32; 4]),
+        Word::from([2_u32; 4]),
+        AccountUpdateDetails::Public(patch),
+    )
+    .unwrap();
+    ProvenBatch::new(
+        Word::empty(),
+        BlockNumber::GENESIS,
+        [update],
+        InputNotes::default(),
+        vec![],
+        BlockNumber::MAX,
+        OrderedTransactionHeaders::new_unchecked(vec![header]),
+        public,
+        dummy_execution_proof(),
+    )
+    .unwrap()
+}
+
+struct BatchTransport;
+
+#[tonic::async_trait]
+impl Prove for BatchTransport {
+    type Input = ProveRequest;
+    type Output = ProveResponse;
+
+    fn decode(request: Self::Input) -> TonicResult<Self::Input> {
+        Ok(request)
+    }
+    fn encode(response: Self::Output) -> TonicResult<Self::Output> {
+        Ok(response)
+    }
+
+    async fn handle(
+        &self,
+        request: Self::Input,
+        _: &MetadataMap,
+        _: &Extensions,
+    ) -> TonicResult<Self::Output> {
+        use generated::miden::remote_prover::v1::{prove_request, prove_response};
+        let Some(prove_request::Request::Block(block)) = request.request else {
+            return Err(Status::invalid_argument("expected block request"));
+        };
+        Ok(Self::Output {
+            proof: block.batches.into_iter().next().map(prove_response::Proof::Batch),
+        })
+    }
+}
+
+#[tokio::test]
+async fn public_logs_survive_complete_prover_envelopes_and_size_limits() {
+    use generated::miden::remote_prover::v1::{
+        ProveRequest,
+        ProveResponse,
+        prove_request,
+        prove_response,
+    };
+    use miden_node_proto::clients::{Builder, RemoteProverClient};
+    use miden_node_utils::shutdown::CancellationToken;
+    let batch = public_log_batch();
+    let mut block = ProtoBlockProofRequest::from(nonempty_block_request());
+    block.batches = vec![(&batch).into()];
+    let request = ProveRequest {
+        request: Some(prove_request::Request::Block(block)),
+    };
+    let expected = ProveResponse {
+        proof: Some(prove_response::Proof::Batch((&batch).into())),
+    };
+    for (request_limit, response_limit, succeeds) in [
+        (request.encoded_len(), expected.encoded_len(), true),
+        (request.encoded_len() - 1, expected.encoded_len(), false),
+        (request.encoded_len(), expected.encoded_len() - 1, false),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap()).parse().unwrap();
+        let shutdown = CancellationToken::new();
+        let stop = shutdown.clone();
+        let server = spawn(async move {
+            Server::builder()
+                .add_service(service(BatchTransport).max_decoding_message_size(request_limit))
+                .serve_with_incoming_shutdown(tcp_incoming(listener), stop.cancelled_owned())
+                .await
+                .unwrap();
+        });
+        let mut client = Builder::new(url)
+            .max_decoding_message_size(response_limit)
+            .without_tls()
+            .without_timeout()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_auth_header()
+            .without_otel_context_injection()
+            .connect_lazy::<RemoteProverClient>();
+        let result = client.prove(request.clone()).await;
+        if succeeds {
+            let actual = result.unwrap().into_inner();
+            assert_eq!(actual, expected);
+            let Some(prove_response::Proof::Batch(wire)) = actual.proof else {
+                panic!("batch response expected")
+            };
+            assert_eq!(wire.decode_and_build_unchecked().unwrap(), batch);
+        } else {
+            assert_eq!(result.unwrap_err().code(), Code::OutOfRange);
+        }
+        shutdown.cancel();
+        server.await.unwrap();
+    }
 }

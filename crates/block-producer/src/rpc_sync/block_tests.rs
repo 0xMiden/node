@@ -1,16 +1,22 @@
 use std::collections::BTreeMap;
+use std::iter::once;
 
+use anyhow::Result as AnyhowResult;
+use miden_node_persistence::decode;
 use miden_node_proto::clients::Builder;
 use miden_node_proto::generated as proto;
+use miden_node_proto::generated::blockchain::SignedBlock as ProtoSignedBlock;
 use miden_node_proto::generated::miden::node::v1::{
     BlockSubscriptionRequest,
     BlockSubscriptionResponse,
     StatusResponse,
 };
 use miden_node_proto::generated::server::miden_node_v1_node_service;
-use miden_node_store::GenesisState;
+use miden_node_proto::generated::server::miden_node_v1_node_service::service;
+use miden_node_store::{DataDirectory, GenesisState};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
@@ -21,13 +27,18 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::transaction::PartialBlockchain;
+use miden_protocol::utils::serde::Serializable;
+use rusqlite::{Connection, OpenFlags};
 use tokio::net::TcpListener;
 use tokio_stream::wrappers::TcpListenerStream;
 
 use super::*;
 
 #[derive(Clone)]
-struct Upstream(Vec<SignedBlock>);
+struct Upstream {
+    blocks: Vec<SignedBlock>,
+    omit_logs: bool,
+}
 
 #[tonic::async_trait]
 impl miden_node_v1_node_service::Status for Upstream {
@@ -49,7 +60,7 @@ impl miden_node_v1_node_service::Status for Upstream {
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         Ok(StatusResponse {
-            chain_tip: self.0.last().unwrap().header().block_num().as_u32(),
+            chain_tip: self.blocks.last().unwrap().header().block_num().as_u32(),
             ..Default::default()
         })
     }
@@ -75,14 +86,18 @@ impl miden_node_v1_node_service::BlockSubscription for Upstream {
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
-        let committed_chain_tip = self.0.last().unwrap().header().block_num().as_u32();
+        let committed_chain_tip = self.blocks.last().unwrap().header().block_num().as_u32();
         let events = self
-            .0
+            .blocks
             .iter()
             .filter(|block| block.header().block_num().as_u32() >= request.block_from)
             .map(|block| {
+                let mut wire: ProtoSignedBlock = block.into();
+                if self.omit_logs {
+                    wire.body.as_mut().unwrap().public_logs = None;
+                }
                 Ok(BlockSubscriptionResponse {
-                    block: Some(block.into()),
+                    block: Some(wire),
                     committed_chain_tip,
                     protocol_config: None,
                 })
@@ -96,11 +111,20 @@ async fn sync_blocks(
     genesis: &GenesisState,
     blocks: Vec<SignedBlock>,
 ) -> (anyhow::Result<()>, BlockHeader) {
+    sync_blocks_with_log_mutation(genesis, blocks, false).await
+}
+
+async fn sync_blocks_with_log_mutation(
+    genesis: &GenesisState,
+    blocks: Vec<SignedBlock>,
+    omit_logs: bool,
+) -> (AnyhowResult<()>, BlockHeader) {
+    let expected = blocks.last().unwrap().clone();
     let directory = tempfile::tempdir().unwrap();
     State::bootstrap(genesis.clone().into_block().unwrap(), directory.path())
         .await
         .unwrap();
-    let (state, writer, _proof_writer, writer_task) =
+    let (state, writer, original_proof_writer, writer_task) =
         State::load(directory.path(), StorageOptions::default())
             .await
             .unwrap()
@@ -112,7 +136,7 @@ async fn sync_blocks(
     let server_shutdown = shutdown.clone();
     let server = tokio::spawn(async move {
         tonic::transport::Server::builder()
-            .add_service(miden_node_v1_node_service::service(Upstream(blocks)))
+            .add_service(service(Upstream { blocks, omit_logs }))
             .serve_with_incoming_shutdown(
                 TcpListenerStream::new(listener),
                 server_shutdown.cancelled_owned(),
@@ -142,6 +166,40 @@ async fn sync_blocks(
     shutdown.cancel();
     server.await.unwrap();
     sync.writer.stop(writer_task).await;
+    drop(sync.state);
+    drop(original_proof_writer);
+    drop(state);
+    let (reopened, writer, proof_writer, task) =
+        State::load(directory.path(), StorageOptions::default())
+            .await
+            .unwrap()
+            .start(CancellationToken::new());
+    if result.is_ok() {
+        let bytes = reopened.load_block(expected.header().block_num()).await.unwrap().unwrap();
+        let actual: SignedBlock = decode(&bytes).unwrap();
+        assert_eq!(actual, expected);
+        let data = DataDirectory::load(directory.path().to_path_buf()).unwrap();
+        let connection =
+            Connection::open_with_flags(data.database_path(), OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .unwrap();
+        let rows = connection.prepare("SELECT emitter, content FROM transaction_logs ORDER BY transaction_index, log_index").unwrap().query_map([], |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        let expected_rows: Vec<_> = expected
+            .body()
+            .public_logs()
+            .entries()
+            .iter()
+            .flat_map(|(_, logs)| logs.iter())
+            .map(|log| {
+                (
+                    log.emitter().to_bytes(),
+                    log.content().iter().flat_map(Serializable::to_bytes).collect::<Vec<_>>(),
+                )
+            })
+            .collect();
+        assert_eq!(rows, expected_rows);
+    }
+    writer.stop(task).await;
+    drop(proof_writer);
     (result, tip.unwrap())
 }
 
@@ -211,6 +269,79 @@ async fn synced_blocks_follow_validator_rotation() {
     let (result, tip) = sync_blocks(&genesis, vec![first.clone(), stale_signer]).await;
     assert!(result.unwrap_err().to_string().contains("failed to verify block"));
     assert_eq!(&tip, first.header());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn synced_public_logs_survive_restart_and_reject_missing_payloads() {
+    use miden_protocol::Word;
+    use miden_protocol::block::BlockBody;
+    use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_protocol::transaction::{
+        InputNotes,
+        LogTopic,
+        OrderedTransactionHeaders,
+        PublicTransactionLogs,
+        TransactionHeader,
+        TransactionLog,
+        TransactionLogs,
+    };
+    let signer = SigningKey::new();
+    let genesis = genesis(&signer);
+    let parent = genesis.clone().into_block().unwrap().inner().header().clone();
+    let empty = child(&parent, PartialBlockchain::default(), &signer, &signer);
+    let id = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap();
+    let log = TransactionLog::new(
+        id,
+        LogTopic::new(1_u32.into(), 2_u32.into()),
+        vec![Word::from([7_u32; 4])],
+    )
+    .unwrap();
+    let logs = TransactionLogs::new(vec![log.clone(), log]).unwrap();
+    let transaction = TransactionHeader::new(
+        id,
+        Word::from([1_u32; 4]),
+        Word::from([2_u32; 4]),
+        InputNotes::default(),
+        vec![],
+        logs.commitment(),
+        CodePatch::default().commitment(),
+    )
+    .unwrap();
+    let public =
+        PublicTransactionLogs::new(vec![(transaction.id(), logs)], once(&transaction)).unwrap();
+    let body = BlockBody::new(
+        vec![],
+        vec![],
+        vec![],
+        vec![OrderedTransactionHeaders::new_unchecked(vec![transaction])],
+        public,
+    )
+    .unwrap();
+    let t = empty.header();
+    let header = BlockHeader::new(
+        t.prev_block_commitment(),
+        t.block_num(),
+        t.chain_commitment(),
+        t.account_root(),
+        t.nullifier_root(),
+        t.code_tree_root(),
+        body.compute_block_note_tree().root(),
+        body.compute_transactions_commitment(),
+        t.validator_config().clone(),
+        t.fee_parameters().clone(),
+        t.protocol_config_commitment(),
+        None,
+        t.timestamp(),
+    );
+    let signature = signer.sign(header.commitment());
+    let block =
+        SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![signature]).unwrap());
+    let (result, tip) = sync_blocks(&genesis, vec![block.clone()]).await;
+    result.unwrap();
+    assert_eq!(&tip, block.header());
+    let (result, tip) = sync_blocks_with_log_mutation(&genesis, vec![block], true).await;
+    assert!(result.unwrap_err().to_string().contains("failed to verify block"));
+    assert_eq!(tip, parent);
 }
 
 // The upstream fixture serves only status and block subscriptions.

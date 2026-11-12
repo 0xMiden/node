@@ -8,7 +8,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{PublicTransactionLogs, TransactionId};
 use miden_standards::note::{AccountTargetNetworkNote, NetworkAccountTarget, NoteExecutionHint};
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
@@ -224,7 +224,13 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     use miden_protocol::block::{BlockBody, BlockSignatures, SignedBlock};
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let body = BlockBody::new_unchecked(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        PublicTransactionLogs::default(),
+    );
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     SignedBlock::new_unchecked(header, body, signatures)
 }
@@ -257,7 +263,13 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
         .expect("test account update should be valid");
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(vec![update], Vec::new(), Vec::new(), Vec::new());
+    let body = BlockBody::new_unchecked(
+        vec![update],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        PublicTransactionLogs::default(),
+    );
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     (SignedBlock::new_unchecked(header, body, signatures), account_id)
 }

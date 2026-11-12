@@ -56,7 +56,9 @@ use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    PublicTransactionLogs,
     TransactionHeader,
+    TransactionLogDetails,
     TxAccountUpdate,
 };
 use miden_protocol::{ACCOUNT_UPDATE_MAX_SIZE, Felt, ONE, Word};
@@ -888,6 +890,16 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         .collect();
     let input_notes = txs.iter().flat_map(|tx| tx.input_notes().iter().cloned()).collect();
     let output_notes = txs.iter().flat_map(|tx| tx.output_notes().iter().cloned()).collect();
+    let headers =
+        OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect());
+    let entries = txs
+        .iter()
+        .filter_map(|tx| match tx.log_details() {
+            TransactionLogDetails::Public(logs) => Some((tx.id(), logs.clone())),
+            TransactionLogDetails::Private(_) => None,
+        })
+        .collect();
+    let public_logs = PublicTransactionLogs::new(entries, headers.as_slice().iter()).unwrap();
     ProvenBatch::new_unchecked(
         BatchId::from_transactions(txs.iter()),
         block_ref.commitment(),
@@ -896,7 +908,8 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         InputNotes::new(input_notes).unwrap(),
         output_notes,
         BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
+        headers,
+        public_logs,
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()

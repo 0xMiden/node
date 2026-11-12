@@ -18,6 +18,7 @@ use miden_node_proto::clients::{
     ValidatorClient,
 };
 use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
+use miden_node_proto::generated::miden::node::v1::BlockSubscriptionRequest;
 use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
 use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
 use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
@@ -67,12 +68,14 @@ use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
+    BlockHeader,
     BlockSignatures,
     FeeParameters,
     ProvenBlock,
     SignedBlock,
     ValidatorConfig,
 };
+use miden_protocol::crypto::merkle::mmr::Mmr;
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
@@ -81,6 +84,8 @@ use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    PublicTransactionLogs,
+    TransactionLogs,
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::Deserializable;
@@ -94,9 +99,10 @@ use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task;
+use tokio::time::timeout;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::Request;
 use tonic::metadata::MetadataMap;
+use tonic::{Code, Request};
 use url::Url;
 
 use crate::server::RpcBackend;
@@ -2589,7 +2595,8 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
-    let body = BlockBody::new(vec![], vec![], vec![], Vec::new()).unwrap();
+    let body = BlockBody::new(vec![], vec![], vec![], Vec::new(), PublicTransactionLogs::default())
+        .unwrap();
 
     let header = BlockHeader::new(
         parent.commitment(),
@@ -2837,4 +2844,157 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
     assert_eq!(status.details(), &[5]);
+}
+
+fn block_with_many_empty_logs(template: &SignedBlock) -> (SignedBlock, TransactionLogs) {
+    use miden_protocol::block::{BlockBody, BlockHeader};
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PRIVATE_SENDER,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    };
+    use miden_protocol::transaction::{
+        InputNotes,
+        LogTopic,
+        OrderedTransactionHeaders,
+        PublicTransactionLogs,
+        TransactionHeader,
+        TransactionLog,
+        TransactionLogs,
+    };
+    let native = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap();
+    let emitter = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
+    let log =
+        TransactionLog::new(emitter, LogTopic::new(3_u32.into(), 4_u32.into()), vec![]).unwrap();
+    let logs = TransactionLogs::new(vec![log; 64]).unwrap();
+    let headers: Vec<_> = (1_u32..=2048)
+        .map(|seed| {
+            TransactionHeader::new(
+                native,
+                Word::from([seed; 4]),
+                Word::from([seed + 1; 4]),
+                InputNotes::default(),
+                vec![],
+                logs.commitment(),
+                CodePatch::default().commitment(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let entries = headers.iter().map(|header| (header.id(), logs.clone())).collect();
+    let public = PublicTransactionLogs::new(entries, headers.iter()).unwrap();
+    let groups = headers
+        .chunks(1024)
+        .map(|chunk| OrderedTransactionHeaders::new_unchecked(chunk.to_vec()))
+        .collect();
+    let body = BlockBody::new(vec![], vec![], vec![], groups, public).unwrap();
+    let t = template.header();
+    let header = BlockHeader::new(
+        t.prev_block_commitment(),
+        t.block_num(),
+        t.chain_commitment(),
+        t.account_root(),
+        t.nullifier_root(),
+        t.code_tree_root(),
+        body.compute_block_note_tree().root(),
+        body.compute_transactions_commitment(),
+        t.validator_config().clone(),
+        t.fee_parameters().clone(),
+        t.protocol_config_commitment(),
+        None,
+        t.timestamp(),
+    );
+    (
+        SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap()),
+        logs,
+    )
+}
+
+async fn append_empty_blocks(store: &mut TestStore, previous: &BlockHeader, mut mmr: Mmr) {
+    use miden_protocol::block::{BlockBody, BlockHeader};
+    use miden_protocol::transaction::PublicTransactionLogs;
+    let empty =
+        BlockBody::new(vec![], vec![], vec![], vec![], PublicTransactionLogs::default()).unwrap();
+    let mut previous = previous.clone();
+    for _ in 0..512 {
+        mmr.add(previous.commitment()).unwrap();
+        let header = BlockHeader::new(
+            previous.commitment(),
+            previous.block_num().child(),
+            mmr.peaks().hash_peaks(),
+            previous.account_root(),
+            previous.nullifier_root(),
+            previous.code_tree_root(),
+            empty.compute_block_note_tree().root(),
+            empty.compute_transactions_commitment(),
+            previous.validator_config().clone(),
+            previous.fee_parameters().clone(),
+            previous.protocol_config_commitment(),
+            None,
+            previous.timestamp() + 1,
+        );
+        let block = SignedBlock::new_unchecked(
+            header.clone(),
+            empty.clone(),
+            BlockSignatures::new(vec![]).unwrap(),
+        );
+        store.writer.apply_block(block, None).await.unwrap();
+        previous = header;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_subscription_preserves_public_logs_and_enforces_message_size() {
+    use miden_node_proto::prost::Message;
+    let (client, _, mut store, _server) = start_rpc().await;
+    let (parent, _) = store.state.view().get_block_header(None, false).await.unwrap();
+    let parent = parent.unwrap();
+    let config = store
+        .state
+        .view()
+        .get_protocol_config(parent.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let template = next_block_with_protocol_config(&store, &config).await;
+    let (expected, logs) = block_with_many_empty_logs(&template);
+    let start = expected.header().block_num().as_u32();
+    let mut large_client = client.clone().max_decoding_message_size(16 * 1024 * 1024);
+    let mut live = large_client
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    store.writer.apply_block(expected.clone(), None).await.unwrap();
+    let wire = timeout(Duration::from_secs(5), live.message()).await.unwrap().unwrap().unwrap();
+    let wire_size = wire.encoded_len();
+    assert!(
+        wire_size > 4 * 1024 * 1024,
+        "zero-content log metadata can exceed the default limit"
+    );
+    let actual: SignedBlock =
+        wire.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.body().public_logs().entries()[0].1, logs);
+
+    drop(live);
+    let mut mmr = Mmr::new();
+    mmr.add(parent.commitment()).unwrap();
+    append_empty_blocks(&mut store, expected.header(), mmr).await;
+    let mut at_limit = client.clone().max_decoding_message_size(wire_size);
+    let mut historical = at_limit
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    let wire = historical.message().await.unwrap().unwrap();
+    let actual: SignedBlock =
+        wire.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+    assert_eq!(actual, expected);
+    let mut too_small = client.max_decoding_message_size(wire_size - 1);
+    let mut stream = too_small
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(stream.message().await.unwrap_err().code(), Code::OutOfRange);
 }
