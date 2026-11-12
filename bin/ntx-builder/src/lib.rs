@@ -139,6 +139,11 @@ const DEFAULT_MAX_BLOCK_COUNT: usize = 4;
 /// Default maximum number of attempts to execute a failing note before dropping it.
 const DEFAULT_MAX_NOTE_ATTEMPTS: usize = 30;
 
+/// Default number of blocks a consumed note is kept before it is pruned.
+///
+/// About one day at a block interval of three seconds.
+pub const DEFAULT_NOTE_RETENTION: u32 = 28_800;
+
 /// Default script cache size.
 const DEFAULT_SCRIPT_CACHE_SIZE: NonZeroUsize =
     NonZeroUsize::new(1_000).expect("literal is non-zero");
@@ -230,6 +235,12 @@ pub struct NtxBuilderConfig {
     /// Maximum number of blocks to keep in the chain MMR. Older blocks are pruned.
     pub max_block_count: usize,
 
+    /// Number of blocks a consumed note is kept before it is pruned.
+    ///
+    /// The note status endpoint reports a consumed note only during this window. Pending and
+    /// discarded notes are kept regardless.
+    pub note_retention: u32,
+
     /// Maximum number of VM execution cycles allowed for a single network transaction.
     ///
     /// Network transactions that exceed this limit will fail with an execution error.
@@ -281,6 +292,7 @@ impl NtxBuilderConfig {
             max_notes_per_tx: DEFAULT_MAX_NOTES_PER_TX,
             max_note_attempts: DEFAULT_MAX_NOTE_ATTEMPTS,
             max_block_count: DEFAULT_MAX_BLOCK_COUNT,
+            note_retention: DEFAULT_NOTE_RETENTION,
             max_cycles: DEFAULT_MAX_TX_CYCLES,
             tx_expiration_delta: DEFAULT_TX_EXPIRATION_DELTA,
             request_backoff_initial: DEFAULT_REQUEST_BACKOFF_INITIAL,
@@ -367,6 +379,13 @@ impl NtxBuilderConfig {
     #[must_use]
     pub fn with_max_block_count(mut self, max: usize) -> Self {
         self.max_block_count = max;
+        self
+    }
+
+    /// Sets the number of blocks a consumed note is kept before it is pruned.
+    #[must_use]
+    pub fn with_note_retention(mut self, blocks: u32) -> Self {
+        self.note_retention = blocks;
         self
     }
 

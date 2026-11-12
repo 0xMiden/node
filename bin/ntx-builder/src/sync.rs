@@ -27,16 +27,24 @@ pub(crate) struct BlockFollower {
     stream: BlockStream,
     chain: ChainState,
     max_block_count: usize,
+    /// Number of blocks a consumed note is kept before it is pruned.
+    note_retention: u32,
     /// Whether the follower has reached the upstream tip at least once.
     is_synced: bool,
 }
 
 impl BlockFollower {
-    pub(crate) fn new(stream: BlockStream, chain: ChainState, max_block_count: usize) -> Self {
+    pub(crate) fn new(
+        stream: BlockStream,
+        chain: ChainState,
+        max_block_count: usize,
+        note_retention: u32,
+    ) -> Self {
         Self {
             stream,
             chain,
             max_block_count,
+            note_retention,
             is_synced: false,
         }
     }
@@ -70,7 +78,16 @@ impl BlockFollower {
         let next_chain =
             self.chain.next_chain_tip(&block, protocol_config, self.max_block_count)?;
         let effects = CommittedBlockEffects::from_signed_block(&block);
-        persist_and_publish_chain_state(db, &mut self.chain, effects.clone(), next_chain).await?;
+        // Nothing is old enough to prune while the chain is shorter than the retention window.
+        let prune_before = block_num.checked_sub(self.note_retention);
+        persist_and_publish_chain_state(
+            db,
+            &mut self.chain,
+            effects.clone(),
+            next_chain,
+            prune_before,
+        )
+        .await?;
         if !self.is_synced && block_num == committed_tip {
             self.is_synced = true;
             info!("ntx-builder is now in sync", block.number = committed_tip);
@@ -196,9 +213,10 @@ async fn persist_and_publish_chain_state(
     chain: &mut ChainState,
     effects: CommittedBlockEffects,
     next_chain: ChainState,
+    prune_before: Option<BlockNumber>,
 ) -> anyhow::Result<()> {
     let next_mmr = next_chain.current_mmr();
-    db.apply_committed_block(effects, next_mmr)
+    db.apply_committed_block(effects, next_mmr, prune_before)
         .await
         .context("failed to apply committed block to DB")?;
     *chain = next_chain;
@@ -240,7 +258,7 @@ mod tests {
             account_transactions: vec![],
         };
 
-        persist_and_publish_chain_state(&db, &mut chain, effects, next)
+        persist_and_publish_chain_state(&db, &mut chain, effects, next, None)
             .await
             .expect_err("a post-genesis account update without a transaction must fail");
 
@@ -271,16 +289,17 @@ mod tests {
         SignedBlock::new_unchecked(header, body, signatures)
     }
 
-    #[tokio::test]
-    async fn block_follower_publishes_commits_and_only_marks_valid_catch_up() {
+    /// Seeds the database with a genesis block and returns a follower at that block, together with
+    /// the key that signs its child blocks.
+    async fn follower_at_genesis(
+        db: &crate::db::NtxDbWriter,
+        note_retention: u32,
+    ) -> (super::BlockFollower, miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey) {
         use miden_node_store::GenesisState;
         use miden_node_utils::fee::{test_fee_params, test_protocol_config};
-        use miden_protocol::block::{BlockSignatures, SignedBlock, ValidatorConfig};
+        use miden_protocol::block::ValidatorConfig;
         use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 
-        use super::BlockFollower;
-
-        let (db, _dir) = test_setup().await;
         let signer = SigningKey::new();
         let config = test_protocol_config();
         let genesis = GenesisState::new(
@@ -297,7 +316,17 @@ mod tests {
             .await
             .unwrap();
         let chain = ChainState::new(header, PartialMmr::default(), config);
-        let mut follower = BlockFollower::new(Box::pin(futures::stream::empty()), chain, 4);
+        let follower =
+            super::BlockFollower::new(Box::pin(futures::stream::empty()), chain, 4, note_retention);
+        (follower, signer)
+    }
+
+    #[tokio::test]
+    async fn block_follower_publishes_commits_and_only_marks_valid_catch_up() {
+        use miden_protocol::block::{BlockSignatures, SignedBlock};
+
+        let (db, _dir) = test_setup().await;
+        let (mut follower, signer) = follower_at_genesis(&db, u32::MAX).await;
         let first = signed_child(follower.chain(), &signer);
         let unsigned = SignedBlock::new_unchecked(
             first.header().clone(),
@@ -324,5 +353,38 @@ mod tests {
         assert!(follower.is_synced());
         assert_eq!(follower.chain().chain_tip_header.block_num(), 3_u32.into());
         assert_eq!(db.select_chain_state().await.unwrap().unwrap().0, 3_u32.into());
+    }
+
+    /// A consumed note stays reportable for the retention window after the block that consumed it,
+    /// and is pruned by the first block past that window.
+    #[tokio::test]
+    async fn block_follower_prunes_notes_consumed_before_the_retention_window() {
+        use crate::test_utils::{mock_network_account_id, mock_single_target_note};
+
+        let (db, _dir) = test_setup().await;
+        let (mut follower, signer) = follower_at_genesis(&db, 2).await;
+
+        let account_id = mock_network_account_id();
+        let old = mock_single_target_note(account_id, 1);
+        let recent = mock_single_target_note(account_id, 2);
+        db.insert_network_notes(vec![old.clone(), recent.clone()]).await.unwrap();
+        db.mark_notes_consumed(vec![old.as_note().nullifier()], 0_u32.into())
+            .await
+            .unwrap();
+        db.mark_notes_consumed(vec![recent.as_note().nullifier()], 2_u32.into())
+            .await
+            .unwrap();
+
+        // Blocks 1 and 2 are within two blocks of the block that consumed the old note.
+        for _ in 0..2 {
+            let block = signed_child(follower.chain(), &signer);
+            follower.apply(&db, block, 3_u32.into(), None).await.unwrap();
+            assert!(db.get_note_status(old.as_note().id()).await.unwrap().is_some());
+        }
+
+        let block = signed_child(follower.chain(), &signer);
+        follower.apply(&db, block, 3_u32.into(), None).await.unwrap();
+        assert!(db.get_note_status(old.as_note().id()).await.unwrap().is_none());
+        assert!(db.get_note_status(recent.as_note().id()).await.unwrap().is_some());
     }
 }
