@@ -9,6 +9,8 @@ use miden_node_proto::generated::blockchain::SignedBlock as ProtoSignedBlock;
 use miden_node_proto::generated::miden::node::v1::{
     BlockSubscriptionRequest,
     BlockSubscriptionResponse,
+    GetTransactionLogsRequest,
+    GetTransactionLogsResponse,
     StatusResponse,
 };
 use miden_node_proto::generated::server::miden_node_v1_node_service;
@@ -495,3 +497,5 @@ impl miden_node_v1_node_service::ProofSubscription for Upstream {
         Err(tonic::Status::unimplemented("unused test endpoint"))
     }
 }
+
+unused_rpc!(GetTransactionLogs, GetTransactionLogsRequest, GetTransactionLogsResponse);

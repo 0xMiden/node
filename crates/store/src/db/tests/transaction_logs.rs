@@ -1,5 +1,6 @@
 use miden_node_db::DatabaseError as SqliteDatabaseError;
 use miden_node_persistence::{decode, encode};
+use miden_node_proto::domain::transaction_logs::GetTransactionLogsResponse;
 use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{BlockBody, SignedBlock};
 use miden_protocol::transaction::{
@@ -164,4 +165,146 @@ fn transaction_logs_insertion_failure_rolls_back_the_block() {
         "SELECT (SELECT COUNT(*) FROM block_headers), (SELECT COUNT(*) FROM transactions), (SELECT COUNT(*) FROM transaction_logs)", &[],
         |row| Ok((row.get::<u32>(0)?,row.get::<u32>(1)?,row.get::<u32>(2)?)))).unwrap();
     assert_eq!(counts, vec![(0, 0, 0)]);
+}
+
+fn lookup(
+    db: &TestDb,
+    header: &TransactionHeader,
+    tip: BlockNumber,
+) -> Result<Option<GetTransactionLogsResponse>, DatabaseError> {
+    use crate::db::queries::select_transaction_logs;
+    use crate::state::ScopedBlockNum;
+    let account = header.account_id();
+    let id = header.id();
+    db.read(move |tx| select_transaction_logs(tx, account, id, ScopedBlockNum::new_unchecked(tip)))
+}
+
+#[test]
+fn lookup_preserves_visibility_positions_and_native_ownership() {
+    use crate::db::queries::select_transaction_logs;
+    use crate::state::ScopedBlockNum;
+    let root = tempdir().unwrap();
+    let path = root.path().join("store.sqlite3");
+    bootstrap_database(&path).unwrap();
+    let block = log_block();
+    {
+        let db = TestDb::open(&path);
+        apply(&db, block.clone()).unwrap();
+    }
+    let db = TestDb::open(&path);
+    let headers: Vec<_> = block
+        .body()
+        .transactions()
+        .iter()
+        .flat_map(OrderedTransactionHeaders::as_slice)
+        .collect();
+    for (index, header) in headers.iter().enumerate() {
+        let result = lookup(&db, header, BlockNumber::ONE).unwrap().unwrap();
+        assert_eq!(result.transaction_id, header.id());
+        assert_eq!(result.native_account_id, header.account_id());
+        assert_eq!(result.block_num, BlockNumber::ONE);
+        assert_eq!(result.transaction_index, index as u32);
+        assert_eq!(result.logs_commitment, header.logs_commitment());
+        match index {
+            0 => assert!(result.logs.is_none()),
+            1 => {
+                let logs = result.logs.unwrap();
+                assert_eq!(
+                    logs,
+                    block.body().public_logs().entries()[0].1.iter().cloned().collect::<Vec<_>>()
+                );
+                assert_ne!(logs[0].emitter(), header.account_id());
+            },
+            2 => assert_eq!(result.logs, Some(vec![])),
+            _ => unreachable!(),
+        }
+        assert!(lookup(&db, header, BlockNumber::GENESIS).unwrap().is_none());
+    }
+    let wrong: AccountId = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2.try_into().unwrap();
+    let id = headers[1].id();
+    let native = headers[1].account_id();
+    let result = db
+        .read::<_, DatabaseError, _>(move |tx| {
+            select_transaction_logs(tx, wrong, id, ScopedBlockNum::new_unchecked(BlockNumber::ONE))
+        })
+        .unwrap();
+    assert!(result.is_none());
+    let missing = TransactionId::from_raw(num_to_word(1234));
+    let result = db
+        .read::<_, DatabaseError, _>(move |tx| {
+            select_transaction_logs(
+                tx,
+                native,
+                missing,
+                ScopedBlockNum::new_unchecked(BlockNumber::ONE),
+            )
+        })
+        .unwrap();
+    assert!(result.is_none());
+}
+
+#[test]
+fn lookup_rejects_corrupt_log_collections() {
+    let corruptions = [
+        "UPDATE transactions SET public_log_count = 2 WHERE transaction_index = 1",
+        "UPDATE transactions SET public_log_count = 65 WHERE transaction_index = 1",
+        "INSERT INTO transaction_logs SELECT native_account_id, block_num, transaction_index, 64, transaction_id, emitter, topic, content FROM transaction_logs WHERE log_index = 0",
+        "WITH RECURSIVE positions(i) AS (SELECT 3 UNION ALL SELECT i + 1 FROM positions WHERE i < 64) INSERT INTO transaction_logs SELECT native_account_id, block_num, transaction_index, i, transaction_id, emitter, topic, content FROM transaction_logs CROSS JOIN positions WHERE log_index = 0",
+        "UPDATE transactions SET public_log_count = NULL WHERE transaction_index = 1",
+        "UPDATE transactions SET public_log_count = 0 WHERE transaction_index = 0",
+        "UPDATE transaction_logs SET native_account_id = (SELECT account_id FROM transactions WHERE transaction_index = 0), transaction_index = 0, transaction_id = (SELECT transaction_id FROM transactions WHERE transaction_index = 0) WHERE log_index = 0",
+        "UPDATE transaction_logs SET log_index = 8 WHERE log_index = 2",
+        "UPDATE transaction_logs SET transaction_id = (SELECT transaction_id FROM transactions WHERE transaction_index = 2) WHERE log_index = 0",
+        "UPDATE transaction_logs SET emitter = zeroblob(15) WHERE log_index = 0",
+        "UPDATE transaction_logs SET emitter = zeroblob(1000000) WHERE log_index = 0",
+        "UPDATE transaction_logs SET topic = CAST(zeroblob(16) AS TEXT) WHERE log_index = 0",
+        "UPDATE transaction_logs SET topic = zeroblob(7) WHERE log_index = 0",
+        "UPDATE transaction_logs SET topic = zeroblob(1000000) WHERE log_index = 0",
+        "UPDATE transaction_logs SET topic = X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF' WHERE log_index = 0",
+        "UPDATE transaction_logs SET content = zeroblob(1000000) WHERE log_index = 0",
+        "UPDATE transaction_logs SET content = zeroblob(31) WHERE log_index = 0",
+        "UPDATE transaction_logs SET content = X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF' WHERE log_index = 0",
+        "UPDATE transaction_logs SET content = zeroblob(2048) WHERE log_index < 2",
+        "UPDATE transactions SET logs_commitment = zeroblob(31) WHERE transaction_index = 1",
+    ];
+    for sql in corruptions {
+        let db = TestDb::new();
+        let block = log_block();
+        apply(&db, block.clone()).unwrap();
+        db.write::<_, DatabaseError, _>(move |tx| {
+            tx.execute("PRAGMA ignore_check_constraints = ON", &[])?;
+            tx.execute(sql, &[])?;
+            Ok(())
+        })
+        .unwrap();
+        let header = if sql.contains("transaction_index = 0") {
+            &block.body().transactions()[0].as_slice()[0]
+        } else {
+            &block.body().transactions()[0].as_slice()[1]
+        };
+        assert!(lookup(&db, header, BlockNumber::ONE).is_err(), "{sql}");
+    }
+}
+
+#[test]
+fn lookup_accepts_the_protocol_log_and_content_limits() {
+    let db = TestDb::new();
+    let block = log_block();
+    apply(&db, block.clone()).unwrap();
+    db.write::<_, DatabaseError, _>(|tx| {
+        tx.execute("UPDATE transaction_logs SET content = zeroblob(32) WHERE log_index < 2", &[])?;
+        tx.execute("WITH RECURSIVE positions(i) AS (SELECT 3 UNION ALL SELECT i + 1 FROM positions WHERE i < 63) INSERT INTO transaction_logs SELECT native_account_id, block_num, transaction_index, i, transaction_id, emitter, topic, content FROM transaction_logs CROSS JOIN positions WHERE log_index = 0", &[])?;
+        tx.execute("UPDATE transaction_logs SET content = zeroblob(32) WHERE log_index = 2", &[])?;
+        tx.execute("UPDATE transactions SET public_log_count = 64 WHERE transaction_index = 1", &[])?;
+        Ok(())
+    }).unwrap();
+    let header = &block.body().transactions()[0].as_slice()[1];
+    let response = lookup(&db, header, BlockNumber::ONE).unwrap().unwrap();
+    let logs = response.logs.unwrap();
+    assert_eq!(logs.len(), TransactionLogs::MAX_COUNT);
+    assert_eq!(
+        logs.iter().map(|log| log.content().len()).sum::<usize>(),
+        TransactionLogs::MAX_NUM_WORDS
+    );
+    assert_eq!(response.logs_commitment, header.logs_commitment());
 }
