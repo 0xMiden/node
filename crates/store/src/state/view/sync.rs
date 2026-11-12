@@ -216,6 +216,7 @@ mod tests {
     use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use miden_protocol::testing::random_secret_key::random_secret_key;
+    use miden_protocol::transaction::PublicTransactionLogs;
 
     use super::*;
     use crate::GenesisState;
@@ -238,7 +239,14 @@ mod tests {
         let mut parent = parent.expect("chain should have a parent block");
 
         for _ in 0..count {
-            let body = BlockBody::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
+            let body = BlockBody::new(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                PublicTransactionLogs::default(),
+            )
+            .unwrap();
             let header = BlockHeader::new(
                 parent.commitment(),
                 parent.block_num().child(),

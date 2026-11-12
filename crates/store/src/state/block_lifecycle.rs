@@ -340,6 +340,7 @@ mod tests {
         OrderedTransactionHeaders,
         OutputNote,
         PrivateOutputNote,
+        PublicTransactionLogs,
         TransactionHeader,
     };
 
@@ -390,15 +391,20 @@ mod tests {
         let output_note = OutputNote::Private(
             PrivateOutputNote::new(persisted_header, NoteAttachments::default()).unwrap(),
         );
-        let body =
-            BlockBody::new_unchecked(Vec::new(), vec![vec![(0, output_note)]], Vec::new(), {
+        let body = BlockBody::new_unchecked(
+            Vec::new(),
+            vec![vec![(0, output_note)]],
+            Vec::new(),
+            {
                 let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
                 if group.as_slice().is_empty() {
                     Vec::new()
                 } else {
                     vec![group]
                 }
-            });
+            },
+            PublicTransactionLogs::default(),
+        );
 
         let lifecycle = BlockLifecycle::from_block_body(BlockNumber::from(7), &body);
 
@@ -442,7 +448,13 @@ mod tests {
         let update =
             BlockAccountUpdate::new(account_id, word(10), AccountUpdateDetails::Public(patch))
                 .expect("test account update should be valid");
-        let body = BlockBody::new_unchecked(vec![update], Vec::new(), Vec::new(), Vec::new());
+        let body = BlockBody::new_unchecked(
+            vec![update],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            PublicTransactionLogs::default(),
+        );
 
         let lifecycle = BlockLifecycle::from_block_body(BlockNumber::from(7), &body);
 

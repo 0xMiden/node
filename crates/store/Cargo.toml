@@ -33,6 +33,7 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { workspace = true }
 miden-objects          = { workspace = true }
 miden-standards        = { workspace = true }
+rusqlite               = { workspace = true }
 # `BlockProof::new_dummy` requires the `testing` feature.
 miden-protocol    = { features = ["std", "testing"], workspace = true }
 pretty_assertions = { workspace = true }
@@ -63,7 +64,6 @@ miden-node-utils      = { features = ["testing"], workspace = true }
 miden-protocol        = { default-features = true, features = ["testing"], workspace = true }
 miden-standards       = { features = ["testing"], workspace = true }
 rand                  = { workspace = true }
-rusqlite              = { workspace = true }
 tempfile              = { workspace = true }
 tracing-subscriber    = { workspace = true }
 

@@ -53,6 +53,7 @@ use miden_protocol::transaction::{
     OutputNote,
     PartialBlockchain,
     ProvenTransaction,
+    PublicTransactionLogs,
     TransactionEffects,
     TransactionId,
     TransactionInputs,
@@ -912,6 +913,7 @@ async fn unknown_transactions_rejected() {
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        PublicTransactionLogs::default(),
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();
@@ -994,6 +996,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
+        PublicTransactionLogs::default(),
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();

@@ -8,7 +8,9 @@ use miden_protocol::transaction::{
     OrderedTransactionHeaders,
     OutputNote,
     ProvenTransaction,
+    PublicTransactionLogs,
     TransactionHeader,
+    TransactionLogDetails,
 };
 use miden_standards::note::TxFeeNote;
 
@@ -77,6 +79,17 @@ impl TransactionBatchConstructor for ProvenBatch {
             output_notes.extend(tx.output_notes().iter().cloned());
         }
 
+        let headers = OrderedTransactionHeaders::new_unchecked(
+            txs.iter().map(|tx| TransactionHeader::from(*tx)).collect(),
+        );
+        let entries = txs
+            .iter()
+            .filter_map(|tx| match tx.log_details() {
+                TransactionLogDetails::Public(logs) => Some((tx.id(), logs.clone())),
+                TransactionLogDetails::Private(_) => None,
+            })
+            .collect();
+        let logs = PublicTransactionLogs::new(entries, headers.as_slice().iter()).unwrap();
         ProvenBatch::new_unchecked(
             BatchId::from_transactions(txs.iter().copied()),
             Word::empty(),
@@ -85,9 +98,8 @@ impl TransactionBatchConstructor for ProvenBatch {
             InputNotes::new_unchecked(input_notes),
             output_notes,
             BlockNumber::MAX,
-            OrderedTransactionHeaders::new_unchecked(
-                txs.into_iter().map(TransactionHeader::from).collect(),
-            ),
+            headers,
+            logs,
             miden_protocol::testing::dummy_execution_proof(),
         )
         .unwrap()

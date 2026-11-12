@@ -28,7 +28,7 @@ use miden_protocol::testing::assembler::assemble_test_package;
 use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::testing::random_secret_key::random_secret_key;
-use miden_protocol::transaction::InputNoteCommitment;
+use miden_protocol::transaction::{InputNoteCommitment, PublicTransactionLogs};
 use miden_standards::account::wallets::BasicWallet;
 use tonic::Code;
 
@@ -159,7 +159,14 @@ impl Fixture {
     async fn commit_block(&mut self, nullifiers: &[Nullifier]) {
         let block_num = self.genesis.block_num().child();
         let tree = NullifierTree::with_entries(nullifiers.iter().map(|n| (*n, block_num))).unwrap();
-        let body = BlockBody::new(vec![], vec![], nullifiers.to_vec(), Vec::new()).unwrap();
+        let body = BlockBody::new(
+            vec![],
+            vec![],
+            nullifiers.to_vec(),
+            Vec::new(),
+            PublicTransactionLogs::default(),
+        )
+        .unwrap();
         let mut mmr = Mmr::new();
         mmr.add(self.genesis.commitment()).unwrap();
         let header = BlockHeader::new(

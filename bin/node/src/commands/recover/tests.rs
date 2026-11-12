@@ -15,7 +15,7 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::protocol_config::{KernelConfig, ProtocolConfig};
-use miden_protocol::transaction::PartialBlockchain;
+use miden_protocol::transaction::{PartialBlockchain, PublicTransactionLogs};
 use tokio::sync::mpsc;
 use url::Url;
 
@@ -167,7 +167,8 @@ async fn coalescer_rejects_protocol_config_disagreement() {
         None,
         0,
     );
-    let body = BlockBody::new(vec![], vec![], vec![], Vec::new()).unwrap();
+    let body = BlockBody::new(vec![], vec![], vec![], Vec::new(), PublicTransactionLogs::default())
+        .unwrap();
     let header = BlockHeader::new(
         parent.commitment(),
         1.into(),
