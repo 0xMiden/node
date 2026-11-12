@@ -73,3 +73,12 @@ of a network note (pending, processed, or discarded), along with the latest exec
 attempt count, and block number of the last attempt. This is useful for debugging notes that fail
 to be consumed. The response also lists the `FEE_SPONSORSHIP` notes bound to the note, with their
 fee asset, reclaim height, the block that consumed them, and their latest execution error.
+
+A consumed note is reported for `--note-retention` blocks after the block that consumed it. The
+block application then deletes it and the endpoint returns `NOT_FOUND`. Consumed
+`FEE_SPONSORSHIP` notes follow the same rule, each by the block that consumed it, so a note that
+is still pending stops listing a sponsorship that was reclaimed more than a retention window ago.
+Pending and discarded notes, and unconsumed sponsorships, are never deleted.
+
+Each block deletes a bounded number of rows, so a backlog of expired notes is cleared over several
+blocks instead of in one long write transaction.
