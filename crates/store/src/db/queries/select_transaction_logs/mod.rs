@@ -21,8 +21,8 @@ fn corrupt() -> DatabaseError {
 
 /// Reads a transaction's logs up to the published tip, preserving private and empty collections.
 ///
-/// Lengths and counts are checked before loading blobs. All queries share the caller's read
-/// transaction, so validated lengths and hydrated rows belong to the same database snapshot.
+/// Counts and positions are checked before loading blobs. All queries share the caller's read
+/// transaction, so metadata and log payloads belong to the same database snapshot.
 pub(crate) fn select_transaction_logs(
     tx: &ReadTx<'_>,
     native_account_id: AccountId,
@@ -48,27 +48,17 @@ pub(crate) fn select_transaction_logs(
     }
     let limit = u32::try_from(TransactionLogs::MAX_COUNT + 1).expect("log limit fits u32");
     let params: &[&dyn ToSqlValue] = &[&native_account_id, &block_num, &transaction_index, &limit];
-    let metadata = tx.query(SELECT_METADATA, params, |row| {
-        Ok((row.get::<u32>(0)?, row.get::<i64>(1)?, row.get::<i64>(2)?))
-    })?;
+    let positions = tx.query(SELECT_METADATA, params, |row| row.get::<u32>(0))?;
     let expected = count.unwrap_or_default() as usize;
-    if expected > TransactionLogs::MAX_COUNT || metadata.len() != expected {
+    if expected > TransactionLogs::MAX_COUNT || positions.len() != expected {
         return Err(corrupt());
     }
-    let mut words = 0;
-    for (index, (position, valid, bytes)) in metadata.into_iter().enumerate() {
-        let bytes = usize::try_from(bytes).map_err(|_| corrupt())?;
-        if position as usize != index
-            || valid != 1
-            || bytes % 32 != 0
-            || bytes > TransactionLog::MAX_NUM_WORDS * 32
-        {
-            return Err(corrupt());
-        }
-        words += bytes / 32;
-        if words > TransactionLogs::MAX_NUM_WORDS {
-            return Err(corrupt());
-        }
+    if positions
+        .into_iter()
+        .enumerate()
+        .any(|(index, position)| position as usize != index)
+    {
+        return Err(corrupt());
     }
     let logs = if count.is_some() {
         let rows = tx.query(SELECT_LOGS, params, |row| {
@@ -80,8 +70,17 @@ pub(crate) fn select_transaction_logs(
             ))
         })?;
         let mut logs = Vec::with_capacity(expected);
+        let mut words = 0;
         for (id, emitter, topic, content) in rows {
             if id != transaction_id {
+                return Err(corrupt());
+            }
+            let topic: [u8; 16] = topic.try_into().map_err(|_| corrupt())?;
+            if content.len() % 32 != 0 || content.len() > TransactionLog::MAX_NUM_WORDS * 32 {
+                return Err(corrupt());
+            }
+            words += content.len() / 32;
+            if words > TransactionLogs::MAX_NUM_WORDS {
                 return Err(corrupt());
             }
             let suffix = Felt::read_from_bytes(&topic[..8])?;

@@ -258,6 +258,7 @@ fn lookup_rejects_corrupt_log_collections() {
         "UPDATE transaction_logs SET emitter = zeroblob(15) WHERE log_index = 0",
         "UPDATE transaction_logs SET emitter = zeroblob(1000000) WHERE log_index = 0",
         "UPDATE transaction_logs SET topic = CAST(zeroblob(16) AS TEXT) WHERE log_index = 0",
+        "UPDATE transaction_logs SET topic = zeroblob(7) WHERE log_index = 0",
         "UPDATE transaction_logs SET topic = zeroblob(1000000) WHERE log_index = 0",
         "UPDATE transaction_logs SET topic = X'FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF' WHERE log_index = 0",
         "UPDATE transaction_logs SET content = zeroblob(1000000) WHERE log_index = 0",
