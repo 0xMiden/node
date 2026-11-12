@@ -4865,6 +4865,7 @@ dependencies = [
  "rand 0.10.3",
  "reqwest",
  "rstest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",

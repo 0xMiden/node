@@ -67,6 +67,11 @@ service NodeService {
     // Returns the script for a note by its root.
     rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
 
+    // Returns a committed transaction's logs under its native account.
+    // Private transactions return only the stored commitment. Unknown transactions and native
+    // account mismatches return NOT_FOUND. Public logs preserve emission order and duplicates.
+    rpc GetTransactionLogs(GetTransactionLogsRequest) returns (GetTransactionLogsResponse) {}
+
     // TRANSACTION SUBMISSION ENDPOINTS
     // --------------------------------------------------------------------------------------------
 
@@ -984,4 +989,20 @@ message SubmitProvenTxBatchRequest {
 
 message SubmitProvenTxBatchResponse {
     fixed32 block_num = 1;
+}
+
+// Identifies a committed transaction under the account it executed against.
+message GetTransactionLogsRequest {
+    account.AccountId native_account_id = 1;
+    transaction.TransactionId transaction_id = 2;
+}
+
+// Committed position, persisted commitment, and public logs or private commitment.
+message GetTransactionLogsResponse {
+    transaction.TransactionId transaction_id = 1;
+    account.AccountId native_account_id = 2;
+    fixed32 block_num = 3;
+    uint32 transaction_index = 4;
+    primitives.Word logs_commitment = 5;
+    transaction.TransactionLogDetails log_details = 6;
 }

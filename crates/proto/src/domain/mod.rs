@@ -9,6 +9,7 @@ pub mod sequencer;
 pub mod sign_block_request;
 pub mod submission;
 pub mod sync;
+pub mod transaction_logs;
 pub mod validator;
 
 use miden_node_tracing::{RecordAttribute, Value};

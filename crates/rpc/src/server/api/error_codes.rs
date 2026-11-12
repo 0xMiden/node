@@ -35,6 +35,8 @@ error_codes!(GetAccountErrorCode {
     StorageSlotNotMap = 7,
 });
 
+error_codes!(GetTransactionLogsErrorCode { DeserializationFailed = 1, TransactionNotFound = 2 });
+
 error_codes!(GetNotesByIdErrorCode { DeserializationFailed = 1 });
 error_codes!(GetNoteScriptByRootErrorCode { DeserializationFailed = 1 });
 
