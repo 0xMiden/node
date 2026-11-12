@@ -3,11 +3,11 @@
 //! Readers access the store's tree state through immutable [`StateSnapshot`] snapshots published
 //! by the block writer after each committed block. The writer remembers each published generation
 //! in [`PublishedGenerations`]. The oldest still-pinned height feeds snapshot-aware history
-//! pruning, since SQLite reads have no point-in-time protection equivalent to the `RocksDB`
-//! snapshots backing the trees.
+//! pruning, since legacy view queries open separate SQLite transactions. Caller-composed reads instead
+//! retain a SQLite snapshot for the whole operation.
 //!
 //! Everything here operates on whole generations. Readers acquire a snapshot through
-//! [`StateView`](super::StateView), the request-scoped handle.
+//! [`StateView`](super::StateView) or [`crate::state::State::read`].
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Weak};
@@ -164,12 +164,11 @@ pub(in crate::state) struct GenerationsStatus {
 /// itself continues. A pinned snapshot also holds back SQLite history pruning (see
 /// [`PublishedGenerations::advance`]).
 ///
-/// The writer and lifecycle can *construct* snapshots via [`Self::new`], but the fields are only
-/// readable within the view module tree: every read outside it must go through
-/// [`StateView`](super::StateView).
-pub(in crate::state) struct StateSnapshot {
+/// The writer and lifecycle construct snapshots via [`Self::new`]. Legacy views access the trees
+/// within this module; caller-composed reads borrow the blockchain through [`crate::read::ReadView`].
+pub(crate) struct StateSnapshot {
     pub(super) nullifier_tree: NullifierTree<LargeSmt<TreeStorageReader>>,
-    pub(super) blockchain: Blockchain,
+    pub(crate) blockchain: Blockchain,
     pub(super) account_tree: AccountTreeWithHistory<TreeStorageReader>,
     pub(super) forest: AccountStateForest<AccountStateForestBackendReader>,
 }
@@ -191,7 +190,7 @@ impl StateSnapshot {
     }
 
     /// Returns the latest block number.
-    pub(in crate::state) fn latest_block_num(&self) -> BlockNumber {
+    pub(crate) fn latest_block_num(&self) -> BlockNumber {
         self.blockchain
             .chain_tip()
             .expect("chain should always have at least the genesis block")

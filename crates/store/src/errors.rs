@@ -111,6 +111,8 @@ pub enum DatabaseError {
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
     #[error("block {block_num} holds more rows than one page can return")]
     BlockExceedsPageLimit { block_num: BlockNumber },
+    #[error("a matching database and tree snapshot is unavailable")]
+    ReadSnapshotUnavailable,
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
