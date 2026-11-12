@@ -1,6 +1,7 @@
 //! Additional accounts for the genesis state.
 
 use std::cmp::Ordering;
+use std::fmt::{Formatter, Result as FmtResult};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
@@ -598,7 +599,7 @@ struct TokenSymbolVisitor;
 impl Visitor<'_> for TokenSymbolVisitor {
     type Value = TokenSymbolStr;
 
-    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn expecting(&self, formatter: &mut Formatter<'_>) -> FmtResult {
         formatter.write_str("1 to 6 uppercase ascii letters")
     }
 

@@ -78,6 +78,7 @@ use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
+    PublicTransactionLogs,
     TransactionHeader,
     TransactionId,
 };
@@ -104,8 +105,10 @@ use crate::db::queries::{
     NOTE_SYNC_RECORD_BYTES,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    PreparedTransactionLogs,
     StorageMapValue,
     StorageMapValuesPage,
+    insert_transactions as insert_transaction_records,
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
@@ -151,7 +154,20 @@ fn insert_transactions(
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize> {
     let transactions = transactions.clone();
-    db.write(move |tx| queries::insert_transactions(tx, block_num, &transactions))
+    db.write(move |tx| {
+        let first_index = tx.query(
+            "SELECT COUNT(*) FROM transactions WHERE block_num = ?1",
+            &[&block_num],
+            |row| row.get::<u32>(0),
+        )?[0];
+        let counts = transactions
+            .as_slice()
+            .iter()
+            .filter(|header| header.account_id().is_public())
+            .map(|header| (header.id(), 0))
+            .collect();
+        insert_transaction_records(tx, block_num, &transactions, first_index, &counts)
+    })
 }
 
 fn upsert_accounts(
@@ -4159,6 +4175,7 @@ fn multi_batch_erasure_fixture()
         ],
         vec![external.nullifier()],
         groups,
+        PublicTransactionLogs::default(),
     )
     .unwrap();
     let (template, signatures) = mock_block(BlockNumber::ONE);
@@ -4236,6 +4253,7 @@ fn multi_batch_block_roundtrip_preserves_grouping() {
             &[(note_record, None)],
             &PrecomputedPublicAccountStates::new(),
             &BTreeSet::from([account_id]),
+            &PreparedTransactionLogs::from_block(reloaded.body())?,
         )
     })
     .unwrap();
@@ -4750,3 +4768,5 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
+
+mod transaction_logs;

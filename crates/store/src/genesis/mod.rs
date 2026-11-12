@@ -17,6 +17,7 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::transaction::PublicTransactionLogs;
 
 pub mod config;
 
@@ -95,8 +96,13 @@ impl GenesisState {
         let empty_output_notes = Vec::new();
         let empty_block_note_tree = BlockNoteTree::empty();
 
-        let body =
-            BlockBody::new_unchecked(accounts, empty_output_notes, empty_nullifiers, Vec::new());
+        let body = BlockBody::new_unchecked(
+            accounts,
+            empty_output_notes,
+            empty_nullifiers,
+            Vec::new(),
+            PublicTransactionLogs::default(),
+        );
 
         let validator_config = self.validator_config;
 

@@ -120,6 +120,8 @@ impl CommittedBlockEffects {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
+
     use anyhow::Context;
     use miden_protocol::Word;
     use miden_protocol::block::code_tree::CodePatch;
@@ -134,7 +136,9 @@ mod tests {
         InputNotes,
         OrderedTransactionHeaders,
         PublicOutputNote,
+        PublicTransactionLogs,
         TransactionHeader,
+        TransactionLogs,
     };
 
     use super::*;
@@ -164,14 +168,24 @@ mod tests {
             miden_protocol::transaction::TransactionLogs::default().commitment(),
             CodePatch::default().commitment(),
         )?;
-        let body = BlockBody::new_unchecked(vec![update], Vec::new(), Vec::new(), {
-            let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
-            if group.as_slice().is_empty() {
-                Vec::new()
-            } else {
-                vec![group]
-            }
-        });
+        let public_logs = PublicTransactionLogs::new(
+            vec![(transaction.id(), TransactionLogs::default())],
+            once(&transaction),
+        )?;
+        let body = BlockBody::new_unchecked(
+            vec![update],
+            Vec::new(),
+            Vec::new(),
+            {
+                let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
+                if group.as_slice().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![group]
+                }
+            },
+            public_logs,
+        );
         let block = SignedBlock::new_unchecked(
             mock_block_header(BlockNumber::from(1)),
             body,
@@ -233,7 +247,15 @@ mod tests {
             OrderedTransactionHeaders::new_unchecked(transactions[..2].to_vec()),
             OrderedTransactionHeaders::new_unchecked(transactions[2..].to_vec()),
         ];
-        let body = BlockBody::new(vec![update], vec![], vec![], groups).unwrap();
+        let public_logs = PublicTransactionLogs::new(
+            transactions
+                .iter()
+                .map(|header| (header.id(), TransactionLogs::default()))
+                .collect(),
+            transactions.iter(),
+        )
+        .unwrap();
+        let body = BlockBody::new(vec![update], vec![], vec![], groups, public_logs).unwrap();
         let block = SignedBlock::new_unchecked(
             mock_block_header(BlockNumber::ONE),
             body,
@@ -262,7 +284,13 @@ mod tests {
             (0, OutputNote::Public(PublicOutputNote::new(feature.as_note().clone()).unwrap())),
             (1, OutputNote::Public(PublicOutputNote::new(sponsorship.clone()).unwrap())),
         ];
-        let body = BlockBody::new_unchecked(Vec::new(), vec![batch], Vec::new(), Vec::new());
+        let body = BlockBody::new_unchecked(
+            Vec::new(),
+            vec![batch],
+            Vec::new(),
+            Vec::new(),
+            PublicTransactionLogs::default(),
+        );
         let block = SignedBlock::new_unchecked(
             mock_block_header(BlockNumber::from(1)),
             body,

@@ -63,6 +63,9 @@ struct InvalidNetworkAccountType(i64);
 
 mod block_header_row;
 
+mod insert_transaction_logs;
+pub(crate) use insert_transaction_logs::{PreparedTransactionLogs, insert_transaction_logs};
+
 mod insert_block_header;
 pub(crate) use insert_block_header::insert_block_header;
 

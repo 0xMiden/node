@@ -21,7 +21,7 @@ use miden_protocol::errors::{
     StorageMapError,
 };
 use miden_protocol::note::Nullifier;
-use miden_protocol::transaction::OutputNote;
+use miden_protocol::transaction::{OutputNote, TransactionLogError};
 use thiserror::Error;
 use tokio::sync::oneshot::error::RecvError;
 
@@ -53,6 +53,8 @@ pub enum AccountStateForestUpdateError {
 
 #[derive(Debug, Error)]
 pub enum DatabaseError {
+    #[error("invalid public transaction logs")]
+    TransactionLogs(#[from] TransactionLogError),
     #[error("invalid persisted protobuf value")]
     Persistence(#[from] miden_node_persistence::PersistenceError),
     // ERRORS WITH AUTOMATIC CONVERSIONS FROM NESTED ERROR TYPES
