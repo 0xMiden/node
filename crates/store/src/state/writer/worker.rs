@@ -1036,6 +1036,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn eidos_block_replica_roundtrip_preserves_commitments_and_logs() {
+        use miden_node_persistence::decode;
         use miden_protocol::block::BlockNumber;
 
         let source_dir = tempfile::tempdir().unwrap();
@@ -1073,7 +1074,7 @@ mod tests {
         .unwrap();
         writer.apply_block(block.clone(), None).await.unwrap();
         let bytes = source.load_block(BlockNumber::ONE).await.unwrap().unwrap();
-        let transported: SignedBlock = miden_node_persistence::decode(&bytes).unwrap();
+        let transported: SignedBlock = decode(&bytes).unwrap();
         assert_eq!(transported, block);
         replica_writer.apply_block(transported, None).await.unwrap();
         assert_eq!(replica.load_block(BlockNumber::ONE).await.unwrap().unwrap(), bytes);
@@ -1085,10 +1086,8 @@ mod tests {
                 .await
                 .unwrap()
                 .start(CancellationToken::new());
-        let stored: SignedBlock = miden_node_persistence::decode(
-            &reopened.load_block(BlockNumber::ONE).await.unwrap().unwrap(),
-        )
-        .unwrap();
+        let stored: SignedBlock =
+            decode(&reopened.load_block(BlockNumber::ONE).await.unwrap().unwrap()).unwrap();
         assert_eq!(stored.header().commitment(), block.header().commitment());
         assert_eq!(stored.body().public_logs(), block.body().public_logs());
         let response = reopened

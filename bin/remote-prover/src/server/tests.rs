@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
+use miden_block_prover::BlockExecutor;
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
 use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient;
@@ -20,14 +21,15 @@ use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::{OrderedBatches, ProposedBatch};
-use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockKernel, ProposedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::{ExecutedTransaction, PartialBlockchain, TransactionVerifier};
-use miden_protocol::vm::ExecutionProof;
+use miden_protocol::vm::{ExecutionProof, StackInputs};
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::BatchVerifier;
+use miden_verifier::{ExecutionClaim, Verifier};
 use serial_test::serial;
 
 use crate::server::Server;
@@ -524,14 +526,11 @@ async fn block_proof_is_canonical_execution_proof() {
         input.block_header.timestamp(),
     )
     .unwrap();
-    let (stack_inputs, _) = miden_protocol::block::BlockKernel::prepare_inputs(&proposed);
-    let executed = miden_block_prover::BlockExecutor::new().execute(proposed).unwrap();
+    let (stack_inputs, _) = BlockKernel::prepare_inputs(&proposed);
+    let executed = BlockExecutor::new().execute(proposed).unwrap();
     let outputs = executed.block_outputs().clone().into_stack_outputs();
-    let claim = miden_verifier::ExecutionClaim::from_program_info(
-        miden_protocol::block::BlockKernel::program_info(),
-        stack_inputs,
-        outputs,
-    );
+    let claim =
+        ExecutionClaim::from_program_info(BlockKernel::program_info(), stack_inputs, outputs);
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let proof = match response.proof.unwrap() {
@@ -539,12 +538,12 @@ async fn block_proof_is_canonical_execution_proof() {
         other => panic!("expected block proof response, got {other:?}"),
     };
 
-    let verifier = miden_verifier::Verifier::new()
-        .with_min_conjectured_security_level_per_stark(MIN_PROOF_SECURITY_LEVEL);
+    let verifier =
+        Verifier::new().with_min_conjectured_security_level_per_stark(MIN_PROOF_SECURITY_LEVEL);
     assert!(verifier.verify(&claim, &proof).unwrap().is_complete());
-    let wrong_claim = miden_verifier::ExecutionClaim::from_program_info(
-        miden_protocol::block::BlockKernel::program_info(),
-        miden_protocol::vm::StackInputs::default(),
+    let wrong_claim = ExecutionClaim::from_program_info(
+        BlockKernel::program_info(),
+        StackInputs::default(),
         outputs,
     );
     assert!(verifier.verify(&wrong_claim, &proof).is_err());

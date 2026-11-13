@@ -1,3 +1,4 @@
+use anyhow::Result;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use rand_core_06::OsRng;
 
@@ -32,7 +33,7 @@ fn authentication_signature_commits_to_domain() {
 }
 
 #[tokio::test]
-async fn authentication_rejects_changed_channel_binding() -> anyhow::Result<()> {
+async fn authentication_rejects_changed_channel_binding() -> Result<()> {
     let signer = ValidatorSigner::new_local(SigningKey::new());
     let challenge = Challenge::decode(&[7; 32])?;
     let binding = [42; 32];

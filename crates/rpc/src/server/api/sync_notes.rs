@@ -141,6 +141,8 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::generated::miden::node::v1::NoteSyncMetadata;
+    use miden_node_proto::generated::note::NoteMetadata as ProtoNoteMetadata;
     use miden_node_proto::prost::Message;
     use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
     use miden_protocol::block::{BlockNoteIndex, BlockNumber, ValidatorConfig};
@@ -157,6 +159,7 @@ mod tests {
     };
     use miden_protocol::{
         BLOCK_NOTE_TREE_DEPTH,
+        Felt,
         Hasher,
         MAX_BATCHES_PER_BLOCK,
         MAX_OUTPUT_NOTES_PER_BATCH,
@@ -249,7 +252,7 @@ mod tests {
 
         for index in 0..attachment_commitments.len() {
             let mut tampered = attachment_commitments.clone();
-            tampered[index] = Hasher::hash_elements(&[miden_protocol::Felt::ONE]);
+            tampered[index] = Hasher::hash_elements(&[Felt::ONE]);
             let elements = tampered.iter().flat_map(Word::as_elements).copied().collect::<Vec<_>>();
             let changed = reconstruct_metadata(&proto_metadata, Hasher::hash_elements(&elements));
             assert_ne!(changed.to_commitment(), expected_metadata_commitment);
@@ -257,7 +260,7 @@ mod tests {
     }
 
     fn reconstruct_metadata(
-        metadata: &proto::miden::node::v1::NoteSyncMetadata,
+        metadata: &NoteSyncMetadata,
         attachments_commitment: Word,
     ) -> NoteMetadata {
         let mut attachment_schemes = metadata
@@ -266,7 +269,7 @@ mod tests {
             .map(|attachment| attachment.scheme)
             .collect::<Vec<_>>();
         attachment_schemes.resize(NoteAttachments::MAX_COUNT, 0);
-        proto::note::NoteMetadata {
+        ProtoNoteMetadata {
             version: metadata.version,
             sender: metadata.sender,
             note_type: metadata.note_type,
