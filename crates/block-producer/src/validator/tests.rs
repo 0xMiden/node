@@ -106,7 +106,7 @@ async fn validator_timeouts_are_not_retried() {
     .unwrap()
     .unwrap_err();
 
-    assert_eq!(error.code(), tonic::Code::Cancelled);
+    assert_eq!(error.code(), tonic::Code::DeadlineExceeded);
     assert_eq!(requests.load(Ordering::SeqCst), 1);
     server.abort();
 }

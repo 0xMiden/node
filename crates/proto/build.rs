@@ -40,6 +40,17 @@ fn main() -> miette::Result<()> {
         generate_bindings(file_descriptors, &dst_dir)?;
     }
 
+    let client_dst_dir = build_rs::input::out_dir().join("client_facades");
+    let _ = fs::remove_dir_all(&client_dst_dir);
+    fs::create_dir_all(&client_dst_dir)
+        .into_diagnostic()
+        .wrap_err("creating client facade folder")?;
+    generate_client_facades(&descriptor_sets, &client_dst_dir)?;
+    generate_mod_rs(&client_dst_dir, "client_facades")
+        .into_diagnostic()
+        .wrap_err("generating client facade mod.rs")?;
+    rustfmt_generated(&client_dst_dir)?;
+
     let server_dst_dir = dst_dir.join("server");
     fs::create_dir_all(&server_dst_dir)
         .into_diagnostic()
@@ -47,13 +58,68 @@ fn main() -> miette::Result<()> {
 
     generate_server_modules(&descriptor_sets, &server_dst_dir)?;
 
-    generate_mod_rs(&server_dst_dir)
+    generate_mod_rs(&server_dst_dir, "generated")
         .into_diagnostic()
         .wrap_err("generating server mod.rs")?;
 
-    generate_mod_rs(&dst_dir).into_diagnostic().wrap_err("generating mod.rs")?;
+    generate_mod_rs(&dst_dir, "generated")
+        .into_diagnostic()
+        .wrap_err("generating mod.rs")?;
 
     rustfmt_generated(&dst_dir)?;
+    Ok(())
+}
+
+/// Generates typed client declarations from every service descriptor.
+///
+/// The Rust macro in `clients` supplies deadline enforcement and forwarding. Descriptors supply
+/// service paths, method names, and types, so adding an RPC needs no separate method or service list.
+fn generate_client_facades(
+    descriptor_sets: &[FileDescriptorSet],
+    dst_dir: &Path,
+) -> miette::Result<()> {
+    let mut generated = HashSet::new();
+    for file in descriptor_sets.iter().flat_map(|fds| &fds.file) {
+        for service in &file.service {
+            if !generated.insert((file.package(), service.name())) {
+                continue;
+            }
+            let module = to_snake_case(service.name());
+            let client = format!("{}Client", service.name());
+            let package = file.package().replace('.', "::");
+            let mut contents = format!(
+                "grpc_client! {{ {client}, crate::generated::{package}::{module}_client::{client}<crate::clients::InterceptedChannel>, {{\n"
+            );
+            for method in &service.method {
+                miette::ensure!(!method.client_streaming(), "client streams are not supported");
+                let request = grpc_path_to_generated(method.input_type());
+                let response = grpc_path_to_generated(method.output_type());
+                let response = if method.server_streaming() {
+                    format!("tonic::Streaming<{response}>")
+                } else {
+                    response
+                };
+                let comment = if method.server_streaming() {
+                    "Establishes a subscription within the configured budget; the returned stream has no lifetime deadline."
+                } else {
+                    "Completes the unary response, including body and trailers, within the configured budget."
+                };
+                writeln!(
+                    contents,
+                    "/// {comment}\nfn {}({request}) -> {response};",
+                    to_snake_case(method.name())
+                )
+                .unwrap();
+            }
+            contents.push_str("}}\n");
+            fs::write(
+                dst_dir.join(format!("{}_{}.rs", file.package().replace('.', "_"), module)),
+                contents,
+            )
+            .into_diagnostic()
+            .wrap_err("writing client facade")?;
+        }
+    }
     Ok(())
 }
 
@@ -161,7 +227,7 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> miette::Re
 }
 
 /// Generate `mod.rs` which includes all files in the folder as submodules.
-fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
+fn generate_mod_rs(dst_dir: impl AsRef<Path>, include_root: &str) -> std::io::Result<()> {
     let mut modules = ModuleTree::default();
     let is_server_dir = dst_dir.as_ref().file_name().is_some_and(|name| name == "server");
 
@@ -181,7 +247,7 @@ fn generate_mod_rs(dst_dir: impl AsRef<Path>) -> std::io::Result<()> {
         }
     }
 
-    fs::write(dst_dir.as_ref().join("mod.rs"), modules.render())
+    fs::write(dst_dir.as_ref().join("mod.rs"), modules.render(include_root))
 }
 
 #[derive(Default)]
@@ -200,7 +266,7 @@ impl ModuleTree {
         }
     }
 
-    fn render(&self) -> String {
+    fn render(&self, include_root: &str) -> String {
         let mut output = String::new();
         for directory in &self.directories {
             let _ = writeln!(output, "pub mod {directory};");
@@ -210,10 +276,10 @@ impl ModuleTree {
             if let Some(path) = &module.path {
                 let _ = writeln!(
                     output,
-                    "include!(concat!(env!(\"OUT_DIR\"), \"/generated/{path}\"));"
+                    "include!(concat!(env!(\"OUT_DIR\"), \"/{include_root}/{path}\"));"
                 );
             }
-            output.push_str(&module.render());
+            output.push_str(&module.render(include_root));
             output.push_str("}\n");
         }
         output

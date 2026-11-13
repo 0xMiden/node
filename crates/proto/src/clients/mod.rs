@@ -1,7 +1,12 @@
 //! gRPC client builder utilities for Miden node.
 //!
 //! This module provides a unified type-safe [`Builder`] for creating various gRPC clients with
-//! explicit configuration decisions for TLS, timeout, and metadata.
+//! explicit configuration decisions for TLS and metadata, with configurable default timeouts.
+//!
+//! Unary deadlines cover channel readiness, response headers, the body, and trailers. Server
+//! streams use the deadline only for establishment. Expiry retires the shared channel for future
+//! calls without replaying requests or cancelling other calls. HTTP/2 keepalives detect transport
+//! failures but cannot establish that a server application is making progress.
 //!
 //! # Examples
 //!
@@ -14,7 +19,6 @@
 //! let url = Url::parse("https://example.com:8080")?;
 //! let client: RpcClient = Builder::new(url)
 //!     .with_tls()?                   // or `.without_tls()`
-//!     .without_timeout()             // or `.with_timeout(Duration::from_secs(10))`
 //!     .without_metadata_version()    // or `.with_metadata_version("1.0".into())`
 //!     .without_metadata_genesis()    // or `.with_metadata_genesis(genesis)`
 //!     .without_auth_header()         // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
@@ -26,7 +30,6 @@
 //! ```
 
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -44,6 +47,12 @@ use tonic::{Request, Status};
 use url::Url;
 
 use crate::generated;
+
+/// Default deadline for complete unary responses and subscription establishment.
+pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+mod channel;
+pub use channel::RecoveringChannel;
 
 mod foreign_account;
 mod usdcx_faucet;
@@ -133,6 +142,7 @@ impl tonic::service::Interceptor for Interceptor {
 #[cfg(test)]
 mod tests {
     mod message_size;
+    mod recovery;
     mod tracing_targets;
     use super::*;
 
@@ -167,7 +177,6 @@ mod tests {
     async fn connection_monitor_stops_when_cancelled() {
         let builder = Builder::new(Url::parse("http://127.0.0.1:1").unwrap())
             .without_tls()
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()
@@ -188,239 +197,135 @@ mod tests {
 // ================================================================================================
 
 type InterceptedChannel = InterceptedService<Channel, Interceptor>;
-type GeneratedRpcClient =
-    generated::miden::node::v1::node_service_client::NodeServiceClient<InterceptedChannel>;
-type GeneratedNoteTransportClient =
-    generated::miden::note_transport::v1::note_transport_service_client::NoteTransportServiceClient<
-        InterceptedChannel,
-    >;
-type GeneratedProxyStatusClient =
-    generated::miden::remote_prover::v1::proxy_status_service_client::ProxyStatusServiceClient<
-        InterceptedChannel,
-    >;
-type GeneratedProverClient =
-    generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient<
-        InterceptedChannel,
-    >;
-type GeneratedValidatorClient =
-    generated::miden::validator::v1::validator_service_client::ValidatorServiceClient<
-        InterceptedChannel,
-    >;
-type GeneratedNtxBuilderClient =
-    generated::miden::ntx_builder::v1::network_transaction_builder_service_client::NetworkTransactionBuilderServiceClient<InterceptedChannel>;
-type GeneratedSequencerClient =
-    generated::miden::sequencer::v1::sequencer_service_client::SequencerServiceClient<
-        InterceptedChannel,
-    >;
 type GeneratedProvenTransaction = generated::submission::ProvenTransactionSubmission;
 type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
-// gRPC CLIENTS
-// ================================================================================================
+/// Per-clone request configuration sharing one recoverable connection with other clones.
+#[derive(Clone)]
+struct ClientConfig {
+    channel: RecoveringChannel,
+    interceptor: Interceptor,
+    timeout: Duration,
+    max_decoding_message_size: usize,
+}
 
-#[derive(Debug, Clone)]
-pub struct RpcClient(GeneratedRpcClient);
-#[derive(Debug, Clone)]
-pub struct NoteTransportClient(GeneratedNoteTransportClient);
-#[derive(Debug, Clone)]
-pub struct RemoteProverProxyStatusClient(GeneratedProxyStatusClient);
-#[derive(Debug, Clone)]
-pub struct RemoteProverClient(GeneratedProverClient);
-#[derive(Debug, Clone)]
-pub struct ValidatorClient(GeneratedValidatorClient);
-#[derive(Debug, Clone)]
-pub struct NtxBuilderClient(GeneratedNtxBuilderClient);
-#[derive(Debug, Clone)]
-pub struct SequencerClient(GeneratedSequencerClient);
+impl ClientConfig {
+    fn new(channel: RecoveringChannel, interceptor: Interceptor) -> Self {
+        Self {
+            channel,
+            interceptor,
+            timeout: DEFAULT_REQUEST_TIMEOUT,
+            max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
+        }
+    }
 
-impl DerefMut for RpcClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
+    async fn call<T, F>(
+        &self,
+        call: impl FnOnce(InterceptedChannel, usize) -> F,
+    ) -> Result<T, Status>
+    where
+        F: Future<Output = Result<T, Status>>,
+    {
+        self.channel
+            .call(self.timeout, |channel| {
+                call(
+                    InterceptedService::new(channel, self.interceptor.clone()),
+                    self.max_decoding_message_size,
+                )
+            })
+            .await
     }
 }
 
-impl Deref for RpcClient {
-    type Target = GeneratedRpcClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field("channel", &self.channel)
+            .field("timeout", &self.timeout)
+            .field("max_decoding_message_size", &self.max_decoding_message_size)
+            .finish_non_exhaustive()
     }
 }
-
-impl DerefMut for RemoteProverProxyStatusClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for RemoteProverProxyStatusClient {
-    type Target = GeneratedProxyStatusClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for RemoteProverClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for RemoteProverClient {
-    type Target = GeneratedProverClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ValidatorClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for ValidatorClient {
-    type Target = GeneratedValidatorClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for NtxBuilderClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for NtxBuilderClient {
-    type Target = GeneratedNtxBuilderClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for SequencerClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Deref for SequencerClient {
-    type Target = GeneratedSequencerClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-// GRPC CLIENT BUILDER TRAIT
-// ================================================================================================
 
 /// Trait for building gRPC clients from a common [`Builder`] configuration.
 pub trait GrpcClient {
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self;
+    fn with_interceptor(channel: RecoveringChannel, interceptor: Interceptor) -> Self;
+
+    /// Sets this client's deadline for unary responses and subscription establishment.
+    ///
+    /// Other clones retain their budgets and transport settings; connection recovery remains
+    /// shared. Clone the client before overriding the timeout for an individual call.
+    /// An outer timeout only cancels the call and does not trigger connection recovery.
+    #[must_use]
+    fn with_timeout(self, timeout: Duration) -> Self;
 
     /// Sets the maximum encoded size of a received response or stream item.
     #[must_use]
     fn max_decoding_message_size(self, limit: usize) -> Self;
 }
 
-impl GrpcClient for RpcClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
+// The descriptor generator emits typed method declarations for this macro. Keeping the forwarding
+// logic in Rust makes the deadline boundary auditable without embedding method bodies in strings.
+macro_rules! grpc_client {
+    ($name:ident, $raw:ty, { $( $(#[$doc:meta])* fn $method:ident($request:ty) -> $response:ty; )* }) => {
+        #[derive(Clone, Debug)]
+        pub struct $name($crate::clients::ClientConfig);
 
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedRpcClient::new(InterceptedService::new(channel, interceptor)))
-    }
+        impl $crate::clients::GrpcClient for $name {
+            fn with_interceptor(channel: $crate::clients::RecoveringChannel, interceptor: $crate::clients::Interceptor) -> Self {
+                Self($crate::clients::ClientConfig::new(channel, interceptor))
+            }
+            fn with_timeout(mut self, timeout: std::time::Duration) -> Self {
+                assert!(!timeout.is_zero(), "gRPC deadline must be positive");
+                self.0.timeout = timeout;
+                self
+            }
+            fn max_decoding_message_size(mut self, limit: usize) -> Self {
+                self.0.max_decoding_message_size = limit;
+                self
+            }
+        }
+
+        impl $name {
+            $(
+                $(#[$doc])*
+                pub async fn $method(&mut self, request: impl tonic::IntoRequest<$request>)
+                    -> Result<tonic::Response<$response>, tonic::Status> {
+                    let request = request.into_request();
+                    self.0.call(|channel, limit| async move {
+                        <$raw>::new(channel).max_decoding_message_size(limit).$method(request).await
+                    }).await
+                }
+            )*
+        }
+    };
 }
 
-impl Deref for NoteTransportClient {
-    type Target = GeneratedNoteTransportClient;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// Client facades derived from the protobuf services.
+///
+/// Unary calls include body decoding and trailers in their deadline. Streaming calls bound
+/// establishment only. Raw tonic clients are kept behind these facades to preserve that policy.
+pub mod services {
+    include!(concat!(env!("OUT_DIR"), "/client_facades/mod.rs"));
 }
 
-impl DerefMut for NoteTransportClient {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl GrpcClient for NoteTransportClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedNoteTransportClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for RemoteProverProxyStatusClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedProxyStatusClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for RemoteProverClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedProverClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for ValidatorClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedValidatorClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for NtxBuilderClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedNtxBuilderClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
-
-impl GrpcClient for SequencerClient {
-    fn max_decoding_message_size(self, limit: usize) -> Self {
-        Self(self.0.max_decoding_message_size(limit))
-    }
-
-    fn with_interceptor(channel: Channel, interceptor: Interceptor) -> Self {
-        Self(GeneratedSequencerClient::new(InterceptedService::new(channel, interceptor)))
-    }
-}
+pub use services::miden_node_v1_node_service::NodeServiceClient as RpcClient;
+pub use services::miden_note_transport_v1_note_transport_service::NoteTransportServiceClient as NoteTransportClient;
+pub use services::miden_ntx_builder_v1_network_transaction_builder_service::NetworkTransactionBuilderServiceClient as NtxBuilderClient;
+pub use services::miden_remote_prover_v1_prover_service::ProverServiceClient as RemoteProverClient;
+pub use services::miden_remote_prover_v1_proxy_status_service::ProxyStatusServiceClient as RemoteProverProxyStatusClient;
+pub use services::miden_sequencer_v1_sequencer_service::SequencerServiceClient as SequencerClient;
+pub use services::miden_validator_v1_validator_service::ValidatorServiceClient as ValidatorClient;
 
 // TYPE-SAFE CLIENT BUILDER
 // ================================================================================================
 
 /// A type-safe builder that forces the caller to make an explicit decision for each
-/// configuration item (TLS, timeout, metadata version, metadata genesis) before connecting.
+/// configuration item (TLS, metadata version, metadata genesis) before connecting.
 ///
-/// Callers must explicitly choose TLS, timeout, and metadata options before connecting. Received
-/// messages default to a 4 MiB limit, configurable with [`Builder::max_decoding_message_size`].
+/// RPCs default to [`DEFAULT_REQUEST_TIMEOUT`], configurable with [`Builder::with_timeout`].
+/// Received messages default to a 4 MiB limit, configurable with
+/// [`Builder::max_decoding_message_size`].
 ///
 /// Usage example:
 ///
@@ -433,7 +338,7 @@ impl GrpcClient for SequencerClient {
 /// let url = Url::parse("https://rpc.example.com:8080")?;
 /// let client: RpcClient = Builder::new(url)
 ///     .with_tls()?                          // or `.without_tls()`
-///     .with_timeout(Duration::from_secs(5)) // or `.without_timeout()`
+///     .with_timeout(Duration::from_secs(5))
 ///     .with_metadata_version("1.0".into())  // or `.without_metadata_version()`
 ///     .without_metadata_genesis()           // or `.with_metadata_genesis(genesis)`
 ///     .without_auth_header()                // or `.with_auth_header_value(AsciiMetadataValue::from_static("value"))`
@@ -446,6 +351,7 @@ impl GrpcClient for SequencerClient {
 #[derive(Clone, Debug)]
 pub struct Builder<State> {
     endpoint: Endpoint,
+    request_timeout: Duration,
     endpoint_url: Url,
     max_decoding_message_size: usize,
     metadata_version: Option<String>,
@@ -458,8 +364,6 @@ pub struct Builder<State> {
 #[derive(Copy, Clone, Debug)]
 pub struct WantsTls;
 #[derive(Copy, Clone, Debug)]
-pub struct WantsTimeout;
-#[derive(Copy, Clone, Debug)]
 pub struct WantsVersion;
 #[derive(Copy, Clone, Debug)]
 pub struct WantsGenesis;
@@ -469,6 +373,18 @@ pub struct WantsOTel;
 pub struct WantsConnection;
 
 impl<State> Builder<State> {
+    /// Overrides the default deadline for complete unary RPCs and subscription establishment.
+    ///
+    /// Defaults to [`DEFAULT_REQUEST_TIMEOUT`]. Connection setup uses the same budget.
+    /// A client's `with_timeout` changes its RPC budget without changing other clones.
+    #[must_use]
+    pub fn with_timeout(mut self, duration: Duration) -> Self {
+        assert!(!duration.is_zero(), "gRPC deadline must be positive");
+        self.request_timeout = duration;
+        self.endpoint = self.endpoint.connect_timeout(duration);
+        self
+    }
+
     /// Sets the maximum encoded size of a received response or stream item.
     #[must_use]
     pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
@@ -480,6 +396,7 @@ impl<State> Builder<State> {
     fn next_state<Next>(self) -> Builder<Next> {
         Builder {
             endpoint: self.endpoint,
+            request_timeout: self.request_timeout,
             endpoint_url: self.endpoint_url,
             max_decoding_message_size: self.max_decoding_message_size,
             metadata_version: self.metadata_version,
@@ -509,10 +426,12 @@ impl Builder<WantsTls> {
             .http2_keep_alive_interval(HTTP2_KEEPALIVE_INTERVAL)
             .keep_alive_timeout(HTTP2_KEEPALIVE_TIMEOUT)
             .keep_alive_while_idle(true)
-            .tcp_keepalive(Some(TCP_KEEPALIVE));
+            .tcp_keepalive(Some(TCP_KEEPALIVE))
+            .connect_timeout(DEFAULT_REQUEST_TIMEOUT);
 
         Builder {
             endpoint,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT,
             endpoint_url: url,
             max_decoding_message_size: DEFAULT_MAX_DECODING_MESSAGE_SIZE,
             metadata_version: None,
@@ -524,28 +443,15 @@ impl Builder<WantsTls> {
     }
 
     /// Explicitly disable TLS.
-    pub fn without_tls(self) -> Builder<WantsTimeout> {
+    pub fn without_tls(self) -> Builder<WantsVersion> {
         self.next_state()
     }
 
     /// Explicitly enable TLS.
-    pub fn with_tls(mut self) -> Result<Builder<WantsTimeout>, TransportError> {
+    pub fn with_tls(mut self) -> Result<Builder<WantsVersion>, TransportError> {
         self.endpoint = self.endpoint.tls_config(ClientTlsConfig::new().with_native_roots())?;
 
         Ok(self.next_state())
-    }
-}
-
-impl Builder<WantsTimeout> {
-    /// Explicitly disable request timeout.
-    pub fn without_timeout(self) -> Builder<WantsVersion> {
-        self.next_state()
-    }
-
-    /// Explicitly configure a request timeout.
-    pub fn with_timeout(mut self, duration: Duration) -> Builder<WantsVersion> {
-        self.endpoint = self.endpoint.timeout(duration);
-        self.next_state()
     }
 }
 
@@ -611,11 +517,14 @@ impl Builder<WantsOTel> {
 
 impl Builder<WantsConnection> {
     /// Establish an eager connection and return a fully configured client.
-    pub async fn connect<T>(self) -> Result<T, TransportError>
+    pub async fn connect<T>(self) -> Result<T, Status>
     where
         T: GrpcClient,
     {
-        let channel = self.endpoint.connect().await?;
+        let channel = tokio::time::timeout(self.request_timeout, self.endpoint.connect())
+            .await
+            .map_err(|_| Status::deadline_exceeded("gRPC connection deadline expired"))?
+            .map_err(|error| Status::from_error(Box::new(error)))?;
         Ok(self.connect_with_channel::<T>(channel))
     }
 
@@ -721,14 +630,16 @@ impl Builder<WantsConnection> {
             metadata_genesis.as_deref(),
             self.metadata_auth_header_value,
         );
+        let channel = RecoveringChannel::new(self.endpoint, channel);
         T::with_interceptor(channel, interceptor)
+            .with_timeout(self.request_timeout)
             .max_decoding_message_size(self.max_decoding_message_size)
     }
 }
 
 impl ValidatorClient {
     /// Submits each transaction in the batch to the validator for re-execution, retrying transient
-    /// failures for each transaction independently.
+    /// failures for each transaction independently with a fresh request budget per attempt.
     ///
     /// # Errors
     ///

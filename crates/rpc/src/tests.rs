@@ -1026,7 +1026,6 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 fn source_rpc_client() -> RpcClient {
     Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1125,7 +1124,6 @@ async fn start_ntx_builder(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1137,7 +1135,6 @@ async fn start_ntx_builder(
 fn dummy_client<T: GrpcClient>() -> T {
     Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .with_otel_context_injection()
@@ -1218,7 +1215,6 @@ async fn start_source_rpc_with_genesis(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1421,7 +1417,6 @@ async fn start_validator(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1848,11 +1843,14 @@ async fn send_request(
 
 async fn connect_rpc(url: Url) -> RpcClient {
     let endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
-        .expect("Url type always results in valid endpoint")
-        .timeout(REQUEST_TIMEOUT);
+        .expect("Url type always results in valid endpoint");
     let channel = endpoint.connect().await.expect("Failed to build channel");
     let interceptor = Interceptor::default();
-    RpcClient::with_interceptor(channel, interceptor)
+    RpcClient::with_interceptor(
+        miden_node_proto::clients::RecoveringChannel::new(endpoint, channel),
+        interceptor,
+    )
+    .with_timeout(REQUEST_TIMEOUT)
 }
 
 /// Binds a socket on an available port, runs the RPC server on it, and returns a client to talk to
@@ -1894,7 +1892,6 @@ async fn start_rpc_with_allowlist(
             );
             let validator = Builder::new(validator_url)
                 .without_tls()
-                .without_timeout()
                 .without_metadata_version()
                 .without_metadata_genesis()
                 .with_otel_context_injection()

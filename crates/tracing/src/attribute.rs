@@ -147,6 +147,7 @@ const STRING_FIELD_NAMES: &[&str] = &[
     "prover",
     "prover.kind",
     "prover.timeout",
+    "reason",
     "request.kind",
     "rpc.endpoint",
     "rpc.listen",

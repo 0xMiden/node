@@ -73,8 +73,6 @@ impl Server {
         let rpc = Builder::new(config.rpc_url.clone())
             .max_decoding_message_size(config.grpc.message_size.max_decoding_message_size.get())
             .with_tls()?
-            // The lookup timeout covers connection setup and the complete response.
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()
