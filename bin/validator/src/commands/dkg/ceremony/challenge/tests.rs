@@ -30,3 +30,25 @@ fn authentication_signature_commits_to_domain() {
 
     assert!(response.verify_against(&challenge, &channel_binding).is_err());
 }
+
+#[tokio::test]
+async fn authentication_rejects_changed_channel_binding() -> anyhow::Result<()> {
+    let signer = ValidatorSigner::new_local(SigningKey::new());
+    let challenge = Challenge::decode(&[7; 32])?;
+    let binding = [42; 32];
+    let response = challenge.sign(&signer, &binding).await?;
+    assert_eq!(response.verify_against(&challenge, &binding)?, signer.public_key());
+    let response = challenge.sign(&signer, &binding).await?;
+    assert!(response.verify_against(&challenge, &[43; 32]).is_err());
+    Ok(())
+}
+
+/// Peers hash the V1 domain, 32 binding bytes of 42, then 32 challenge bytes of 7.
+#[test]
+fn authentication_challenge_eidos_vector() {
+    let challenge = Challenge::decode(&[7; 32]).unwrap();
+    assert_eq!(
+        hex::encode(challenge.commitment(&[42; 32]).as_bytes()),
+        "5a7b52d9b6f995721cb76b67b675af11e449cfd8e6bde85fedcd993eaee5ea31"
+    );
+}
