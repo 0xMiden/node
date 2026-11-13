@@ -1,18 +1,18 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
+use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInputs};
 use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::ProvenTransaction;
 
 /// Build a fixture with matching account state and unspent nullifiers.
-pub struct MockAuthenticatedTxBuilder {
+pub struct MockTransactionCandidateBuilder {
     transaction: ProvenTransaction,
     inputs: TransactionInputs,
 }
 
-impl MockAuthenticatedTxBuilder {
+impl MockTransactionCandidateBuilder {
     pub fn new(transaction: ProvenTransaction) -> Self {
         let account_commitment = match transaction.account_update().initial_state_commitment() {
             zero if zero == Word::empty() => None,
@@ -40,7 +40,7 @@ impl MockAuthenticatedTxBuilder {
         self
     }
 
-    pub fn build(self) -> AuthenticatedTransaction {
-        AuthenticatedTransaction::new_unchecked(Arc::new(self.transaction), self.inputs).unwrap()
+    pub fn build(self) -> TransactionCandidate {
+        TransactionCandidate::new_unchecked(Arc::new(self.transaction), self.inputs).unwrap()
     }
 }

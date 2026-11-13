@@ -53,13 +53,18 @@ mod tests {
 
     use super::ensure_transaction_has_fee;
     use crate::errors::MempoolSubmissionError;
-    use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
+    use crate::test_utils::{
+        MockProvenTxBuilder,
+        MockTransactionCandidateBuilder,
+        mock_account_id,
+    };
 
     #[test]
     fn authenticated_transaction_proto_roundtrip_preserves_the_transaction() {
-        let transaction =
-            MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(1).build())
-                .build();
+        let transaction = MockTransactionCandidateBuilder::new(
+            MockProvenTxBuilder::with_account_index(1).build(),
+        )
+        .build();
         let encoded =
             miden_node_proto::generated::miden::sequencer::v1::AuthenticatedTransaction::from(
                 transaction.clone(),

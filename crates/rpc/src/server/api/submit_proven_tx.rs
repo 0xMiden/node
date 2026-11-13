@@ -1,7 +1,7 @@
 use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -201,9 +201,8 @@ impl RpcService {
     ) -> tonic::Result<proto::blockchain::BlockNumber> {
         let tx_inputs = get_tx_inputs(&self.state, &rebuilt_tx).await?;
 
-        let authenticated_tx =
-            AuthenticatedTransaction::new_unchecked(rebuilt_tx.into(), tx_inputs)
-                .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
+        let authenticated_tx = TransactionCandidate::new_unchecked(rebuilt_tx.into(), tx_inputs)
+            .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
 
         // Submit to every validator.
         submit_tx_to_validators(validators, &request).await?;
@@ -241,7 +240,7 @@ async fn check_nullifiers_and_expiration(
         .into());
     }
 
-    AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+    TransactionCandidate::new_unchecked(tx.into(), inputs)
         .map_err(|err| MempoolSubmissionError::AuthenticationFailed(err.into()))?;
     Ok(())
 }
