@@ -5,8 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
-#[cfg(test)]
-use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Instrument, Span, error, instrument, miden_span_record};
@@ -552,6 +550,7 @@ mod tests {
     use std::future::pending;
     use std::time::Duration;
 
+    use miden_node_proto::domain::sequencer::TransactionCandidate;
     use miden_node_utils::genesis::GenesisBlock;
     use miden_protocol::ONE;
     use miden_protocol::block::{BlockSignatures, SignedBlock};
