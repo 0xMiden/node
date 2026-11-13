@@ -98,14 +98,14 @@ pub enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 pub enum AuthSchemeArg {
     EcdsaK256Keccak,
-    Falcon512Poseidon2,
+    Falcon512Eidos,
 }
 
 impl From<AuthSchemeArg> for AuthScheme {
     fn from(scheme: AuthSchemeArg) -> Self {
         match scheme {
             AuthSchemeArg::EcdsaK256Keccak => AuthScheme::EcdsaK256Keccak,
-            AuthSchemeArg::Falcon512Poseidon2 => AuthScheme::Falcon512Poseidon2,
+            AuthSchemeArg::Falcon512Eidos => AuthScheme::Falcon512Eidos,
         }
     }
 }

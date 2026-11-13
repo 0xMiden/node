@@ -31,7 +31,7 @@ The four account commands work in the current directory: each reads its account 
 re-run needs the old output moved away first. Run the commands in launch order:
 
 ```sh
-miden-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-poseidon2]
+miden-genesis new-distributor [--auth-scheme ecdsa-k256-keccak|falcon512-eidos]
 miden-genesis faucet --owner <distributor-id> --seed <hex> --token-supply <base-units> --verification-base-fee <fee> [...]
 miden-genesis prefund [--faucet usdcx-faucet.mac] [--distributor distributor.mac]
 miden-genesis record-nonces --nonce <hex> [--nonce <hex> ...] [--faucet usdcx-faucet.mac]
@@ -41,13 +41,13 @@ miden-genesis build --genesis-block-directory <dir> --accounts-directory <dir> \
 ```
 
 1. `new-distributor` generates a fresh public basic wallet with a new signing key (ECDSA secp256k1/keccak by default,
-   Falcon512Poseidon2 on request) and writes it, key included, as `distributor.mac`: undeployed (nonce zero, empty
-   vault), exactly what a wallet created with `miden-client new-wallet --account-type public` and exported with its keys
-   looks like; that file is accepted in step 3 too. Prints the distributor id: hex, bech32 for mainnet/testnet/devnet,
-   and the bytes32 form that is the deposit's `remoteRecipient` on the xReserve side (the id right-aligned in 32 bytes;
-   the layout is `DEV-10`, open with Circle). The id is the `--owner` of step 2. Every command prints its ids in the
-   same four forms. The command also writes `distributor.secret`, which contains the signing key without the account
-   state. Both files contain the same key and are readable only by their owner. The `.secret` file contains the binary
+   Falcon512Eidos on request) and writes it, key included, as `distributor.mac`: undeployed (nonce zero, empty vault),
+   exactly what a wallet created with `miden-client new-wallet --account-type public` and exported with its keys looks
+   like; that file is accepted in step 3 too. Prints the distributor id: hex, bech32 for mainnet/testnet/devnet, and the
+   bytes32 form that is the deposit's `remoteRecipient` on the xReserve side (the id right-aligned in 32 bytes; the
+   layout is `DEV-10`, open with Circle). The id is the `--owner` of step 2. Every command prints its ids in the same
+   four forms. The command also writes `distributor.secret`, which contains the signing key without the account state.
+   Both files contain the same key and are readable only by their owner. The `.secret` file contains the binary
    serialization of `AuthSecretKey`, including its signature scheme. Keep these files private. If generation fails after
    creating one output, preserve the files and retry in an empty directory.
 2. `faucet` builds the genesis faucet from its flags (see [Faucet flags](#faucet-flags)) and writes it as

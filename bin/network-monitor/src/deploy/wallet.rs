@@ -16,7 +16,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::wallets::BasicWallet;
 use miden_standards::code_builder::CodeBuilder;
@@ -57,7 +57,7 @@ pub fn wallet_counter_component_code() -> Result<AccountComponentCode> {
         .context("failed to compile wallet counter component code")
 }
 
-/// Create a wallet account with `RpoFalcon512` authentication and a self-counter component.
+/// Create a wallet account with `Falcon512Eidos` authentication and a self-counter component.
 ///
 /// Returns the created account and the secret key for authentication.
 #[instrument(name = "create-wallet-account")]
@@ -66,7 +66,7 @@ pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let secret_key = SecretKey::with_rng(&mut rng);
     let auth_component: AccountComponent = AuthSingleSig::new(Approver::new(
         secret_key.public_key().into(),
-        AuthScheme::Falcon512Poseidon2,
+        AuthScheme::Falcon512Eidos,
     ))
     .into();
     let init_seed: [u8; 32] = rng.random();

@@ -1,10 +1,9 @@
 use std::fmt;
 
 use anyhow::{Context, ensure};
-use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{Hasher, Word};
 use rand_core_06::CryptoRngCore;
 
 use super::super::wire::WireCodec;
@@ -58,7 +57,7 @@ impl SessionId {
             transcript.extend_from_slice(&validator_key.to_bytes());
             transcript.extend_from_slice(&nonce.encode());
         }
-        Self(Rpo256::hash(&transcript))
+        Self(Hasher::hash(&transcript))
     }
 }
 

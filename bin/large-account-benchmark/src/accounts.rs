@@ -32,7 +32,7 @@ use miden_protocol::account::{
     StorageSlotName,
 };
 use miden_protocol::asset::{AssetAmount, TokenSymbol};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 use miden_protocol::note::NoteScript;
 use miden_protocol::{Felt, Word};
 use miden_standards::account::auth::{Approver, AuthNetworkAccount, AuthSingleSig};
@@ -126,7 +126,7 @@ pub fn create_fee_faucet_account() -> Result<(Account, SecretKey)> {
     let secret_key = SecretKey::with_rng(&mut rng);
     let auth = AuthSingleSig::new(Approver::new(
         secret_key.public_key().into(),
-        AuthScheme::Falcon512Poseidon2,
+        AuthScheme::Falcon512Eidos,
     ));
     let init_seed: [u8; 32] = rng.random();
 
@@ -166,7 +166,7 @@ pub fn create_wallet_account() -> Result<(Account, SecretKey)> {
     let secret_key = SecretKey::with_rng(&mut rng);
     let auth_component: AccountComponent = AuthSingleSig::new(Approver::new(
         secret_key.public_key().into(),
-        AuthScheme::Falcon512Poseidon2,
+        AuthScheme::Falcon512Eidos,
     ))
     .into();
     let init_seed: [u8; 32] = rng.random();

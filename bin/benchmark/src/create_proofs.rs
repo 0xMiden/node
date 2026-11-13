@@ -24,9 +24,11 @@ use miden_protocol::account::{
     StorageMapKey,
 };
 use miden_protocol::asset::{Asset, AssetId, AssetWitness, FungibleAsset, TokenSymbol};
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::code::ProcedureRoot;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
@@ -40,7 +42,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
-use miden_protocol::{Felt, Word};
+use miden_protocol::{Felt, MastForest, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
 use miden_standards::account::policies::{BurnPolicy, MintPolicy, TokenPolicyManager};
@@ -205,7 +207,7 @@ pub(crate) async fn run(
     let (mut faucet, faucet_secret_key) = create_faucet();
 
     let coin_seed: [u64; 4] = rand::rng().random();
-    let mut seed_rng = RandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
+    let mut seed_rng = EidosRandomCoin::new(coin_seed.map(Felt::new_unchecked).into());
     let wallet_secret_key = SecretKey::with_rng(&mut rand::rng());
     let wallet_public_key = wallet_secret_key.public_key();
 
@@ -223,8 +225,8 @@ pub(crate) async fn run(
     }
 
     let authenticator = BasicAuthenticator::new(&[
-        AuthSecretKey::Falcon512Poseidon2(faucet_secret_key),
-        AuthSecretKey::Falcon512Poseidon2(wallet_secret_key),
+        AuthSecretKey::Falcon512Eidos(faucet_secret_key),
+        AuthSecretKey::Falcon512Eidos(wallet_secret_key),
     ]);
 
     let prover = Arc::new(match remote_prover_url {
@@ -418,7 +420,7 @@ fn create_faucet() -> (Account, SecretKey) {
         )
         .with_component(AuthSingleSig::new(Approver::new(
             key_pair.public_key().into(),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build()
         .unwrap();
@@ -428,7 +430,7 @@ fn create_faucet() -> (Account, SecretKey) {
 /// Creates a new wallet account with the given public key, using `index` to vary the init seed so
 /// each wallet ends up with a distinct account ID.
 fn create_wallet(
-    public_key: &miden_protocol::crypto::dsa::falcon512_poseidon2::PublicKey,
+    public_key: &miden_protocol::crypto::dsa::falcon512_eidos::PublicKey,
     index: u64,
 ) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
@@ -436,7 +438,7 @@ fn create_wallet(
         .account_type(AccountType::Private)
         .with_component(AuthSingleSig::new(Approver::new(
             public_key.clone().into(),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .with_component(BasicWallet)
         .build()
@@ -566,6 +568,22 @@ impl DataStore for BenchmarkDataStore {
                 })
                 .collect::<Result<Vec<_>, _>>()
         }
+    }
+
+    fn get_code_witnesses(
+        &self,
+        _code_tree_root: CodeTreeRoot,
+        _procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move { Err(DataStoreError::other("code witnesses are unavailable in this data store")) }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
     }
 
     fn get_note_script(

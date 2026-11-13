@@ -45,7 +45,7 @@ fn genesis_wallet(account_type: AccountType, scheme: AuthScheme) -> (Account, Au
 
 #[rstest::rstest]
 #[case(AuthScheme::EcdsaK256Keccak)]
-#[case(AuthScheme::Falcon512Poseidon2)]
+#[case(AuthScheme::Falcon512Eidos)]
 #[tokio::test]
 async fn loads_public_state_from_the_node_with_only_an_id_and_key(
     #[case] scheme: AuthScheme,
@@ -71,7 +71,7 @@ async fn loads_public_state_from_the_node_with_only_an_id_and_key(
 
 #[rstest::rstest]
 #[case(AuthScheme::EcdsaK256Keccak)]
-#[case(AuthScheme::Falcon512Poseidon2)]
+#[case(AuthScheme::Falcon512Eidos)]
 #[tokio::test]
 async fn rejects_an_unrelated_signing_key(#[case] scheme: AuthScheme) {
     let (account, _) = genesis_wallet(AccountType::Public, scheme);
@@ -95,7 +95,7 @@ async fn rejects_an_unrelated_signing_key(#[case] scheme: AuthScheme) {
 
 #[tokio::test]
 async fn rejects_a_key_with_the_wrong_signature_scheme() {
-    let (mut account, key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let (mut account, key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Eidos);
     account
         .storage_mut()
         .set_item(
@@ -121,8 +121,7 @@ async fn rejects_a_key_with_the_wrong_signature_scheme() {
 
 #[tokio::test]
 async fn rejects_a_private_account() {
-    let (account, secret_key) =
-        genesis_wallet(AccountType::Private, AuthScheme::Falcon512Poseidon2);
+    let (account, secret_key) = genesis_wallet(AccountType::Private, AuthScheme::Falcon512Eidos);
     let server = TestServer::start(TestChain::new(12)).await;
     let err = FundingWallet::load_at(
         &mut server.node.rpc_client(),
@@ -421,7 +420,7 @@ async fn restored_wallet(
 
 #[tokio::test]
 async fn a_restored_wallet_resumes_discovery_at_its_cursor() -> Result<()> {
-    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Eidos);
     let before_cursor = deposit_for(&account, 1);
     let after_cursor = deposit_for(&account, 2);
     let mut chain = TestChain::new(15);
@@ -442,7 +441,7 @@ async fn a_restored_wallet_resumes_discovery_at_its_cursor() -> Result<()> {
 
 #[tokio::test]
 async fn an_uncompleted_scan_is_repeated_by_the_next_sync() -> Result<()> {
-    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Eidos);
     let deposit = deposit_for(&account, 1);
     let mut chain = TestChain::new(15);
     chain.notes = vec![(12, deposit.clone().into_note())];
@@ -462,7 +461,7 @@ async fn an_uncompleted_scan_is_repeated_by_the_next_sync() -> Result<()> {
 
 #[tokio::test]
 async fn an_update_that_does_not_continue_the_cursor_is_rejected() -> Result<()> {
-    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Poseidon2);
+    let (account, secret_key) = genesis_wallet(AccountType::Public, AuthScheme::Falcon512Eidos);
     let server = TestServer::start(TestChain::new(15)).await;
     let mut wallet = restored_wallet(&server, &account, secret_key, 15, 11).await?;
 

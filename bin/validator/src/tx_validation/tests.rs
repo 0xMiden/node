@@ -10,9 +10,7 @@ use super::*;
 async fn captured_execution() -> ExecutedTransaction {
     let mut builder = MockChainBuilder::new();
     let account = builder
-        .add_existing_wallet(Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        })
+        .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
         .unwrap();
     let asset: Asset =
         FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
@@ -121,9 +119,7 @@ async fn replay_store_serves_foreign_state_scripts_and_witnesses() {
     use miden_protocol::transaction::AccountInputs;
     use miden_tx::DataStore;
     let mut builder = MockChainBuilder::new();
-    let auth = Auth::BasicAuth {
-        auth_scheme: AuthScheme::Falcon512Poseidon2,
-    };
+    let auth = Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos };
     let native = builder.add_existing_wallet(auth.clone()).unwrap();
     let asset: Asset =
         FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)

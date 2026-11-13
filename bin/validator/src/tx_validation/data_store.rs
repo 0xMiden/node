@@ -1,14 +1,17 @@
 //! Provides transaction inputs to validator transaction execution.
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
-use miden_protocol::Word;
 use miden_protocol::account::{AccountId, PartialAccount, StorageMapKey, StorageMapWitness};
 use miden_protocol::asset::{AssetId, AssetWitness};
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::code::ProcedureRoot;
 use miden_protocol::note::{NoteScript, NoteScriptRoot};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{AccountInputs, PartialBlockchain, TransactionInputs};
 use miden_protocol::vm::FutureMaybeSend;
+use miden_protocol::{MastForest, Word};
 use miden_tx::{
     DataStore,
     DataStoreError,
@@ -133,6 +136,35 @@ impl DataStore for TransactionInputsDataStore {
                 DataStoreError::other_with_source("missing captured storage witness", err)
             })
         }
+    }
+
+    fn get_code_witnesses(
+        &self,
+        code_tree_root: CodeTreeRoot,
+        procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move {
+            let tree = self.tx_inputs.code_tree();
+            if tree.root() != code_tree_root {
+                return Err(DataStoreError::other("captured code tree root mismatch"));
+            }
+            procedure_roots
+                .iter()
+                .map(|root| {
+                    tree.open(root).map_err(|err| {
+                        DataStoreError::other_with_source("missing captured code witness", err)
+                    })
+                })
+                .collect()
+        }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
     }
 
     fn get_note_script(

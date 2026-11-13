@@ -7,8 +7,9 @@ use miden_protocol::utils::serde::Deserializable;
 /// Account generation provides the same signing key in the account file and the standalone file.
 #[rstest::rstest]
 #[case("ecdsa-k256-keccak")]
-#[case("falcon512-poseidon2")]
-fn generated_signing_key_is_private_and_matches_the_account(#[case] scheme: &str) {
+#[case("falcon512-eidos")]
+#[tokio::test]
+async fn generated_signing_key_is_private_and_matches_the_account(#[case] scheme: &str) {
     let dir = tempfile::tempdir().unwrap();
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_miden-genesis"))
         .args(["new-distributor", "--auth-scheme", scheme])
@@ -19,7 +20,26 @@ fn generated_signing_key_is_private_and_matches_the_account(#[case] scheme: &str
     let account = read_account_file(&dir.path().join(DISTRIBUTOR_MAC_FILE)).unwrap();
     let key_path = dir.path().join(DISTRIBUTOR_SECRET_FILE);
     let key = AuthSecretKey::read_from_bytes(&fs_err::read(&key_path).unwrap()).unwrap();
-    assert_eq!(account.auth_secret_keys(), &[key]);
+    assert_eq!(account.auth_secret_keys(), &[key.clone()]);
+
+    let mut wallet = account.account().clone();
+    wallet.set_nonce(miden_protocol::ONE).unwrap();
+    let chain = miden_testing::MockChainBuilder::with_accounts([wallet.clone()])
+        .unwrap()
+        .build()
+        .unwrap();
+    let executed = Box::pin(
+        chain
+            .build_transaction(wallet.id())
+            .authenticator(Some(miden_tx::auth::BasicAuthenticator::new(&[key])))
+            .build()
+            .unwrap()
+            .execute(),
+    )
+    .await
+    .unwrap();
+    assert_ne!(executed.tx_inputs().signatures(), []);
+    assert_eq!(executed.final_account().id(), wallet.id());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

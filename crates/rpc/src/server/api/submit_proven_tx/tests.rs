@@ -191,7 +191,6 @@ impl Fixture {
 
 #[tokio::test]
 async fn decorator_stripping_preserves_logs_and_code_patch() {
-    use miden_protocol::code::ProcedureRoot;
     use miden_protocol::transaction::TransactionLogDetails;
     let fixture = Fixture::new().await;
     let base = fixture.transaction(fixture.account.id(), &[], 2);
@@ -201,12 +200,7 @@ async fn decorator_stripping_preserves_logs_and_code_patch() {
         "pub proc entry push.1 drop end",
     );
     let mast = package.mast_forest().clone();
-    let patch = CodePatch::new(
-        mast.procedure_digests().map(ProcedureRoot::from_raw).collect(),
-        vec![],
-        mast,
-    )
-    .unwrap();
+    let patch = CodePatch::new(mast).unwrap();
     let public_account = AccountBuilder::new([9; 32])
         .account_type(AccountType::Public)
         .with_component(BasicWallet)

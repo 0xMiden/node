@@ -47,7 +47,7 @@ use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
 use miden_protocol::crypto::merkle::smt::Smt;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
@@ -603,7 +603,7 @@ async fn nullifier_pages_return_every_nullifier_once() {
 
 pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
+    let rng = Arc::new(Mutex::new(EidosRandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let mut rng = rng.lock().unwrap();
 
     P2idNote::builder()
@@ -2047,7 +2047,7 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -2184,7 +2184,7 @@ fn mock_account_code_and_storage(
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -2415,7 +2415,7 @@ async fn genesis_with_account_assets() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2487,7 +2487,7 @@ async fn genesis_with_account_storage_map() {
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2552,7 +2552,7 @@ async fn genesis_with_account_assets_and_storage() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2596,7 +2596,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component1)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2620,7 +2620,7 @@ async fn genesis_with_multiple_accounts() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2653,7 +2653,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component3)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -3128,7 +3128,7 @@ fn db_roundtrip_account_storage_with_maps() {
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();

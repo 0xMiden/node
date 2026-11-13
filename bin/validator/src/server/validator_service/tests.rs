@@ -426,9 +426,7 @@ async fn proven_transaction_fixture() -> &'static ProvenTransactionFixture {
     FIXTURE
         .get_or_init(|| async {
             let mut chain_builder = MockChainBuilder::new();
-            let auth = Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            };
+            let auth = Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos };
             let account_a = chain_builder.add_existing_wallet(auth.clone()).unwrap();
             let account_b = chain_builder.add_existing_wallet(auth).unwrap();
             assert_ne!(account_a.id(), account_b.id());

@@ -504,7 +504,7 @@ mod tests {
             .with_component(component)
             .with_component(AuthSingleSig::new(Approver::new(
                 PublicKeyCommitment::from(EMPTY_WORD),
-                AuthScheme::Falcon512Poseidon2,
+                AuthScheme::Falcon512Eidos,
             )))
             .build_existing()
             .unwrap()

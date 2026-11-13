@@ -17,7 +17,7 @@ use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockHeader;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, TransactionId};
@@ -87,7 +87,7 @@ pub struct Funder {
     node: RpcNodeClient,
     prover: Prover,
     setup: FunderSetup,
-    rng: RandomCoin,
+    rng: EidosRandomCoin,
 }
 
 impl Funder {
@@ -100,7 +100,7 @@ impl Funder {
             node,
             prover,
             setup,
-            rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
+            rng: EidosRandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
         }
     }
 
