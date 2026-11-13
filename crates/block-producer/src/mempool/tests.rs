@@ -4,6 +4,7 @@ use std::time::Duration;
 use assert_matches::assert_matches;
 use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::note::NoteHeader;
 use miden_protocol::transaction::{OutputNote, PublicOutputNote, TransactionHeader};
 use pretty_assertions::assert_eq;
 use serial_test::serial;
@@ -360,7 +361,7 @@ fn stored_input_notes_remain_authenticated_after_admission_and_rollback() {
         nullifiers: transaction.nullifiers().map(|nullifier| (nullifier, None)).collect(),
         found_unauthenticated_notes: transaction
             .unauthenticated_notes()
-            .map(|note| note.id())
+            .map(NoteHeader::id)
             .collect(),
         current_block_height: BlockNumber::GENESIS,
     };
