@@ -255,7 +255,7 @@ mod tests {
             sender: proto_metadata.sender,
             note_type: proto_metadata.note_type,
             tag: proto_metadata.tag,
-            attachment_schemes,
+            attachment_schemes: attachment_schemes.clone(),
             attachments_commitment: Some(attachments_commitment.into()),
         }
         .decode_fields()
@@ -263,6 +263,25 @@ mod tests {
         .verify()
         .unwrap();
         assert_eq!(reconstructed.to_commitment(), expected_metadata_commitment);
+
+        for index in 0..attachment_commitments.len() {
+            let mut tampered = attachment_commitments.clone();
+            tampered[index] = Hasher::hash_elements(&[miden_protocol::Felt::ONE]);
+            let elements = tampered.iter().flat_map(Word::as_elements).copied().collect::<Vec<_>>();
+            let changed: NoteMetadata = proto::note::NoteMetadata {
+                version: proto_metadata.version,
+                sender: Some(sender.into()),
+                note_type: proto_metadata.note_type,
+                tag: proto_metadata.tag,
+                attachment_schemes: attachment_schemes.clone(),
+                attachments_commitment: Some(Hasher::hash_elements(&elements).into()),
+            }
+            .decode_fields()
+            .unwrap()
+            .verify()
+            .unwrap();
+            assert_ne!(changed.to_commitment(), expected_metadata_commitment);
+        }
     }
 
     #[test]
