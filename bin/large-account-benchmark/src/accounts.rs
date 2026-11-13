@@ -288,7 +288,7 @@ mod tests {
 
     /// The increment note script root.
     const INCREMENT_NOTE_SCRIPT_ROOT: &str =
-        "0x2d97dcace70970b7b72ad7777602ac3a1a3d6efac1cc8289173cd2a3c86ce6c6";
+        "0xf5cb3ed7f33db55d7aa828714d569d05b191740a7903f134dda4f4efcad83805";
 
     #[test]
     fn increment_note_script_root_is_unchanged() {

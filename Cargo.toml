@@ -75,6 +75,7 @@ miden-usdcx        = { git = "https://github.com/0xMiden/protocol", rev = "44079
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto    = { version = "=1.0.0-rc.0" }
 miden-processor = { version = "=1.0.0-rc.0" }
+miden-verifier  = { version = "=1.0.0-rc.0" }
 
 # External dependencies
 anyhow             = { version = "1.0" }

@@ -38,4 +38,5 @@ assert_matches = { workspace = true }
 miden-protocol = { features = ["testing"], workspace = true }
 miden-testing  = { workspace = true }
 miden-tx       = { features = ["concurrent", "testing"], workspace = true }
+miden-verifier = { workspace = true }
 serial_test    = { workspace = true }
