@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
+#[cfg(test)]
 use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -28,7 +29,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
-use crate::mempool::SharedMempool;
+use crate::mempool::{MempoolTransaction, SharedMempool};
 use crate::validator::BlockProducerValidatorClient;
 
 mod prover;
@@ -314,7 +315,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .map(TransactionCandidate::reference_block)
+            .map(MempoolTransaction::reference_block)
             .map(|(block_num, _)| block_num)
             .collect();
         let reference_block = selected.parameters().reference_block;
@@ -322,7 +323,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(TransactionCandidate::unauthenticated_note_ids)
+            .flat_map(MempoolTransaction::unauthenticated_note_ids)
             .collect();
 
         // The view pins a state snapshot. Only the store reads and the fee collection execution use

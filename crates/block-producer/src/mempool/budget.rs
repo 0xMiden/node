@@ -1,5 +1,5 @@
-use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::batch::ProvenBatch;
+use miden_protocol::transaction::ProvenTransaction;
 use miden_protocol::{
     MAX_ACCOUNTS_PER_BATCH,
     MAX_INPUT_NOTES_PER_BATCH,
@@ -74,14 +74,14 @@ impl BatchBudget {
     /// Returns [`BudgetStatus::Exceeded`] if the transaction would exceed the remaining budget,
     /// otherwise returns [`BudgetStatus::WithinScope`] and subtracts the resources from the budget.
     #[must_use]
-    pub(crate) fn check_then_subtract(&mut self, tx: &TransactionCandidate) -> BudgetStatus {
+    pub(crate) fn check_then_subtract(&mut self, tx: &ProvenTransaction) -> BudgetStatus {
         // The protocol exposes one account update per transaction. This type assertion keeps the
         // budget assumption coupled to that API.
         pub(crate) const ACCOUNT_UPDATES_PER_TX: usize = 1;
         let _: miden_protocol::account::AccountId = tx.account_update().account_id();
 
-        let output_notes = tx.output_note_count();
-        let input_notes = tx.input_note_count();
+        let output_notes = tx.output_notes().num_notes();
+        let input_notes = tx.input_notes().num_notes() as usize;
 
         if self.transactions == 0
             || self.accounts < ACCOUNT_UPDATES_PER_TX
@@ -144,7 +144,10 @@ mod tests {
         let mut budget = BatchBudget::new(10);
         let initial_output_notes = budget.output_notes;
 
-        assert_eq!(budget.check_then_subtract(&tx), BudgetStatus::WithinScope);
+        assert_eq!(
+            budget.check_then_subtract(tx.raw_proven_transaction()),
+            BudgetStatus::WithinScope
+        );
         assert_eq!(budget.output_notes, initial_output_notes - 1);
     }
 }

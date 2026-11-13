@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
@@ -10,6 +9,8 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteId};
 use miden_protocol::transaction::OutputNote;
 use miden_standards::note::TxFeeNote;
+
+use crate::mempool::MempoolTransaction;
 
 // SELECTED BATCH
 // ================================================================================================
@@ -59,10 +60,10 @@ impl BatchParameters {
 /// [ProvenBatch]: miden_protocol::batch::ProvenBatch
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectedBatch {
-    txs: Vec<Arc<TransactionCandidate>>,
+    txs: Vec<Arc<MempoolTransaction>>,
     id: SelectedBatchId,
     parameters: BatchParameters,
-    account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
+    account_updates: HashMap<AccountId, (Word, Word)>,
     unauthenticated_notes: HashSet<NoteId>,
     collectible_fee_notes: Vec<Note>,
 }
@@ -80,11 +81,11 @@ impl SelectedBatch {
         self.id
     }
 
-    pub(crate) fn into_transactions(self) -> Vec<Arc<TransactionCandidate>> {
+    pub(crate) fn into_transactions(self) -> Vec<Arc<MempoolTransaction>> {
         self.txs
     }
 
-    pub(crate) fn transactions(&self) -> &[Arc<TransactionCandidate>] {
+    pub(crate) fn transactions(&self) -> &[Arc<MempoolTransaction>] {
         &self.txs
     }
 
@@ -97,16 +98,12 @@ impl SelectedBatch {
     }
 
     /// The aggregated list of account transitions this batch causes given as tuples of `(AccountId,
-    /// initial commitment, final commitment, Option<store commitment>)`.
+    /// initial commitment, final commitment)`.
     ///
     /// Note that the updates are aggregated, i.e. only a single update per account is possible, and
     /// transaction updates to an account of `a -> b -> c` will result in a single `a -> c`.
-    pub(crate) fn account_updates(
-        &self,
-    ) -> impl Iterator<Item = (AccountId, Word, Word, Option<Word>)> {
-        self.account_updates
-            .iter()
-            .map(|(account, (from, to, store))| (*account, *from, *to, *store))
+    pub(crate) fn account_updates(&self) -> impl Iterator<Item = (AccountId, Word, Word)> {
+        self.account_updates.iter().map(|(account, (from, to))| (*account, *from, *to))
     }
 
     pub(crate) fn unauthenticated_note_ids(&self) -> impl Iterator<Item = NoteId> {
@@ -127,8 +124,8 @@ impl SelectedBatch {
 #[derive(Clone)]
 pub(crate) struct SelectedBatchBuilder {
     parameters: BatchParameters,
-    pub(crate) txs: Vec<Arc<TransactionCandidate>>,
-    pub(crate) account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
+    pub(crate) txs: Vec<Arc<MempoolTransaction>>,
+    pub(crate) account_updates: HashMap<AccountId, (Word, Word)>,
 }
 
 impl SelectedBatchBuilder {
@@ -139,11 +136,11 @@ impl SelectedBatchBuilder {
     /// Panics if the new transaction's account update is inconsistent with the current account
     /// state within the batch i.e. if the transaction's initial account commitment does not
     /// match the account update's final account commitment within the batch (if any).
-    pub(crate) fn push(&mut self, tx: Arc<TransactionCandidate>) {
+    pub(crate) fn push(&mut self, tx: Arc<MempoolTransaction>) {
         let update = tx.account_update();
         self.account_updates
             .entry(update.account_id())
-            .and_modify(|(_from, to, _store)| {
+            .and_modify(|(_from, to)| {
                 assert!(
                     to == &update.initial_state_commitment(),
                     "Cannot select transaction {} as its initial commitment {} for account {} does \
@@ -156,11 +153,7 @@ not match the current commitment {}",
 
                 *to = update.final_state_commitment();
             })
-            .or_insert((
-                update.initial_state_commitment(),
-                update.final_state_commitment(),
-                tx.store_account_state(),
-            ));
+            .or_insert((update.initial_state_commitment(), update.final_state_commitment()));
 
         self.txs.push(tx);
     }

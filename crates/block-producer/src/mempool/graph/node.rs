@@ -34,8 +34,8 @@ pub trait GraphNode {
     ///
     /// Output tuple represents each updates `(account ID, initial commitment, final commitment,
     /// baseline commitment)`. The baseline is used only when the graph has no state for the
-    /// account. Transactions use their authenticated store commitment; selected batches use the
-    /// initial commitment already validated by the transaction graph.
+    /// account. Candidates use their authenticated store commitment; admitted transactions and
+    /// selected batches use the initial commitment already validated by the transaction graph.
     ///
     /// Updates must be aggregates i.e. only a single account ID update allowed.
     fn account_updates(

@@ -46,7 +46,7 @@ impl GraphNode for SelectedBatch {
         // its baseline, rather than the stale snapshot A.
         Box::new(
             self.account_updates()
-                .map(|(account, from, to, _store)| (account, from, to, Some(from))),
+                .map(|(account, from, to)| (account, from, to, Some(from))),
         )
     }
 

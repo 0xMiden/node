@@ -75,6 +75,7 @@ mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
 mod graph;
+pub(crate) use graph::MempoolTransaction;
 
 #[cfg(test)]
 mod tests;

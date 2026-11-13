@@ -6,8 +6,8 @@ use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::note::{NoteId, Nullifier};
-use miden_protocol::transaction::{OutputNote, TransactionId};
+use miden_protocol::note::{NoteHeader, NoteId, Nullifier};
+use miden_protocol::transaction::{OutputNote, ProvenTransaction, TransactionId, TxAccountUpdate};
 
 use crate::domain::batch::{BatchParameters, SelectedBatch};
 use crate::errors::StateConflict;
@@ -15,6 +15,82 @@ use crate::mempool::BatchBudget;
 use crate::mempool::budget::BudgetStatus;
 use crate::mempool::graph::dag::Graph;
 use crate::mempool::graph::node::GraphNode;
+
+/// A transaction admitted to the mempool with its account and note dependencies resolved.
+///
+/// Store evidence is used only during admission. The graph retains dependencies while committed
+/// input notes remain authenticated when their creating transactions are pruned.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MempoolTransaction {
+    inner: Arc<ProvenTransaction>,
+    authenticated_input_notes: HashSet<NoteId>,
+}
+
+impl MempoolTransaction {
+    fn admitted(candidate: &TransactionCandidate) -> Self {
+        Self {
+            inner: candidate.proven_transaction(),
+            authenticated_input_notes: candidate.store_authenticated_note_ids().collect(),
+        }
+    }
+
+    pub fn id(&self) -> TransactionId {
+        self.inner.id()
+    }
+
+    pub fn account_id(&self) -> AccountId {
+        self.inner.account_id()
+    }
+
+    pub fn account_update(&self) -> &TxAccountUpdate {
+        self.inner.account_update()
+    }
+
+    pub fn nullifiers(&self) -> impl Iterator<Item = Nullifier> + '_ {
+        self.inner.nullifiers()
+    }
+
+    pub fn output_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
+        self.inner.output_notes().iter().map(OutputNote::id)
+    }
+
+    pub fn output_note_count(&self) -> usize {
+        self.inner.output_notes().num_notes()
+    }
+
+    pub fn input_note_count(&self) -> usize {
+        self.inner.input_notes().num_notes() as usize
+    }
+
+    pub fn reference_block(&self) -> (BlockNumber, Word) {
+        (self.inner.ref_block_num(), self.inner.ref_block_commitment())
+    }
+
+    /// Return input note IDs that neither the transaction nor committed state authenticates.
+    pub fn unauthenticated_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
+        self.inner
+            .unauthenticated_notes()
+            .map(NoteHeader::id)
+            .filter(|note_id| !self.authenticated_input_notes.contains(note_id))
+    }
+
+    pub fn proven_transaction(&self) -> Arc<ProvenTransaction> {
+        Arc::clone(&self.inner)
+    }
+
+    pub fn expires_at(&self) -> BlockNumber {
+        self.inner.expiration_block_num()
+    }
+
+    pub fn raw_proven_transaction(&self) -> &ProvenTransaction {
+        &self.inner
+    }
+
+    /// Records input notes whose creating transactions have been committed and pruned.
+    fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = NoteId>) {
+        self.authenticated_input_notes.extend(notes);
+    }
+}
 
 enum BatchSelection {
     Empty,
@@ -70,6 +146,42 @@ impl GraphNode for Arc<TransactionCandidate> {
     }
 }
 
+impl GraphNode for Arc<MempoolTransaction> {
+    type Id = TransactionId;
+
+    fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_> {
+        Box::new(self.as_ref().nullifiers())
+    }
+
+    fn output_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
+        Box::new(self.output_note_ids())
+    }
+
+    fn unauthenticated_notes(&self) -> Box<dyn Iterator<Item = NoteId> + '_> {
+        Box::new(self.unauthenticated_note_ids())
+    }
+
+    fn account_updates(
+        &self,
+    ) -> Box<dyn Iterator<Item = (AccountId, Word, Word, Option<Word>)> + '_> {
+        let update = self.account_update();
+        Box::new(std::iter::once((
+            update.account_id(),
+            update.initial_state_commitment(),
+            update.final_state_commitment(),
+            Some(update.initial_state_commitment()),
+        )))
+    }
+
+    fn id(&self) -> Self::Id {
+        self.as_ref().id()
+    }
+
+    fn expires_at(&self) -> BlockNumber {
+        self.as_ref().expires_at()
+    }
+}
+
 // TRANSACTION GRAPH
 // ================================================================================================
 
@@ -85,7 +197,7 @@ impl GraphNode for Arc<TransactionCandidate> {
 /// descendants.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionGraph {
-    inner: Graph<Arc<TransactionCandidate>>,
+    inner: Graph<Arc<MempoolTransaction>>,
     /// The number of failures a transaction has participated in.
     ///
     /// These are batch or block proving errors in which the transaction was a part of. This is
@@ -131,7 +243,8 @@ impl TransactionGraph {
     pub const FAILURE_LIMIT: u32 = 3;
 
     pub fn append(&mut self, tx: Arc<TransactionCandidate>) -> Result<(), StateConflict> {
-        self.inner.append(tx)
+        self.inner
+            .append_with(tx, |candidate| Arc::new(MempoolTransaction::admitted(&candidate)))
     }
 
     /// Returns the transaction and output note that created the specified note ID.
@@ -166,7 +279,7 @@ impl TransactionGraph {
                 for tx in batch.iter().take(idx).rev() {
                     let reverted = self.inner.revert_node_and_descendants(tx.id());
                     assert_eq!(reverted.len(), 1);
-                    assert_eq!(&reverted[0], tx);
+                    assert_eq!(reverted[0].id(), tx.id());
                 }
 
                 return Err(err);
@@ -267,7 +380,8 @@ impl TransactionGraph {
             let candidates = self.inner.selection_candidates();
 
             for tx in candidates.values().filter(|tx| !self.user_batches.contains_tx(&tx.id())) {
-                if budget.check_then_subtract(tx) == BudgetStatus::Exceeded {
+                if budget.check_then_subtract(tx.raw_proven_transaction()) == BudgetStatus::Exceeded
+                {
                     assert!(
                         !selected.is_empty(),
                         "selectable transaction {} exceeds the batch budget; \
@@ -438,10 +552,7 @@ impl TransactionGraph {
         self.user_batches.remove(&batch.id().as_batch_id());
     }
 
-    fn mark_committed_notes_authenticated_for_descendants(
-        &mut self,
-        tx: &Arc<TransactionCandidate>,
-    ) {
+    fn mark_committed_notes_authenticated_for_descendants(&mut self, tx: &Arc<MempoolTransaction>) {
         let output_notes = tx.output_note_ids().collect::<HashSet<_>>();
         if output_notes.is_empty() {
             return;

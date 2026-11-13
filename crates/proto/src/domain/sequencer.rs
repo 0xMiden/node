@@ -146,7 +146,7 @@ pub enum TransactionAuthenticationError {
     NullifiersAlreadyExist(Vec<Nullifier>),
 }
 
-/// A transaction with store authentication data supplied by a trusted caller.
+/// A transaction proposed for mempool admission with store evidence supplied by a trusted caller.
 ///
 /// The caller must verify the proof. [`Self::new_unchecked`] checks the supplied nullifier results
 /// and records which input notes the store has committed. Protobuf conversion trusts the sender's
@@ -163,8 +163,8 @@ pub struct TransactionCandidate {
     ///
     /// Pending transactions can cause this to differ from the initial transaction state.
     store_account_state: Option<Word>,
-    /// Input notes that were unauthenticated when the transaction was proven. Store inputs or
-    /// committed mempool history have since authenticated these notes.
+    /// Input notes that were unauthenticated when the transaction was proven and have since been
+    /// committed according to the supplied store inputs.
     notes_authenticated_by_store: HashSet<NoteId>,
     /// The chain height at authentication.
     ///
@@ -266,10 +266,9 @@ impl TransactionCandidate {
             .filter(|note_id| !self.notes_authenticated_by_store.contains(note_id))
     }
 
-    /// Mark these note IDs as authenticated by committed state. The caller must check that the
-    /// notes belong to committed state.
-    pub fn mark_notes_authenticated(&mut self, notes: impl IntoIterator<Item = NoteId>) {
-        self.notes_authenticated_by_store.extend(notes);
+    /// Returns the input note IDs authenticated by the supplied store snapshot.
+    pub fn store_authenticated_note_ids(&self) -> impl Iterator<Item = NoteId> + '_ {
+        self.notes_authenticated_by_store.iter().copied()
     }
 
     pub fn proven_transaction(&self) -> Arc<ProvenTransaction> {

@@ -37,8 +37,8 @@ fn user_batch_bypasses_batch_proving() {
 
     let conventional = uut.select_any_batch().unwrap();
     assert_eq!(conventional.transactions().len(), 2);
-    assert!(conventional.transactions().contains(&conventional_a));
-    assert!(conventional.transactions().contains(&conventional_b));
+    assert!(conventional.transactions().iter().any(|tx| tx.id() == conventional_a.id()));
+    assert!(conventional.transactions().iter().any(|tx| tx.id() == conventional_b.id()));
     assert_eq!(
         conventional.parameters(),
         BatchParameters { reference_block: BlockNumber::GENESIS }

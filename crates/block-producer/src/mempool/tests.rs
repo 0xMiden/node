@@ -118,8 +118,8 @@ fn full_batch_selection_returns_internal_batch_at_transaction_limit() {
 
     let batch = uut.select_full_batch().unwrap();
     assert_eq!(batch.transactions().len(), 2);
-    assert!(batch.transactions().contains(&tx_a));
-    assert!(batch.transactions().contains(&tx_b));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_a.id()));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_b.id()));
 }
 
 #[test]
@@ -143,9 +143,9 @@ fn internal_batch_selection_skips_candidates_exceeding_remaining_budget() {
 
     let batch = uut.select_any_batch().unwrap();
     assert_eq!(batch.transactions().len(), 2);
-    assert!(batch.transactions().contains(&parent));
-    assert!(batch.transactions().contains(&fitting));
-    assert!(!batch.transactions().contains(&oversized));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == parent.id()));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == fitting.id()));
+    assert!(!batch.transactions().iter().any(|tx| tx.id() == oversized.id()));
 }
 
 fn output_budget_ordered_child_transactions()
@@ -223,15 +223,24 @@ fn children_of_failed_batches_are_ignored() {
     let (mut uut, _) = Mempool::for_tests();
     uut.add_transaction(txs[0].clone()).unwrap();
     let parent_batch = uut.select_any_batch().unwrap();
-    assert_eq!(parent_batch.transactions(), vec![txs[0].clone()]);
+    assert_eq!(
+        parent_batch.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![txs[0].id()]
+    );
 
     uut.add_transaction(txs[1].clone()).unwrap();
     let child_batch_a = uut.select_any_batch().unwrap();
-    assert_eq!(child_batch_a.transactions(), vec![txs[1].clone()]);
+    assert_eq!(
+        child_batch_a.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![txs[1].id()]
+    );
 
     uut.add_transaction(txs[2].clone()).unwrap();
     let next_batch = uut.select_any_batch().unwrap();
-    assert_eq!(next_batch.transactions(), vec![txs[2].clone()]);
+    assert_eq!(
+        next_batch.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![txs[2].id()]
+    );
 
     // Child batch jobs are now dangling.
     uut.rollback_batch(parent_batch.id());
@@ -336,6 +345,40 @@ fn rolled_back_transaction_can_be_rebatched_after_parent_history_is_pruned() {
 }
 
 #[test]
+fn stored_input_notes_remain_authenticated_after_admission_and_rollback() {
+    use miden_node_proto::domain::sequencer::TransactionInputs;
+
+    let (mut uut, _) = Mempool::for_tests();
+    let transaction = Arc::new(
+        MockProvenTxBuilder::with_account_index(1)
+            .unauthenticated_notes_range(3..4)
+            .build(),
+    );
+    let inputs = TransactionInputs {
+        account_id: transaction.account_id(),
+        account_commitment: Some(transaction.account_update().initial_state_commitment()),
+        nullifiers: transaction.nullifiers().map(|nullifier| (nullifier, None)).collect(),
+        found_unauthenticated_notes: transaction
+            .unauthenticated_notes()
+            .map(|note| note.id())
+            .collect(),
+        current_block_height: BlockNumber::GENESIS,
+    };
+    let candidate = TransactionCandidate::new_unchecked(transaction.clone(), inputs).unwrap();
+    uut.add_transaction(Arc::new(candidate)).unwrap();
+
+    let batch = uut.select_any_batch().unwrap();
+    assert_eq!(batch.transactions()[0].proven_transaction(), transaction);
+    assert_eq!(batch.unauthenticated_note_ids().count(), 0);
+    uut.rollback_batch(batch.id());
+
+    let retried = uut.select_any_batch().unwrap();
+    assert_eq!(retried.transactions()[0].proven_transaction(), transaction);
+    assert_eq!(retried.transactions()[0].unauthenticated_note_ids().count(), 0);
+    assert_eq!(retried.unauthenticated_note_ids().count(), 0);
+}
+
+#[test]
 fn rolled_back_block_can_be_rebatched_after_parent_history_is_pruned() {
     assert_rebatch_after_parent_history_is_pruned(true);
 }
@@ -394,12 +437,12 @@ fn batch_baseline_does_not_override_tracked_account_state() {
     )
     .build();
     let conflicting = Arc::new(MockTransactionCandidateBuilder::new(conflicting).build());
-    let mut batch =
-        SelectedBatch::builder(BatchParameters { reference_block: BlockNumber::GENESIS });
-    batch.push(conflicting);
+    let (mut other, _) = Mempool::for_tests();
+    other.add_transaction(conflicting).unwrap();
+    let batch = other.select_any_batch().unwrap();
 
     assert_matches!(
-        uut.batches.append(batch.build()),
+        uut.batches.append(batch),
         Err(StateConflict::AccountCommitmentMismatch { .. })
     );
 }
@@ -436,7 +479,10 @@ fn pruned_committed_notes_are_authenticated_for_inflight_descendants() {
 
     uut.add_transaction(parent.clone()).unwrap();
     let parent_batch = uut.select_any_batch().unwrap();
-    assert_eq!(parent_batch.transactions(), std::slice::from_ref(&parent));
+    assert_eq!(
+        parent_batch.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![parent.id()]
+    );
 
     uut.add_transaction(child.clone()).unwrap();
     uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
@@ -549,7 +595,10 @@ fn late_fee_free_proof_does_not_match_a_shorter_selection() {
 
     uut.config.batch_budget.transactions = 1;
     let shorter = uut.select_any_batch().unwrap();
-    assert_eq!(shorter.transactions(), &[Arc::clone(&txs[0])]);
+    assert_eq!(
+        shorter.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![txs[0].id()]
+    );
     uut.commit_batch(proof);
     assert_eq!(uut.select_block().batches, []);
 }
@@ -756,15 +805,14 @@ fn pass_through_txs_on_an_empty_account() {
         account_update.account_id(),
         account_update.initial_state_commitment(),
         account_update.final_state_commitment(),
-        tx_pass_through_a.store_account_state(),
     ));
     itertools::assert_equal(batch.account_updates(), expected);
 
     // Ensure the batch contains a,b and final. Final should also be the last tx since its order is
     // required.
-    assert!(batch.transactions().contains(&tx_pass_through_a));
-    assert!(batch.transactions().contains(&tx_pass_through_b));
-    assert_eq!(batch.transactions().last().unwrap(), &tx_final);
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_pass_through_a.id()));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_pass_through_b.id()));
+    assert_eq!(batch.transactions().last().unwrap().id(), tx_final.id());
 }
 
 /// Tests that pass through transactions retain parent-child relations based on notes, even though
@@ -804,11 +852,17 @@ fn pass_through_txs_with_note_dependencies() {
     // relationship was correctly inferred by the mempool.
     uut.add_transaction(tx_pass_through_a.clone()).unwrap();
     let batch_a = uut.select_any_batch().unwrap();
-    assert_eq!(batch_a.transactions(), std::slice::from_ref(&tx_pass_through_a));
+    assert_eq!(
+        batch_a.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![tx_pass_through_a.id()]
+    );
 
     uut.add_transaction(tx_pass_through_b.clone()).unwrap();
     let batch_b = uut.select_any_batch().unwrap();
-    assert_eq!(batch_b.transactions(), std::slice::from_ref(&tx_pass_through_b));
+    assert_eq!(
+        batch_b.transactions().iter().map(|tx| tx.id()).collect::<Vec<_>>(),
+        vec![tx_pass_through_b.id()]
+    );
 
     // Rollback (a) and check that (b) also reverted by comparing to the reference.
     uut.rollback_batch(batch_a.id());
@@ -854,6 +908,6 @@ fn intra_batch_unauthenticated_note() {
 
     let batch = uut.select_any_batch().unwrap();
 
-    assert!(batch.transactions().contains(&tx_a));
-    assert!(batch.transactions().contains(&tx_b));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_a.id()));
+    assert!(batch.transactions().iter().any(|tx| tx.id() == tx_b.id()));
 }
