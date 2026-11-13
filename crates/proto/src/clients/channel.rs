@@ -59,7 +59,9 @@ impl RecoveringChannel {
             .expect("gRPC channel lock poisoned")
             .get_or_insert_with(|| Arc::new(self.0.endpoint.connect_lazy()))
             .clone();
-        if let Ok(result) = tokio::time::timeout_at(deadline, call((*channel).clone())).await {
+        // Box the RPC future so callers do not inherit tonic's large, deeply nested future layout.
+        let response = Box::pin(call((*channel).clone()));
+        if let Ok(result) = tokio::time::timeout_at(deadline, response).await {
             result
         } else {
             self.0.retire(&channel);
