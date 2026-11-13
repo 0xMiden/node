@@ -74,7 +74,7 @@ message NextTransactionEncryptionKey {
 
 // The validator-set encryption key used to seal transaction inputs.
 //
-// Each attestation signs the Poseidon2 byte-mode hash of
+// Each attestation signs the EIDOS byte-mode hash of
 // `domain_tag || scheme || len(key_id) || key_id || genesis_commitment || len(public_key) ||
 // public_key || next_key_transcript`. Integer fields and length prefixes are little-endian u32s;
 // the domain tag is `MIDEN_TX_ENCRYPTION_KEY_ATTESTATION_V1`. When next_key is present, its
