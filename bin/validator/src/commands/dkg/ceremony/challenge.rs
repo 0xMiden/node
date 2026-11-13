@@ -1,8 +1,7 @@
 use anyhow::{Context, ensure};
-use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{Hasher, Word};
 use miden_validator::ValidatorSigner;
 use rand_core_06::CryptoRngCore;
 
@@ -35,7 +34,7 @@ impl Challenge {
         transcript.extend_from_slice(Self::SIGNATURE_DOMAIN);
         transcript.extend_from_slice(channel_binding);
         transcript.extend_from_slice(&self.encode());
-        Rpo256::hash(&transcript)
+        Hasher::hash(&transcript)
     }
 
     pub async fn sign(

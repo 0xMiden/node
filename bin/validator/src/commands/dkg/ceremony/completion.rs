@@ -2,7 +2,7 @@ use anyhow::{Context, ensure};
 use futures::future::try_join_all;
 use golden_ehtdh1::Ehtdh1Material;
 use golden_ehtdh1::wire::to_wire_bytes;
-use miden_protocol::crypto::hash::rpo::Rpo256;
+use miden_protocol::Hasher;
 
 use super::super::wire::WireCodec;
 use super::dkg::StorageGroup;
@@ -37,7 +37,7 @@ impl Completion {
         Self {
             session_id: participants.session.id,
             dealings_commitment,
-            output_commitment: Rpo256::hash(&transcript).as_bytes(),
+            output_commitment: Hasher::hash(&transcript).as_bytes(),
         }
     }
 }

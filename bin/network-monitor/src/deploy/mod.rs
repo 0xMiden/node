@@ -31,7 +31,6 @@ use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, instrument, warn};
 use miden_node_utils::retry;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
-use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountId,
@@ -46,9 +45,11 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::code::ProcedureRoot;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrPeaks, PartialMmr};
 use miden_protocol::note::{
     Note,
@@ -70,6 +71,7 @@ use miden_protocol::transaction::{
     TransactionArgs,
 };
 use miden_protocol::vm::FutureMaybeSend;
+use miden_protocol::{MastForest, Word};
 use miden_standards::note::P2idNoteStorage;
 use miden_standards::tx_script::SendNotesTransactionScript;
 use miden_tx::auth::BasicAuthenticator;
@@ -1313,6 +1315,22 @@ impl DataStore for MonitorDataStore {
                 })
                 .collect::<Result<Vec<_>, _>>()
         }
+    }
+
+    fn get_code_witnesses(
+        &self,
+        _code_tree_root: CodeTreeRoot,
+        _procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move { Err(DataStoreError::other("code witnesses are unavailable in this data store")) }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
     }
 
     fn get_note_script(

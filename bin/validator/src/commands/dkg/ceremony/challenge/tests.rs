@@ -25,7 +25,7 @@ fn authentication_signature_commits_to_domain() {
     commitment.extend_from_slice(&challenge.encode());
     let response = ChallengeResponse {
         validator_public_key: signing_key.public_key(),
-        signature: signing_key.sign(Rpo256::hash(&commitment)),
+        signature: signing_key.sign(Hasher::hash(&commitment)),
     };
 
     assert!(response.verify_against(&challenge, &channel_binding).is_err());

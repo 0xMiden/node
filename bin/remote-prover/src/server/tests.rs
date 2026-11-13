@@ -111,9 +111,7 @@ impl ProofRequestExt for ProveRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
 
         let fungible_asset_1: Asset =
@@ -144,9 +142,7 @@ impl ProofRequestExt for ProveRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
 
         let fungible_asset_1: Asset =

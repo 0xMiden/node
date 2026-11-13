@@ -419,9 +419,7 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
         .fee_faucet_id(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap())
         .verification_base_fee(1);
     let auth = if include_fee {
-        Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        }
+        Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos }
     } else {
         Auth::IncrNonce
     };

@@ -2,9 +2,10 @@ use axum::Json;
 use axum::extract::State;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::Note;
 use miden_protocol::utils::serde::Serializable;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
 use crate::error::RequestFundsError;
@@ -62,10 +63,10 @@ pub(super) async fn request_funds(
 
     // Each request draws its own serial number, so the handler needs no shared generator and takes
     // no lock. Two notes never collide, because the generator is seeded at random.
-    let mut rng = RandomCoin::new(Word::from(rand::random::<[u32; 4]>()));
+    let mut rng = EidosRandomCoin::new(Word::from(rand::random::<[u32; 4]>()));
     let stored = state
         .database
-        .store_request(target, request.amount, rng.draw_word())
+        .store_request(target, request.amount, rng.random())
         .await
         .map_err(RequestFundsError::Internal)?;
 
