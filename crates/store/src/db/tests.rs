@@ -970,6 +970,58 @@ fn select_nullifiers_by_prefix_works() {
 }
 
 #[test]
+fn eidos_nullifier_prefix_pages_preserve_all_matches() {
+    let generated = Nullifier::new(
+        miden_protocol::note::NoteScriptRoot::from_raw(num_to_word(1)),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        num_to_word(5),
+        num_to_word(6),
+    );
+    assert!(generated.prefix() < 0x8000);
+    assert_eq!(utils::get_nullifier_prefix(&generated), generated.prefix());
+    let db = &TestDb::new();
+    // Two valid-sized blocks together exceed one response page, even when all prefixes collide.
+    let per_block = miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES / 36 / 2 + 1;
+    let mut expected = Vec::new();
+    for height in 1..=2u32 {
+        let block = BlockNumber::from(height);
+        create_block(db, block);
+        let nullifiers = (0..per_block)
+            .map(|index| {
+                num_to_nullifier((1 << 48) + u64::from(height) * per_block as u64 + index as u64)
+            })
+            .collect::<Vec<_>>();
+        insert_nullifiers_for_block(db, &nullifiers, block).unwrap();
+        expected.extend(
+            nullifiers
+                .into_iter()
+                .map(|nullifier| NullifierInfo { nullifier, block_num: block }),
+        );
+    }
+    let (mut first, reached) =
+        select_nullifiers_by_prefix(db, 16, &[1, 1], BlockNumber::GENESIS..=2.into()).unwrap();
+    assert_eq!(reached, BlockNumber::ONE);
+    let (second, reached) =
+        select_nullifiers_by_prefix(db, 16, &[1], reached.child()..=2.into()).unwrap();
+    first.extend(second);
+    assert_eq!(reached, BlockNumber::from(2));
+    assert!(first.windows(2).all(|pair| pair[0].block_num <= pair[1].block_num));
+    // Ordering within a block is not part of the query contract.
+    first.sort_by_key(|info| info.nullifier);
+    expected.sort_by_key(|info| info.nullifier);
+    assert_eq!(first, expected);
+    for prefix in [0x7fff, 0x8000, 0xffff] {
+        let (matches, reached) =
+            select_nullifiers_by_prefix(db, 16, &[prefix], BlockNumber::GENESIS..=2.into())
+                .unwrap();
+        assert_eq!(matches, [] as [NullifierInfo; 0]);
+        assert_eq!(reached, BlockNumber::from(2));
+    }
+}
+
+#[test]
 #[miden_node_test_macro::enable_logging]
 fn db_block_header() {
     let db = &TestDb::new();
@@ -1323,6 +1375,7 @@ fn note_sync_multi_respects_payload_limit() {
     let tag = 43u32;
     let note_index = BlockNoteIndex::new(0, 0).unwrap();
 
+    let mut expected_ids = Vec::new();
     for block_num_raw in 1..=3u32 {
         let block_num = BlockNumber::from(block_num_raw);
         create_block(db, block_num);
@@ -1340,6 +1393,7 @@ fn note_sync_multi_respects_payload_limit() {
         .unwrap();
 
         let new_note = create_note(sender);
+        expected_ids.push(new_note.id());
         let attachments = NoteAttachments::new(
             (1..=NoteAttachments::MAX_COUNT)
                 .map(|scheme| {
@@ -1391,6 +1445,23 @@ fn note_sync_multi_respects_payload_limit() {
         "the first block is always included, but the second block would exceed the payload cap",
     );
     assert_eq!(page.next, Some(BlockNumber::from(2)), "the next page starts at block 2");
+    let mut collected_ids = page
+        .items
+        .iter()
+        .flat_map(|update| update.notes.iter().map(|note| note.note_id))
+        .collect::<Vec<_>>();
+    let mut next = page.next;
+    while let Some(cursor) = next {
+        let page = get_note_sync_multi(db, &[tag], cursor..=BlockNumber::from(3), one_block_budget)
+            .unwrap();
+        collected_ids.extend(
+            page.items
+                .iter()
+                .flat_map(|update| update.notes.iter().map(|note| note.note_id)),
+        );
+        next = page.next;
+    }
+    assert_eq!(collected_ids, expected_ids);
 }
 
 /// Tests that note sync returns an empty result when no notes match the requested tags.
