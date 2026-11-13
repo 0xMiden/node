@@ -37,6 +37,7 @@ url                         = { workspace = true }
 [dev-dependencies]
 assert_matches     = { workspace = true }
 futures            = { workspace = true }
+h2                 = { workspace = true }
 miden-protocol     = { features = ["testing"], workspace = true }
 rstest             = { workspace = true }
 tokio              = { features = ["net"], workspace = true }

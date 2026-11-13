@@ -323,7 +323,6 @@ impl SequencerExternalServiceOptions {
         let builder = Builder::new(self.ntx_builder_url.clone())
             .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection();
@@ -506,7 +505,6 @@ impl SyncOptions {
         Ok(Builder::new(self.block_source_url())
             .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
@@ -553,7 +551,6 @@ fn remote_prover_monitor(
             Ok(Builder::new(endpoint.clone())
                 .max_decoding_message_size(max_decoding_message_size)
                 .with_tls()?
-                .without_timeout()
                 .without_metadata_version()
                 .without_metadata_genesis()
                 .without_auth_header()

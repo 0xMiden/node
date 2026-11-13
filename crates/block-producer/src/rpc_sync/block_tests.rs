@@ -122,7 +122,6 @@ async fn sync_blocks(
     });
     let source_rpc = Builder::new(format!("http://{address}").parse().unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()

@@ -35,7 +35,6 @@ async fn connection_target<T: GrpcClient + Send + 'static>(url: url::Url) {
     });
     let builder = Builder::new(url)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_auth_header()

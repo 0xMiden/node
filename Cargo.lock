@@ -4800,6 +4800,7 @@ dependencies = [
  "codegen",
  "fs-err",
  "futures",
+ "h2",
  "http",
  "miden-node-grpc-error-macro",
  "miden-node-persistence",

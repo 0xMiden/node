@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use miden_node_proto::clients::GrpcClient;
 use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::generated::miden::node::v1::{
     GetBlockHeaderByNumberRequest,
@@ -50,25 +51,21 @@ impl Server {
 
         // All attempts and backoff share one budget. Reserve the rest for validation and storage.
         let budget = self.config.grpc.request_timeout / 2;
-        let attempt_timeout = budget / MAX_ATTEMPTS;
+        let attempt_timeout = (budget / MAX_ATTEMPTS).max(Duration::from_nanos(1));
         let backoff = Duration::from_millis(100).min(budget / 50);
         tokio::time::timeout(budget, async {
-            let mut rpc = self.rpc.clone();
+            // The client deadline replaces a hung connection before the next attempt.
+            let mut rpc = self.rpc.clone().with_timeout(attempt_timeout);
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                let response = tokio::time::timeout(
-                    attempt_timeout,
-                    rpc.get_block_header_by_number(GetBlockHeaderByNumberRequest {
+                let response = rpc
+                    .get_block_header_by_number(GetBlockHeaderByNumberRequest {
                         block_num: Some(block_num.as_u32()),
                         include_mmr_proof: Some(false),
                         include_protocol_config: Some(false),
-                    }),
-                )
-                .await
-                .unwrap_or_else(|_| {
-                    Err(tonic::Status::deadline_exceeded("block header lookup timed out"))
-                });
+                    })
+                    .await;
                 match response {
                     Ok(response) => return Ok(response.into_inner()),
                     Err(error)
