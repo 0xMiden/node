@@ -20,7 +20,7 @@ async fn generated_signing_key_is_private_and_matches_the_account(#[case] scheme
     let account = read_account_file(&dir.path().join(DISTRIBUTOR_MAC_FILE)).unwrap();
     let key_path = dir.path().join(DISTRIBUTOR_SECRET_FILE);
     let key = AuthSecretKey::read_from_bytes(&fs_err::read(&key_path).unwrap()).unwrap();
-    assert_eq!(account.auth_secret_keys(), &[key.clone()]);
+    assert_eq!(account.auth_secret_keys(), std::slice::from_ref(&key));
 
     let mut wallet = account.account().clone();
     wallet.set_nonce(miden_protocol::ONE).unwrap();
