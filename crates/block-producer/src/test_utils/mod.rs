@@ -8,9 +8,9 @@ mod proven_tx;
 
 pub use proven_tx::MockProvenTxBuilder;
 
-mod authenticated_tx;
+mod transaction_candidate;
 
-pub use authenticated_tx::MockAuthenticatedTxBuilder;
+pub use transaction_candidate::MockTransactionCandidateBuilder;
 
 mod account;
 

@@ -16,7 +16,7 @@ use url::Url;
 use crate::mempool::{Mempool, MempoolConfig};
 use crate::server::MempoolStats;
 use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
-use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
+use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder};
 use crate::{
     DEFAULT_BATCH_WORKERS,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
@@ -31,7 +31,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     let shared = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
     let mut mempool = shared.lock().unwrap();
     let tx = Arc::new(
-        MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(100).build())
+        MockTransactionCandidateBuilder::new(MockProvenTxBuilder::with_account_index(100).build())
             .build(),
     );
 

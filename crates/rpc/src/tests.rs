@@ -17,7 +17,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
+use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInputs};
 use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
 use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
 use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
@@ -743,7 +743,7 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
         found_unauthenticated_notes: HashSet::default(),
         current_block_height: 0.into(),
     };
-    let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).unwrap();
+    let tx = TransactionCandidate::new_unchecked(tx.into(), inputs).unwrap();
     let block_producer = BlockProducerApi::new(
         Arc::clone(&store.state),
         store.state.committed_tip(),
@@ -787,7 +787,7 @@ async fn sequencer_authenticated_rpc_accepts_transactions_without_notes_when_fee
         found_unauthenticated_notes: HashSet::default(),
         current_block_height: 0.into(),
     };
-    let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).unwrap();
+    let tx = TransactionCandidate::new_unchecked(tx.into(), inputs).unwrap();
     let block_producer = BlockProducerApi::new(
         Arc::clone(&store.state),
         store.state.committed_tip(),

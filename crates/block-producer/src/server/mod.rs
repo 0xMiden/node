@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
+use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInputs};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{debug, error, info, instrument};
 use miden_node_utils::formatting::{format_input_notes, format_output_notes};
@@ -348,7 +348,7 @@ impl BlockProducerApi {
         // Authenticate against the local store, then add to the mempool.
         let inputs = get_tx_inputs(&self.state, &tx).await?;
         // SAFETY: we assume that the rpc component has verified the transaction proof already.
-        let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs)
+        let tx = TransactionCandidate::new_unchecked(tx.into(), inputs)
             .map_err(StateConflict::from)
             .map_err(MempoolSubmissionError::AuthenticationFailed)?;
         self.submit_authenticated_tx(tx).await
@@ -359,7 +359,7 @@ impl BlockProducerApi {
     #[expect(clippy::let_and_return, reason = "required to lengthen arc lifetime")]
     pub async fn submit_authenticated_tx(
         &self,
-        tx: AuthenticatedTransaction,
+        tx: TransactionCandidate,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         let shared_mempool = self.mempool.lock().await;
         // We need the let binding here to avoid E0597 `shared_mempool` does not live long enough
@@ -416,7 +416,7 @@ impl BlockProducerApi {
         for (tx, inputs) in batch.transactions().iter().zip(inputs) {
             // SAFETY: We assume that the rpc component has verified the transaction proofs, as well
             // as the batch integrity itself.
-            let tx = AuthenticatedTransaction::new_unchecked(Arc::clone(tx), inputs)
+            let tx = TransactionCandidate::new_unchecked(Arc::clone(tx), inputs)
                 .map(Arc::new)
                 .map_err(StateConflict::from)
                 .map_err(MempoolSubmissionError::StateConflict)?;

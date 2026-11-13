@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Instrument, Span, error, instrument, miden_span_record};
@@ -28,7 +27,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
-use crate::mempool::SharedMempool;
+use crate::mempool::{MempoolTransaction, SharedMempool};
 use crate::validator::BlockProducerValidatorClient;
 
 mod prover;
@@ -314,7 +313,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .map(AuthenticatedTransaction::reference_block)
+            .map(MempoolTransaction::reference_block)
             .map(|(block_num, _)| block_num)
             .collect();
         let reference_block = selected.parameters().reference_block;
@@ -322,7 +321,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
+            .flat_map(MempoolTransaction::unauthenticated_note_ids)
             .collect();
 
         // The view pins a state snapshot. Only the store reads and the fee collection execution use
@@ -551,6 +550,7 @@ mod tests {
     use std::future::pending;
     use std::time::Duration;
 
+    use miden_node_proto::domain::sequencer::TransactionCandidate;
     use miden_node_utils::genesis::GenesisBlock;
     use miden_protocol::ONE;
     use miden_protocol::block::{BlockSignatures, SignedBlock};
@@ -591,7 +591,7 @@ mod tests {
         let (state, ..) = State::for_tests(directory.path()).await;
         let inputs = get_tx_inputs(&state, &transaction).await?;
         let transaction =
-            Arc::new(AuthenticatedTransaction::new_unchecked(Arc::new(transaction), inputs)?);
+            Arc::new(TransactionCandidate::new_unchecked(Arc::new(transaction), inputs)?);
         let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
         mempool.lock().unwrap().add_transaction(transaction)?;
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();
