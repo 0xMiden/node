@@ -268,7 +268,7 @@ mod tests {
         attachment_schemes.resize(NoteAttachments::MAX_COUNT, 0);
         proto::note::NoteMetadata {
             version: metadata.version,
-            sender: metadata.sender.clone(),
+            sender: metadata.sender,
             note_type: metadata.note_type,
             tag: metadata.tag,
             attachment_schemes,
