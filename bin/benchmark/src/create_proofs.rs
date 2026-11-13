@@ -27,7 +27,7 @@ use miden_protocol::asset::{Asset, AssetId, AssetWitness, FungibleAsset, TokenSy
 use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::code::ProcedureRoot;
-use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::{PublicKey, SecretKey};
 use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, NoteScript, NoteScriptRoot, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
@@ -429,10 +429,7 @@ fn create_faucet() -> (Account, SecretKey) {
 
 /// Creates a new wallet account with the given public key, using `index` to vary the init seed so
 /// each wallet ends up with a distinct account ID.
-fn create_wallet(
-    public_key: &miden_protocol::crypto::dsa::falcon512_eidos::PublicKey,
-    index: u64,
-) -> Account {
+fn create_wallet(public_key: &PublicKey, index: u64) -> Account {
     let init_seed: Vec<_> = index.to_be_bytes().into_iter().chain([0u8; 24]).collect();
     AccountBuilder::new(init_seed.try_into().unwrap())
         .account_type(AccountType::Private)

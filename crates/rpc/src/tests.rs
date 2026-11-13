@@ -2508,10 +2508,12 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
 
 #[tokio::test]
 async fn sync_nullifiers_accepts_raw_high_bit_prefixes() {
+    use miden_node_proto::generated::miden::node::v1::{BlockRange, SyncNullifiersRequest};
+
     let (mut client, _, _store, _server) = start_rpc().await;
     let response = client
-        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
-            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+        .sync_nullifiers(SyncNullifiersRequest {
+            block_range: Some(BlockRange { block_from: 0, block_to: 0 }),
             prefix_len: 16,
             nullifiers: vec![0x7fff, 0x8000, 0xffff],
         })

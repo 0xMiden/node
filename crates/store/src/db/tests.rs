@@ -971,8 +971,10 @@ fn select_nullifiers_by_prefix_works() {
 
 #[test]
 fn eidos_nullifier_prefix_pages_preserve_all_matches() {
+    use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+    use miden_protocol::note::NoteScriptRoot;
     let generated = Nullifier::new(
-        miden_protocol::note::NoteScriptRoot::from_raw(num_to_word(1)),
+        NoteScriptRoot::from_raw(num_to_word(1)),
         num_to_word(2),
         num_to_word(3),
         num_to_word(4),
@@ -983,7 +985,7 @@ fn eidos_nullifier_prefix_pages_preserve_all_matches() {
     assert_eq!(utils::get_nullifier_prefix(&generated), generated.prefix());
     let db = &TestDb::new();
     // Two valid-sized blocks together exceed one response page, even when all prefixes collide.
-    let per_block = miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES / 36 / 2 + 1;
+    let per_block = MAX_RESPONSE_PAYLOAD_BYTES / 36 / 2 + 1;
     let mut expected = Vec::new();
     for height in 1..=2u32 {
         let block = BlockNumber::from(height);

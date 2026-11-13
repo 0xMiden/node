@@ -455,7 +455,9 @@ fn verify_account_state_forest_record(
 
 #[cfg(test)]
 mod tests {
+    use miden_crypto::merkle::smt::BackendReader;
     use miden_protocol::account::{
+        Account,
         AccountId,
         AccountStorageHeader,
         StorageSlotHeader,
@@ -628,9 +630,8 @@ mod tests {
         );
     }
 
-    fn forest_accounts() -> Vec<miden_protocol::account::Account> {
+    fn forest_accounts() -> Vec<Account> {
         use miden_protocol::account::{
-            Account,
             AccountCode,
             AccountStorage,
             StorageMap,
@@ -679,8 +680,8 @@ mod tests {
     }
 
     fn assert_forest_accounts(
-        forest: &AccountStateForest<impl miden_crypto::merkle::smt::BackendReader>,
-        accounts: &[miden_protocol::account::Account],
+        forest: &AccountStateForest<impl BackendReader>,
+        accounts: &[Account],
     ) {
         use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
         use miden_protocol::account::{StorageMapKey, StorageSlotContent};
