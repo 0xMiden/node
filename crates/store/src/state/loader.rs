@@ -455,7 +455,9 @@ fn verify_account_state_forest_record(
 
 #[cfg(test)]
 mod tests {
+    use miden_crypto::merkle::smt::BackendReader;
     use miden_protocol::account::{
+        Account,
         AccountId,
         AccountStorageHeader,
         StorageSlotHeader,
@@ -626,5 +628,172 @@ mod tests {
                 && forest_root == AccountStateForest::empty_smt_root()
                 && database_root == expected_vault_root
         );
+    }
+
+    fn forest_accounts() -> Vec<Account> {
+        use miden_protocol::account::{
+            AccountCode,
+            AccountStorage,
+            StorageMap,
+            StorageMapKey,
+            StorageSlot,
+        };
+        use miden_protocol::asset::{AssetVault, FungibleAsset};
+        use miden_protocol::testing::account_id::{
+            ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+            ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
+        };
+
+        [
+            ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
+            ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let asset = FungibleAsset::new(
+                ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(),
+                100 + index as u64,
+            )
+            .unwrap();
+            let slots = (0..2)
+                .map(|slot| {
+                    StorageSlot::with_map(
+                        StorageSlotName::mock(slot),
+                        StorageMap::with_entries([(
+                            StorageMapKey::from_index(1),
+                            Word::from([index as u32 + slot as u32 + 1, 0, 0, 0]),
+                        )])
+                        .unwrap(),
+                    )
+                })
+                .collect();
+            Account::new_existing(
+                id.try_into().unwrap(),
+                AssetVault::new(&[asset.into()]).unwrap(),
+                AccountStorage::new(slots).unwrap(),
+                AccountCode::mock(),
+                Felt::ONE,
+            )
+        })
+        .collect()
+    }
+
+    fn assert_forest_accounts(
+        forest: &AccountStateForest<impl BackendReader>,
+        accounts: &[Account],
+    ) {
+        use miden_node_proto::domain::account::{AccountVaultDetails, StorageMapEntries};
+        use miden_protocol::account::{StorageMapKey, StorageSlotContent};
+        use miden_protocol::asset::AssetId;
+        use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2;
+
+        for account in accounts {
+            let mut ids = account.vault().assets().map(|asset| asset.id()).collect::<Vec<_>>();
+            ids.push(AssetId::new_fungible(
+                ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2.try_into().unwrap(),
+            ));
+            let AccountVaultDetails::Partial { vault, .. } = forest
+                .get_vault_details_for_assets(account.id(), BlockNumber::GENESIS, ids.clone())
+                .unwrap()
+            else {
+                panic!("expected vault witnesses")
+            };
+            assert_eq!(vault.root(), account.vault().root());
+            for id in ids {
+                assert_eq!(vault.open(id).unwrap(), account.vault().open(id));
+            }
+            for slot in account.storage().slots() {
+                let StorageSlotContent::Map(map) = slot.content() else {
+                    unreachable!()
+                };
+                let keys = vec![StorageMapKey::from_index(1), StorageMapKey::from_index(2)];
+                let details = forest
+                    .get_storage_map_details_for_keys(
+                        account.id(),
+                        slot.name().clone(),
+                        BlockNumber::GENESIS,
+                        keys.clone(),
+                    )
+                    .unwrap()
+                    .unwrap();
+                let StorageMapEntries::PartialMap { partial_smt, .. } = details.entries else {
+                    panic!("expected map witnesses")
+                };
+                assert_eq!(partial_smt.root(), map.root());
+                for key in keys {
+                    assert_eq!(
+                        partial_smt.get_value(&key.hash().as_word()).unwrap(),
+                        map.get(&key)
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eidos_forest_reopens_with_vault_and_storage_proofs() {
+        use miden_protocol::account::AccountPatch;
+        let root = tempfile::tempdir().unwrap();
+        let accounts = forest_accounts();
+        let config = PersistentBackendConfig::new(root.path()).unwrap();
+        let mut forest = AccountStateForest::from_backend(
+            ForestPersistentBackend::load(config.clone()).unwrap(),
+        )
+        .unwrap();
+        forest
+            .apply_rebuild_updates(
+                BlockNumber::GENESIS,
+                accounts.iter().cloned().map(|account| AccountPatch::try_from(account).unwrap()),
+            )
+            .unwrap();
+        assert_forest_accounts(&forest, &accounts);
+        drop(forest);
+        let reopened =
+            AccountStateForest::from_backend(ForestPersistentBackend::load(config).unwrap())
+                .unwrap();
+        assert_forest_accounts(&reopened, &accounts);
+    }
+
+    #[tokio::test]
+    async fn eidos_forest_rebuild_matches_persisted_state() {
+        use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+        use miden_protocol::block::ValidatorConfig;
+
+        use crate::genesis::GenesisState;
+
+        let root = tempfile::tempdir().unwrap();
+        let accounts = forest_accounts();
+        let signer = SigningKey::new();
+        let genesis = GenesisState::new(
+            accounts.clone(),
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let path = root.path().join("store.sqlite3");
+        Db::bootstrap(path.clone(), genesis).await.unwrap();
+        let db = Db::load(path).await.unwrap();
+        let config = PersistentBackendConfig::new(root.path().join("forest")).unwrap();
+        let forest = load_account_state_forest(
+            ForestPersistentBackend::load(config.clone()).unwrap(),
+            &db,
+            BlockNumber::GENESIS,
+        )
+        .await
+        .unwrap();
+        assert_forest_accounts(&forest, &accounts);
+        drop(forest);
+        let reopened = load_account_state_forest(
+            ForestPersistentBackend::load(config).unwrap(),
+            &db,
+            BlockNumber::GENESIS,
+        )
+        .await
+        .unwrap();
+        assert_forest_accounts(&reopened, &accounts);
     }
 }

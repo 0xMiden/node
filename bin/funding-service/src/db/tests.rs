@@ -4,7 +4,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use miden_node_db::DatabaseError;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_WITH_CALLBACKS,
@@ -37,7 +37,7 @@ fn note_for(target: AccountId, amount: u64, seed: u32) -> UsdcxP2Id {
         identity.fee_asset_id,
         target,
         amount,
-        &mut RandomCoin::new(Word::from([seed; 4])),
+        &mut EidosRandomCoin::new(Word::from([seed; 4])),
     )
     .unwrap()
 }

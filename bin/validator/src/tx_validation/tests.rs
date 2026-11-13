@@ -10,9 +10,7 @@ use super::*;
 async fn captured_execution() -> ExecutedTransaction {
     let mut builder = MockChainBuilder::new();
     let account = builder
-        .add_existing_wallet(Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        })
+        .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
         .unwrap();
     let asset: Asset =
         FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)
@@ -81,6 +79,34 @@ async fn replay_rejects_missing_signatures() {
 }
 
 #[tokio::test]
+async fn replay_store_serves_captured_code_witnesses() {
+    use miden_protocol::Word;
+    use miden_protocol::block::code_tree::CodeTreeRoot;
+    use miden_protocol::code::ProcedureRoot;
+    use miden_tx::DataStore;
+
+    let executed = captured_execution().await;
+    let mut inputs = executed.tx_inputs().clone();
+    let chain = MockChainBuilder::new().build().unwrap();
+    let tree = chain.code_tree();
+    let procedure = tree.procedure_roots().next().unwrap();
+    let absent = ProcedureRoot::from_raw(Word::from([1, 2, 3, 4u32]));
+    let witnesses = vec![tree.open(&procedure), tree.open(&absent)];
+    inputs.add_code_witnesses(witnesses.clone()).unwrap();
+    let store = TransactionInputsDataStore::new(inputs);
+    assert_eq!(
+        store.get_code_witnesses(tree.root(), vec![procedure, absent]).await.unwrap(),
+        witnesses
+    );
+    assert!(
+        store
+            .get_code_witnesses(CodeTreeRoot::from_raw(Word::empty()), vec![procedure])
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn replay_store_reports_missing_data_and_wrong_roots() {
     use std::collections::BTreeSet;
 
@@ -121,9 +147,7 @@ async fn replay_store_serves_foreign_state_scripts_and_witnesses() {
     use miden_protocol::transaction::AccountInputs;
     use miden_tx::DataStore;
     let mut builder = MockChainBuilder::new();
-    let auth = Auth::BasicAuth {
-        auth_scheme: AuthScheme::Falcon512Poseidon2,
-    };
+    let auth = Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos };
     let native = builder.add_existing_wallet(auth.clone()).unwrap();
     let asset: Asset =
         FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100)

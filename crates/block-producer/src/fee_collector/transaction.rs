@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 use std::num::NonZeroU16;
+use std::sync::Arc;
 
 use miden_node_store::state::StateView;
 use miden_objects::account_file::AccountFile;
-use miden_protocol::Word;
 use miden_protocol::account::{
     Account,
     AccountId,
@@ -12,7 +12,9 @@ use miden_protocol::account::{
     StorageMapWitness,
 };
 use miden_protocol::asset::{Asset, AssetId, AssetWitness};
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::code::ProcedureRoot;
 use miden_protocol::note::{Note, NoteAssets, NoteScript, NoteScriptRoot, NoteType};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
@@ -24,6 +26,7 @@ use miden_protocol::transaction::{
     TransactionArgs,
 };
 use miden_protocol::vm::{AdviceMap, FutureMaybeSend};
+use miden_protocol::{MastForest, Word};
 use miden_standards::account::auth::AuthTxFeeCollector;
 use miden_standards::note::P2idNoteStorage;
 use miden_standards::tx_script::ExpirationTransactionScript;
@@ -264,6 +267,22 @@ impl DataStore for FeeCollectorDataStore<'_> {
                     source: Some(error.into()),
                 })
         }
+    }
+
+    fn get_code_witnesses(
+        &self,
+        _code_tree_root: CodeTreeRoot,
+        _procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move { Err(DataStoreError::other("code witnesses are unavailable in this data store")) }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
     }
 
     fn get_note_script(
@@ -538,7 +557,7 @@ mod tests {
         let (state, ..) = State::for_tests(directory.path()).await;
         let (account, _) = mock_collection_account().into_parts();
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        for keys in [vec![], vec![AuthSecretKey::new_falcon512_poseidon2()]] {
+        for keys in [vec![], vec![AuthSecretKey::new_falcon512_eidos()]] {
             let result = FeeCollectorTransactionBuilder::new(
                 target,
                 AccountFile::new(account.clone(), keys),

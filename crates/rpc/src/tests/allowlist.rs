@@ -235,14 +235,10 @@ impl TestStore {
             .verification_base_fee(1);
         let accounts = [
             builder
-                .create_new_wallet(Auth::BasicAuth {
-                    auth_scheme: AuthScheme::Falcon512Poseidon2,
-                })
+                .create_new_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
                 .unwrap(),
             builder
-                .create_new_wallet(Auth::BasicAuth {
-                    auth_scheme: AuthScheme::Falcon512Poseidon2,
-                })
+                .create_new_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
                 .unwrap(),
         ];
         let notes = accounts.each_ref().map(|account| {

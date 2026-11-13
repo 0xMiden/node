@@ -10,8 +10,8 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, NoteType};
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
@@ -53,7 +53,7 @@ pub fn genesis_style_wallet(
 ) -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(seed);
     let secret_key = SecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Eidos);
     let init_seed: [u8; 32] = rng.random();
 
     let mut wallet = create_basic_wallet(init_seed, auth, AccountType::Public)?;
@@ -152,7 +152,7 @@ impl Fixture {
         let (funder, secret_key) = genesis_style_wallet(fee_faucet_id, balance, [9; 32])?;
         let wallet = FundingWallet::new(
             funder.clone(),
-            AuthSecretKey::Falcon512Poseidon2(secret_key),
+            AuthSecretKey::Falcon512Eidos(secret_key),
             AssetId::new_fungible(fee_faucet_id),
         );
 
@@ -181,7 +181,7 @@ pub fn build_funding_note(
     fee_asset_id: AssetId,
     target: AccountId,
     amount: u64,
-    rng: &mut RandomCoin,
+    rng: &mut EidosRandomCoin,
 ) -> Result<UsdcxP2Id> {
     let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
         .context("failed to build the funding asset")?;

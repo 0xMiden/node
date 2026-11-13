@@ -419,9 +419,7 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
         .fee_faucet_id(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap())
         .verification_base_fee(1);
     let auth = if include_fee {
-        Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        }
+        Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos }
     } else {
         Auth::IncrNonce
     };
@@ -2506,6 +2504,23 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     client_mmr.add(headers[4].commitment(), false).unwrap();
 
     assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
+}
+
+#[tokio::test]
+async fn sync_nullifiers_accepts_raw_high_bit_prefixes() {
+    use miden_node_proto::generated::miden::node::v1::{BlockRange, SyncNullifiersRequest};
+
+    let (mut client, _, _store, _server) = start_rpc().await;
+    let response = client
+        .sync_nullifiers(SyncNullifiersRequest {
+            block_range: Some(BlockRange { block_from: 0, block_to: 0 }),
+            prefix_len: 16,
+            nullifiers: vec![0x7fff, 0x8000, 0xffff],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.nullifiers, []);
 }
 
 /// A nullifier prefix that does not fit in the requested 16-bit prefix length must be rejected with

@@ -239,7 +239,7 @@ fn create_test_account_with_storage() -> (Account, AccountId) {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -348,7 +348,7 @@ fn create_account_with_map_storage(
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -639,7 +639,7 @@ fn upsert_accounts_closes_previous_validity_interval() {
         .with_component(component_2)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -724,7 +724,7 @@ fn upsert_accounts_with_multiple_storage_slots() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -797,7 +797,7 @@ fn upsert_accounts_with_empty_storage() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -935,7 +935,7 @@ fn select_latest_storage_multiple_slots() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -1462,7 +1462,7 @@ fn build_account_with_code_seeded(push_value: u32, seed: [u8; 32]) -> Account {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()

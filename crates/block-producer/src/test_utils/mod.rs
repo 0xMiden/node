@@ -1,8 +1,9 @@
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
-use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::testing::account_id::AccountIdBuilder;
 use miden_protocol::transaction::TransactionId;
+use rand::RngExt;
 
 mod proven_tx;
 
@@ -29,7 +30,7 @@ pub mod note;
 ///
 /// It prints its seed on construction which allows us to reproduce
 /// test failures.
-pub struct Random(RandomCoin);
+pub struct Random(EidosRandomCoin);
 
 impl Random {
     /// Creates a [Random] with a random seed. This seed is logged so that it is known for test
@@ -39,11 +40,11 @@ impl Random {
 
         println!("Random::with_random_seed: {seed:?}");
 
-        Self(RandomCoin::new(Word::from(seed)))
+        Self(EidosRandomCoin::new(Word::from(seed)))
     }
 
     pub fn draw_tx_id(&mut self) -> TransactionId {
-        TransactionId::from_raw(self.0.draw_word())
+        TransactionId::from_raw(self.0.random())
     }
 
     pub fn draw_account_id(&mut self) -> AccountId {
@@ -51,6 +52,6 @@ impl Random {
     }
 
     pub fn draw_digest(&mut self) -> Word {
-        self.0.draw_word()
+        self.0.random()
     }
 }

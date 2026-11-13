@@ -152,7 +152,7 @@ fn assert_fresh_wallet_controlled_by_its_key(distributor: &AccountFile, scheme: 
 /// A distributor generated for either scheme is a fresh public wallet controlled by its key.
 #[rstest]
 #[case(AuthScheme::EcdsaK256Keccak)]
-#[case(AuthScheme::Falcon512Poseidon2)]
+#[case(AuthScheme::Falcon512Eidos)]
 fn new_distributor_is_a_fresh_wallet_controlled_by_its_key(#[case] scheme: AuthScheme) {
     let distributor = new_distributor(scheme).expect("the distributor must generate");
     assert_fresh_wallet_controlled_by_its_key(&distributor, scheme);

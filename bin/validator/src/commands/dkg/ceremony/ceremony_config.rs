@@ -1,8 +1,7 @@
 use anyhow::{Context, ensure};
-use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
+use miden_protocol::{Hasher, Word};
 use miden_validator::StorageKeyEpoch;
 
 use super::super::wire::WireCodec;
@@ -29,7 +28,7 @@ impl CeremonyConfig {
         for key in keys {
             bytes.extend_from_slice(&key);
         }
-        let validator_set_commitment = Rpo256::hash(&bytes);
+        let validator_set_commitment = Hasher::hash(&bytes);
         Self {
             validator_set_commitment,
             threshold,

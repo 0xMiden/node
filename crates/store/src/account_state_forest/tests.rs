@@ -992,7 +992,7 @@ fn storage_map_empty_entries_query() {
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();

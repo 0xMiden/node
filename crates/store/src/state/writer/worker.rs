@@ -950,7 +950,12 @@ mod tests {
         let mut account_tree: AccountTree = AccountTree::default();
         account_tree.insert(id, commitment).unwrap();
         let logs = TransactionLogs::new(vec![
-            TransactionLog::new(id, LogTopic::new(1_u32.into(), 2_u32.into()), vec![]).unwrap(),
+            TransactionLog::new(
+                id,
+                LogTopic::new(1_u32.into(), 2_u32.into()),
+                vec![Word::from([7, 8, 9, 10u32])],
+            )
+            .unwrap(),
         ])
         .unwrap();
         let header = TransactionHeader::new(
@@ -1027,5 +1032,77 @@ mod tests {
             .witness;
         assert_eq!(witness.state_commitment(), commitment);
         writer.stop(task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn eidos_block_replica_roundtrip_preserves_commitments_and_logs() {
+        use miden_node_persistence::decode;
+        use miden_protocol::block::BlockNumber;
+
+        let source_dir = tempfile::tempdir().unwrap();
+        let replica_dir = tempfile::tempdir().unwrap();
+        let signer = random_secret_key();
+        let config = test_protocol_config();
+        for dir in [&source_dir, &replica_dir] {
+            let genesis = GenesisState::new(
+                Vec::new(),
+                test_fee_params(),
+                0,
+                ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+                config.clone(),
+            )
+            .into_block()
+            .unwrap();
+            State::bootstrap(genesis, dir.path()).await.unwrap();
+        }
+        let (source, mut writer, source_proofs, source_task) =
+            State::load(source_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let (replica, mut replica_writer, replica_proofs, replica_task) =
+            State::load(replica_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let (block, id, commitment) = block_with_account_and_log(&source, &config).await;
+        let block = SignedBlock::new(
+            block.header().clone(),
+            block.body().clone(),
+            BlockSignatures::new(vec![signer.sign(block.header().commitment())]).unwrap(),
+        )
+        .unwrap();
+        writer.apply_block(block.clone(), None).await.unwrap();
+        let bytes = source.load_block(BlockNumber::ONE).await.unwrap().unwrap();
+        let transported: SignedBlock = decode(&bytes).unwrap();
+        assert_eq!(transported, block);
+        replica_writer.apply_block(transported, None).await.unwrap();
+        assert_eq!(replica.load_block(BlockNumber::ONE).await.unwrap().unwrap(), bytes);
+        replica_writer.stop(replica_task).await;
+        drop(replica_proofs);
+        drop(replica);
+        let (reopened, reopened_writer, _proofs, task) =
+            State::load(replica_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let stored: SignedBlock =
+            decode(&reopened.load_block(BlockNumber::ONE).await.unwrap().unwrap()).unwrap();
+        assert_eq!(stored.header().commitment(), block.header().commitment());
+        assert_eq!(stored.body().public_logs(), block.body().public_logs());
+        let response = reopened
+            .view()
+            .get_account(GetAccountRequest {
+                account_id: id,
+                block_num: None,
+                details: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.witness.state_commitment(), commitment);
+        assert_eq!(reopened.committed_tip(), BlockNumber::ONE);
+        reopened_writer.stop(task).await;
+        writer.stop(source_task).await;
+        drop(source_proofs);
     }
 }

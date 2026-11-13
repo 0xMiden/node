@@ -243,7 +243,7 @@ mod tests {
         let (account, key) = crate::test_utils::genesis_style_wallet(faucet, 0, [9; 32]).unwrap();
         FundingWallet::new(
             account,
-            AuthSecretKey::Falcon512Poseidon2(key),
+            AuthSecretKey::Falcon512Eidos(key),
             AssetId::new_fungible(faucet),
         )
     }

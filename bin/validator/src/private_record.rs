@@ -729,9 +729,7 @@ mod tests {
     fn transaction_inputs() -> TransactionInputs {
         let mut builder = MockChainBuilder::new();
         let account = builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
         builder.build().unwrap().get_transaction_inputs(&account, &[], &[]).unwrap()
     }
@@ -1058,7 +1056,6 @@ mod tests {
         use miden_protocol::Word;
         use miden_protocol::account::AccountPatch;
         use miden_protocol::block::code_tree::CodePatch;
-        use miden_protocol::code::ProcedureRoot;
         use miden_protocol::transaction::{
             LogTopic,
             TransactionEffects,
@@ -1073,12 +1070,7 @@ mod tests {
             "pub proc entry push.1 drop end",
         );
         let mast = package.mast_forest().clone();
-        let patch = CodePatch::new(
-            mast.procedure_digests().map(ProcedureRoot::from_raw).collect(),
-            vec![],
-            mast,
-        )
-        .unwrap();
+        let patch = CodePatch::new(mast).unwrap();
         let logs = TransactionLogs::new(vec![
             TransactionLog::new(
                 inputs.account().id(),
