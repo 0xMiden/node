@@ -35,7 +35,19 @@ impl GraphNode for SelectedBatch {
     fn account_updates(
         &self,
     ) -> Box<dyn Iterator<Item = (AccountId, Word, Word, Option<Word>)> + '_> {
-        Box::new(self.account_updates())
+        // The transaction graph has already validated these transitions and their ordering. Their
+        // initial commitments are the baseline when no account history remains in this graph. Store
+        // snapshots can predate committed parents that have since been pruned.
+        //
+        // For example, a parent changes an account from A to B, and a child changes it from B to C.
+        // If the child is authenticated before the parent commits, its store snapshot still records
+        // A. Once the parent commits and its history is pruned, rolling back the child's batch
+        // removes the account's last entry from this graph. Rebatching the child must then use B as
+        // its baseline, rather than the stale snapshot A.
+        Box::new(
+            self.account_updates()
+                .map(|(account, from, to, _store)| (account, from, to, Some(from))),
+        )
     }
 
     fn id(&self) -> Self::Id {

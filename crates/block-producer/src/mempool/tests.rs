@@ -330,6 +330,80 @@ fn empty_block_commitment() {
     }
 }
 
+#[test]
+fn rolled_back_transaction_can_be_rebatched_after_parent_history_is_pruned() {
+    assert_rebatch_after_parent_history_is_pruned(false);
+}
+
+#[test]
+fn rolled_back_block_can_be_rebatched_after_parent_history_is_pruned() {
+    assert_rebatch_after_parent_history_is_pruned(true);
+}
+
+fn assert_rebatch_after_parent_history_is_pruned(rollback_block: bool) {
+    let (mut uut, _) = Mempool::for_tests();
+    uut.config.state_retention = NonZeroUsize::new(1).unwrap();
+    uut.config.batch_budget.transactions = 1;
+    let [parent, child, _] = MockProvenTxBuilder::sequential();
+    let child = Arc::new(
+        MockAuthenticatedTxBuilder::new(child.raw_proven_transaction().clone())
+            .with_store_state(parent.account_update().initial_state_commitment())
+            .build(),
+    );
+
+    uut.add_transaction(parent.clone()).unwrap();
+    uut.select_full_batch().unwrap();
+    uut.add_transaction(child.clone()).unwrap();
+    let child_batch = uut.select_full_batch().unwrap();
+    uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
+        parent.raw_proven_transaction()
+    ])));
+
+    // Retire the parent's committed history while the child is still awaiting its proof.
+    for _ in 0..2 {
+        let block = uut.select_block();
+        uut.commit_block(&BlockHeader::mock(block.block_number, None, None, &[]));
+    }
+
+    if rollback_block {
+        uut.commit_batch(Arc::new(mock_proven_batch_with_fee_collection([
+            child.raw_proven_transaction()
+        ])));
+        let block = uut.select_block();
+        assert_eq!(block.batches.len(), 1);
+        uut.rollback_block(block.block_number);
+    } else {
+        uut.rollback_batch(child_batch.id());
+    }
+    let retried = uut.select_full_batch().unwrap();
+    assert_eq!(retried.transactions()[0].id(), child.id());
+}
+
+#[test]
+fn batch_baseline_does_not_override_tracked_account_state() {
+    let (mut uut, _) = Mempool::for_tests();
+    let [parent, _, _] = MockProvenTxBuilder::sequential();
+    uut.add_transaction(parent.clone()).unwrap();
+    uut.select_any_batch().unwrap();
+
+    let update = parent.account_update();
+    let conflicting = MockProvenTxBuilder::with_account(
+        update.account_id(),
+        update.initial_state_commitment(),
+        Word::empty(),
+    )
+    .build();
+    let conflicting = Arc::new(MockAuthenticatedTxBuilder::new(conflicting).build());
+    let mut batch =
+        SelectedBatch::builder(BatchParameters { reference_block: BlockNumber::GENESIS });
+    batch.push(conflicting);
+
+    assert_matches!(
+        uut.batches.append(batch.build()),
+        Err(StateConflict::AccountCommitmentMismatch { .. })
+    );
+}
+
 /// Regression test for a child transaction that consumes an unauthenticated note produced by a
 /// parent transaction which has already been committed and later pruned from retained mempool
 /// history.
