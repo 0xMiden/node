@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::BatchId;
@@ -59,7 +59,7 @@ impl BatchParameters {
 /// [ProvenBatch]: miden_protocol::batch::ProvenBatch
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SelectedBatch {
-    txs: Vec<Arc<AuthenticatedTransaction>>,
+    txs: Vec<Arc<TransactionCandidate>>,
     id: SelectedBatchId,
     parameters: BatchParameters,
     account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
@@ -80,11 +80,11 @@ impl SelectedBatch {
         self.id
     }
 
-    pub(crate) fn into_transactions(self) -> Vec<Arc<AuthenticatedTransaction>> {
+    pub(crate) fn into_transactions(self) -> Vec<Arc<TransactionCandidate>> {
         self.txs
     }
 
-    pub(crate) fn transactions(&self) -> &[Arc<AuthenticatedTransaction>] {
+    pub(crate) fn transactions(&self) -> &[Arc<TransactionCandidate>] {
         &self.txs
     }
 
@@ -127,7 +127,7 @@ impl SelectedBatch {
 #[derive(Clone)]
 pub(crate) struct SelectedBatchBuilder {
     parameters: BatchParameters,
-    pub(crate) txs: Vec<Arc<AuthenticatedTransaction>>,
+    pub(crate) txs: Vec<Arc<TransactionCandidate>>,
     pub(crate) account_updates: HashMap<AccountId, (Word, Word, Option<Word>)>,
 }
 
@@ -139,7 +139,7 @@ impl SelectedBatchBuilder {
     /// Panics if the new transaction's account update is inconsistent with the current account
     /// state within the batch i.e. if the transaction's initial account commitment does not
     /// match the account update's final account commitment within the batch (if any).
-    pub(crate) fn push(&mut self, tx: Arc<AuthenticatedTransaction>) {
+    pub(crate) fn push(&mut self, tx: Arc<TransactionCandidate>) {
         let update = tx.account_update();
         self.account_updates
             .entry(update.account_id())

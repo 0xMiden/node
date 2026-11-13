@@ -157,7 +157,7 @@ pub enum TransactionAuthenticationError {
 ///
 /// Authentication is valid only at the recorded chain height.
 #[derive(Clone, Debug, PartialEq)]
-pub struct AuthenticatedTransaction {
+pub struct TransactionCandidate {
     inner: Arc<ProvenTransaction>,
     /// The account state from the store [inputs](TransactionInputs).
     ///
@@ -172,7 +172,7 @@ pub struct AuthenticatedTransaction {
     authentication_height: BlockNumber,
 }
 
-impl AuthenticatedTransaction {
+impl TransactionCandidate {
     /// Check that the supplied store inputs match the account and contain an unspent result for
     /// every transaction nullifier.
     ///
@@ -184,7 +184,7 @@ impl AuthenticatedTransaction {
     pub fn new_unchecked(
         tx: Arc<ProvenTransaction>,
         inputs: TransactionInputs,
-    ) -> Result<AuthenticatedTransaction, TransactionAuthenticationError> {
+    ) -> Result<TransactionCandidate, TransactionAuthenticationError> {
         if inputs.account_id != tx.account_id() {
             return Err(TransactionAuthenticationError::AccountIdMismatch {
                 expected: tx.account_id(),
@@ -210,7 +210,7 @@ impl AuthenticatedTransaction {
             ));
         }
 
-        Ok(AuthenticatedTransaction {
+        Ok(TransactionCandidate {
             inner: tx,
             notes_authenticated_by_store: inputs.found_unauthenticated_notes,
             authentication_height: inputs.current_block_height,
@@ -288,8 +288,8 @@ impl AuthenticatedTransaction {
 // PROTO CONVERSIONS
 // ================================================================================================
 
-impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
-    fn from(value: AuthenticatedTransaction) -> Self {
+impl From<TransactionCandidate> for sequencer::AuthenticatedTransaction {
+    fn from(value: TransactionCandidate) -> Self {
         Self {
             transaction: Some(value.inner.as_ref().into()),
             store_account_state: value.store_account_state.map(Into::into),
@@ -304,7 +304,7 @@ impl From<AuthenticatedTransaction> for sequencer::AuthenticatedTransaction {
 }
 
 impl BuildUnchecked for sequencer::DecodedAuthenticatedTransaction {
-    type Output = AuthenticatedTransaction;
+    type Output = TransactionCandidate;
     type Error = ConversionError;
 
     /// Construct a transaction authenticated by a trusted sequencer client. The caller must ensure
@@ -313,7 +313,7 @@ impl BuildUnchecked for sequencer::DecodedAuthenticatedTransaction {
         // SAFETY: The caller must trust the sender to verify the transaction proof and store
         // authentication data. This constructor does not establish that trust.
         let inner = self.transaction.build_unchecked().context("transaction")?;
-        Ok(AuthenticatedTransaction {
+        Ok(TransactionCandidate {
             inner: Arc::new(inner),
             store_account_state: self.store_account_state.into_inner(),
             notes_authenticated_by_store: self

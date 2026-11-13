@@ -2,7 +2,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use assert_matches::assert_matches;
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::{OutputNote, PublicOutputNote, TransactionHeader};
@@ -13,7 +13,7 @@ use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::batch::TransactionBatchConstructor;
 use crate::test_utils::note::mock_fee_note;
-use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
+use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder};
 
 #[test]
 fn user_batch_bypasses_batch_proving() {
@@ -205,13 +205,13 @@ fn user_batch_conflicts_with_existing_state_are_rejected() {
     assert_eq!(uut, reference);
 }
 
-fn build_tx(builder: MockProvenTxBuilder) -> Arc<AuthenticatedTransaction> {
-    Arc::new(MockAuthenticatedTxBuilder::new(builder.build()).build())
+fn build_tx(builder: MockProvenTxBuilder) -> Arc<TransactionCandidate> {
+    Arc::new(MockTransactionCandidateBuilder::new(builder.build()).build())
 }
 
 fn add_user_batch(
     mempool: &mut Mempool,
-    txs: &[Arc<AuthenticatedTransaction>],
+    txs: &[Arc<TransactionCandidate>],
     parameters: BatchParameters,
 ) -> Result<BlockNumber, MempoolSubmissionError> {
     let proof =
@@ -222,6 +222,6 @@ fn add_user_batch(
 fn tx_with_nullifiers(
     account_index: u32,
     range: std::ops::Range<u64>,
-) -> Arc<AuthenticatedTransaction> {
+) -> Arc<TransactionCandidate> {
     build_tx(MockProvenTxBuilder::with_account_index(account_index).nullifiers_range(range))
 }

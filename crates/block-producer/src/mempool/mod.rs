@@ -54,7 +54,7 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
@@ -238,7 +238,7 @@ impl Mempool {
     #[instrument(name = "add_transaction")]
     pub fn add_transaction(
         &mut self,
-        tx: Arc<AuthenticatedTransaction>,
+        tx: Arc<TransactionCandidate>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         if self.uncommitted_transactions_count() >= self.config.tx_capacity.get() {
             return Err(MempoolSubmissionError::CapacityExceeded);
@@ -275,7 +275,7 @@ impl Mempool {
     #[instrument(name = "add_user_batch")]
     pub fn add_user_batch(
         &mut self,
-        txs: &[Arc<AuthenticatedTransaction>],
+        txs: &[Arc<TransactionCandidate>],
         parameters: BatchParameters,
         proof: Arc<ProvenBatch>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -725,7 +725,7 @@ impl Mempool {
     /// Rejects transactions that consume an uncommitted `TX_FEE` note.
     fn fee_note_consumption_check(
         &self,
-        tx: &AuthenticatedTransaction,
+        tx: &TransactionCandidate,
     ) -> Result<(), MempoolSubmissionError> {
         let fee_script_root = TxFeeNote::script_root();
         let is_fee_note = |note: &OutputNote| {
@@ -763,7 +763,7 @@ impl Mempool {
     }
 }
 
-fn emit_transaction_added(tx: &AuthenticatedTransaction) {
+fn emit_transaction_added(tx: &TransactionCandidate) {
     if !miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG) {
         return;
     }

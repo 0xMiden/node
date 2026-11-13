@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProvenBatch};
@@ -34,7 +34,7 @@ impl BatchSelection {
 // TRANSACTION GRAPH NODE
 // ================================================================================================
 
-impl GraphNode for Arc<AuthenticatedTransaction> {
+impl GraphNode for Arc<TransactionCandidate> {
     type Id = TransactionId;
 
     fn nullifiers(&self) -> Box<dyn Iterator<Item = Nullifier> + '_> {
@@ -85,7 +85,7 @@ impl GraphNode for Arc<AuthenticatedTransaction> {
 /// descendants.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct TransactionGraph {
-    inner: Graph<Arc<AuthenticatedTransaction>>,
+    inner: Graph<Arc<TransactionCandidate>>,
     /// The number of failures a transaction has participated in.
     ///
     /// These are batch or block proving errors in which the transaction was a part of. This is
@@ -130,7 +130,7 @@ impl TransactionGraph {
     /// Transactions are evicted after failing this number of times.
     pub const FAILURE_LIMIT: u32 = 3;
 
-    pub fn append(&mut self, tx: Arc<AuthenticatedTransaction>) -> Result<(), StateConflict> {
+    pub fn append(&mut self, tx: Arc<TransactionCandidate>) -> Result<(), StateConflict> {
         self.inner.append(tx)
     }
 
@@ -152,7 +152,7 @@ impl TransactionGraph {
     /// These transactions can only be selected as a batch, and are reverted and pruned together.
     pub fn append_user_batch(
         &mut self,
-        batch: &[Arc<AuthenticatedTransaction>],
+        batch: &[Arc<TransactionCandidate>],
         parameters: BatchParameters,
         proof: Arc<ProvenBatch>,
     ) -> Result<(), StateConflict> {
@@ -440,7 +440,7 @@ impl TransactionGraph {
 
     fn mark_committed_notes_authenticated_for_descendants(
         &mut self,
-        tx: &Arc<AuthenticatedTransaction>,
+        tx: &Arc<TransactionCandidate>,
     ) {
         let output_notes = tx.output_note_ids().collect::<HashSet<_>>();
         if output_notes.is_empty() {

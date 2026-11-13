@@ -1,4 +1,4 @@
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::batch::ProvenBatch;
 use miden_protocol::{
     MAX_ACCOUNTS_PER_BATCH,
@@ -74,7 +74,7 @@ impl BatchBudget {
     /// Returns [`BudgetStatus::Exceeded`] if the transaction would exceed the remaining budget,
     /// otherwise returns [`BudgetStatus::WithinScope`] and subtracts the resources from the budget.
     #[must_use]
-    pub(crate) fn check_then_subtract(&mut self, tx: &AuthenticatedTransaction) -> BudgetStatus {
+    pub(crate) fn check_then_subtract(&mut self, tx: &TransactionCandidate) -> BudgetStatus {
         // The protocol exposes one account update per transaction. This type assertion keeps the
         // budget assumption coupled to that API.
         pub(crate) const ACCOUNT_UPDATES_PER_TX: usize = 1;
@@ -122,7 +122,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::note::mock_fee_note;
-    use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
+    use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder};
 
     #[test]
     fn batch_budget_reserves_pass_through_transaction_resources() {
@@ -140,7 +140,7 @@ mod tests {
         let tx = MockProvenTxBuilder::with_account_index(1)
             .output_notes(vec![OutputNote::Public(PublicOutputNote::new(fee_note).unwrap())])
             .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx).build();
+        let tx = MockTransactionCandidateBuilder::new(tx).build();
         let mut budget = BatchBudget::new(10);
         let initial_output_notes = budget.output_notes;
 
