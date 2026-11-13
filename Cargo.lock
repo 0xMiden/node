@@ -5332,6 +5332,7 @@ dependencies = [
  "miden-testing",
  "miden-tx",
  "miden-tx-batch",
+ "miden-verifier",
  "serial_test",
  "tokio",
  "tonic",

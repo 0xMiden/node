@@ -514,6 +514,24 @@ async fn block_proof_is_canonical_execution_proof() {
         .expect("server should spawn");
 
     let request = ProveRequest::for_empty_block();
+    let Some(Request::Block(input)) = request.request.clone() else {
+        unreachable!()
+    };
+    let input: BlockProofRequest = input.decode_fields().unwrap().build_unchecked().unwrap();
+    let proposed = ProposedBlock::new_at(
+        input.block_inputs,
+        input.tx_batches.into_vec(),
+        input.block_header.timestamp(),
+    )
+    .unwrap();
+    let (stack_inputs, _) = miden_protocol::block::BlockKernel::prepare_inputs(&proposed);
+    let executed = miden_block_prover::BlockExecutor::new().execute(proposed).unwrap();
+    let outputs = executed.block_outputs().clone().into_stack_outputs();
+    let claim = miden_verifier::ExecutionClaim::from_program_info(
+        miden_protocol::block::BlockKernel::program_info(),
+        stack_inputs,
+        outputs,
+    );
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let proof = match response.proof.unwrap() {
@@ -521,7 +539,15 @@ async fn block_proof_is_canonical_execution_proof() {
         other => panic!("expected block proof response, got {other:?}"),
     };
 
-    assert_ne!(proof.to_bytes(), [] as [u8; 0]);
+    let verifier = miden_verifier::Verifier::new()
+        .with_min_conjectured_security_level_per_stark(MIN_PROOF_SECURITY_LEVEL);
+    assert!(verifier.verify(&claim, &proof).unwrap().is_complete());
+    let wrong_claim = miden_verifier::ExecutionClaim::from_program_info(
+        miden_protocol::block::BlockKernel::program_info(),
+        miden_protocol::vm::StackInputs::default(),
+        outputs,
+    );
+    assert!(verifier.verify(&wrong_claim, &proof).is_err());
 
     server.abort();
 }
