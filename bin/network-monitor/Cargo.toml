@@ -15,6 +15,8 @@ version.workspace      = true
 workspace = true
 
 [dependencies]
+alloy-primitives    = { default-features = false, version = "1.7" }
+alloy-sol-types     = { default-features = false, version = "1.7" }
 anyhow              = { workspace = true }
 axum                = { workspace = true }
 backon              = { workspace = true }
@@ -30,6 +32,7 @@ miden-node-utils    = { workspace = true }
 miden-protocol      = { features = ["std"], workspace = true }
 miden-standards     = { workspace = true }
 miden-tx            = { features = ["concurrent", "std"], workspace = true }
+miden-usdcx         = { workspace = true }
 rand                = { workspace = true }
 rand_chacha         = { workspace = true }
 reqwest             = { features = ["json", "query"], workspace = true }

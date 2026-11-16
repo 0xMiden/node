@@ -20,6 +20,7 @@ miden_node_tracing::declare_targets! {
     "miden_network_monitor::validator" => "miden::monitor::validator",
     "miden_network_monitor::note_transport" => "miden::monitor::note_transport",
     "miden_network_monitor::agglayer" => "miden::monitor::agglayer",
+    "miden_network_monitor::usdcx_bridge" => "miden::monitor::usdcx_bridge",
     "miden_network_monitor::counter" => "miden::monitor::transactions",
     "miden_network_monitor::deploy" => "miden::monitor::transactions",
     "miden_network_monitor::funding" => "miden::monitor::transactions",
@@ -45,6 +46,7 @@ pub mod remote_prover;
 pub mod service;
 pub mod service_status;
 pub mod status;
+pub mod usdcx_bridge;
 pub mod validator;
 mod view;
 

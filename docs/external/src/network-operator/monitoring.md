@@ -15,7 +15,9 @@ configuration.
 
 `miden-network-monitor` is an observer and test client. It is not required for block production. Depending on
 configuration, it can check RPC freshness, validator health, remote prover status, faucet availability, explorer
-availability, note transport, Agglayer bridge status, and end-to-end network transaction flows.
+availability, note transport, Agglayer bridge status, USDCx bridge status, and end-to-end network transaction flows. The
+USDCx bridge check is enabled by `MIDEN_MONITOR_XRESERVE_RPC_URL` and `MIDEN_MONITOR_XRESERVE_ADDRESS`; see the
+[monitor operation guide](https://github.com/0xMiden/node/blob/next/bin/network-monitor/README.md#operation).
 
 End-to-end transaction checks require the validator's signing public key. Set
 `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to the key printed by `miden-validator pubkey`. The monitor uses it to

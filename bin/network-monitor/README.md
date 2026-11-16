@@ -16,6 +16,7 @@ monitor:
 - a note transport service;
 - named validator services;
 - the Agglayer bridge, through the status endpoint of an agglayer-monitor instance;
+- the USDCx bridge, through the native faucet on Miden and the Circle xReserve contract that holds its collateral;
 - an end-to-end network transaction flow using temporary in-memory accounts.
 
 The monitor serves a web dashboard and can emit OpenTelemetry traces when standard OTLP environment variables are
@@ -110,6 +111,33 @@ The Agglayer bridge check reads `GET /v1/status` from the agglayer-monitor API a
 The agglayer-monitor runs the E2E bridge tests between L1 and Miden. The monitor does not send bridge transactions. The
 card status is the overall status that the agglayer-monitor reports. That status is unknown until both directions have a
 result. The card is unhealthy when the endpoint is unreachable, returns an error, or uses an unsupported schema version.
+
+The USDCx bridge card compares the USDCx circulating on Miden with the USDC that Circle's xReserve contract holds as
+collateral for it on Arc. Enable it by setting both `MIDEN_MONITOR_XRESERVE_RPC_URL`, a JSON-RPC endpoint of Arc, and
+`MIDEN_MONITOR_XRESERVE_ADDRESS`, the xReserve contract:
+
+| Network | `MIDEN_MONITOR_XRESERVE_RPC_URL` | `MIDEN_MONITOR_XRESERVE_ADDRESS`             |
+| ------- | -------------------------------- | -------------------------------------------- |
+| Mainnet | `https://rpc.mainnet.arc.io`     | `0x8888888199b2Df864bf678259607d6D5EBb4e3Ce` |
+| Testnet | `https://rpc.testnet.arc.io`     | `0x008888878f94C0d87defdf0B07f46B93C1934442` |
+
+Do not enable the card on networks whose native faucet is not backed by xReserve, such as devnet or a local network. The
+monitor finds the faucet from the chain's fee asset and reads the faucet's Circle domain from its storage, so no other
+setting is needed. `MIDEN_MONITOR_XRESERVE_LOCAL_TOKEN` defaults to USDC on Arc. The RPC URL is never displayed or
+logged, so it may carry a provider API key; prefer the environment variable over the command-line flag in that case.
+Public Arc endpoints rate-limit their clients, so the card is checked every `MIDEN_MONITOR_USDCX_BRIDGE_CHECK_INTERVAL`,
+which defaults to `30s`.
+
+The card is healthy when both chains can be read, nothing is paused, and the collateral covers the circulating supply.
+It turns unhealthy when the Miden faucet is paused, when xReserve is paused globally or for Miden's deposits or
+withdrawals, or when the supply exceeds the collateral, which should never happen because deposits reach xReserve before
+they are minted and withdrawals are burned before xReserve releases them. The difference between the two is in-flight
+deposits and withdrawals.
+
+The card also counts the deposits and withdrawals the faucet processed in the last 24 hours of chain time and shows the
+latest one. The monitor keeps these counts in memory and rebuilds them from chain history after a restart, which can
+take a few checks on a busy network; the card shows the block it has caught up to until then. A failure to read this
+history is shown as a warning and does not change the card status.
 
 Use the binary help output for the current command and configuration surface. The help output is the source of truth for
 flags and environment variables.
