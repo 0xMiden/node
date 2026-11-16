@@ -142,6 +142,7 @@ pub enum ServiceDetails {
     NoteTransportStatus(NoteTransportStatusDetails),
     ValidatorStatus(ValidatorStatusDetails),
     AgglayerStatus(AgglayerStatusDetails),
+    UsdcxBridge(UsdcxBridgeDetails),
     Error,
 }
 
@@ -269,6 +270,86 @@ pub struct AgglayerDirectionDetails {
     pub current_phase: Option<String>,
     pub success_count: u64,
     pub failure_count: u64,
+}
+
+// USDCX BRIDGE DETAILS
+// ================================================================================================
+
+/// State of the `USDCx` bridge, read from the Miden faucet and from the xReserve contract.
+///
+/// Each section holds what the latest check could read, so an unhealthy card still shows the
+/// sources that answered.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UsdcxBridgeDetails {
+    /// Address of the xReserve contract.
+    pub xreserve_address: String,
+    pub faucet: Option<UsdcxFaucetDetails>,
+    pub xreserve: Option<XReserveDetails>,
+    pub activity: Option<UsdcxActivityDetails>,
+    /// Error from the latest activity sync.
+    ///
+    /// Activity is informational, so this error does not change the card status.
+    pub activity_error: Option<String>,
+}
+
+/// `USDCx` faucet state at a Miden block.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsdcxFaucetDetails {
+    pub faucet_id: String,
+    /// Block at which the faucet state was read.
+    pub block_num: u32,
+    pub symbol: String,
+    pub decimals: u8,
+    /// Amount the faucet has minted and not burned, in base units.
+    pub circulating_supply: u64,
+    /// Whether the faucet is paused, which stops both mints and burns.
+    pub paused: bool,
+    /// Circle domain that identifies this network in xReserve.
+    pub circle_domain: u32,
+}
+
+/// xReserve state for the faucet's Circle domain.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct XReserveDetails {
+    pub chain_id: u64,
+    /// Collateral held for the domain, in base units of the collateral token.
+    pub collateral: u64,
+    pub collateral_decimals: u8,
+    /// Whether the whole contract is paused, which stops deposits and withdrawals for every domain.
+    pub paused: bool,
+    pub deposits_paused: bool,
+    pub withdrawals_paused: bool,
+}
+
+/// Bridge transactions of the `USDCx` faucet in the last 24 hours of chain time.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsdcxActivityDetails {
+    pub deposits_24h: u64,
+    pub withdrawals_24h: u64,
+    /// Most recent bridge event seen, kept after it leaves the 24-hour window.
+    pub latest: Option<UsdcxBridgeEvent>,
+    /// Last block included in the counts.
+    pub synced_to: u32,
+    /// Chain tip when the counts were last updated.
+    pub chain_tip: u32,
+}
+
+/// A deposit or withdrawal processed by the `USDCx` faucet.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UsdcxBridgeEvent {
+    pub kind: UsdcxBridgeEventKind,
+    pub block_num: u32,
+    pub timestamp: u64,
+    pub transaction_id: String,
+}
+
+/// Direction of a `USDCx` bridge event, from the point of view of Miden.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum UsdcxBridgeEventKind {
+    /// A deposit on the xReserve chain was minted on Miden.
+    Deposit,
+    /// `USDCx` was burned on Miden to withdraw on the xReserve chain.
+    Withdrawal,
 }
 
 // RPC STATUS DETAILS
