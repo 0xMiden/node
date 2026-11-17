@@ -75,7 +75,7 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 
 | Target                            | Events                                                            |
 | --------------------------------- | ----------------------------------------------------------------- |
-| `miden`                           | General process startup, configuration, shutdown, and fatal exits |
+| `miden::process`                  | General process startup, configuration, shutdown, and fatal exits |
 | `miden::rpc::server`              | RPC requests, subscriptions, readiness, and submissions           |
 | `miden::production`               | Sequencer orchestration and fee-collector operations              |
 | `miden::production::transactions` | Network transaction scheduling, note selection, and execution     |
@@ -100,7 +100,7 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::http::server`             | HTTP dashboard requests and listener readiness                    |
 | `miden::cache`                    | In-memory cache lock spans                                        |
 
-Network monitor startup and configuration messages use the root `miden` target.
+Network monitor startup and configuration messages use the `miden::process` target.
 
 Network monitor probes have separate child targets under `miden::monitor`: `rpc`, `prover`, `faucet`, `funding`,
 `explorer`, `validator`, `note_transport`, `agglayer`, and `transactions`. The transactions target includes account
@@ -111,12 +111,12 @@ logs while keeping other monitor diagnostics at `info`:
 miden::monitor=info,miden::monitor::prover=debug
 ```
 
-General process messages use the root `miden` target. Operational work uses activity targets such as `miden::storage`,
-`miden::sync`, and `miden::admin`. Set a baseline with `miden=info` and override individual activities as needed, for
-example `miden=info,miden::sync=debug`.
+General process messages use the `miden::process` target. Operational work uses activity targets such as
+`miden::storage`, `miden::sync`, and `miden::admin`. Set a baseline with `miden=info` and override individual activities
+as needed, for example `miden=info,miden::sync=debug`.
 
-A `miden-node` process contains multiple components. For example, a sequencer can emit `miden`, `miden::rpc::server`,
-`miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
+A `miden-node` process contains multiple components. For example, a sequencer can emit `miden::process`,
+`miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
 
 ## Select a span
 
