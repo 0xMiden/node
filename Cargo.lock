@@ -4650,6 +4650,8 @@ dependencies = [
 name = "miden-network-monitor"
 version = "0.18.2"
 dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "axum",
  "backon",
@@ -4666,6 +4668,7 @@ dependencies = [
  "miden-standards",
  "miden-testing",
  "miden-tx",
+ "miden-usdcx",
  "rand 0.10.3",
  "rand_chacha 0.10.0",
  "reqwest",
