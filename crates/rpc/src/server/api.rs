@@ -129,6 +129,7 @@ pub struct RpcService {
     network_tx_auth: Option<NetworkTxAuth>,
     genesis_commitment: Option<Word>,
     block_header_cache: LruCache<BlockNumber, BlockHeader>,
+    upstream_status: status::UpstreamStatusCache,
 }
 
 impl RpcService {
@@ -146,6 +147,7 @@ impl RpcService {
             network_tx_auth,
             genesis_commitment: None,
             block_header_cache: LruCache::new(commitment_cache_capacity),
+            upstream_status: status::UpstreamStatusCache::default(),
         }
     }
 

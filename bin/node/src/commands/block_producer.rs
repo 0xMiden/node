@@ -31,6 +31,9 @@ pub struct BlockProducerOptions {
     pub block_prover: BlockProverOptions,
 
     #[command(flatten)]
+    pub batch_prover: BatchProverOptions,
+
+    #[command(flatten)]
     pub mempool: MempoolOptions,
 }
 
@@ -69,6 +72,7 @@ mod tests {
 
     use super::{
         BatchOptions,
+        BatchProverOptions,
         BlockOptions,
         BlockProducerOptions,
         BlockProverOptions,
@@ -100,6 +104,7 @@ mod tests {
                 max_concurrent_proofs: miden_node_block_producer::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
             block_prover: BlockProverOptions { url: None },
+            batch_prover: BatchProverOptions { url: None },
             mempool: MempoolOptions {
                 tx_capacity: miden_node_block_producer::DEFAULT_MEMPOOL_TX_CAPACITY,
             },
@@ -164,7 +169,7 @@ pub struct BuilderOptions {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BatchOptions {
-    /// Maximum interval between batch scheduler checks.
+    /// Maximum delay before pending transactions are selected for a partial batch.
     #[arg(
         id = "batch.interval",
         long = "batch.interval",
@@ -246,6 +251,19 @@ pub struct BlockProverOptions {
         id = "block-prover.url",
         long = "block-prover.url",
         env = "MIDEN_NODE_BLOCK_PROVER_URL",
+        value_name = "URL",
+        help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
+    )]
+    pub url: Option<Url>,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub struct BatchProverOptions {
+    /// The remote batch prover gRPC URL. If not provided, batches are proved locally.
+    #[arg(
+        id = "batch-prover.url",
+        long = "batch-prover.url",
+        env = "MIDEN_NODE_BATCH_PROVER_URL",
         value_name = "URL",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]

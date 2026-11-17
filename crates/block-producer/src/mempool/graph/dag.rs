@@ -65,12 +65,27 @@ where
     ///
     /// Returns an error if the node's state does not build on top of the current graph state.
     pub fn append(&mut self, node: N) -> Result<(), StateConflict> {
+        self.append_with(node, |node| node)
+    }
+
+    /// Validates a candidate before converting it into the representation retained by the graph.
+    ///
+    /// The conversion must preserve the node's identity and state transitions. Admission evidence
+    /// may be discarded after validation without becoming part of the retained state.
+    pub(super) fn append_with<T>(
+        &mut self,
+        node: T,
+        admit: impl FnOnce(T) -> N,
+    ) -> Result<(), StateConflict>
+    where
+        T: GraphNode<Id = N::Id>,
+    {
         self.state.validate_append(&node)?;
 
         let id = node.id();
         let parents = self.state.apply_append(id, &node);
         self.edges.insert(id, parents);
-        self.nodes.insert(id, node);
+        self.nodes.insert(id, admit(node));
         self.selection_check(id);
 
         Ok(())

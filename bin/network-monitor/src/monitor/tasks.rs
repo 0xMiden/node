@@ -36,6 +36,7 @@ use crate::status::{
     ServiceDetails,
     ServiceStatus,
 };
+use crate::usdcx_bridge::UsdcxBridgeService;
 use crate::validator::ValidatorService;
 
 /// Task management structure that supervises named component tasks.
@@ -130,6 +131,25 @@ impl Tasks {
             agglayer_monitor_url,
             config.status_check_interval,
             config.request_timeout,
+        );
+        self.spawn_service(svc)
+    }
+
+    /// Spawn the `USDCx` bridge checker task.
+    pub fn spawn_usdcx_bridge_checker(
+        &mut self,
+        config: &MonitorConfig,
+    ) -> Receiver<ServiceStatus> {
+        let xreserve_rpc_url = config.xreserve_rpc_url.clone().expect("xReserve RPC URL exists");
+        let xreserve_address = config.xreserve_address.expect("xReserve address exists");
+        let svc = UsdcxBridgeService::new(
+            config.rpc_url.clone(),
+            xreserve_rpc_url,
+            xreserve_address,
+            config.xreserve_local_token,
+            config.usdcx_bridge_check_interval,
+            config.request_timeout,
+            config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
     }

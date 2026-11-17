@@ -23,9 +23,12 @@ Connect services to the relevant prover URLs:
 | Consumer                        | Option               |
 | ------------------------------- | -------------------- |
 | Sequencer block proving         | `--block-prover.url` |
+| Sequencer batch proving         | `--batch-prover.url` |
 | NTX builder transaction proving | `--tx-prover.url`    |
 
-The sequencer proves batches locally with precompile proof generation disabled.
+The sequencer proves batches locally with precompile proof generation disabled unless `--batch-prover.url` or
+`MIDEN_NODE_BATCH_PROVER_URL` is set. Configure a batch prover independently of the block prover. See the
+[sequencer guide](./sequencer.md#batch-proving) for configuration and failure behavior.
 
 Remote provers are internal services. Put load balancing, service discovery, and admission control outside the prover
 binary when a deployment needs them.

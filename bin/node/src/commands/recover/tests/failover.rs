@@ -647,7 +647,6 @@ async fn validator_backup_decoding_limit_is_configurable() -> anyhow::Result<()>
     ensure!(response.encoded_len() > 4 * 1024 * 1024);
     let upstream = Builder::new(Url::parse("http://127.0.0.1:1")?)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()

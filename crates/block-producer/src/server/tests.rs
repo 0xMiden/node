@@ -16,7 +16,7 @@ use url::Url;
 use crate::mempool::{Mempool, MempoolConfig};
 use crate::server::MempoolStats;
 use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
-use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder};
+use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder};
 use crate::{
     DEFAULT_BATCH_WORKERS,
     DEFAULT_MAX_BATCHES_PER_BLOCK,
@@ -31,7 +31,7 @@ fn mempool_stats_track_uncommitted_work_and_the_canonical_tip() {
     let shared = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
     let mut mempool = shared.lock().unwrap();
     let tx = Arc::new(
-        MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(100).build())
+        MockTransactionCandidateBuilder::new(MockProvenTxBuilder::with_account_index(100).build())
             .build(),
     );
 
@@ -89,6 +89,7 @@ async fn block_producer_starts_with_store_state() {
         validator_urls: vec![Url::parse("http://127.0.0.1:0").unwrap()],
         validator_timeout: DEFAULT_VALIDATOR_TIMEOUT,
         block_prover_url: None,
+        batch_prover_url: None,
         batch_interval: Duration::from_hours(1),
         block_interval: Duration::from_hours(1),
         max_txs_per_batch: DEFAULT_MAX_TXS_PER_BATCH,

@@ -74,6 +74,11 @@ async fn monitor(config: MonitorConfig) -> Result<()> {
         .is_some()
         .then(|| tasks.spawn_agglayer_checker(&config));
 
+    let usdcx_bridge_rx = config
+        .xreserve_rpc_url
+        .is_some()
+        .then(|| tasks.spawn_usdcx_bridge_checker(&config));
+
     // Build the flat services Vec in the order the dashboard expects to render cards.
     let services = std::iter::once(rpc_rx)
         .chain(prover_rxs)
@@ -85,6 +90,7 @@ async fn monitor(config: MonitorConfig) -> Result<()> {
         .chain(note_transport_rx)
         .chain(validator_rxs)
         .chain(agglayer_rx)
+        .chain(usdcx_bridge_rx)
         .collect();
 
     let server_state = ServerState {

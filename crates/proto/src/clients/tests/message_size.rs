@@ -52,7 +52,6 @@ async fn message_size_override_survives_states_clones_and_connection_modes() {
     let builder = Builder::new(url.clone())
         .max_decoding_message_size(16 * 1024 * 1024)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_auth_header()
@@ -69,7 +68,6 @@ async fn message_size_override_survives_states_clones_and_connection_modes() {
     );
     let mut default = Builder::new(url)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_auth_header()
@@ -93,7 +91,6 @@ async fn message_size_counts_encoded_bytes_at_the_boundary() {
     let (url, shutdown, task) = server(126).await;
     let builder = Builder::new(url)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_auth_header()
@@ -185,7 +182,6 @@ async fn message_size_validator_uses_four_mib_default_and_accepts_override() {
     let (url, shutdown, task) = server(4 * 1024 * 1024 + 1).await;
     let builder = Builder::new(url)
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_auth_header()
@@ -215,7 +211,6 @@ async fn message_size_limits_stream_items_individually() {
         let mut client = Builder::new(url)
             .max_decoding_message_size(5)
             .without_tls()
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()

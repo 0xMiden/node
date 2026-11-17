@@ -21,7 +21,7 @@ async fn production_setup_exposes_reload_controls_without_an_exporter() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body, serde_json::json!({"filter": "warn"}));
+    assert_eq!(body, serde_json::json!({"filter": "warn,miden::=warn"}));
     for (output, expected) in [("stdout", StatusCode::NO_CONTENT), ("otel", StatusCode::CONFLICT)] {
         let response = app
             .clone()

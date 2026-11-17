@@ -9,6 +9,7 @@ mod note_transport;
 mod ntx;
 mod remote_prover;
 mod rpc;
+mod usdcx_bridge;
 mod validator;
 
 pub(super) use agglayer::render_agglayer;
@@ -19,4 +20,5 @@ pub(super) use note_transport::render_note_transport;
 pub(super) use ntx::{render_ntx_increment, render_ntx_tracking};
 pub(super) use remote_prover::render_remote_prover;
 pub(super) use rpc::render_rpc_status;
+pub(super) use usdcx_bridge::render_usdcx_bridge;
 pub(super) use validator::render_validators;

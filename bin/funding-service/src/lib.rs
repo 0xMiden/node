@@ -207,7 +207,7 @@ impl FundingServiceConfig {
 
     /// Connects to the node and builds the service.
     #[instrument(
-        target = "miden",
+        target = "miden::process",
         name = "initialize",
         fields(
             funding_service.remote_prover = self.tx_prover_url.is_some(),
@@ -316,7 +316,7 @@ impl FundingServiceConfig {
             None => Prover::local(),
         };
 
-        info!(target: "miden",
+        info!(target: "miden::process",
             "Funding service initialized",
             account.id = wallet.account_id(),
             asset.faucet_id = fee_asset_id.faucet_id(),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use assert_matches::assert_matches;
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::Word;
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::NoteId;
@@ -11,7 +11,7 @@ use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::mempool::Mempool;
 use crate::test_utils::batch::mock_proven_batch_with_fee_collection;
 use crate::test_utils::note::mock_fee_note;
-use crate::test_utils::{MockAuthenticatedTxBuilder, MockProvenTxBuilder, mock_account_id};
+use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder, mock_account_id};
 
 #[test]
 fn valid_with_state_from_multiple_parents() {
@@ -50,7 +50,7 @@ fn valid_with_state_from_multiple_parents() {
     .build();
 
     for tx in [parent_a, parent_b, parent_c, child] {
-        let tx = MockAuthenticatedTxBuilder::new(tx).build();
+        let tx = MockTransactionCandidateBuilder::new(tx).build();
         let tx = Arc::new(tx);
 
         uut.add_transaction(tx).unwrap();
@@ -88,7 +88,7 @@ mod tx_expiration {
         let tx = MockProvenTxBuilder::with_account_index(0)
             .expiration_block_num(limit.child())
             .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_authentication_height(uut.chain_tip())
             .build();
         let tx = Arc::new(tx);
@@ -104,7 +104,7 @@ mod tx_expiration {
             let tx = MockProvenTxBuilder::with_account_index(0)
                 .expiration_block_num(i.into())
                 .build();
-            let tx = MockAuthenticatedTxBuilder::new(tx)
+            let tx = MockTransactionCandidateBuilder::new(tx)
                 .with_authentication_height(uut.chain_tip())
                 .build();
             let tx = Arc::new(tx);
@@ -124,7 +124,7 @@ mod tx_expiration {
         let tx = MockProvenTxBuilder::with_account_index(0)
             .expiration_block_num(uut.chain_tip())
             .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_authentication_height(uut.chain_tip())
             .build();
         let tx = Arc::new(tx);
@@ -166,7 +166,7 @@ mod authentication_height {
         let oldest_mempool = uut.committed_blocks.front().map(|block| block.block_number).unwrap();
 
         let tx = MockProvenTxBuilder::with_account_index(0).build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_authentication_height((oldest_mempool.as_u32() - 2).into())
             .build();
         let tx = Arc::new(tx);
@@ -179,7 +179,7 @@ mod authentication_height {
         let mut uut = setup();
 
         let tx = MockProvenTxBuilder::with_account_index(0).build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_authentication_height(uut.chain_tip().child())
             .build();
         let tx = Arc::new(tx);
@@ -198,8 +198,9 @@ mod authentication_height {
 
         for i in oldest_local - 1..=uut.chain_tip().as_u32() {
             let tx = MockProvenTxBuilder::with_account_index(i).build();
-            let tx =
-                MockAuthenticatedTxBuilder::new(tx).with_authentication_height(i.into()).build();
+            let tx = MockTransactionCandidateBuilder::new(tx)
+                .with_authentication_height(i.into())
+                .build();
             let tx = Arc::new(tx);
 
             let result = uut.add_transaction(tx);
@@ -225,7 +226,7 @@ fn duplicate_nullifiers_are_rejected() {
     )
     .nullifiers_range(1..11)
     .build();
-    let tx_a = MockAuthenticatedTxBuilder::new(tx_a).build();
+    let tx_a = MockTransactionCandidateBuilder::new(tx_a).build();
     let tx_a = Arc::new(tx_a);
 
     let tx_b = MockProvenTxBuilder::with_account(
@@ -235,7 +236,7 @@ fn duplicate_nullifiers_are_rejected() {
     )
     .nullifiers_range(10..20)
     .build();
-    let tx_b = MockAuthenticatedTxBuilder::new(tx_b).build();
+    let tx_b = MockTransactionCandidateBuilder::new(tx_b).build();
     let tx_b = Arc::new(tx_b);
 
     uut.add_transaction(tx_a).unwrap();
@@ -259,7 +260,7 @@ fn duplicate_output_notes_are_rejected() {
     )
     .private_notes_created_range(0..11)
     .build();
-    let tx_a = MockAuthenticatedTxBuilder::new(tx_a).build();
+    let tx_a = MockTransactionCandidateBuilder::new(tx_a).build();
     let tx_a = Arc::new(tx_a);
 
     let tx_b = MockProvenTxBuilder::with_account(
@@ -269,7 +270,7 @@ fn duplicate_output_notes_are_rejected() {
     )
     .private_notes_created_range(10..20)
     .build();
-    let tx_b = MockAuthenticatedTxBuilder::new(tx_b).build();
+    let tx_b = MockTransactionCandidateBuilder::new(tx_b).build();
     let tx_b = Arc::new(tx_b);
 
     uut.add_transaction(tx_a).unwrap();
@@ -294,7 +295,7 @@ fn unknown_unauthenticated_notes_are_rejected() {
     )
     .private_notes_created_range(0..11)
     .build();
-    let tx_a = MockAuthenticatedTxBuilder::new(tx_a).build();
+    let tx_a = MockTransactionCandidateBuilder::new(tx_a).build();
     let tx_a = Arc::new(tx_a);
 
     let tx_b = MockProvenTxBuilder::with_account(
@@ -304,7 +305,7 @@ fn unknown_unauthenticated_notes_are_rejected() {
     )
     .unauthenticated_notes_range(0..12)
     .build();
-    let tx_b = MockAuthenticatedTxBuilder::new(tx_b).build();
+    let tx_b = MockTransactionCandidateBuilder::new(tx_b).build();
     let tx_b = Arc::new(tx_b);
 
     uut.add_transaction(tx_a).unwrap();
@@ -354,7 +355,7 @@ fn committed_fee_note_consumption_is_accepted() {
     uut.add_transaction(consumer).unwrap();
 }
 
-fn fee_note_dependency() -> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTransaction>, NoteId) {
+fn fee_note_dependency() -> (Arc<TransactionCandidate>, Arc<TransactionCandidate>, NoteId) {
     let fee_note = mock_fee_note(100);
     let fee_note_id = fee_note.id();
     let producer = MockProvenTxBuilder::with_account_index(100)
@@ -365,8 +366,8 @@ fn fee_note_dependency() -> (Arc<AuthenticatedTransaction>, Arc<AuthenticatedTra
         .build();
 
     (
-        Arc::new(MockAuthenticatedTxBuilder::new(producer).build()),
-        Arc::new(MockAuthenticatedTxBuilder::new(consumer).build()),
+        Arc::new(MockTransactionCandidateBuilder::new(producer).build()),
+        Arc::new(MockTransactionCandidateBuilder::new(consumer).build()),
         fee_note_id,
     )
 }
@@ -396,7 +397,7 @@ mod account_state {
             Word::new([3u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
         )
         .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx).build();
+        let tx = MockTransactionCandidateBuilder::new(tx).build();
         let tx = Arc::new(tx);
 
         uut.add_transaction(tx).unwrap();
@@ -422,8 +423,8 @@ mod account_state {
             Word::new([10u32.into(), 11u32.into(), 12u32.into(), 13u32.into()]),
         )
         .build();
-        let tx_a = MockAuthenticatedTxBuilder::new(tx_a).build();
-        let tx_b = MockAuthenticatedTxBuilder::new(tx_b)
+        let tx_a = MockTransactionCandidateBuilder::new(tx_a).build();
+        let tx_b = MockTransactionCandidateBuilder::new(tx_b)
             .with_store_state(Word::new([30u32.into(), 31u32.into(), 32u32.into(), 33u32.into()]))
             .build();
 
@@ -454,8 +455,8 @@ mod account_state {
             Word::new([20u32.into(), 11u32.into(), 12u32.into(), 13u32.into()]),
         )
         .build();
-        let tx_a = MockAuthenticatedTxBuilder::new(tx_a).build();
-        let tx_b = MockAuthenticatedTxBuilder::new(tx_b).build();
+        let tx_a = MockTransactionCandidateBuilder::new(tx_a).build();
+        let tx_b = MockTransactionCandidateBuilder::new(tx_b).build();
         let tx_a = Arc::new(tx_a);
         let tx_b = Arc::new(tx_b);
 
@@ -483,7 +484,7 @@ mod account_state {
             Word::new([3u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
         )
         .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_store_state(Word::new([6u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]))
             .build();
         let tx = Arc::new(tx);
@@ -514,7 +515,7 @@ mod new_account {
             Word::new([0u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
         )
         .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx).build();
+        let tx = MockTransactionCandidateBuilder::new(tx).build();
         let tx = Arc::new(tx);
         uut.add_transaction(tx).unwrap();
     }
@@ -531,7 +532,7 @@ mod new_account {
             Word::new([0u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
         )
         .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx)
+        let tx = MockTransactionCandidateBuilder::new(tx)
             .with_store_state(Word::new([5u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]))
             .build();
         let tx = Arc::new(tx);
@@ -556,7 +557,7 @@ mod new_account {
             Word::new([0u32.into(), 1u32.into(), 2u32.into(), 3u32.into()]),
         )
         .build();
-        let tx = MockAuthenticatedTxBuilder::new(tx).build();
+        let tx = MockTransactionCandidateBuilder::new(tx).build();
         let tx = Arc::new(tx);
 
         uut.add_transaction(tx.clone()).unwrap();

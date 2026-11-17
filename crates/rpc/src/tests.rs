@@ -17,7 +17,7 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_proto::domain::sequencer::{AuthenticatedTransaction, TransactionInputs};
+use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInputs};
 use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
 use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
 use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
@@ -104,6 +104,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod status;
 mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
@@ -743,7 +744,7 @@ async fn sequencer_authenticated_rpc_rejects_transactions_without_native_fees(
         found_unauthenticated_notes: HashSet::default(),
         current_block_height: 0.into(),
     };
-    let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).unwrap();
+    let tx = TransactionCandidate::new_unchecked(tx.into(), inputs).unwrap();
     let block_producer = BlockProducerApi::new(
         Arc::clone(&store.state),
         store.state.committed_tip(),
@@ -787,7 +788,7 @@ async fn sequencer_authenticated_rpc_accepts_transactions_without_notes_when_fee
         found_unauthenticated_notes: HashSet::default(),
         current_block_height: 0.into(),
     };
-    let tx = AuthenticatedTransaction::new_unchecked(tx.into(), inputs).unwrap();
+    let tx = TransactionCandidate::new_unchecked(tx.into(), inputs).unwrap();
     let block_producer = BlockProducerApi::new(
         Arc::clone(&store.state),
         store.state.committed_tip(),
@@ -1026,7 +1027,6 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
 fn source_rpc_client() -> RpcClient {
     Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1125,7 +1125,6 @@ async fn start_ntx_builder(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1137,7 +1136,6 @@ async fn start_ntx_builder(
 fn dummy_client<T: GrpcClient>() -> T {
     Builder::new(Url::parse("http://127.0.0.1:0").unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .with_otel_context_injection()
@@ -1218,7 +1216,6 @@ async fn start_source_rpc_with_genesis(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1421,7 +1418,6 @@ async fn start_validator(
 
     let client = Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
         .without_tls()
-        .without_timeout()
         .without_metadata_version()
         .without_metadata_genesis()
         .without_otel_context_injection()
@@ -1848,11 +1844,14 @@ async fn send_request(
 
 async fn connect_rpc(url: Url) -> RpcClient {
     let endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
-        .expect("Url type always results in valid endpoint")
-        .timeout(REQUEST_TIMEOUT);
+        .expect("Url type always results in valid endpoint");
     let channel = endpoint.connect().await.expect("Failed to build channel");
     let interceptor = Interceptor::default();
-    RpcClient::with_interceptor(channel, interceptor)
+    RpcClient::with_interceptor(
+        miden_node_proto::clients::RecoveringChannel::new(endpoint, channel),
+        interceptor,
+    )
+    .with_timeout(REQUEST_TIMEOUT)
 }
 
 /// Binds a socket on an available port, runs the RPC server on it, and returns a client to talk to
@@ -1894,7 +1893,6 @@ async fn start_rpc_with_allowlist(
             );
             let validator = Builder::new(validator_url)
                 .without_tls()
-                .without_timeout()
                 .without_metadata_version()
                 .without_metadata_genesis()
                 .with_otel_context_injection()

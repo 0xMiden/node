@@ -1,5 +1,11 @@
 use anyhow::Result;
-use miden_protocol::account::{AccountId, AccountStorage, StorageSlot, StorageSlotType};
+use miden_protocol::account::{
+    AccountId,
+    AccountStorage,
+    AccountStorageHeader,
+    StorageSlot,
+    StorageSlotType,
+};
 use miden_protocol::block::BlockNumber;
 use miden_standards::account::faucets::FungibleFaucet;
 
@@ -47,6 +53,12 @@ impl UsdcxFaucet {
                 .collect(),
         )?;
         Ok(FungibleFaucet::try_from(&storage)?)
+    }
+
+    /// The faucet's storage header: every slot's name and type, with the values of value slots and
+    /// the roots of map slots.
+    pub fn storage_header(&self) -> &AccountStorageHeader {
+        self.0.inputs().account().storage().header()
     }
 
     /// Returns the faucet's foreign account inputs for transaction execution.

@@ -110,12 +110,15 @@ pub struct RemoteBlockProver {
 }
 
 impl RemoteBlockProver {
-    /// Creates a new [`RemoteBlockProver`] with a lazy connection to the given gRPC endpoint.
+    /// Creates a remote prover with a three-minute deadline for the complete RPC.
+    ///
+    /// This leaves headroom within the scheduler's four-minute attempt budget for loading proving
+    /// inputs and handling the result.
     fn new(url: Url, max_decoding_message_size: usize) -> anyhow::Result<Self> {
         let client = Builder::new(url)
             .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
-            .without_timeout()
+            .with_timeout(std::time::Duration::from_mins(3))
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()
