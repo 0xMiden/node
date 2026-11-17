@@ -163,13 +163,13 @@ impl BatchGraph {
     }
 
     /// Marks the given batch as proven, making it available for selection in a block once it
-    /// becomes a root.
-    pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) {
+    /// becomes a root. Returns whether the proof matched a batch in the graph.
+    pub fn submit_proof(&mut self, proof: Arc<ProvenBatch>) -> bool {
         let proof_id = proof.id();
         let selected_id = SelectedBatchId::from_batch_id(proof_id);
         if self.inner.contains(&selected_id) {
             self.insert_proof(selected_id, proof_id, proof);
-            return;
+            return true;
         }
 
         // An appended fee transaction changes the batch ID.
@@ -179,7 +179,7 @@ impl BatchGraph {
             .split_last()
             .expect("a proven batch must contain a transaction");
         if selected_transactions.is_empty() {
-            return;
+            return false;
         }
         let selected_id = SelectedBatchId::from_batch_id(BatchId::from_ids(
             selected_transactions
@@ -194,6 +194,9 @@ impl BatchGraph {
             .is_some_and(|batch| !batch.collectible_fee_notes().is_empty())
         {
             self.insert_proof(selected_id, proof_id, proof);
+            true
+        } else {
+            false
         }
     }
 

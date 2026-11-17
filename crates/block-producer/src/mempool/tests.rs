@@ -20,6 +20,7 @@ use crate::test_utils::{MockProvenTxBuilder, MockTransactionCandidateBuilder, mo
 
 mod add_transaction;
 mod add_user_batch;
+mod notifications;
 
 #[test]
 fn shared_mempool_lock_is_poisoned_after_panic() {

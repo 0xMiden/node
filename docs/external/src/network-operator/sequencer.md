@@ -181,13 +181,13 @@ available when planning failover: losing it requires completing proofs before de
 
 ## Common Configuration
 
-| Option                               | Purpose                                                |
-| ------------------------------------ | ------------------------------------------------------ |
-| `--rpc.listen`                       | Public RPC socket exposed by the sequencer.            |
-| `--rpc.network-tx-auth-header-value` | Shared secret for authorized network transaction flow. |
-| `--validator.url`                    | Internal validator service URLs (one per validator).   |
-| `--ntx-builder.url`                  | Internal network transaction builder service URL.      |
-| `--batch.interval`                   | Maximum interval between batch scheduler checks.       |
-| `--block.interval`                   | Block production interval.                             |
+| Option                               | Purpose                                                                   |
+| ------------------------------------ | ------------------------------------------------------------------------- |
+| `--rpc.listen`                       | Public RPC socket exposed by the sequencer.                               |
+| `--rpc.network-tx-auth-header-value` | Shared secret for authorized network transaction flow.                    |
+| `--validator.url`                    | Internal validator service URLs (one per validator).                      |
+| `--ntx-builder.url`                  | Internal network transaction builder service URL.                         |
+| `--batch.interval`                   | Maximum delay before building a partial batch when a worker is available. |
+| `--block.interval`                   | Block production interval.                                                |
 
 Use `miden-node sequencer --help` for the complete current option list.
