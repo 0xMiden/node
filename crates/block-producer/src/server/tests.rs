@@ -89,6 +89,7 @@ async fn block_producer_starts_with_store_state() {
         validator_urls: vec![Url::parse("http://127.0.0.1:0").unwrap()],
         validator_timeout: DEFAULT_VALIDATOR_TIMEOUT,
         block_prover_url: None,
+        batch_prover_url: None,
         batch_interval: Duration::from_hours(1),
         block_interval: Duration::from_hours(1),
         max_txs_per_batch: DEFAULT_MAX_TXS_PER_BATCH,
