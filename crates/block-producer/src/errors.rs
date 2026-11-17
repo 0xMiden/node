@@ -162,6 +162,15 @@ pub enum BuildBatchError {
     #[error("failed to prove proposed transaction batch")]
     ProveBatchError(#[source] ProvenBatchError),
 
+    #[error("remote batch proving request failed")]
+    RemoteProvingFailed(#[source] tonic::Status),
+
+    #[error("remote batch prover returned an invalid or mismatched batch")]
+    InvalidRemoteBatch(#[source] miden_node_proto::errors::ConversionError),
+
+    #[error("remote batch prover returned an invalid proof")]
+    InvalidRemoteBatchProof(#[source] miden_tx_batch::BatchVerifierError),
+
     #[error("batch proof security level is too low: {0} < {1}")]
     SecurityLevelTooLow(u32, u32),
 

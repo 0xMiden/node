@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use url::Url;
 
-use crate::batch_builder::BatchBuilder;
+use crate::batch_builder::{BatchBuilder, BatchProver};
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::batch::BatchParameters;
@@ -68,7 +68,7 @@ impl BlockProducerApiConfig {
 
 /// The sequencer runtime configuration.
 ///
-/// Specifies how to connect to the validator and block prover components.
+/// Specifies how to connect to the validator and prover components.
 pub struct Sequencer {
     /// Maximum encoded size accepted by every outgoing gRPC client.
     pub max_decoding_message_size: usize,
@@ -84,6 +84,8 @@ pub struct Sequencer {
     pub validator_timeout: Duration,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
+    /// The address of the batch prover component. Batches are proved locally when absent.
+    pub batch_prover_url: Option<Url>,
     /// Maximum delay before pending transactions are selected for a partial batch.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
@@ -130,10 +132,15 @@ impl Sequencer {
             validator.clone(),
             self.block_interval,
         );
+        let batch_prover = match self.batch_prover_url {
+            Some(url) => BatchProver::remote(url, self.max_decoding_message_size)?,
+            None => BatchProver::new(),
+        };
         let batch_builder = BatchBuilder::new(
             Arc::clone(&state),
             self.batch_workers,
             self.batch_interval,
+            batch_prover,
             self.builder_account_id,
             fee_collector_account,
             validator,

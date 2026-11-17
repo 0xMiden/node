@@ -48,6 +48,25 @@ service collects them.
 The network transaction auth value is a shared secret used to authorize network transaction submissions. It must match
 the NTX builder's `--rpc.auth-header-value`; otherwise, the sequencer rejects network transactions from the builder.
 
+## Batch Proving
+
+Batch proofs run locally by default. To move that work to a dedicated machine, start a
+[remote prover](./remote-provers.md) configured for `batch` proofs and add this option when starting the sequencer:
+
+```bash
+--batch-prover.url http://batch-prover:50052
+```
+
+The corresponding environment variable is `MIDEN_NODE_BATCH_PROVER_URL`. Batch and block proving are configured
+independently; `--block-prover.url` selects only the block prover. `--batch.workers` limits concurrent batch jobs for
+both local and remote proving.
+
+Remote batch requests have a three-minute timeout per attempt and retry transient connection failures with backoff. The
+sequencer checks that the response matches the requested batch and verifies its proof before accepting it. A failed
+remote request follows the normal batch rollback policy and never falls back to local proving. Repeated failed batch
+attempts count toward the transaction failure limit. Check the batch-prover connection logs and `prove_batch` spans to
+confirm the endpoint is reachable and remote jobs succeed.
+
 ## RPC Source
 
 The sequencer implements the full RPC API and can act as an RPC source. This is useful for networks without full nodes,
@@ -188,6 +207,7 @@ available when planning failover: losing it requires completing proofs before de
 | `--validator.url`                    | Internal validator service URLs (one per validator).                      |
 | `--ntx-builder.url`                  | Internal network transaction builder service URL.                         |
 | `--batch.interval`                   | Maximum delay before building a partial batch when a worker is available. |
+| `--batch-prover.url`                 | Optional remote batch prover URL; defaults to local proving.              |
 | `--block.interval`                   | Block production interval.                                                |
 
 Use `miden-node sequencer --help` for the complete current option list.
