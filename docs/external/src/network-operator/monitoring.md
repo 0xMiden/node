@@ -49,6 +49,16 @@ Use the binary help output for the current configuration surface:
 miden-network-monitor start --help
 ```
 
+## RPC Status Freshness
+
+A full node caches the upstream sequencer status for five seconds to avoid forwarding every status probe. Its own chain
+tip is read locally on every request. Failed upstream lookups are also cached for five seconds, so changes in upstream
+availability may only appear after the cached result expires.
+
+The response is not a consistent snapshot of both nodes. The cached `block_producer.chain_tip` can be lower than the
+full node's current `chain_tip` even when both nodes are healthy. The sequencer also refreshes its mempool statistics
+periodically, so the full node's cache adds to that existing delay.
+
 ## Telemetry
 
 Services export OpenTelemetry traces when an OTLP trace endpoint is configured through the standard OpenTelemetry

@@ -104,6 +104,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 
 mod allowlist;
 mod error_details;
+mod status;
 mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
