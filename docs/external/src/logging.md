@@ -19,24 +19,43 @@ The stdout filter is selected from the first non-empty value in this order:
 
 `MIDEN_STDOUT_FILTER` uses the
 [`tracing_subscriber` filter syntax](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/filter/struct.EnvFilter.html).
-A filter is a comma-separated list of directives. Each directive sets a level globally or for a target:
+A filter is a comma-separated list of directives. A target directive sets the verbosity for that target:
 
 ```text
 target=level
 ```
 
-The available levels are `off`, `error`, `warn`, `info`, `debug`, and `trace`. Target directives match a target and its
-children, so `user=info` applies to every `user::*` target.
+The available levels are `off`, `error`, `warn`, `info`, `debug`, and `trace`. Target directives match by prefix.
+`miden` is an alias for `miden::`, so `miden=debug` enables node diagnostics without matching dependencies such as
+`miden_processor`.
 
-For example, keep third-party and internal output at `warn`, show user-facing events at `info`, and enable detailed RPC
-events:
+Bare levels select the verbosity for `miden::` targets. Named target directives override bare levels regardless of
+directive order. Dependencies default to `warn`, preserving their warning and error events; enable a named dependency
+explicitly to collect more detail. This applies to `RUST_LOG`, both Miden-specific environment variables, and
+administration API updates. Unlike the usual `RUST_LOG` behavior, a bare `debug` does not enable debug output from
+dependencies.
+
+| Input                    | Effective filter                         |
+| ------------------------ | ---------------------------------------- |
+| `info`                   | `warn,miden::=info`                      |
+| `debug` or `miden=debug` | `warn,miden::=debug`                     |
+| `info,tonic=debug`       | `warn,miden::=info,tonic=debug`          |
+| `info,miden_prover=off`  | `warn,miden::=info,miden_prover=off`     |
+| `miden::storage=debug`   | `warn,miden::=info,miden::storage=debug` |
+| `off`                    | `off`                                    |
+
+A bare `off` disables all output except explicitly named overrides. For example, `off,tonic=debug` collects only `tonic`
+diagnostics. Use `miden=off` to disable node diagnostics while retaining dependency warnings and errors.
+
+For example, keep node and dependency output at `warn`, show user-facing and storage events at `info`, and enable
+detailed RPC events:
 
 ```bash
 MIDEN_STDOUT_FILTER='warn,user=info,miden::storage=info,miden::rpc::server=debug' \
 miden-node full ...
 ```
 
-To temporarily enable all debug logs:
+To temporarily enable debug logs for all node targets:
 
 ```bash
 MIDEN_STDOUT_FILTER=debug miden-node full ...
@@ -70,8 +89,8 @@ the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
 per-transaction messages would create undesirable noise. Events whose primary use case is local development therefore
-use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other targets default to
-`info`. The `miden_prover` dependency is limited to `warn`.
+use the `debug` level, even when they are user-visible. Shared RPC client diagnostics and other node targets default to
+`info`. Dependencies default to `warn`.
 
 | Target                            | Events                                                            |
 | --------------------------------- | ----------------------------------------------------------------- |
@@ -138,9 +157,10 @@ non-empty value. Its filter is selected independently from the first non-empty v
 
 1. `MIDEN_OTEL_FILTER`
 2. `RUST_LOG`
-3. `info,axum::rejection=trace` (default)
+3. `info` (default; node targets at `info`, dependencies at `warn`)
 
-For example, retain debug-level user-facing events in the tracing backend while keeping stdout quieter:
+For example, retain debug-level user-facing, storage, and RPC events in the tracing backend while keeping stdout
+quieter:
 
 ```bash
 MIDEN_STDOUT_FILTER='warn,user=info,miden::storage=info,miden::rpc::server=info' \
@@ -195,8 +215,9 @@ The response contains a `targets` array of names you can use in filter expressio
 The list contains Miden's declared targets. Filters also accept targets absent from this list, including those used by
 external dependencies.
 
-Each update replaces the entire filter for one output. Save the current filter so you can restore it after the
-investigation:
+Each update replaces the filter for one output using the same node and dependency levels described above. Reads return
+the effective expression, including the dependency baseline and expanded `miden::` alias. Save the current filter so you
+can restore it after the investigation:
 
 ```bash
 curl --fail-with-body "${ADMIN_URL}/admin/tracing/stdout-filter" --output stdout-filter.json

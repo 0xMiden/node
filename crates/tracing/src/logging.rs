@@ -25,12 +25,12 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Stdout defaults for operator diagnostics with prover dependency noise suppression.
+/// Stdout defaults for node operator diagnostics.
 const DEFAULT_STDOUT_FILTER: &str = concat!(
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,",
     "miden::production=debug,miden::mempool=debug,miden::proving=debug,miden::sync=debug,",
     "miden::validation=debug,miden::privacy=debug,miden::admin=debug,",
-    "miden::funding=debug,miden::monitor=debug,miden::http::server=debug,miden_prover=warn",
+    "miden::funding=debug,miden::monitor=debug,miden::http::server=debug",
 );
 
 /// Default OpenTelemetry resource attributes for this process.
@@ -129,10 +129,7 @@ impl TracingConfig {
         Self {
             open_telemetry,
             stdout_filter: filter_env_or_default("MIDEN_STDOUT_FILTER", DEFAULT_STDOUT_FILTER),
-            otel_filter: filter_env_or_default(
-                "MIDEN_OTEL_FILTER",
-                "info,axum::rejection=trace,miden_prover=warn",
-            ),
+            otel_filter: filter_env_or_default("MIDEN_OTEL_FILTER", "info"),
         }
     }
 }
@@ -177,7 +174,7 @@ impl Drop for OtelGuard {
 /// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
 /// built-in defaults for operator, storage, and RPC server diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
-/// `info,axum::rejection=trace,miden_prover=warn`.
+/// `info`. Bare levels select node verbosity; dependencies default to `warn` for both outputs.
 ///
 /// The open-telemetry configuration is controlled via environment variables as defined in the
 /// [specification](https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/protocol/exporter.md#opentelemetry-protocol-exporter)
@@ -412,10 +409,10 @@ mod tests {
 
     fn default_stdout_events(emit: impl FnOnce()) -> Vec<(&'static str, tracing::Level)> {
         let events = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::registry().with(
-            RecordedTargets(Arc::clone(&events))
-                .with_filter(EnvFilter::try_new(DEFAULT_STDOUT_FILTER).unwrap()),
-        );
+        let subscriber = tracing_subscriber::registry()
+            .with(RecordedTargets(Arc::clone(&events)).with_filter(
+                crate::filter_control::parse_filter(DEFAULT_STDOUT_FILTER).unwrap().0,
+            ));
         tracing::subscriber::with_default(subscriber, emit);
         events.lock().unwrap().clone()
     }
@@ -425,6 +422,7 @@ mod tests {
         let events = default_stdout_events(|| {
             tracing::info!(target: "miden::process", "process info");
             tracing::debug!(target: "miden::process", "process debug");
+            tracing::debug!(target: "user::application", "user debug");
             tracing::debug!(target: "miden::monitor", "probe debug");
             tracing::debug!(target: "miden::http::server", "dashboard debug");
             tracing::debug!(target: "miden::storage", "storage lifecycle");
@@ -440,11 +438,11 @@ mod tests {
             events,
             [
                 ("miden::process", tracing::Level::INFO),
+                ("user::application", tracing::Level::DEBUG),
                 ("miden::monitor", tracing::Level::DEBUG),
                 ("miden::http::server", tracing::Level::DEBUG),
                 ("miden::storage", tracing::Level::DEBUG),
                 ("miden::storage::sqlite", tracing::Level::DEBUG),
-                ("other_dependency", tracing::Level::INFO),
                 ("miden_prover", tracing::Level::WARN),
             ]
         );
