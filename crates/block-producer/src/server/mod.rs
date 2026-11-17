@@ -18,7 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use url::Url;
 
-use crate::batch_builder::{BatchBuilder, BatchIntervals};
+use crate::batch_builder::BatchBuilder;
 use crate::block_builder::BlockBuilder;
 use crate::block_prover::BlockProver;
 use crate::domain::batch::BatchParameters;
@@ -84,7 +84,7 @@ pub struct Sequencer {
     pub validator_timeout: Duration,
     /// The address of the block prover component.
     pub block_prover_url: Option<Url>,
-    /// Maximum interval between batch scheduler checks.
+    /// Maximum delay before pending transactions are selected for a partial batch.
     pub batch_interval: Duration,
     /// The interval at which to produce blocks.
     pub block_interval: Duration,
@@ -130,11 +130,10 @@ impl Sequencer {
             validator.clone(),
             self.block_interval,
         );
-        let batch_intervals = BatchIntervals::derive_from(self.block_interval, self.batch_interval);
         let batch_builder = BatchBuilder::new(
             Arc::clone(&state),
             self.batch_workers,
-            batch_intervals,
+            self.batch_interval,
             self.builder_account_id,
             fee_collector_account,
             validator,

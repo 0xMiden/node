@@ -164,7 +164,7 @@ pub struct BuilderOptions {
 
 #[derive(clap::Args, Clone, Debug)]
 pub struct BatchOptions {
-    /// Maximum interval between batch scheduler checks.
+    /// Maximum delay before pending transactions are selected for a partial batch.
     #[arg(
         id = "batch.interval",
         long = "batch.interval",
