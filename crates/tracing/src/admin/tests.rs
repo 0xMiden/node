@@ -115,11 +115,11 @@ async fn get(app: &Router, output: &str) -> (StatusCode, Value) {
 
 #[tokio::test]
 async fn saved_filters_preserve_float_value_matching_when_restored() {
-    let expression = "off,[scope{value=1.0}]=info";
+    let expression = "off,miden[scope{value=1.0}]=info";
     let (app, dispatch, stdout, otel) = setup_with_filters(true, expression, expression);
     async {
         let emit_float = || {
-            let span = tracing::info_span!("scope", value = 1.0_f64);
+            let span = tracing::info_span!(target: "miden::process", "scope", value = 1.0_f64);
             let _entered = span.enter();
             tracing::info!("float event");
         };
@@ -134,7 +134,7 @@ async fn saved_filters_preserve_float_value_matching_when_restored() {
         for output in ["stdout", "otel"] {
             let (status, saved) = get(&app, output).await;
             assert_eq!(status, StatusCode::OK);
-            assert_eq!(saved, json!({"filter": expression}));
+            assert_eq!(saved, json!({"filter": "off,miden::[scope{value=1.0}]=info"}));
             assert_eq!(put(&app, output, "off").await, StatusCode::NO_CONTENT);
             assert_eq!(
                 put(&app, output, saved["filter"].as_str().unwrap()).await,
@@ -165,23 +165,29 @@ async fn get_returns_the_active_filter_for_each_output() {
     assert_eq!(put(&app, "stdout", "admin_test=info").await, StatusCode::NO_CONTENT);
     assert_eq!(
         get(&app, "stdout").await,
-        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+        (StatusCode::OK, json!({"filter": "warn,miden::=info,admin_test=info"}))
     );
     assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "off"})));
 
     assert_eq!(put(&app, "stdout", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
     assert_eq!(
         get(&app, "stdout").await,
-        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+        (StatusCode::OK, json!({"filter": "warn,miden::=info,admin_test=info"}))
     );
 
     assert_eq!(put(&app, "otel", "warn").await, StatusCode::NO_CONTENT);
-    assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "warn"})));
+    assert_eq!(
+        get(&app, "otel").await,
+        (StatusCode::OK, json!({"filter": "warn,miden::=warn"}))
+    );
     assert_eq!(put(&app, "otel", "admin_test=invalid").await, StatusCode::BAD_REQUEST);
-    assert_eq!(get(&app, "otel").await, (StatusCode::OK, json!({"filter": "warn"})));
+    assert_eq!(
+        get(&app, "otel").await,
+        (StatusCode::OK, json!({"filter": "warn,miden::=warn"}))
+    );
     assert_eq!(
         get(&app, "stdout").await,
-        (StatusCode::OK, json!({"filter": "admin_test=info"}))
+        (StatusCode::OK, json!({"filter": "warn,miden::=info,admin_test=info"}))
     );
 }
 
@@ -219,13 +225,52 @@ async fn filters_change_independently_and_reenable_existing_callsites() {
 }
 
 #[tokio::test]
+async fn node_aliases_and_dependency_opt_ins_apply_to_both_outputs() {
+    let (app, dispatch, stdout, otel) = setup(true);
+    async {
+        let emit = || {
+            let _ = tracing::debug_span!(target: "miden::process", "node");
+            let _ = tracing::info_span!(target: "miden_processor", "vm");
+            let _ = tracing::warn_span!(target: "dependency", "warning");
+        };
+        for output in ["stdout", "otel"] {
+            assert_eq!(put(&app, output, "miden=debug").await, StatusCode::NO_CONTENT);
+            assert_eq!(get(&app, output).await.1, json!({"filter": "warn,miden::=debug"}));
+        }
+        for recorded in [&stdout, &otel] {
+            recorded.0.lock().unwrap().clear();
+        }
+        emit();
+        assert_eq!(*stdout.0.lock().unwrap(), ["span", "span"]);
+        assert_eq!(*otel.0.lock().unwrap(), ["span", "span"]);
+
+        assert_eq!(put(&app, "otel", "off,miden_processor=info").await, StatusCode::NO_CONTENT);
+        for recorded in [&stdout, &otel] {
+            recorded.0.lock().unwrap().clear();
+        }
+        emit();
+        assert_eq!(*stdout.0.lock().unwrap(), ["span", "span"]);
+        assert_eq!(*otel.0.lock().unwrap(), ["span"]);
+    }
+    .with_subscriber(dispatch)
+    .await;
+}
+
+#[tokio::test]
 async fn reloaded_otel_filter_preserves_span_attributes_and_export() {
+    use std::sync::OnceLock;
+
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
     use tracing_opentelemetry::OpenTelemetrySpanExt;
 
+    // Keep the provider alive until process exit. Parallel callsite-cache rebuilds can release the
+    // last subscriber under tracing's registry lock; provider drop logs would reenter that lock.
+    static PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
     let exporter = InMemorySpanExporter::default();
-    let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
+    let provider = PROVIDER.get_or_init(|| {
+        SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build()
+    });
     let (stdout_filter, stdout_reload) = reloadable_filter("off", FilterOutput::Stdout).unwrap();
     let (otel_filter, otel_reload) = reloadable_filter("off", FilterOutput::OpenTelemetry).unwrap();
     let subscriber = Registry::default().with(Recorded::default().with_filter(stdout_filter)).with(
