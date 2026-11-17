@@ -83,7 +83,7 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
         .unwrap();
     let original_inputs = miden_node_persistence::encode(&inputs);
     let replacement =
-        ProposedBlock::new_at(inputs.block_inputs, vec![], original.header().timestamp() + 1)
+        ProposedBlock::new_at(inputs.block_inputs, vec![], original.header().timestamp() - 1)
             .unwrap();
     tv.call_sign_block(&replacement).await.unwrap();
     let backup = tv.server.db.load_block_backup(1.into()).await.unwrap().unwrap();

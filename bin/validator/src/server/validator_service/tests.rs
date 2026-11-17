@@ -648,8 +648,8 @@ async fn chain_tip_replacement_succeeds() {
     tv.apply_empty_block().await;
     let original_header = tv.chain_tip.clone();
 
-    // Submit a different block at the same height (block 1), which is a replacement. Use an
-    // explicit timestamp far in the future to ensure the replacement block differs.
+    // Submit a different block at the same height (block 1), which is a replacement. Use an earlier
+    // timestamp within the allowed interval to ensure the replacement block differs.
     let block_inputs = BlockInputs::new(
         genesis_header.clone(),
         chain_at_genesis.clone(),
@@ -657,8 +657,8 @@ async fn chain_tip_replacement_succeeds() {
         BTreeMap::new(),
         BTreeMap::new(),
     );
-    let far_future_timestamp = genesis_header.timestamp() + 1_000_000;
-    let replacement = ProposedBlock::new_at(block_inputs, vec![], far_future_timestamp).unwrap();
+    let replacement_timestamp = tv.chain_tip.timestamp() - 1;
+    let replacement = ProposedBlock::new_at(block_inputs, vec![], replacement_timestamp).unwrap();
     let (replacement_header, _) = replacement.clone().into_header_and_body().unwrap();
 
     assert_eq!(replacement_header.block_num(), original_header.block_num());
@@ -724,8 +724,7 @@ async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
         BTreeMap::new(),
     );
     let replacement =
-        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
-            .unwrap();
+        ProposedBlock::new_at(block_inputs, vec![], tv.chain_tip.timestamp() - 1).unwrap();
     tv.call_sign_block(&replacement)
         .await
         .expect("chain tip replacement should succeed");
@@ -1070,8 +1069,8 @@ async fn new_block_after_replacement_with_stale_commitment_rejected() {
         BTreeMap::new(),
         BTreeMap::new(),
     );
-    let far_future_timestamp = genesis_header.timestamp() + 1_000_000;
-    let replacement = ProposedBlock::new_at(block_inputs, vec![], far_future_timestamp).unwrap();
+    let replacement_timestamp = tv.chain_tip.timestamp() - 1;
+    let replacement = ProposedBlock::new_at(block_inputs, vec![], replacement_timestamp).unwrap();
     let (replacement_header, _) = replacement.clone().into_header_and_body().unwrap();
     assert_ne!(
         replacement_header.commitment(),
