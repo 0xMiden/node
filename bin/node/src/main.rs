@@ -6,7 +6,7 @@ use clap::error::ErrorKind;
 use commands::Command;
 
 miden_node_tracing::declare_targets! {
-    default: "miden",
+    default: "miden::process",
     "miden_node::admin" => "miden::admin",
     "miden_node::commands::lifecycle" => "miden::storage",
     "miden_node::commands::recover" => "miden::sync::blocks",

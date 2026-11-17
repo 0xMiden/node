@@ -148,7 +148,7 @@ fn expand_instrument(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::trace;
 ///
-/// miden_node_tracing::declare_targets! { default: "miden", }
+/// miden_node_tracing::declare_targets! { default: "miden::process", }
 ///
 /// trace!(target: "node", "block.received", block.number = 42_u32);
 ///
@@ -182,7 +182,7 @@ pub fn trace(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::debug;
 ///
-/// miden_node_tracing::declare_targets! { default: "miden", }
+/// miden_node_tracing::declare_targets! { default: "miden::process", }
 ///
 /// debug!("block.queued", block.number = 42_u32);
 ///
@@ -216,7 +216,7 @@ pub fn debug(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::info;
 ///
-/// miden_node_tracing::declare_targets! { default: "miden", }
+/// miden_node_tracing::declare_targets! { default: "miden::process", }
 ///
 /// let parent = tracing::info_span!("block");
 /// info!(parent: &parent, "block.accepted", block.number = 42_u32);
@@ -251,7 +251,7 @@ pub fn info(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::warn;
 ///
-/// miden_node_tracing::declare_targets! { default: "miden", }
+/// miden_node_tracing::declare_targets! { default: "miden::process", }
 ///
 /// warn!("block.delayed", block.number = 42_u32);
 ///
@@ -284,7 +284,7 @@ pub fn warn(input: TokenStream) -> TokenStream {
 /// ```rust,ignore
 /// use miden_node_tracing::error;
 ///
-/// miden_node_tracing::declare_targets! { default: "miden", }
+/// miden_node_tracing::declare_targets! { default: "miden::process", }
 ///
 /// let source = std::io::Error::other("database unavailable");
 /// error!(source, target: "node", "block.store_failed", block.number = 42_u32);

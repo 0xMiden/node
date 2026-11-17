@@ -27,8 +27,8 @@ fn declarations_are_available_without_executing_callsites() {
         vec![
             "inventory::shared",
             "inventory::unexecuted",
-            "miden",
             "miden::admin",
+            "miden::process",
             "miden::rpc::server"
         ],
     );
