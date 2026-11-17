@@ -165,7 +165,7 @@ impl SharedMempool {
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[instrument(name = "lock", err)]
+    #[instrument(name = "lock", level = "debug", err)]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
