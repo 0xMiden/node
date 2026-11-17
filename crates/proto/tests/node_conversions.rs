@@ -880,7 +880,6 @@ async fn public_logs_survive_complete_prover_envelopes_and_size_limits() {
         let mut client = Builder::new(url)
             .max_decoding_message_size(response_limit)
             .without_tls()
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .without_auth_header()

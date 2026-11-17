@@ -248,7 +248,7 @@ mod tests {
 
     #[test]
     fn public_log_batch_budget_reserves_fee_headroom_and_rejection_is_atomic() {
-        let tx = MockAuthenticatedTxBuilder::new(public_transaction(64)).build();
+        let tx = MockTransactionCandidateBuilder::new(public_transaction(64)).build();
         let mut budget = BatchBudget::new(1024);
         for _ in 0..511 {
             assert_eq!(
@@ -259,14 +259,15 @@ mod tests {
         let before = budget.clone();
         assert_eq!(budget.check_then_subtract(tx.raw_proven_transaction()), BudgetStatus::Exceeded);
         assert_eq!(budget, before);
-        let empty = MockAuthenticatedTxBuilder::new(public_transaction(0)).build();
+        let empty = MockTransactionCandidateBuilder::new(public_transaction(0)).build();
         assert_eq!(
             budget.check_then_subtract(empty.raw_proven_transaction()),
             BudgetStatus::WithinScope
         );
-        let private =
-            MockAuthenticatedTxBuilder::new(MockProvenTxBuilder::with_account_index(1).build())
-                .build();
+        let private = MockTransactionCandidateBuilder::new(
+            MockProvenTxBuilder::with_account_index(1).build(),
+        )
+        .build();
         assert_eq!(
             budget.check_then_subtract(private.raw_proven_transaction()),
             BudgetStatus::WithinScope
@@ -303,8 +304,9 @@ mod tests {
         let mut mempool = Mempool::new(BlockNumber::GENESIS, config);
         let mut ids = Vec::new();
         for state in [1, 2] {
-            let transaction =
-                Arc::new(MockAuthenticatedTxBuilder::new(public_transaction_at(64, state)).build());
+            let transaction = Arc::new(
+                MockTransactionCandidateBuilder::new(public_transaction_at(64, state)).build(),
+            );
             let proof =
                 ProvenBatch::mocked_from_transactions([transaction.raw_proven_transaction()]);
             ids.push(proof.id());
@@ -331,7 +333,7 @@ mod tests {
         };
         let mut mempool = Mempool::new(BlockNumber::GENESIS, config);
         for state in 1..=511 {
-            let tx = MockAuthenticatedTxBuilder::new(public_transaction_at(64, state)).build();
+            let tx = MockTransactionCandidateBuilder::new(public_transaction_at(64, state)).build();
             mempool.add_transaction(Arc::new(tx)).unwrap();
         }
         let batch = mempool.select_full_batch().expect("content-saturated work is a full batch");
