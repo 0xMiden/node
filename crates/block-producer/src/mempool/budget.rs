@@ -1,10 +1,5 @@
 use miden_protocol::batch::ProvenBatch;
-use miden_protocol::transaction::{
-    ProvenTransaction,
-    PublicTransactionLogs,
-    TransactionLogDetails,
-    TransactionLogs,
-};
+use miden_protocol::transaction::{ProvenTransaction, TransactionLogDetails, TransactionLogs};
 use miden_protocol::{
     MAX_ACCOUNTS_PER_BATCH,
     MAX_INPUT_NOTES_PER_BATCH,
@@ -12,6 +7,12 @@ use miden_protocol::{
 };
 
 use crate::{DEFAULT_MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH};
+
+/// Maximum public log content words in a batch, including fee collection.
+const MAX_PUBLIC_LOG_CONTENT_WORDS_PER_BATCH: usize = 64 * TransactionLogs::MAX_NUM_WORDS;
+
+/// Maximum public log content words across all batches in a block.
+const MAX_PUBLIC_LOG_CONTENT_WORDS_PER_BLOCK: usize = 256 * TransactionLogs::MAX_NUM_WORDS;
 
 /// Constraints placed on the batches proposed by the [`Mempool`](super::Mempool).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,7 +56,7 @@ impl Default for BlockBudget {
     fn default() -> Self {
         Self {
             batches: DEFAULT_MAX_BATCHES_PER_BLOCK.get(),
-            public_log_content_words: PublicTransactionLogs::MAX_NUM_WORDS,
+            public_log_content_words: MAX_PUBLIC_LOG_CONTENT_WORDS_PER_BLOCK,
         }
     }
 }
@@ -68,7 +69,8 @@ impl BatchBudget {
             input_notes: MAX_INPUT_NOTES_PER_BATCH,
             output_notes: MAX_OUTPUT_NOTES_PER_BATCH.saturating_sub(1),
             accounts: MAX_ACCOUNTS_PER_BATCH.saturating_sub(1),
-            public_log_content_words: PublicTransactionLogs::MAX_NUM_WORDS
+            // Reserve one transaction's logs for fee collection within the batch limit.
+            public_log_content_words: MAX_PUBLIC_LOG_CONTENT_WORDS_PER_BATCH
                 - TransactionLogs::MAX_NUM_WORDS,
         }
     }
@@ -250,7 +252,7 @@ mod tests {
     fn public_log_batch_budget_reserves_fee_headroom_and_rejection_is_atomic() {
         let tx = MockTransactionCandidateBuilder::new(public_transaction(64)).build();
         let mut budget = BatchBudget::new(1024);
-        for _ in 0..511 {
+        for _ in 0..63 {
             assert_eq!(
                 budget.check_then_subtract(tx.raw_proven_transaction()),
                 BudgetStatus::WithinScope
@@ -280,7 +282,7 @@ mod tests {
         let transaction = public_transaction(64);
         let batch = ProvenBatch::mocked_from_transactions([&transaction]);
         let mut budget = BlockBudget { batches: 1024, ..BlockBudget::default() };
-        for _ in 0..512 {
+        for _ in 0..256 {
             assert_eq!(budget.check_then_subtract(&batch), BudgetStatus::WithinScope);
         }
         let before = budget;
@@ -332,11 +334,11 @@ mod tests {
             ..MempoolConfig::default()
         };
         let mut mempool = Mempool::new(BlockNumber::GENESIS, config);
-        for state in 1..=511 {
+        for state in 1..=63 {
             let tx = MockTransactionCandidateBuilder::new(public_transaction_at(64, state)).build();
             mempool.add_transaction(Arc::new(tx)).unwrap();
         }
         let batch = mempool.select_full_batch().expect("content-saturated work is a full batch");
-        assert_eq!(batch.transactions().len(), 511);
+        assert_eq!(batch.transactions().len(), 63);
     }
 }
