@@ -37,6 +37,10 @@ struct PreparedLog {
 
 impl PreparedTransactionLogs {
     /// Associates public collections with all block headers and prepares their column values.
+    ///
+    /// Rechecks log associations, commitments, and content limits before persistence because block
+    /// bodies can be constructed without validation. These checks run before the database write
+    /// transaction begins.
     pub(crate) fn from_block(body: &BlockBody) -> Result<Self, DatabaseError> {
         let mut prepared = Self::default();
         let mut entries = body.public_logs().entries().iter();

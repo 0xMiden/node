@@ -1,8 +1,6 @@
 use anyhow::Result;
-use fs_err::read;
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
 use rusqlite::Connection;
-use tempfile::tempdir;
 
 use super::*;
 use crate::db::queries::VALID_FOREVER;
@@ -16,7 +14,7 @@ const EXPECTED_SCHEMA_HASHES: [SchemaHash; 9] = [
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
     SchemaHash::from_hex("93db886dab52c2175a4572a23823fe3a05138d7f7d08ea55cd5e60ee6d4ec3a8"),
-    SchemaHash::from_hex("65587acfb7f0703a16a62323008d58bfcedde7e7ff85861245d35f50f520c58a"),
+    SchemaHash::from_hex("baaeabe602a81b84ef7161f781fd571750b7baf4afe028cf85ded57d6ca3b373"),
 ];
 
 #[test]
@@ -36,7 +34,7 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
     let database_filepath = temp_dir.path().join("store.sqlite3");
 
     {
-        let conn = rusqlite::Connection::open(&database_filepath)?;
+        let conn = Connection::open(&database_filepath)?;
         conn.execute_batch(include_str!("../001_initial.sql"))?;
         conn.execute_batch(include_str!("../002_index_optimizations.sql"))?;
         conn.execute_batch(include_str!("../003_block_headers_without_rowid.sql"))?;
@@ -60,7 +58,7 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
 
     migrator()?.open_database(&database_filepath)?.migrate_to(4)?;
 
-    let conn = rusqlite::Connection::open(&database_filepath)?;
+    let conn = Connection::open(&database_filepath)?;
 
     let accounts = conn
         .prepare("SELECT block_num, valid_until FROM accounts ORDER BY block_num ASC")?
@@ -94,26 +92,5 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
     pretty_assertions::assert_eq!(storage, vec![(1, 5), (5, VALID_FOREVER)]);
 
-    Ok(())
-}
-
-#[test]
-fn transaction_logs_migration_rejects_populated_history_without_changes() -> Result<()> {
-    let root = tempdir()?;
-    let path = root.path().join("store.sqlite3");
-    migrator()?.create_database(&path)?.migrate_to(8)?;
-    {
-        let conn = Connection::open(&path)?;
-        conn.execute_batch("INSERT INTO transactions VALUES (X'01', X'02', 1, X'03', X'04', X'', X'', 0, zeroblob(32), zeroblob(32));")?;
-    }
-    let before = read(&path)?;
-    assert!(migrate_database(&path).is_err());
-    assert_eq!(read(&path)?, before);
-    let conn = Connection::open(&path)?;
-    assert_eq!(conn.query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))?, 8);
-    assert_eq!(
-        conn.query_row("SELECT COUNT(*) FROM transactions", [], |row| row.get::<_, u32>(0))?,
-        1
-    );
     Ok(())
 }

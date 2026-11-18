@@ -224,13 +224,7 @@ pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     use miden_protocol::block::{BlockBody, BlockSignatures, SignedBlock};
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        PublicTransactionLogs::default(),
-    );
+    let body = BlockBody::default();
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     SignedBlock::new_unchecked(header, body, signatures)
 }

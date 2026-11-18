@@ -113,6 +113,8 @@ use crate::db::queries::{
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
 
+mod transaction_logs;
+
 // QUERY DRIVERS
 // ================================================================================================
 //
@@ -4768,5 +4770,3 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
-
-mod transaction_logs;
