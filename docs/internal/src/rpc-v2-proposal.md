@@ -9,7 +9,7 @@ proposal contains only a service definition for discussion.
 | Method                       | Returns                                                                                                           |
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `GetAccountInfos`            | Account and storage headers for several public accounts at block N, optionally only if their commitments changed. |
-| `GetAccountWitness`          | An account inclusion or non-inclusion witness at N, for public or private accounts.                               |
+| `GetAccountWitnesses`        | One partial SMT proving inclusion or absence at N for all requested public or private account IDs.                |
 | `SyncAccount`                | Complete vault and map contents for a small public account, as a snapshot or delta to N.                          |
 | `GetAccountVaultWitnesses`   | Inclusion/non-inclusion proofs for selected asset IDs at N.                                                       |
 | `GetAccountStorageWitnesses` | Inclusion/non-inclusion proofs for selected keys across storage maps at N.                                        |
@@ -17,6 +17,11 @@ proposal contains only a service definition for discussion.
 All state reads for an execution use the same explicit block N. Headers authenticate contents and entry proofs; account
 witnesses authenticate headers against N's account root. An unchanged account can still need a fresh account witness
 when the global account root changes.
+
+`GetAccountInfos` returns one result per public account ID in request order: headers, `unchanged` if the supplied
+commitment matches, or `not_found` if the account does not exist at N. A wallet can include accounts it has created
+locally and still receive headers for its deployed accounts. Malformed requests and private IDs fail the batch with
+`INVALID_ARGUMENT`.
 
 `SyncAccount` accepts `(from, N]`; omitting `from` requests a snapshot. The server can return a snapshot even when a
 delta was requested. It returns no headers, code, or witnesses. Its size limit, advertised by `GetLimits`, counts
@@ -42,7 +47,7 @@ chain commitment will follow the protocol's code-registry design.
 ### Migration
 
 Synchronize the code registry through the reference block before spawning execution tasks. Tasks use that local
-registry, request account information through `GetAccountInfos`, account witnesses through `GetAccountWitness`, and
+registry, request account information through `GetAccountInfos`, account witnesses through `GetAccountWitnesses`, and
 vault/storage proofs lazily through the two entry-witness methods. All state reads use the task's reference block. This
 is the migration baseline; account caches and a local account tree are optional.
 
@@ -59,37 +64,44 @@ is the migration baseline; account caches and a local account tree are optional.
 
 ## Clients and monitors
 
-Clients tracking a few accounts do not need a local account tree:
+1. Authenticate target N through `SyncChainMmr` and synchronize the code registry through N. Set `target_block_num`
+   to execute at a historical block, or omit it to use the selected committed or proven tip. A target below the
+   client's starting height returns `INVALID_ARGUMENT`. A target above the selected tip or outside retained history
+   returns `OUT_OF_RANGE`.
+2. To track account activity, consume `SyncTransactions` for the tracked IDs through N, including pass-through
+   transactions whose account commitment stays the same. Each record supplies inclusion proofs for committed output
+   notes. Outputs listed in the transaction header without a proof were erased. Use the final state commitment as a
+   hint to refresh cached state. Clients interested only in public headers can call `GetAccountInfos` directly with
+   their known commitments.
+3. When a small public account needs refreshing, call `SyncAccount` from the last synchronized block to N and fetch
+   its target headers. For large public accounts, fetch entry proofs lazily or download the contents through
+   `SyncAccountVault` and `SyncAccountStorageMaps`. Owners retain private account state locally.
+4. For execution, call `GetAccountWitnesses` for the required accounts at N. Verify the partial SMT against the
+   authenticated account root at N, match each account header to its proven commitment, and verify the contents or
+   entry proofs against that header. Execute using the code registry at N.
 
-1. Authenticate target N through `SyncChainMmr` and synchronize the local code registry through N.
-2. Call `GetAccountInfos` with known commitments, or use `SyncAccountCommitments` to discover changed accounts before
-   fetching their headers.
-3. For small accounts, call `SyncAccount` from the last synchronized block to N. For large accounts, either fetch
-   witnesses lazily or download complete contents through `SyncAccountVault` and `SyncAccountStorageMaps`.
-4. Obtain `GetAccountWitness` at N when needed for execution, unless the commitment stream already supplied it. Execute
-   using the local code registry at N. Owners retain private account state locally.
+For example, a client preparing a foreign procedure invocation that already knows the foreign accounts, asset IDs,
+and storage keys can request the public headers, batched account witnesses, and per-account vault and storage
+witnesses concurrently at N. Once the responses arrive, the client can verify them together before execution.
 
-At the same target, use `SyncNotes`, `SyncNullifiers`, and `SyncTransactions` to discover notes, consumption, and
-account activity. `GetTransactionsById` reconciles known pending transactions. Accept stream results only after
-successful completion and verify proofs and final account roots against authenticated chain state.
+Use `SyncNotes` and `SyncNullifiers` at the same target to discover notes and consumption. `GetTransactionsById`
+reconciles known pending transactions. Accept stream results only after successful completion.
 
 ## Other methods
 
 The service retains v1's status, limits, registration, allowlist, invitation, block/note retrieval, encryption key,
-transaction submission, chain-MMR, subscriptions, and network-note status methods.
+transaction submission, subscriptions, and network-note status methods.
 
 This proposal adds the streaming APIs under discussion in [#2483](https://github.com/0xMiden/node/pull/2483). They
 replace the paginated synchronization methods and use names without a `V2` suffix in the v2 service.
-`SyncAccountCommitments` and `GetTransactionsById` are also new. The account methods above replace `GetAccount`.
+`GetTransactionsById` is also new. The account methods above replace `GetAccount`.
 
 ## Discussion points
 
 - Should the other `SyncXxx` ranges also use a required, inclusive `from`, as `SyncCodeRegistry` does? Fresh loads would
   request `[0, N]`; clients holding state at C would request `[C + 1, N]`, skipping sync when already at N.
+  If the lower bound becomes mandatory, how should `SyncAccount` distinguish a snapshot from a delta?
 - Are the methods sufficient for execution, and are separate header, contents, and witness calls acceptable for clients
   tracking only a few accounts?
-- Should `GetAccountInfos` fail the whole batch for a missing/private account, as currently proposed, or return a result
-  per account?
-- Should account witnesses also support batches?
 - Can the builder initialize its account tree through replay or a verified snapshot, or do we need an RPC bootstrap
   method?

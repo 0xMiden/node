@@ -34,7 +34,6 @@ service NodeService {
     rpc GetBlockHeaderByNumber(GetBlockHeaderByNumberRequest) returns (GetBlockHeaderByNumberResponse) {}
     rpc GetNotesById(GetNotesByIdRequest) returns (GetNotesByIdResponse) {}
     rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
-    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
     // Transaction submission.
     rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
@@ -45,15 +44,18 @@ service NodeService {
     rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
-    // NEW METHODS
+    // NEW AND REVISED METHODS
     // ----------------------------------------------------------------------------------------
+
+    // Chain MMR delta and signed header at a caller-selected target.
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
 
     // Account information and execution witnesses.
 
     // Public account and storage headers, conditionally returned per account.
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
     // Account inclusion or non-inclusion at the requested block, including private accounts.
-    rpc GetAccountWitness(GetAccountWitnessRequest) returns (GetAccountWitnessResponse) {}
+    rpc GetAccountWitnesses(GetAccountWitnessesRequest) returns (GetAccountWitnessesResponse) {}
     // Batched asset inclusion and non-inclusion proofs against the target vault root.
     rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
     // Batched key inclusion and non-inclusion proofs, grouped by storage map.
@@ -76,7 +78,7 @@ service NodeService {
     // Streaming discovery and transaction lookup.
     rpc SyncNullifiers(SyncNullifiersRequest) returns (stream SyncNullifiersResponse) {}
     rpc SyncNotes(SyncNotesRequest) returns (stream SyncNotesResponse) {}
-    rpc SyncAccountCommitments(SyncAccountCommitmentsRequest) returns (stream SyncAccountCommitmentsResponse) {}
+    // Includes every matching transaction, even when its account commitment is unchanged.
     rpc SyncTransactions(SyncTransactionsRequest) returns (stream SyncTransactionsResponse) {}
     rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
 }
@@ -107,24 +109,26 @@ message GetAccountInfosResponse {
         oneof result {
             AccountHeaders headers = 2;
             google.protobuf.Empty unchanged = 3;
+            // The public account does not exist at block_num.
+            google.protobuf.Empty not_found = 4;
         }
     }
     fixed32 block_num = 1;
-    // Exactly one result per requested account, in request order. Any invalid, missing, or private
-    // account fails the whole request; a successful response never silently omits an account.
+    // Exactly one result per requested account, in request order. Malformed requests and private account
+    // IDs fail the whole request with INVALID_ARGUMENT.
     repeated AccountInfo accounts = 2;
 }
 
-message GetAccountWitnessRequest {
-    account.AccountId account_id = 1;
+message GetAccountWitnessesRequest {
+    // One or more distinct public or private IDs, up to the account_id limit in GetLimits.
+    repeated account.AccountId account_ids = 1;
     optional fixed32 block_num = 2;
 }
 
-message GetAccountWitnessResponse {
+message GetAccountWitnessesResponse {
     fixed32 block_num = 1;
-    // Verify against the authenticated target block's account root. An empty commitment proves
-    // absence. This witness is returned even when the account has not changed since an earlier read.
-    account.AccountWitness witness = 2;
+    // Proves inclusion or absence for every requested ID against the target block's account root.
+    primitives.PartialSmt account_tree = 2;
 }
 
 // CODE REGISTRY SYNCHRONIZATION
@@ -217,7 +221,7 @@ message GetAccountStorageWitnessesResponse {
     repeated MapWitness maps = 2;
 }
 
-// RETAINED V1 MESSAGE SHAPES
+// STATUS, REGISTRATION, CHAIN, AND TRANSACTION MESSAGES
 // ================================================================================================
 
 message RegisterAccountRequest {
@@ -438,8 +442,13 @@ message SyncChainMmrRequest {
     // already present in the caller's MMR so the delta begins at the next block.
     fixed32 current_client_block_height = 1;
 
-    // Sync target: either the committed or the proven tip.
+    // Selects the committed or proven tip as the highest permissible target.
     FinalityLevel finality_level = 2;
+
+    // Omit to sync to the selected tip. An explicit target (including zero for genesis) must
+    // be at or above current_client_block_height, otherwise the request fails with INVALID_ARGUMENT.
+    // Targets above the selected tip or outside retained history fail with OUT_OF_RANGE.
+    optional fixed32 target_block_num = 3;
 }
 
 message SyncChainMmrResponse {
@@ -630,16 +639,6 @@ message SyncNotesResponse {
 message NoteBlockStart {
     blockchain.BlockHeader block_header = 1;
     primitives.MerklePath mmr_path = 2;
-}
-
-message SyncAccountCommitmentsRequest {
-    StateDeltaRange range = 1;
-    repeated account.AccountId account_ids = 2;
-}
-
-message SyncAccountCommitmentsResponse {
-    fixed32 last_updated_at = 1;
-    account.AccountWitness witness = 2;
 }
 
 message GetTransactionsByIdRequest {
