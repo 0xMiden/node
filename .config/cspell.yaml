@@ -32,3 +32,5 @@ words:
   - unpauser
   - blocklist
   - undeployed
+  - kache
+  - zstd
