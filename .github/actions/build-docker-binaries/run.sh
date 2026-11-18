@@ -11,13 +11,17 @@ case "${RUNNER_ARCH}/${ARCHITECTURE}" in
 esac
 output="${RUNNER_TEMP}/docker-binaries"
 mkdir -p "${output}/app/bin"
+cache_root="${RUNNER_TEMP}/kache-docker"
+mkdir -p "${cache_root}"
 args=(
     --rm
     --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/app,readonly"
     --mount "type=bind,src=${output},dst=/output"
+    --mount "type=bind,src=${cache_root},dst=/tmp"
     --mount "type=bind,src=${ACTION_PATH}/compile.sh,dst=/run/compile.sh,readonly"
     -e CARGO_TARGET_DIR=/tmp/target
     -e OUTPUT_DIR=/output/app/bin
+    -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)"
 )
 if [[ "${CACHE_ENABLED}" == true ]]; then
     args+=(

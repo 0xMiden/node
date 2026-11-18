@@ -19,6 +19,10 @@ finish() {
         kache stats --full --format github --output /output/report.md || true
         kache stats --full --format json --output /output/report.json || true
         kache daemon stop || true
+        if [[ -n "${HOST_UID:-}" && -n "${HOST_GID:-}" ]]; then
+            chown -R "${HOST_UID}:${HOST_GID}" /tmp/kache-cache /tmp/kache-runtime \
+                || echo "::warning::Failed to return cache ownership to the runner"
+        fi
     else
         printf 'S3 compiler cache is disabled for this build.\n' > /output/report.md
     fi
