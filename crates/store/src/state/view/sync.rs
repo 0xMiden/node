@@ -138,7 +138,7 @@ impl StateView {
         let block_range = self.scope_retained_range(block_range)?;
         let query = AccountStorageMapValuesPaged::new(
             account_id,
-            block_range.scoped_end(),
+            block_range.end(),
             default_storage_map_entries_limit(),
         );
         let page = self.db.page(query, block_range.start()).await?;

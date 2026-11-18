@@ -58,13 +58,14 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
             }
         }
 
-        let account_data = self
-            .state
-            .view()
-            .get_account(request)
-            .await
-            .map_err(get_account_error_to_status)?;
-        Ok(account_data)
+        // Witness-only requests read just the account tree, so they skip the database transaction
+        // that a consistent read would open.
+        let account_data = if request.details.is_none() {
+            self.state.view().get_account_witness(request.account_id, request.block_num)
+        } else {
+            self.state.read(move |view| view.get_account(request)).await
+        };
+        account_data.map_err(get_account_error_to_status)
     }
 }
 

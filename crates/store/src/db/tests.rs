@@ -112,6 +112,7 @@ use crate::db::queries::{
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
+use crate::read::ReadTransaction;
 
 mod transaction_logs;
 
@@ -323,11 +324,7 @@ fn select_account_storage_map_values_paged(
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
     let (block_from, block_to) = block_range.into_inner();
-    let query = queries::AccountStorageMapValuesPaged::new(
-        account_id,
-        ScopedBlockNum::new_unchecked(block_to),
-        limit,
-    );
+    let query = queries::AccountStorageMapValuesPaged::new(account_id, block_to, limit);
     let page = db.read(move |tx| query.page(tx, &block_from))?;
     Ok(StorageMapValuesPage {
         last_block_included: page.last_block_included(block_to),
@@ -1864,7 +1861,7 @@ fn select_storage_map_sync_values_multi_block_pagination() {
 
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
-async fn reconstruct_storage_map_from_db_pages_until_latest() {
+async fn select_storage_map_pages_until_latest() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
 
@@ -1902,12 +1899,10 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
         .unwrap();
 
     let details = db
-        .reconstruct_storage_map_from_db(
-            account_id,
-            slot_name.clone(),
-            ScopedBlockNum::new_unchecked(block3),
-            Some(1),
-        )
+        .reader()
+        .read("reconstruct storage map", move |tx| {
+            ReadTransaction::new(tx).select_storage_map(account_id, slot_name, block3, 1)
+        })
         .await
         .unwrap();
 
@@ -1916,11 +1911,11 @@ async fn reconstruct_storage_map_from_db_pages_until_latest() {
     });
 }
 
-/// Tests that `reconstruct_storage_map_from_db` returns `LimitExceeded` when a single block holds
-/// more entries than the page limit, instead of reporting an empty map.
+/// Tests that `select_storage_map` returns `LimitExceeded` when a single block holds more entries
+/// than the page limit, instead of reporting an empty map.
 #[tokio::test]
 #[miden_node_test_macro::enable_logging]
-async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block_overflow() {
+async fn select_storage_map_returns_limit_exceeded_for_single_block_overflow() {
     let temp_dir = tempdir().unwrap();
     let db_path = temp_dir.path().join("store.sqlite");
 
@@ -1956,12 +1951,10 @@ async fn reconstruct_storage_map_from_db_returns_limit_exceeded_for_single_block
 
     // With a limit of 1, the three entries of block 5 can never fit in one page.
     let details = db
-        .reconstruct_storage_map_from_db(
-            account_id,
-            slot_name.clone(),
-            ScopedBlockNum::new_unchecked(block5),
-            Some(1),
-        )
+        .reader()
+        .read("reconstruct storage map", move |tx| {
+            ReadTransaction::new(tx).select_storage_map(account_id, slot_name, block5, 1)
+        })
         .await
         .unwrap();
 

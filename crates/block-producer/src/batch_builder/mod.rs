@@ -61,12 +61,9 @@ impl BatchBuilder {
         fee_collector_account: AccountFile,
         validator: BlockProducerValidatorClient,
     ) -> anyhow::Result<Self> {
-        let fee_collector = FeeCollectorTransactionBuilder::new(
-            builder_account_id,
-            fee_collector_account,
-            &state.view(),
-        )
-        .await?;
+        let fee_collector =
+            FeeCollectorTransactionBuilder::new(builder_account_id, fee_collector_account, &state)
+                .await?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
@@ -323,7 +320,7 @@ impl BatchJob {
                 inputs.reference_block_header.clone(),
                 protocol_config,
                 inputs.partial_blockchain.clone(),
-                view,
+                &self.state,
             )
             .await
             .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
@@ -487,7 +484,7 @@ mod tests {
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();
         let selected_id = selected.id().as_batch_id();
         let fee_collector =
-            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
+            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state).await?;
         let job = BatchJob {
             state,
             batch_prover: BatchProver::new(),

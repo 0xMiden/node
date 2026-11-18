@@ -1,9 +1,11 @@
 //! Consistent store reads composed by the caller.
 
+mod account;
 pub(crate) mod acquire;
 mod snapshot;
 mod transaction;
 
+pub(crate) use account::open_account_witness;
 pub use snapshot::StateSnapshot;
 pub use transaction::ReadTransaction;
 pub(crate) use transaction::select_block_header;

@@ -1017,11 +1017,12 @@ mod tests {
         assert!(!notifications.has_changed().unwrap());
         assert!(state.load_block(1.into()).await.unwrap().is_none());
         let witness = state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
+            .read(move |view| {
+                view.get_account(GetAccountRequest {
+                    account_id: id,
+                    block_num: None,
+                    details: None,
+                })
             })
             .await
             .unwrap()
@@ -1037,11 +1038,12 @@ mod tests {
         notifications.changed().await.unwrap();
         assert_eq!(state.committed_tip(), 1.into());
         let witness = state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
+            .read(move |view| {
+                view.get_account(GetAccountRequest {
+                    account_id: id,
+                    block_num: None,
+                    details: None,
+                })
             })
             .await
             .unwrap()
@@ -1107,11 +1109,12 @@ mod tests {
         assert_eq!(stored.header().commitment(), block.header().commitment());
         assert_eq!(stored.body().public_logs(), block.body().public_logs());
         let response = reopened
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
+            .read(move |view| {
+                view.get_account(GetAccountRequest {
+                    account_id: id,
+                    block_num: None,
+                    details: None,
+                })
             })
             .await
             .unwrap();

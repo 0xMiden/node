@@ -57,12 +57,9 @@ pub async fn deploy_fee_collector(
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
-    let builder = FeeCollectorTransactionBuilder::new(
-        account_file.account().id(),
-        account_file,
-        &state.view(),
-    )
-    .await?;
+    let builder =
+        FeeCollectorTransactionBuilder::new(account_file.account().id(), account_file, state)
+            .await?;
     let validator = BlockProducerValidatorClient::new(
         validator_urls,
         validator_timeout,
@@ -86,7 +83,7 @@ pub async fn deploy_fee_collector(
                 .context("genesis block header is missing")?
                 .commitment();
             let executed = builder
-                .execute(Vec::new(), header.clone(), config, blockchain.clone(), view)
+                .execute(Vec::new(), header.clone(), config, blockchain.clone(), state)
                 .await?;
             anyhow::Ok((executed, header, blockchain, genesis))
         })
@@ -151,14 +148,12 @@ pub(crate) async fn load_deployed_collector(
 }
 
 async fn collector_is_deployed(state: &State, account: &Account) -> anyhow::Result<bool> {
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id: account.id(),
-            block_num: None,
-            details: None,
-        })
-        .await?;
+    let request = GetAccountRequest {
+        account_id: account.id(),
+        block_num: None,
+        details: None,
+    };
+    let response = state.read(move |view| view.get_account(request)).await?;
     if response.witness.state_commitment().is_empty() {
         return Ok(false);
     }

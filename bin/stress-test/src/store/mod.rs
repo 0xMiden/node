@@ -130,7 +130,7 @@ async fn get_account(
     let start = Instant::now();
     let request = request.decode_and_verify().expect("request should be valid");
     let response: proto::miden::node::v1::GetAccountResponse =
-        state.view().get_account(request).await.unwrap().into();
+        state.read(move |view| view.get_account(request)).await.unwrap().into();
     let duration = start.elapsed();
 
     let details = response.details;

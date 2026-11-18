@@ -4,6 +4,7 @@ use miden_protocol::block::{BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 
 use crate::AccountTreeWithHistory;
+use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 
 /// Immutable chain state at the block selected when a read is acquired.
 ///
@@ -14,4 +15,5 @@ pub struct StateSnapshot<'a> {
     pub blockchain: &'a Blockchain,
     pub account_tree: &'a AccountTreeWithHistory<RocksDbSnapshotStorage>,
     pub nullifier_tree: &'a NullifierTree<LargeSmt<RocksDbSnapshotStorage>>,
+    pub(crate) forest: &'a AccountStateForest<AccountStateForestBackendReader>,
 }

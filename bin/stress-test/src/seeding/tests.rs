@@ -161,19 +161,16 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
     let account_id = AccountId::from_hex(account_ids[0]).unwrap();
 
     let (state, block_writer, writer_task) = load_state(data_directory).await;
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id,
-            block_num: None,
-            details: Some(AccountDetailRequest {
-                code_commitment: None,
-                vault_request: miden_node_proto::domain::account::AccountVaultRequest::None,
-                storage_request: AccountStorageRequest::AllStorageMaps,
-            }),
-        })
-        .await
-        .unwrap();
+    let request = GetAccountRequest {
+        account_id,
+        block_num: None,
+        details: Some(AccountDetailRequest {
+            code_commitment: None,
+            vault_request: miden_node_proto::domain::account::AccountVaultRequest::None,
+            storage_request: AccountStorageRequest::AllStorageMaps,
+        }),
+    };
+    let response = state.read(move |view| view.get_account(request)).await.unwrap();
     let details = response.details.expect("public account details should be returned");
     assert_eq!(details.storage_details.map_details.len(), 1);
     let map_details = &details.storage_details.map_details[0];
@@ -209,15 +206,12 @@ async fn seed_store_handles_map_larger_than_transaction_account_update_limit() {
     let account_id = AccountId::from_hex(account_ids[0]).unwrap();
 
     let (state, block_writer, writer_task) = load_state(data_directory).await;
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id,
-            block_num: None,
-            details: None,
-        })
-        .await
-        .unwrap();
+    let request = GetAccountRequest {
+        account_id,
+        block_num: None,
+        details: None,
+    };
+    let response = state.read(move |view| view.get_account(request)).await.unwrap();
     assert_ne!(response.witness.state_commitment(), Word::empty());
 
     // Release the backing storage before the temporary directory is deleted.

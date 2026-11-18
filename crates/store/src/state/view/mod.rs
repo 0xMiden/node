@@ -11,7 +11,6 @@ use std::sync::Arc;
 use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
-use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 use crate::db::{Db, HISTORICAL_BLOCK_RETENTION};
 use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
 use crate::state::State;
@@ -56,7 +55,7 @@ impl State {
     /// The view is frozen: it is unaffected if the writer publishes a new snapshot while it is
     /// held.
     ///
-    /// Use this only for one single-expression read (`state.view().get_account(..)`),
+    /// Use this only for one single-expression read (`state.view().get_account_witness(..)`),
     /// where the temporary view drops at the end of the statement. Two `view()` calls observe
     /// potentially *different* snapshots — a block can commit between them — so reads that must
     /// be mutually consistent (e.g. a query and the tip it was served at) must share one view via
@@ -79,8 +78,8 @@ impl State {
     ///
     /// The closure receives a shared reference, so the view cannot escape the call, and the
     /// snapshot is not pinned through unrelated work that follows (e.g. response encoding). A
-    /// *single* read doesn't need it — `state.view().get_account(..)` drops its temporary view at
-    /// the end of the statement.
+    /// *single* read doesn't need it — `state.view().get_account_witness(..)` drops its temporary
+    /// view at the end of the statement.
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
     /// I/O and no other `.await` points. Anything slower holds the pinned snapshot, and therefore
@@ -157,16 +156,5 @@ impl StateView {
     fn with_inner_read_blocking<R>(&self, f: impl FnOnce(&StateSnapshot) -> R) -> R {
         let span = Span::current();
         tokio::task::block_in_place(|| span.in_scope(|| f(&self.snapshot)))
-    }
-
-    /// Runs a synchronous read-only operation over the account state forest snapshot on Tokio's
-    /// blocking path.
-    ///
-    /// See [`Self::with_inner_read_blocking`] for why this uses `block_in_place`.
-    fn with_forest_read_blocking<R>(
-        &self,
-        f: impl FnOnce(&AccountStateForest<AccountStateForestBackendReader>) -> R,
-    ) -> R {
-        self.with_inner_read_blocking(|snapshot| f(&snapshot.forest))
     }
 }

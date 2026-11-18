@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
@@ -18,12 +16,14 @@ use miden_node_tracing::instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::crypto::merkle::smt::RocksDbSnapshotStorage;
 
-use super::{ScopedBlockNum, StateView};
+use super::ReadView;
+use crate::AccountTreeWithHistory;
 use crate::account_state_forest::AccountStorageMapResult;
 use crate::errors::{DatabaseError, GetAccountError};
 
-impl StateView {
+impl ReadView<'_> {
     /// Returns an account witness and optionally account details at a specific block.
     ///
     /// The witness is a Merkle proof of inclusion in the account tree, proving the account's
@@ -31,10 +31,10 @@ impl StateView {
     /// vault assets, and storage data. Account details are only available for public accounts.
     ///
     /// If `block_num` is provided, returns the state at that historical block; otherwise, returns
-    /// the latest state. Note that historical states are only available for recent blocks close
-    /// to the chain tip.
+    /// the state at this view's block. Note that historical states are only available for recent
+    /// blocks close to the chain tip.
     #[instrument]
-    pub async fn get_account(
+    pub fn get_account(
         &self,
         get_account_request: GetAccountRequest,
     ) -> Result<GetAccountResponse, GetAccountError> {
@@ -44,55 +44,17 @@ impl StateView {
             return Err(GetAccountError::AccountNotPublic(account_id));
         }
 
-        let (scoped_block, witness) = self.get_account_witness(block_num, account_id).await?;
+        let snapshot = &self.snapshot;
+        let (block_num, witness) =
+            open_account_witness(snapshot.account_tree, snapshot.block_num, block_num, account_id)?;
 
         let details = if let Some(request) = details {
-            Some(
-                self.fetch_public_account_details(account_id, scoped_block, &witness, request)
-                    .await?,
-            )
+            Some(self.fetch_public_account_details(account_id, block_num, &witness, request)?)
         } else {
             None
         };
 
-        Ok(GetAccountResponse {
-            block_num: *scoped_block,
-            witness,
-            details,
-        })
-    }
-
-    /// Returns an account witness (Merkle proof of inclusion in the account tree) together with
-    /// the resolved block as a scoped block number.
-    ///
-    /// If `block_num` is provided, returns the witness at that historical block; otherwise,
-    /// returns the witness at the latest block. The tree resolution doubles as the tip
-    /// validation, so the returned block is ready for block-bounded database queries.
-    #[instrument]
-    async fn get_account_witness(
-        &self,
-        block_num: Option<BlockNumber>,
-        account_id: AccountId,
-    ) -> Result<(ScopedBlockNum, AccountWitness), GetAccountError> {
-        // Historical query: scope the requested block up front — a block beyond this view's tip is
-        // unknown, so a missing tree entry below can only mean it was pruned.
-        if let Some(requested_block) = block_num {
-            let scoped_block = self
-                .scope_block(requested_block)
-                .ok_or(GetAccountError::UnknownBlock(requested_block))?;
-            let witness = self
-                .with_inner_read_blocking(|inner_state| {
-                    inner_state.account_tree.open_at(account_id, *scoped_block)
-                })
-                .ok_or(GetAccountError::BlockPruned(*scoped_block))?;
-            Ok((scoped_block, witness))
-        } else {
-            // Latest query: the tree's latest state is the view's tip.
-            let witness = self.with_inner_read_blocking(|inner_state| {
-                inner_state.account_tree.open_latest(account_id)
-            });
-            Ok((self.tip(), witness))
-        }
+        Ok(GetAccountResponse { block_num, witness, details })
     }
 
     /// Returns storage map details from the forest for a specific account and storage slot.
@@ -106,31 +68,31 @@ impl StateView {
         &self,
         account_id: AccountId,
         slot_name: &StorageSlotName,
-        block_num: ScopedBlockNum,
+        block_num: BlockNumber,
     ) -> Result<Option<AccountStorageMapDetails>, DatabaseError> {
-        self.with_forest_read_blocking(|forest| {
-            match forest
-                .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), *block_num)
-                .map_err(DatabaseError::MerkleError)?
-            {
-                AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
-                    account_id,
-                    slot_name: slot_name.to_string(),
-                    block_num: *block_num,
-                }),
-                AccountStorageMapResult::Details(details) => Ok(Some(details)),
-                AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
-            }
-        })
+        match self
+            .snapshot
+            .forest
+            .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
+            .map_err(DatabaseError::MerkleError)?
+        {
+            AccountStorageMapResult::NotFound => Err(DatabaseError::StorageRootNotFound {
+                account_id,
+                slot_name: slot_name.to_string(),
+                block_num,
+            }),
+            AccountStorageMapResult::Details(details) => Ok(Some(details)),
+            AccountStorageMapResult::CannotReconstructKeysFromCache => Ok(None),
+        }
     }
 
     /// Returns vault details by reconstructing the vault from the database.
-    async fn reconstruct_vault_details_from_db(
+    fn reconstruct_vault_details_from_db(
         &self,
         account_id: AccountId,
-        block_num: ScopedBlockNum,
+        block_num: BlockNumber,
     ) -> Result<AccountVaultDetails, DatabaseError> {
-        let assets = self.db.select_vault_at_block(account_id, block_num).await?;
+        let assets = self.tx.select_vault_assets(account_id, block_num)?;
 
         if assets.len() > AccountVaultDetails::MAX_RETURN_ENTRIES {
             return Ok(AccountVaultDetails::LimitExceeded);
@@ -140,36 +102,32 @@ impl StateView {
 
         // The reverse-key caches are shared between the writer and all snapshots, so caching via
         // the current snapshot's forest is visible everywhere.
-        self.with_forest_read_blocking(|forest| {
-            forest
-                .vault_key_cache
-                .put_many(keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
-        });
+        self.snapshot
+            .forest
+            .vault_key_cache
+            .put_many(keys.into_iter().map(|raw_key| (raw_key.hash(), raw_key)));
 
         Ok(AccountVaultDetails::from_assets(assets))
     }
 
     /// Returns storage map details by reconstructing the storage map from the database.
-    async fn reconstruct_storage_map_details_from_db(
+    fn reconstruct_storage_map_details_from_db(
         &self,
         account_id: AccountId,
         slot_name: StorageSlotName,
-        block_num: ScopedBlockNum,
+        block_num: BlockNumber,
     ) -> Result<AccountStorageMapDetails, DatabaseError> {
-        let details = self
-            .db
-            .reconstruct_storage_map_from_db(
-                account_id,
-                slot_name,
-                block_num,
-                Some(AccountStorageMapDetails::MAX_RETURN_ENTRIES),
-            )
-            .await?;
+        let details = self.tx.select_storage_map(
+            account_id,
+            slot_name,
+            block_num,
+            AccountStorageMapDetails::MAX_RETURN_ENTRIES,
+        )?;
 
         if let StorageMapEntries::AllEntries(entries) = &details.entries {
-            self.with_forest_read_blocking(|forest| {
-                forest.cache_storage_map_keys(entries.iter().map(|(raw_key, _)| *raw_key));
-            });
+            self.snapshot
+                .forest
+                .cache_storage_map_keys(entries.iter().map(|(raw_key, _)| *raw_key));
         }
 
         Ok(details)
@@ -186,10 +144,10 @@ impl StateView {
     /// All-entries queries (`SlotData::All`) use the forest when all hashed keys are known in the
     /// reverse-key LRU cache, otherwise they fall back to database reconstruction.
     #[instrument]
-    async fn fetch_public_account_details(
+    fn fetch_public_account_details(
         &self,
         account_id: AccountId,
-        scoped_block: ScopedBlockNum,
+        block_num: BlockNumber,
         witness: &AccountWitness,
         detail_request: AccountDetailRequest,
     ) -> Result<AccountDetails, GetAccountError> {
@@ -205,63 +163,47 @@ impl StateView {
 
         // Query account header and storage header together in a single DB call
         let (account_header, storage_header) = self
-            .db
-            .select_account_header_with_storage_header_at_block(account_id, scoped_block)
-            .await?
-            .ok_or(GetAccountError::AccountNotFound(account_id, *scoped_block))?;
+            .tx
+            .select_account_header_with_storage_header(account_id, block_num)?
+            .ok_or(GetAccountError::AccountNotFound(account_id, block_num))?;
 
         let should_apply_response_budget =
             matches!(&storage_request, AccountStorageRequest::AllStorageMaps);
         let storage_requests = expand_account_storage_request(storage_request, &storage_header);
-        validate_storage_map_requests(
-            account_id,
-            scoped_block,
-            &storage_requests,
-            &storage_header,
-        )?;
+        validate_storage_map_requests(account_id, block_num, &storage_requests, &storage_header)?;
 
         let account_code = match code_commitment {
             Some(commitment) if commitment == account_header.code_commitment() => None,
-            Some(_) => {
-                self.db
-                    .select_account_code_by_commitment(account_header.code_commitment())
-                    .await?
-            },
+            Some(_) => self.tx.select_account_code(account_header.code_commitment())?,
             None => None,
         };
 
+        let forest = self.snapshot.forest;
         let vault_details = match vault_request {
             AccountVaultRequest::All(commitment) if commitment == account_header.vault_root() => {
                 AccountVaultDetails::empty()
             },
             AccountVaultRequest::All(_) => {
-                let forest_details = self.with_forest_read_blocking(|forest| {
-                    forest.get_vault_details(account_id, *scoped_block).map_err(|err| {
+                let forest_details =
+                    forest.get_vault_details(account_id, block_num).map_err(|err| {
                         DatabaseError::DataCorrupted(format!(
-                            "failed to reconstruct vault for account {account_id} at block {}: {err}",
-                            *scoped_block,
+                            "failed to reconstruct vault for account {account_id} at block {block_num}: {err}",
                         ))
-                    })
-                })?;
+                    })?;
 
                 match forest_details {
                     Some(details) => details,
-                    None => {
-                        self.reconstruct_vault_details_from_db(account_id, scoped_block).await?
-                    },
+                    None => self.reconstruct_vault_details_from_db(account_id, block_num)?,
                 }
             },
             AccountVaultRequest::None => AccountVaultDetails::empty(),
-            AccountVaultRequest::Assets(asset_ids) => self.with_forest_read_blocking(|forest| {
-                forest
-                    .get_vault_details_for_assets(account_id, *scoped_block, asset_ids)
-                    .map_err(|err| {
-                        DatabaseError::DataCorrupted(format!(
-                            "failed to open vault for account {account_id} at block {}: {err}",
-                            *scoped_block,
-                        ))
-                    })
-            })?,
+            AccountVaultRequest::Assets(asset_ids) => forest
+                .get_vault_details_for_assets(account_id, block_num, asset_ids)
+                .map_err(|err| {
+                    DatabaseError::DataCorrupted(format!(
+                        "failed to open vault for account {account_id} at block {block_num}: {err}",
+                    ))
+                })?,
         };
 
         // Split storage map requests into two categories:
@@ -290,43 +232,26 @@ impl StateView {
         let mut storage_map_details_by_index = vec![None; storage_request_slots.len()];
 
         // Handle slots with explicit key requests
-        if !map_keys_requests.is_empty() {
-            self.with_forest_read_blocking(|forest| {
-                for (index, slot_name, keys) in map_keys_requests {
-                    let details = forest
-                        .get_storage_map_details_for_keys(
-                            account_id,
-                            slot_name.clone(),
-                            *scoped_block,
-                            keys,
-                        )
-                        .ok_or_else(|| DatabaseError::StorageRootNotFound {
-                            account_id,
-                            slot_name: slot_name.to_string(),
-                            block_num: *scoped_block,
-                        })?
-                        .map_err(DatabaseError::MerkleError)?;
-                    storage_map_details_by_index[index] = Some(details);
-                }
-                Ok::<(), DatabaseError>(())
-            })?;
+        for (index, slot_name, keys) in map_keys_requests {
+            let details = forest
+                .get_storage_map_details_for_keys(account_id, slot_name.clone(), block_num, keys)
+                .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                    account_id,
+                    slot_name: slot_name.to_string(),
+                    block_num,
+                })?
+                .map_err(DatabaseError::MerkleError)?;
+            storage_map_details_by_index[index] = Some(details);
         }
 
         // Handle slots with "all entries" requests
         for (index, slot_name) in all_entries_requests {
-            let details = match self.get_storage_map_details_from_forest(
-                account_id,
-                &slot_name,
-                scoped_block,
-            )? {
+            let details = match self
+                .get_storage_map_details_from_forest(account_id, &slot_name, block_num)?
+            {
                 Some(details) => details,
                 None => {
-                    self.reconstruct_storage_map_details_from_db(
-                        account_id,
-                        slot_name,
-                        scoped_block,
-                    )
-                    .await?
+                    self.reconstruct_storage_map_details_from_db(account_id, slot_name, block_num)?
                 },
             };
             storage_map_details_by_index[index] = Some(details);
@@ -338,7 +263,7 @@ impl StateView {
             let details = details.ok_or_else(|| DatabaseError::StorageRootNotFound {
                 account_id,
                 slot_name: slot_name.to_string(),
-                block_num: *scoped_block,
+                block_num,
             })?;
             storage_map_details.push(details);
         }
@@ -349,7 +274,7 @@ impl StateView {
         // response.
         if should_apply_response_budget {
             return Ok(apply_all_storage_maps_response_budget(
-                *scoped_block,
+                block_num,
                 witness,
                 account_header,
                 account_code,
@@ -376,6 +301,30 @@ impl StateView {
 // HELPERS
 // ================================================================================================
 
+/// Returns an account witness (Merkle proof of inclusion in the account tree) together with
+/// the resolved block.
+///
+/// If `block_num` is provided, returns the witness at that historical block; otherwise,
+/// returns the witness at `tip`, the latest block in `account_tree`.
+pub(crate) fn open_account_witness(
+    account_tree: &AccountTreeWithHistory<RocksDbSnapshotStorage>,
+    tip: BlockNumber,
+    block_num: Option<BlockNumber>,
+    account_id: AccountId,
+) -> Result<(BlockNumber, AccountWitness), GetAccountError> {
+    let Some(block_num) = block_num else {
+        return Ok((tip, account_tree.open_latest(account_id)));
+    };
+    // A block beyond the tip is unknown, so a missing tree entry below can only mean it was pruned.
+    if block_num > tip {
+        return Err(GetAccountError::UnknownBlock(block_num));
+    }
+    let witness = account_tree
+        .open_at(account_id, block_num)
+        .ok_or(GetAccountError::BlockPruned(block_num))?;
+    Ok((block_num, witness))
+}
+
 /// Expand [`AccountStorageRequest`] to a vector of slot requests.
 fn expand_account_storage_request(
     storage_request: AccountStorageRequest,
@@ -401,7 +350,7 @@ fn expand_account_storage_request(
 /// such a slot, so a forest lookup cannot tell this case apart from a missing storage root.
 fn validate_storage_map_requests(
     account_id: AccountId,
-    block_num: ScopedBlockNum,
+    block_num: BlockNumber,
     requests: &[StorageMapRequest],
     storage_header: &AccountStorageHeader,
 ) -> Result<(), GetAccountError> {
@@ -410,14 +359,14 @@ fn validate_storage_map_requests(
             GetAccountError::StorageSlotNotFound {
                 account_id,
                 slot_name: slot_name.clone(),
-                block_num: *block_num,
+                block_num,
             }
         })?;
         if slot.slot_type() != StorageSlotType::Map {
             return Err(GetAccountError::StorageSlotNotMap {
                 account_id,
                 slot_name: slot_name.clone(),
-                block_num: *block_num,
+                block_num,
             });
         }
     }
@@ -429,19 +378,6 @@ use response_budget::{
     MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS,
     apply_all_storage_maps_response_budget,
 };
-
-// NETWORK ACCOUNT CLASSIFICATION
-// ================================================================================================
-
-impl StateView {
-    /// Filters `account_ids` down to the subset classified as network accounts.
-    pub async fn filter_network_accounts(
-        &self,
-        account_ids: &[AccountId],
-    ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db.filter_network_accounts(account_ids.to_vec()).await
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -556,7 +492,9 @@ mod tests {
                 slot_name: missing_slot.clone(),
                 slot_data: slot_data.clone(),
             };
-            let result = state.view().get_account(storage_request(account_id, request)).await;
+            let result = state
+                .read(move |view| view.get_account(storage_request(account_id, request)))
+                .await;
             assert!(
                 matches!(
                     &result,
@@ -571,7 +509,9 @@ mod tests {
                 slot_name: value_slot_name(),
                 slot_data: slot_data.clone(),
             };
-            let result = state.view().get_account(storage_request(account_id, request)).await;
+            let result = state
+                .read(move |view| view.get_account(storage_request(account_id, request)))
+                .await;
             assert!(
                 matches!(
                     &result,
@@ -587,8 +527,7 @@ mod tests {
         for slot_data in [SlotData::All, map_keys] {
             let request = StorageMapRequest { slot_name: map_slot_name(), slot_data };
             let response = state
-                .view()
-                .get_account(storage_request(account_id, request))
+                .read(move |view| view.get_account(storage_request(account_id, request)))
                 .await
                 .expect("map slot request should succeed");
             let details = response.details.expect("details should be returned");
