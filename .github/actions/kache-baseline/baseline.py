@@ -333,7 +333,7 @@ def restore(args, env):
         if args.runtime_dir
         else Path(tempfile.mkdtemp(prefix="kache-run-"))
     )
-    runtime.mkdir(parents=True, exist_ok=True)
+    runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
     state = {
         **vars(args),
         "branch": branch_for(env),

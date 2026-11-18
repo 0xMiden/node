@@ -41,6 +41,13 @@ TOML
     export KACHE_RUNTIME_DIR=/tmp/kache-runtime KACHE_BASE_DIR=/app
     export KACHE_MAX_SIZE=50GiB KACHE_CACHE_EXECUTABLES=1
     export RUSTC_WRAPPER=kache CC="kache cc" CXX="kache c++" CC_KNOWN_WRAPPER_CUSTOM=kache
+
+    # Gives the container ownership of its private runtime directory.
+    #
+    # The daemon refuses socket directories owned by another user.
+    mkdir -p "${KACHE_RUNTIME_DIR}"
+    chown -R "$(id -u):$(id -g)" "${KACHE_RUNTIME_DIR}"
+    chmod 700 "${KACHE_RUNTIME_DIR}"
     kache daemon start
     kache doctor
 fi

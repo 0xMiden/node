@@ -266,6 +266,7 @@ class SnapshotTests(unittest.TestCase):
             )
             baseline.restore(args, env)
             self.assertTrue(json.loads(Path(args.state).read_text())["restore_ok"])
+            self.assertEqual(Path(args.runtime_dir).stat().st_mode & 0o777, 0o700)
             self.assertEqual(
                 requests, ["/" + baseline.metadata_key(st), "/" + meta["archive"]]
             )
