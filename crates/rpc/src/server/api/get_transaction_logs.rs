@@ -1,7 +1,10 @@
 //! Unary lookup of committed logs under a transaction's native account.
 
 use miden_node_proto::DecodeMessageExt;
-use miden_node_proto::domain::transaction_logs::GetTransactionLogsRequest;
+use miden_node_proto::domain::transaction_logs::{
+    GetTransactionLogsRequest,
+    GetTransactionLogsResponse,
+};
 use miden_node_proto::generated::miden::node::v1::{
     GetTransactionLogsRequest as ProtoRequest,
     GetTransactionLogsResponse as ProtoResponse,
@@ -20,7 +23,7 @@ pub(super) const MAX_ACTIVE_REQUESTS: usize = 32;
 #[tonic::async_trait]
 impl GetTransactionLogs for RpcService {
     type Input = GetTransactionLogsRequest;
-    type Output = ProtoResponse;
+    type Output = GetTransactionLogsResponse;
 
     fn decode(request: ProtoRequest) -> TonicResult<Self::Input> {
         request
@@ -29,7 +32,7 @@ impl GetTransactionLogs for RpcService {
     }
 
     fn encode(response: Self::Output) -> TonicResult<ProtoResponse> {
-        Ok(response)
+        Ok(response.into())
     }
 
     #[instrument(name = "get_transaction_logs", fields(account.id = request.native_account_id, transaction.id = request.transaction_id))]
@@ -47,14 +50,13 @@ impl GetTransactionLogs for RpcService {
             error!(err, "Failed to read transaction logs");
             internal_error("Failed to read transaction logs")
         })?;
-        let response = result.ok_or_else(|| {
+        result.ok_or_else(|| {
             Status::with_details(
                 Code::NotFound,
                 "Transaction not found for native account",
                 vec![GetTransactionLogsErrorCode::TransactionNotFound as u8].into(),
             )
-        })?;
-        Ok(response.into())
+        })
     }
 }
 
