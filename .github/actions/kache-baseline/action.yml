@@ -1,0 +1,43 @@
+name: Kache baseline
+description: Restore a local compiler-cache snapshot and refresh it after successful protected-branch pushes
+inputs:
+  job-key:
+    description: Stable job and build-configuration identity
+    required: true
+  cache-version:
+    description: Pinned kache version identifying the local-store format
+    required: true
+  binary:
+    description: Installed kache executable
+    required: true
+  config:
+    description: Kache remote configuration file
+    required: true
+  bucket:
+    description: S3 upload bucket
+    required: true
+  region:
+    description: S3 upload region
+    required: true
+  download-endpoint:
+    description: CloudFront endpoint for every baseline read
+    required: true
+  writable:
+    description: Whether this job has cache write credentials
+    default: "false"
+  cache-dir:
+    description: Local store directory; defaults to a private directory beside the workspace
+    default: ""
+  runtime-dir:
+    description: Kache runtime directory; defaults to a private temporary directory
+    default: ""
+outputs:
+  cache-dir:
+    description: Restored local store
+  runtime-dir:
+    description: Job runtime directory
+runs:
+  using: node24
+  main: lifecycle.js
+  post: lifecycle.js
+  post-if: success()

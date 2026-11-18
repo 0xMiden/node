@@ -62,11 +62,18 @@ jobs:
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
+        id: kache
         with:
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
           download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+      - name: Test compiler-cache baseline restore
+        if: steps.kache.outputs.enabled == 'true'
+        working-directory: .github/actions/kache-baseline
+        env:
+          KACHE_TEST_BINARY: ${{ steps.kache.outputs.binary }}
+        run: python3 -m unittest test_baseline.CargoRestoreTests -v
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -560,6 +567,12 @@ jobs:
       # Checks workflow syntax, expressions, and embedded shell scripts.
       - name: actionlint
         run: '"${RUNNER_TEMP}/actionlint/actionlint" -pyflakes='
+
+      - name: Test compiler-cache baselines
+        run: |
+          zstd --version
+          node --check .github/actions/kache-baseline/lifecycle.js
+          python3 -m unittest discover -s .github/actions/kache-baseline -p test_baseline.py -v
 
       # Limits workflow and local action YAML lines to 120 characters.
       - name: yamllint

@@ -62,9 +62,7 @@ runs:
       # Only a runner-created temporary path is exported to the job environment.
       run: | # zizmor: ignore[github-env]
         REMOTE_CACHE=false
-        if [[ "${WRITABLE_CACHE}" == true || (
-          -n "${KACHE_S3_BUCKET}" && -n "${KACHE_S3_REGION}" && -n "${KACHE_DOWNLOAD_ENDPOINT}"
-        ) ]]; then
+        if [[ -n "${KACHE_S3_BUCKET}" && -n "${KACHE_S3_REGION}" && -n "${KACHE_DOWNLOAD_ENDPOINT}" ]]; then
           REMOTE_CACHE=true
         fi
         echo "remote=${REMOTE_CACHE}" >> "${GITHUB_OUTPUT}"
@@ -78,6 +76,8 @@ runs:
         import os
 
         print('[cache]')
+        # The branch snapshot provides warmup; only exact misses need downloads.
+        print('prefetch_enabled = false')
         readonly = os.environ["WRITABLE_CACHE"] != "true"
         print(f"remote_readonly = {str(readonly).lower()}")
         print('[cache.remote]')
@@ -93,7 +93,7 @@ runs:
             print(f"download_endpoint = {json.dumps(endpoint)}")
         PYTHON
         echo "KACHE_CONFIG=${config}" >> "${GITHUB_ENV}"
-        echo "KACHE_CI_BUNDLES=true" >> "${GITHUB_ENV}"
+        echo "KACHE_CI_BUNDLES=false" >> "${GITHUB_ENV}"
         echo "config=${config}" >> "${GITHUB_OUTPUT}"
 
     - name: Authenticate to the Rust cache
@@ -108,35 +108,34 @@ runs:
     # Installs the CloudFront client and engine in the runner's tool cache.
     #
     # The upstream action reuses this verified installation for setup and cleanup.
-    # Bundle warmup and publication use its daemon-start and manifest-save hooks.
-    # Remove this step once an official release includes CloudFront downloads,
-    # the prefetch cancellation fix, and automatic CI bundles.
+    # The fork keeps all downloads on CloudFront. CI owns local-store snapshot
+    # restoration and refresh without enabling kache's transfer-pack hooks.
     - name: Install patched kache
       id: install
       if: steps.cache.outputs.remote == 'true'
       shell: bash
       env:
-        TRIAL_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-bundles.1
+        KACHE_RELEASE: https://github.com/Mirko-von-Leipzig/kache/releases/download/miden-kache-v2.0.0-rc.2-cloudfront.2
       run: |
         case "${RUNNER_OS}/${RUNNER_ARCH}" in
           Linux/X64)
             target=x86_64-unknown-linux-gnu
             architecture=x64
-            checksum=7eab90b7961e2fca197500bb04e8e94193ef866fd1e969f4bdff88c3ae8be434
+            checksum=7afef202644a2b4dd7fed9e8f568fd381dfb8958da457ceb832d8a189eb0ad4f
             ;;
           Linux/ARM64)
             target=aarch64-unknown-linux-gnu
             architecture=arm64
-            checksum=d298ea14adb757f6dc0c16543f0cffab7afad57ef52337765512ef28e9bf9f44
+            checksum=fab505ba2040dc9ad094180d4ded159eb5d6fadf1f224126829209acf2fa7b92
             ;;
           *) echo "Unsupported runner: ${RUNNER_OS}/${RUNNER_ARCH}" >&2; exit 1 ;;
         esac
-        archive="$(mktemp "${RUNNER_TEMP}/kache-trial.XXXXXX")"
+        archive="$(mktemp "${RUNNER_TEMP}/kache-download.XXXXXX")"
         curl --fail --location --silent --show-error --retry 3 \
-          "${TRIAL_RELEASE}/kache-v2.0.0-rc.2-miden.2-${target}.tar.gz" \
+          "${KACHE_RELEASE}/kache-v2.0.0-rc.2-miden.3-${target}.tar.gz" \
           --output "${archive}"
         printf '%s  %s\n' "${checksum}" "${archive}" | sha256sum --check --status
-        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.2/${architecture}"
+        tool_dir="${RUNNER_TOOL_CACHE}/kache/2.0.0-rc.2-miden.3/${architecture}"
         mkdir -p "${tool_dir}"
         tar -xzf "${archive}" -C "${tool_dir}" kache kache-engine
         "${tool_dir}/kache" --version
@@ -144,15 +143,31 @@ runs:
         echo "binary=${tool_dir}/kache" >> "${GITHUB_OUTPUT}"
         rm "${archive}"
 
+    - name: Restore branch baseline
+      id: baseline
+      if: steps.cache.outputs.remote == 'true' && inputs.prepare-only != 'true'
+      uses: $/.github/actions/kache-baseline
+      with:
+        job-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+        cache-version: v2.0.0-rc.2-miden.3
+        binary: ${{ steps.install.outputs.binary }}
+        config: ${{ steps.cache.outputs.config }}
+        bucket: ${{ inputs.s3-bucket }}
+        region: ${{ inputs.s3-region }}
+        download-endpoint: ${{ inputs.download-endpoint }}
+        writable: ${{ steps.cache.outputs.writable }}
+
     - name: Set up Rust compiler cache
       if: steps.cache.outputs.remote == 'true' && inputs.prepare-only != 'true'
       uses: kunobi-ninja/kache-action@v1
       with:
-        version: v2.0.0-rc.2-miden.2
+        version: v2.0.0-rc.2-miden.3
         s3-bucket: ${{ inputs.s3-bucket }}
         s3-region: ${{ inputs.s3-region }}
         s3-prefix: protected-branch
         manifest-key: node-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+        cache-dir: ${{ steps.baseline.outputs.cache-dir }}
+        runtime-dir: ${{ steps.baseline.outputs.runtime-dir }}
         max-size: 50GiB
         cache-executables: true
         github-cache: false

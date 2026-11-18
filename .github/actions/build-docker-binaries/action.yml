@@ -37,6 +37,21 @@ runs:
         s3-role-arn: ${{ inputs.s3-role-arn }}
         download-endpoint: ${{ inputs.download-endpoint }}
 
+    - name: Restore branch baseline
+      if: steps.cache.outputs.enabled == 'true'
+      uses: $/.github/actions/kache-baseline
+      with:
+        job-key: node-docker-${{ inputs.architecture }}
+        cache-version: v2.0.0-rc.2-miden.3
+        binary: ${{ steps.cache.outputs.binary }}
+        config: ${{ steps.cache.outputs.config }}
+        bucket: ${{ inputs.s3-bucket }}
+        region: ${{ inputs.s3-region }}
+        download-endpoint: ${{ inputs.download-endpoint }}
+        writable: ${{ steps.cache.outputs.writable }}
+        cache-dir: ${{ runner.temp }}/kache-docker/kache-cache
+        runtime-dir: ${{ runner.temp }}/kache-docker/kache-runtime
+
     - name: Compile image binaries
       id: build
       shell: bash
