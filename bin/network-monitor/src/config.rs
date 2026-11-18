@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use alloy_primitives::{Address, address};
 use anyhow::{Context, Result};
 use clap::Parser;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
@@ -22,6 +23,9 @@ const DEFAULT_PORT: u16 = 3000;
 const DEFAULT_FAUCET_MINT_AMOUNT: u64 = 1_000;
 /// Amount of the fee asset, in base units, requested by each wallet funding request by default.
 const DEFAULT_WALLET_FUNDING_AMOUNT: NonZeroU64 = NonZeroU64::new(1_000_000).unwrap();
+/// USDC on Arc mainnet and testnet, the token xReserve holds as collateral for `USDCx`.
+const DEFAULT_XRESERVE_LOCAL_TOKEN: Address =
+    address!("0x3600000000000000000000000000000000000000");
 
 /// Configuration for the monitor.
 ///
@@ -263,6 +267,49 @@ pub struct MonitorConfig {
     )]
     pub agglayer_monitor_url: Option<Url>,
 
+    /// The JSON-RPC URL of the chain that hosts the xReserve contract backing `USDCx` (Arc).
+    ///
+    /// Setting it together with `--xreserve-address` enables the `USDCx` bridge card. The URL is
+    /// never displayed, so it may carry a provider API key.
+    #[arg(
+        long = "xreserve-rpc-url",
+        env = "MIDEN_MONITOR_XRESERVE_RPC_URL",
+        requires = "xreserve_address",
+        help = "The JSON-RPC URL of the chain that hosts the xReserve contract backing USDCx (Arc)"
+    )]
+    pub xreserve_rpc_url: Option<Url>,
+
+    /// The address of the xReserve contract that holds the collateral for `USDCx`.
+    #[arg(
+        long = "xreserve-address",
+        env = "MIDEN_MONITOR_XRESERVE_ADDRESS",
+        requires = "xreserve_rpc_url",
+        help = "The address of the xReserve contract that holds the collateral for USDCx"
+    )]
+    pub xreserve_address: Option<Address>,
+
+    /// The token that xReserve holds as collateral for `USDCx`.
+    #[arg(
+        long = "xreserve-local-token",
+        env = "MIDEN_MONITOR_XRESERVE_LOCAL_TOKEN",
+        default_value_t = DEFAULT_XRESERVE_LOCAL_TOKEN,
+        help = "The token that xReserve holds as collateral for USDCx"
+    )]
+    pub xreserve_local_token: Address,
+
+    /// The interval at which to check the `USDCx` bridge.
+    ///
+    /// It is longer than the status check interval because public RPC providers of the xReserve
+    /// chain rate-limit their clients.
+    #[arg(
+        long = "usdcx-bridge-check-interval",
+        env = "MIDEN_MONITOR_USDCX_BRIDGE_CHECK_INTERVAL",
+        default_value = "30s",
+        value_parser = humantime::parse_duration,
+        help = "The interval at which to check the USDCx bridge"
+    )]
+    pub usdcx_bridge_check_interval: Duration,
+
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///
     /// If the chain tip does not increment within this duration, the RPC service will be
@@ -349,6 +396,56 @@ mod tests {
         assert!(
             MonitorConfig::try_parse_from(["monitor", "--wallet-funding-amount", "0"]).is_err()
         );
+    }
+
+    /// The `USDCx` bridge card is off by default and needs both the endpoint and the contract.
+    #[test]
+    fn xreserve_endpoint_and_contract_are_required_together() {
+        const XRESERVE: &str = "0x008888878f94C0d87defdf0B07f46B93C1934442";
+
+        let config = MonitorConfig::try_parse_from(["monitor"]).unwrap();
+        assert!(config.xreserve_rpc_url.is_none());
+        assert!(config.xreserve_address.is_none());
+        assert_eq!(config.xreserve_local_token, DEFAULT_XRESERVE_LOCAL_TOKEN);
+        assert_eq!(config.usdcx_bridge_check_interval, Duration::from_secs(30));
+
+        assert!(
+            MonitorConfig::try_parse_from([
+                "monitor",
+                "--xreserve-rpc-url",
+                "https://rpc.testnet.arc.io",
+            ])
+            .is_err()
+        );
+        assert!(
+            MonitorConfig::try_parse_from(["monitor", "--xreserve-address", XRESERVE]).is_err()
+        );
+
+        let config = MonitorConfig::try_parse_from([
+            "monitor",
+            "--xreserve-rpc-url",
+            "https://rpc.testnet.arc.io",
+            "--xreserve-address",
+            XRESERVE,
+        ])
+        .unwrap();
+        assert_eq!(config.xreserve_address, Some(XRESERVE.parse().unwrap()));
+    }
+
+    #[test]
+    fn rejects_invalid_xreserve_addresses() {
+        for value in ["0x1234", "not-an-address"] {
+            assert!(
+                MonitorConfig::try_parse_from([
+                    "monitor",
+                    "--xreserve-rpc-url",
+                    "https://rpc.testnet.arc.io",
+                    "--xreserve-address",
+                    value,
+                ])
+                .is_err()
+            );
+        }
     }
 
     #[test]

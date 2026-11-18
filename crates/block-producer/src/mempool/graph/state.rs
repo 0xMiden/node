@@ -67,12 +67,12 @@ where
             return Err(StateConflict::UnauthenticatedNotesMissing(missing_input_notes));
         }
 
-        for (account_id, from, _to, store) in node.account_updates() {
+        for (account_id, from, _to, baseline) in node.account_updates() {
             let current = self
                 .accounts
                 .get(&account_id)
                 .map(AccountStates::commitment)
-                .or(store)
+                .or(baseline)
                 .unwrap_or_default();
 
             if from != current {

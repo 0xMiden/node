@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use itertools::Itertools;
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteAttachments, Nullifier};
@@ -17,7 +17,7 @@ use miden_protocol::transaction::{
 use miden_protocol::{Felt, ONE, Word};
 use rand::RngExt;
 
-use super::{MockAuthenticatedTxBuilder, MockPrivateAccount};
+use super::{MockPrivateAccount, MockTransactionCandidateBuilder};
 
 #[derive(Clone)]
 pub struct MockProvenTxBuilder {
@@ -38,7 +38,7 @@ impl MockProvenTxBuilder {
     }
 
     /// Generates 3 random, sequential transactions acting on the same account.
-    pub fn sequential() -> [Arc<AuthenticatedTransaction>; 3] {
+    pub fn sequential() -> [Arc<TransactionCandidate>; 3] {
         let mut rng = rand::rng();
         let mock_account: MockPrivateAccount<4> = rng.random::<u32>().into();
 
@@ -50,7 +50,7 @@ impl MockProvenTxBuilder {
                     mock_account.states[i + 1],
                 )
             })
-            .map(|tx| Arc::new(MockAuthenticatedTxBuilder::new(tx.build()).build()))
+            .map(|tx| Arc::new(MockTransactionCandidateBuilder::new(tx.build()).build()))
             .collect_vec()
             .try_into()
             .expect("Sizes should match")

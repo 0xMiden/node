@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
 use miden_node_store::state::{State, StateView};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Instrument, Span, error, instrument, miden_span_record};
@@ -23,16 +22,18 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use tokio::task::{JoinError, JoinSet};
-use tokio::time::{Instant, MissedTickBehavior};
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
-use crate::mempool::SharedMempool;
+use crate::mempool::{MempoolTransaction, SharedMempool};
 use crate::validator::BlockProducerValidatorClient;
 
 mod prover;
+mod scheduler;
+
 pub(crate) use prover::BatchProver;
+use scheduler::BatchScheduler;
 
 // BATCH BUILDER
 // ================================================================================================
@@ -46,36 +47,11 @@ pub struct BatchBuilder {
     /// Batch building jobs currently running.
     active_jobs: JoinSet<Result<(), BuildBatchError>>,
     num_workers: NonZeroUsize,
-    intervals: BatchIntervals,
+    batch_interval: Duration,
     batch_prover: BatchProver,
     fee_collector: FeeCollectorTransactionBuilder,
     validator: BlockProducerValidatorClient,
     state: Arc<State>,
-}
-
-pub(crate) struct BatchIntervals {
-    /// Maximum time between spawned batch jobs before an any-size batch is attempted.
-    max_batch_interval: Duration,
-    /// How often the scheduler wakes to check whether a full batch can be spawned.
-    full_batch_check_interval: Duration,
-}
-
-impl BatchIntervals {
-    const MIN_SCHEDULER_INTERVAL: Duration = Duration::from_millis(50);
-
-    /// Derives batch scheduler intervals from the block and legacy batch intervals.
-    ///
-    /// Full batches are produced as often as possible, but a batch is attempted at
-    /// least every `batch_interval` if traffic is low.
-    pub(crate) fn derive_from(block_interval: Duration, batch_interval: Duration) -> Self {
-        let max_batch_interval = batch_interval.max(Self::MIN_SCHEDULER_INTERVAL);
-        let full_batch_check_interval = (block_interval / 10).max(Self::MIN_SCHEDULER_INTERVAL);
-
-        BatchIntervals {
-            max_batch_interval,
-            full_batch_check_interval,
-        }
-    }
 }
 
 impl BatchBuilder {
@@ -83,7 +59,8 @@ impl BatchBuilder {
     pub async fn new(
         state: Arc<State>,
         num_workers: NonZeroUsize,
-        intervals: BatchIntervals,
+        batch_interval: Duration,
+        batch_prover: BatchProver,
         builder_account_id: AccountId,
         fee_collector_account: AccountFile,
         validator: BlockProducerValidatorClient,
@@ -98,52 +75,38 @@ impl BatchBuilder {
         Ok(Self {
             active_jobs: JoinSet::new(),
             num_workers,
-            intervals,
-            batch_prover: BatchProver::new(),
+            batch_interval,
+            batch_prover,
             fee_collector,
             validator,
             state,
         })
     }
 
-    /// Starts the [`BatchBuilder`], creating and proving batches dynamically.
+    /// Starts the batch builder, creating and proving batches as mempool changes arrive.
     ///
-    /// Full batches are spawned on each check and job completion. A batch of any size is attempted
-    /// when no batch has been spawned for the maximum batch interval.
+    /// Full batches are selected immediately when a worker is available. Partial batches wait for
+    /// the configured batch interval, and an empty mempool does not schedule selection attempts.
     pub async fn run(
         mut self,
         mempool: SharedMempool,
         shutdown: CancellationToken,
     ) -> anyhow::Result<()> {
-        let mut last_spawn = Instant::now();
-        let mut full_batch_check = tokio::time::interval(self.intervals.full_batch_check_interval);
-        full_batch_check.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
+        let mut scheduler = BatchScheduler::new(mempool.clone(), self.batch_interval)?;
         loop {
-            // Force a batch attempt after the maximum interval, even if it is partial.
-            let force_at = tokio::time::sleep_until(last_spawn + self.intervals.max_batch_interval);
             let has_available_worker = self.has_available_worker();
             let has_active_job = !self.active_jobs.is_empty();
-
             tokio::select! {
                 () = shutdown.cancelled() => {
                     Self::abort_active_jobs(&mut self.active_jobs);
                     return Ok(());
                 },
-                _ = force_at => {
-                    last_spawn = Instant::now();
-                    if has_available_worker {
-                        self.spawn_any_batch_job(mempool.clone())?;
-                    }
-                },
                 result = self.active_jobs.join_next(), if has_active_job => {
                     Self::handle_job_result(result.expect("active job set is not empty"))?;
                 },
-                _ = full_batch_check.tick() => {},
-            }
-
-            while self.has_available_worker() && self.spawn_full_batch_job(mempool.clone())? {
-                last_spawn = Instant::now();
+                batch = scheduler.next_batch(has_available_worker) => {
+                    self.build_batch(mempool.clone(), batch?);
+                },
             }
         }
     }
@@ -181,36 +144,6 @@ impl BatchBuilder {
         );
     }
 
-    fn spawn_full_batch_job(&mut self, mempool: SharedMempool) -> Result<bool, BuildBatchError> {
-        let Some(batch) = Self::select_full_batch(&mempool)? else {
-            return Ok(false);
-        };
-
-        self.build_batch(mempool, batch);
-        Ok(true)
-    }
-
-    fn spawn_any_batch_job(&mut self, mempool: SharedMempool) -> Result<bool, BuildBatchError> {
-        let Some(batch) = Self::select_any_batch(&mempool)? else {
-            return Ok(false);
-        };
-
-        self.build_batch(mempool, batch);
-        Ok(true)
-    }
-
-    #[instrument(name = "select_full_batch")]
-    fn select_full_batch(
-        mempool: &SharedMempool,
-    ) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_full_batch())
-    }
-
-    #[instrument(name = "select_any_batch")]
-    fn select_any_batch(mempool: &SharedMempool) -> Result<Option<SelectedBatch>, BuildBatchError> {
-        Ok(mempool.lock().map_err(BuildBatchError::MempoolPoisoned)?.select_any_batch())
-    }
-
     fn has_available_worker(&self) -> bool {
         self.active_jobs.len() < self.num_workers.get()
     }
@@ -219,8 +152,8 @@ impl BatchBuilder {
     ///
     /// # Invariant: abort strands the job's transactions
     ///
-    /// Batch selection (`Self::select_full_batch` / `Self::select_any_batch`) synchronously moves
-    /// transactions into `selected` state in the mempool DAG. A job's error path re-queues them
+    /// Batch selection synchronously moves transactions into `selected` state in the mempool DAG.
+    /// A job's error path re-queues them
     /// via `BatchJob::rollback_batch`, but an **aborted** job never reaches that path: its
     /// selected transactions remain unavailable until they are rolled back or expire. Their DAG
     /// descendants may still be selected, since selecting a parent makes its children candidates.
@@ -314,7 +247,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .map(AuthenticatedTransaction::reference_block)
+            .map(MempoolTransaction::reference_block)
             .map(|(block_num, _)| block_num)
             .collect();
         let reference_block = selected.parameters().reference_block;
@@ -322,7 +255,7 @@ impl BatchJob {
             .transactions()
             .iter()
             .map(Deref::deref)
-            .flat_map(AuthenticatedTransaction::unauthenticated_note_ids)
+            .flat_map(MempoolTransaction::unauthenticated_note_ids)
             .collect();
 
         // The view pins a state snapshot. Only the store reads and the fee collection execution use
@@ -551,6 +484,7 @@ mod tests {
     use std::future::pending;
     use std::time::Duration;
 
+    use miden_node_proto::domain::sequencer::TransactionCandidate;
     use miden_node_utils::genesis::GenesisBlock;
     use miden_protocol::ONE;
     use miden_protocol::block::{BlockSignatures, SignedBlock};
@@ -591,7 +525,7 @@ mod tests {
         let (state, ..) = State::for_tests(directory.path()).await;
         let inputs = get_tx_inputs(&state, &transaction).await?;
         let transaction =
-            Arc::new(AuthenticatedTransaction::new_unchecked(Arc::new(transaction), inputs)?);
+            Arc::new(TransactionCandidate::new_unchecked(Arc::new(transaction), inputs)?);
         let mempool = Mempool::shared(BlockNumber::GENESIS, MempoolConfig::default());
         mempool.lock().unwrap().add_transaction(transaction)?;
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();

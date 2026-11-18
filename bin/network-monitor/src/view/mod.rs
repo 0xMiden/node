@@ -181,6 +181,7 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
         // Validators share a card rendered by `status_fragment`.
         ServiceDetails::ValidatorStatus(_) => html! {},
         ServiceDetails::AgglayerStatus(d) => cards::render_agglayer(d),
+        ServiceDetails::UsdcxBridge(d) => cards::render_usdcx_bridge(d),
         ServiceDetails::Error => html! {},
     }
 }
@@ -685,6 +686,112 @@ mod tests {
         assert!(html.contains("waiting_claimable"));
         // Only the unhealthy outbound direction has a reason.
         assert_eq!(html.matches("Reason:").count(), 1);
+    }
+
+    #[test]
+    fn renders_usdcx_bridge_card() {
+        use crate::status::{
+            UsdcxActivityDetails,
+            UsdcxBridgeDetails,
+            UsdcxBridgeEvent,
+            UsdcxBridgeEventKind,
+            UsdcxFaucetDetails,
+            XReserveDetails,
+        };
+
+        let details = UsdcxBridgeDetails {
+            xreserve_address: "0x008888878f94C0d87defdf0B07f46B93C1934442".to_string(),
+            faucet: Some(UsdcxFaucetDetails {
+                faucet_id: "0xfaucet".to_string(),
+                block_num: 42,
+                symbol: "USDCX".to_string(),
+                decimals: 6,
+                circulating_supply: 1_500_000,
+                paused: false,
+                circle_domain: 10_007,
+            }),
+            xreserve: Some(XReserveDetails {
+                chain_id: 5_042_002,
+                collateral: 2_000_000,
+                collateral_decimals: 6,
+                paused: false,
+                deposits_paused: true,
+                withdrawals_paused: false,
+            }),
+            activity: Some(UsdcxActivityDetails {
+                deposits_24h: 3,
+                withdrawals_24h: 1,
+                latest: Some(UsdcxBridgeEvent {
+                    kind: UsdcxBridgeEventKind::Withdrawal,
+                    block_num: 40,
+                    timestamp: 1_609_459_200,
+                    transaction_id: "0xtransaction".to_string(),
+                }),
+                synced_to: 30,
+                chain_tip: 42,
+            }),
+            activity_error: Some("failed to sync the faucet transactions".to_string()),
+        };
+        let html = render(vec![healthy("USDCx Bridge", ServiceDetails::UsdcxBridge(details))]);
+        for expected in [
+            "USDCx Bridge",
+            "0xfaucet",
+            "1.5 USDCX",
+            "10007",
+            "0x008888878f94C0d87defdf0B07f46B93C1934442",
+            "5042002",
+            "2 USDC",
+            "0.5 USDC",
+            "Paused",
+            "Withdrawal at 2021-01-01 00:00:00 UTC (block 40)",
+            "synced to block 30 of 42",
+            "failed to sync the faucet transactions",
+        ] {
+            assert!(html.contains(expected), "missing {expected}");
+        }
+    }
+
+    #[test]
+    fn renders_usdcx_bridge_deficit_and_missing_reads() {
+        use crate::status::{UsdcxBridgeDetails, UsdcxFaucetDetails, XReserveDetails};
+
+        let faucet = UsdcxFaucetDetails {
+            faucet_id: "0xfaucet".to_string(),
+            block_num: 42,
+            symbol: "USDCX".to_string(),
+            decimals: 6,
+            circulating_supply: 3_000_000,
+            paused: false,
+            circle_domain: 10_007,
+        };
+        let xreserve = XReserveDetails {
+            chain_id: 5_042_002,
+            collateral: 2_000_000,
+            collateral_decimals: 6,
+            paused: false,
+            deposits_paused: false,
+            withdrawals_paused: false,
+        };
+        let deficit = UsdcxBridgeDetails {
+            faucet: Some(faucet),
+            xreserve: Some(xreserve),
+            ..Default::default()
+        };
+        let html = render(vec![ServiceStatus::unhealthy(
+            "USDCx Bridge",
+            "supply exceeds collateral",
+            ServiceDetails::UsdcxBridge(deficit),
+        )]);
+        assert!(html.contains("-1 USDC (deficit)"));
+
+        let html = render(vec![ServiceStatus::unhealthy(
+            "USDCx Bridge",
+            "connection refused",
+            ServiceDetails::UsdcxBridge(UsdcxBridgeDetails::default()),
+        )]);
+        assert!(html.contains("connection refused"));
+        assert!(html.contains(&helpers::metric_row("Circulating Supply:", "-").into_string()));
+        assert!(html.contains(&helpers::metric_row("Collateral:", "-").into_string()));
     }
 
     #[test]

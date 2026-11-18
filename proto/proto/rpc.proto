@@ -249,10 +249,14 @@ message StatusResponse {
     // The genesis commitment.
     primitives.Word genesis_commitment = 2;
 
-    // Number of the latest block in the chain.
+    // Number of the latest block committed by the responding node.
     fixed32 chain_tip = 3;
 
     // The block producer status.
+    //
+    // Full nodes cache the upstream response, including failed lookups, for five seconds.
+    // This is not a consistent snapshot with the local chain_tip: the cached producer
+    // height can be lower than the local height even when both nodes are healthy.
     BlockProducerStatus block_producer = 4;
 }
 

@@ -3,6 +3,7 @@
 
 use std::time::Duration;
 
+use miden_node_proto::clients::RecoveringChannel;
 use miden_node_tracing::instrument;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -15,7 +16,9 @@ use crate::status::{NoteTransportStatusDetails, ServiceDetails, ServiceStatus};
 
 pub struct NoteTransportService {
     url: Url,
-    client: HealthClient<Channel>,
+    channel: RecoveringChannel,
+    timeout: Duration,
+    max_decoding_message_size: usize,
     interval: Duration,
 }
 
@@ -27,9 +30,13 @@ impl NoteTransportService {
         max_decoding_message_size: usize,
     ) -> Self {
         let channel = create_channel(&url, timeout).expect("failed to create channel");
-        let client =
-            HealthClient::new(channel).max_decoding_message_size(max_decoding_message_size);
-        Self { url, client, interval }
+        Self {
+            url,
+            channel,
+            timeout,
+            max_decoding_message_size,
+            interval,
+        }
     }
 }
 
@@ -54,13 +61,13 @@ impl Service for NoteTransportService {
     #[instrument(name = "check_status")]
     async fn check(&mut self) -> ServiceStatus {
         let details = NoteTransportStatusDetails { url: self.url.to_string() };
-        let health = self
-            .client
-            .check(HealthCheckRequest {
-                service: miden_node_proto::server::miden_note_transport_v1_note_transport_service::service_name().to_string(),
-            })
-            .await
-            .map(tonic::Response::into_inner);
+        let max_decoding_message_size = self.max_decoding_message_size;
+        let health = self.channel.call(self.timeout, |channel| async move {
+            HealthClient::new(channel).max_decoding_message_size(max_decoding_message_size)
+                .check(HealthCheckRequest {
+                    service: miden_node_proto::server::miden_note_transport_v1_note_transport_service::service_name().to_string(),
+                }).await
+        }).await.map(tonic::Response::into_inner);
         status_from_health(self.name(), details, health)
     }
 }
@@ -85,14 +92,20 @@ fn status_from_health(
 }
 
 /// Creates a `tonic` channel for the given URL, enabling TLS for `https` schemes.
-fn create_channel(url: &Url, timeout: Duration) -> Result<Channel, tonic::transport::Error> {
-    let mut endpoint = Channel::from_shared(url.to_string()).expect("valid URL").timeout(timeout);
+fn create_channel(
+    url: &Url,
+    timeout: Duration,
+) -> Result<RecoveringChannel, tonic::transport::Error> {
+    let mut endpoint = Channel::from_shared(url.to_string())
+        .expect("valid URL")
+        .connect_timeout(timeout);
 
     if url.scheme() == "https" {
         endpoint = endpoint.tls_config(ClientTlsConfig::new().with_native_roots())?;
     }
 
-    Ok(endpoint.connect_lazy())
+    let channel = endpoint.connect_lazy();
+    Ok(RecoveringChannel::new(endpoint, channel))
 }
 
 #[cfg(test)]

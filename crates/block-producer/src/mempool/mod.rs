@@ -54,13 +54,14 @@ use std::collections::VecDeque;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 
-use miden_node_proto::domain::sequencer::AuthenticatedTransaction;
+use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record};
 use miden_protocol::batch::{BatchId, ProvenBatch};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::transaction::{OutputNote, TransactionHeader, TransactionId};
 use miden_standards::note::TxFeeNote;
 use thiserror::Error;
+use tokio::sync::watch;
 
 use crate::block_builder::SelectedBlock;
 use crate::domain::batch::{BatchParameters, SelectedBatch, SelectedBatchId};
@@ -75,6 +76,7 @@ mod budget;
 pub use budget::{BatchBudget, BlockBudget};
 
 mod graph;
+pub(crate) use graph::MempoolTransaction;
 
 #[cfg(test)]
 mod tests;
@@ -150,11 +152,20 @@ impl Default for MempoolConfig {
 // ================================================================================================
 
 impl SharedMempool {
+    /// Subscribes to mempool changes and the current number of unbatched transactions.
+    ///
+    /// Updates are retained until observed and coalesced when mutations outpace the receiver.
+    /// Drop borrowed watch values before locking the mempool, since mutations publish under its
+    /// lock.
+    pub(crate) fn subscribe(&self) -> Result<watch::Receiver<usize>, MempoolPoisonError> {
+        Ok(self.lock()?.updates.subscribe())
+    }
+
     /// Acquires a lock on the underlying [`Mempool`].
     ///
     /// Callers should minimise the amount of work performed while holding the lock to reduce
     /// contention with other subsystems that need to access the pool.
-    #[instrument(name = "lock", err)]
+    #[instrument(name = "lock", level = "debug", err)]
     pub fn lock(&self) -> Result<MutexGuard<'_, Mempool>, MempoolPoisonError> {
         let result: LockResult<MutexGuard<'_, Mempool>> = self.0.lock();
         result.map_err(|_| MempoolPoisonError)
@@ -164,7 +175,7 @@ impl SharedMempool {
 // MEMPOOL
 // ================================================================================================
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub struct Mempool {
     /// Tracks the dependency graph for transactions awaiting batching.
     transactions: graph::TransactionGraph,
@@ -181,6 +192,35 @@ pub struct Mempool {
     committed_chain_tip: BlockNumber,
 
     config: MempoolConfig,
+
+    /// Publishes state changes, including changes that leave the transaction count unchanged.
+    updates: watch::Sender<usize>,
+}
+
+impl Clone for Mempool {
+    fn clone(&self) -> Self {
+        // A cloned mempool publishes its own state independently of the original.
+        Self {
+            transactions: self.transactions.clone(),
+            batches: self.batches.clone(),
+            pending_block: self.pending_block.clone(),
+            committed_blocks: self.committed_blocks.clone(),
+            committed_chain_tip: self.committed_chain_tip,
+            config: self.config.clone(),
+            updates: watch::channel(self.unbatched_transactions_count()).0,
+        }
+    }
+}
+
+impl PartialEq for Mempool {
+    fn eq(&self, other: &Self) -> bool {
+        self.transactions == other.transactions
+            && self.batches == other.batches
+            && self.pending_block == other.pending_block
+            && self.committed_blocks == other.committed_blocks
+            && self.committed_chain_tip == other.committed_chain_tip
+            && self.config == other.config
+    }
 }
 
 struct MempoolTelemetry {
@@ -210,6 +250,7 @@ impl Mempool {
             batches: graph::BatchGraph::default(),
             pending_block: None,
             committed_blocks: VecDeque::default(),
+            updates: watch::channel(0).0,
         }
     }
 
@@ -238,7 +279,7 @@ impl Mempool {
     #[instrument(name = "add_transaction")]
     pub fn add_transaction(
         &mut self,
-        tx: Arc<AuthenticatedTransaction>,
+        tx: Arc<TransactionCandidate>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
         if self.uncommitted_transactions_count() >= self.config.tx_capacity.get() {
             return Err(MempoolSubmissionError::CapacityExceeded);
@@ -264,6 +305,7 @@ impl Mempool {
             mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_added(&tx);
+        self.notify_changed();
 
         Ok(self.committed_chain_tip)
     }
@@ -275,7 +317,7 @@ impl Mempool {
     #[instrument(name = "add_user_batch")]
     pub fn add_user_batch(
         &mut self,
-        txs: &[Arc<AuthenticatedTransaction>],
+        txs: &[Arc<TransactionCandidate>],
         parameters: BatchParameters,
         proof: Arc<ProvenBatch>,
     ) -> Result<BlockNumber, MempoolSubmissionError> {
@@ -320,6 +362,7 @@ impl Mempool {
         for tx in txs {
             emit_transaction_added(tx);
         }
+        self.notify_changed();
 
         Ok(self.committed_chain_tip)
     }
@@ -385,6 +428,7 @@ impl Mempool {
         if let Err(err) = self.batches.append(batch.clone()) {
             panic!("failed to append batch to dependency graph: {}", err.as_report());
         }
+        self.notify_changed();
         batch
     }
 
@@ -394,6 +438,7 @@ impl Mempool {
             if let Err(err) = self.batches.append_user_batch(batch, proof) {
                 panic!("failed to append user batch to dependency graph: {}", err.as_report());
             }
+            self.notify_changed();
         }
     }
 
@@ -446,12 +491,15 @@ impl Mempool {
             mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_evictions(&evicted, "failure_limit", "dependency_evicted");
+        if !reverted_batches.is_empty() {
+            self.notify_changed();
+        }
     }
 
     /// Marks a batch as proven if it exists.
     #[instrument(name = "commit_batch")]
     pub fn commit_batch(&mut self, proof: Arc<ProvenBatch>) {
-        self.batches.submit_proof(proof);
+        let changed = self.batches.submit_proof(proof);
         let telemetry = self.telemetry();
         miden_span_record!(
             mempool.transactions.uncommitted = telemetry.uncommitted_transactions,
@@ -462,6 +510,9 @@ impl Mempool {
             mempool.nullifiers = telemetry.nullifiers,
             mempool.output_notes = telemetry.output_notes
         );
+        if changed {
+            self.notify_changed();
+        }
     }
 
     /// Select batches for the next block.
@@ -495,6 +546,7 @@ impl Mempool {
             mempool.nullifiers = telemetry.nullifiers,
             mempool.output_notes = telemetry.output_notes
         );
+        self.notify_changed();
         block
     }
 
@@ -534,6 +586,7 @@ impl Mempool {
             mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_expirations(&expired, self.committed_chain_tip);
+        self.notify_changed();
     }
 
     /// Notify the pool that construction of the in flight block failed.
@@ -583,6 +636,7 @@ impl Mempool {
             mempool.output_notes = telemetry.output_notes
         );
         emit_transaction_evictions(&evicted, "failure_limit", "dependency_evicted");
+        self.notify_changed();
     }
 
     // STATS & INSPECTION
@@ -626,6 +680,10 @@ impl Mempool {
 
     // INTERNAL HELPERS
     // --------------------------------------------------------------------------------------------
+
+    fn notify_changed(&self) {
+        self.updates.send_replace(self.unbatched_transactions_count());
+    }
 
     fn telemetry(&self) -> MempoolTelemetry {
         MempoolTelemetry {
@@ -725,7 +783,7 @@ impl Mempool {
     /// Rejects transactions that consume an uncommitted `TX_FEE` note.
     fn fee_note_consumption_check(
         &self,
-        tx: &AuthenticatedTransaction,
+        tx: &TransactionCandidate,
     ) -> Result<(), MempoolSubmissionError> {
         let fee_script_root = TxFeeNote::script_root();
         let is_fee_note = |note: &OutputNote| {
@@ -763,7 +821,7 @@ impl Mempool {
     }
 }
 
-fn emit_transaction_added(tx: &AuthenticatedTransaction) {
+fn emit_transaction_added(tx: &TransactionCandidate) {
     if !miden_node_tracing::enabled!(miden_node_tracing::Level::DEBUG) {
         return;
     }

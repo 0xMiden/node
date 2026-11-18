@@ -572,19 +572,24 @@ async fn transient_lookup_failures_stop_after_three_attempts() {
 }
 
 #[tokio::test]
-async fn slow_lookup_retries_stay_within_the_shared_budget() {
+async fn slow_lookup_retries_replace_connections_within_the_shared_budget() {
     let (_, response) = fixture();
-    let (url, upstream, requests) =
-        node_rpc_responses(BTreeMap::from([(42, Ok(response))]), Duration::from_secs(30)).await;
-    let mut config = Config::new(url);
+    let upstream = node_rpc_script_with_connection_age(
+        BTreeMap::from([(42, VecDeque::from([Ok(response)]))]),
+        Duration::from_secs(30),
+        None,
+    )
+    .await;
+    let mut config = Config::new(upstream.url);
     config.grpc.request_timeout = Duration::from_millis(600);
     let (_dir, server) = server(config);
     let result = tokio::time::timeout(Duration::from_millis(500), server.get_note_root(42.into()))
         .await
         .expect("lookups must finish within the shared budget");
     assert_eq!(result.unwrap_err().code(), tonic::Code::DeadlineExceeded);
-    assert_eq!(*requests.lock().unwrap(), vec![42, 42, 42]);
-    upstream.abort();
+    assert_eq!(*upstream.requests.lock().unwrap(), vec![42, 42, 42]);
+    assert_eq!(upstream.connections.load(std::sync::atomic::Ordering::SeqCst), 3);
+    upstream.task.abort();
 }
 
 #[tokio::test]

@@ -3,8 +3,8 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use miden_node_proto::domain::sequencer::{
-    AuthenticatedTransaction,
     TransactionAuthenticationError,
+    TransactionCandidate,
     TransactionInputs,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify, generated};
@@ -73,7 +73,7 @@ fn authentication_rejects_missing_nullifier_results() {
     let (tx, mut inputs) = transaction_and_inputs();
     inputs.nullifiers.clear();
     assert_eq!(
-        AuthenticatedTransaction::new_unchecked(Arc::clone(&tx), inputs).unwrap_err(),
+        TransactionCandidate::new_unchecked(Arc::clone(&tx), inputs).unwrap_err(),
         TransactionAuthenticationError::MissingNullifiers(tx.nullifiers().collect()),
     );
 
@@ -85,7 +85,7 @@ fn authentication_rejects_missing_nullifier_results() {
             inputs.nullifiers.insert(Nullifier::from_raw(Word::from([3u32, 0, 0, 0])), None);
         }
         assert_eq!(
-            AuthenticatedTransaction::new_unchecked(tx, inputs).unwrap_err(),
+            TransactionCandidate::new_unchecked(tx, inputs).unwrap_err(),
             TransactionAuthenticationError::MissingNullifiers(vec![missing_nullifier]),
         );
     }
@@ -98,7 +98,7 @@ fn authentication_rejects_inputs_for_another_account() {
     let expected = tx.account_id();
     let actual = inputs.account_id;
     assert_eq!(
-        AuthenticatedTransaction::new_unchecked(tx, inputs).unwrap_err(),
+        TransactionCandidate::new_unchecked(tx, inputs).unwrap_err(),
         TransactionAuthenticationError::AccountIdMismatch { expected, actual },
     );
 }
@@ -111,7 +111,7 @@ fn authentication_rejects_spent_nullifiers() {
         inputs.nullifiers.insert(*nullifier, NonZeroU32::new(5));
     }
     assert_eq!(
-        AuthenticatedTransaction::new_unchecked(tx, inputs).unwrap_err(),
+        TransactionCandidate::new_unchecked(tx, inputs).unwrap_err(),
         TransactionAuthenticationError::NullifiersAlreadyExist(nullifiers),
     );
 }
@@ -122,7 +122,7 @@ fn authentication_accepts_complete_unspent_inputs_with_pending_account_dependenc
     let store_account_state = Some(Word::from([9u32, 10, 11, 12]));
     inputs.account_commitment = store_account_state;
     let authentication_height = inputs.current_block_height;
-    let authenticated = AuthenticatedTransaction::new_unchecked(Arc::clone(&tx), inputs).unwrap();
+    let authenticated = TransactionCandidate::new_unchecked(Arc::clone(&tx), inputs).unwrap();
 
     assert_eq!(authenticated.proven_transaction(), tx);
     assert_eq!(authenticated.store_account_state(), store_account_state);
@@ -160,7 +160,7 @@ fn note_authentication_preserves_ids_across_serialization() {
     let inputs = message.decode_fields().and_then(Verify::verify).unwrap();
     assert_eq!(inputs.found_unauthenticated_notes, HashSet::from([input_note_ids[0]]));
 
-    let mut authenticated = AuthenticatedTransaction::new_unchecked(Arc::new(tx), inputs).unwrap();
+    let authenticated = TransactionCandidate::new_unchecked(Arc::new(tx), inputs).unwrap();
     assert_eq!(authenticated.output_note_ids().collect::<Vec<_>>(), vec![output_note_id]);
     assert_eq!(
         authenticated.unauthenticated_note_ids().collect::<Vec<_>>(),
@@ -170,13 +170,6 @@ fn note_authentication_preserves_ids_across_serialization() {
     let message =
         generated::miden::sequencer::v1::AuthenticatedTransaction::from(authenticated.clone());
     assert_eq!(message.notes_authenticated_by_store, vec![input_note_ids[0].as_word().into()]);
-    let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
-    assert_eq!(decoded, authenticated);
-
-    authenticated.mark_notes_authenticated([input_note_ids[1]]);
-    assert_eq!(authenticated.unauthenticated_note_ids().count(), 0);
-    let message =
-        generated::miden::sequencer::v1::AuthenticatedTransaction::from(authenticated.clone());
     let decoded = message.decode_fields().and_then(BuildUnchecked::build_unchecked).unwrap();
     assert_eq!(decoded, authenticated);
 }

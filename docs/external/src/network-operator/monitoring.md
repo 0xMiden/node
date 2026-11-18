@@ -15,7 +15,9 @@ configuration.
 
 `miden-network-monitor` is an observer and test client. It is not required for block production. Depending on
 configuration, it can check RPC freshness, validator health, remote prover status, faucet availability, explorer
-availability, note transport, Agglayer bridge status, and end-to-end network transaction flows.
+availability, note transport, Agglayer bridge status, USDCx bridge status, and end-to-end network transaction flows. The
+USDCx bridge check is enabled by `MIDEN_MONITOR_XRESERVE_RPC_URL` and `MIDEN_MONITOR_XRESERVE_ADDRESS`; see the
+[monitor operation guide](https://github.com/0xMiden/node/blob/next/bin/network-monitor/README.md#operation).
 
 End-to-end transaction checks require the validator's signing public key. Set
 `MIDEN_MONITOR_VALIDATOR_SIGNING_PUBLIC_KEY` to the key printed by `miden-validator pubkey`. The monitor uses it to
@@ -46,6 +48,16 @@ Use the binary help output for the current configuration surface:
 ```bash
 miden-network-monitor start --help
 ```
+
+## RPC Status Freshness
+
+A full node caches the upstream sequencer status for five seconds to avoid forwarding every status probe. Its own chain
+tip is read locally on every request. Failed upstream lookups are also cached for five seconds, so changes in upstream
+availability may only appear after the cached result expires.
+
+The response is not a consistent snapshot of both nodes. The cached `block_producer.chain_tip` can be lower than the
+full node's current `chain_tip` even when both nodes are healthy. The sequencer also refreshes its mempool statistics
+periodically, so the full node's cache adds to that existing delay.
 
 ## Telemetry
 

@@ -95,6 +95,10 @@ impl SequencerCommand {
             self.block_producer.block_prover.url.as_ref(),
             max_decoding_message_size,
         )?;
+        let batch_prover_monitor = remote_prover_monitor(
+            self.block_producer.batch_prover.url.as_ref(),
+            max_decoding_message_size,
+        )?;
         let allowlist = Arc::new(self.load_allowlist()?);
         let funding = self.external_services.funding_client()?;
         let account_admission = self.account_admission(Arc::clone(&allowlist), funding.clone());
@@ -110,6 +114,7 @@ impl SequencerCommand {
             validator_timeout: self.external_services.validator_timeout,
             max_decoding_message_size,
             block_prover_url: self.block_producer.block_prover.url,
+            batch_prover_url: self.block_producer.batch_prover.url,
             batch_interval: self.block_producer.batch.interval,
             block_interval: self.block_producer.block.interval,
             max_txs_per_batch: self.block_producer.batch.max_txs,
@@ -157,12 +162,10 @@ impl SequencerCommand {
             "ntx-builder connection monitor",
             ntx_builder_monitor.monitor::<NtxBuilderClient>("ntx-builder", shutdown.clone()),
         );
-        if let Some(block_prover_monitor) = block_prover_monitor {
-            tasks.spawn_infallible(
-                "block prover connection monitor",
-                block_prover_monitor
-                    .monitor::<RemoteProverClient>("block-prover", shutdown.clone()),
-            );
+        for (name, monitor) in
+            [("block-prover", block_prover_monitor), ("batch-prover", batch_prover_monitor)]
+        {
+            spawn_prover_monitor(&mut tasks, name, monitor, shutdown.clone());
         }
         if let Some(internal_listen) = self.internal {
             let sequencer_internal = SequencerInternal {
@@ -323,7 +326,6 @@ impl SequencerExternalServiceOptions {
         let builder = Builder::new(self.ntx_builder_url.clone())
             .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection();
@@ -506,7 +508,6 @@ impl SyncOptions {
         Ok(Builder::new(self.block_source_url())
             .max_decoding_message_size(max_decoding_message_size)
             .with_tls()?
-            .without_timeout()
             .without_metadata_version()
             .without_metadata_genesis()
             .with_otel_context_injection()
@@ -553,11 +554,24 @@ fn remote_prover_monitor(
             Ok(Builder::new(endpoint.clone())
                 .max_decoding_message_size(max_decoding_message_size)
                 .with_tls()?
-                .without_timeout()
                 .without_metadata_version()
                 .without_metadata_genesis()
                 .without_auth_header()
                 .with_otel_context_injection())
         })
         .transpose()
+}
+
+fn spawn_prover_monitor(
+    tasks: &mut Tasks,
+    name: &'static str,
+    monitor: Option<Builder<WantsConnection>>,
+    shutdown: CancellationToken,
+) {
+    if let Some(monitor) = monitor {
+        tasks.spawn_infallible(
+            format!("{name} connection monitor"),
+            monitor.monitor::<RemoteProverClient>(name, shutdown),
+        );
+    }
 }
