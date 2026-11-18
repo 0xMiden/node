@@ -318,7 +318,9 @@ a {
 .nested-status > strong {
     display: block;
     margin-bottom: 10px;
-    color: var(--color-accent);
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--color-border);
+    color: var(--color-heading);
     font-size: 13px;
     font-weight: 600;
 }
