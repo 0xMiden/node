@@ -233,15 +233,17 @@ impl NtxDbWriter {
             .await
     }
 
-    /// Applies a committed block's effects in a single write transaction.
+    /// Applies a committed block's effects in a single write transaction. The same transaction
+    /// deletes the notes consumed before `prune_before`, if given.
     pub(crate) async fn apply_committed_block(
         &self,
         effects: CommittedBlockEffects,
         chain_mmr: PartialMmr,
+        prune_before: Option<BlockNumber>,
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("apply_committed_block", move |tx| {
-                queries::apply_committed_block(tx, &effects, &chain_mmr)
+                queries::apply_committed_block(tx, &effects, &chain_mmr, prune_before)
             })
             .await
     }
@@ -392,7 +394,7 @@ pub async fn bootstrap(database_filepath: PathBuf, genesis: &SignedBlock) -> any
         .context("failed to seed genesis chain state")?;
 
     let effects = CommittedBlockEffects::from_signed_block(genesis);
-    db.apply_committed_block(effects, PartialMmr::default())
+    db.apply_committed_block(effects, PartialMmr::default(), None)
         .await
         .context("failed to insert genesis block")?;
 
@@ -550,6 +552,20 @@ impl NtxDbWriter {
         self.writer
             .write("update_chain_state_tip", move |tx| {
                 queries::update_chain_state_tip(tx, block_num, &block_header, &chain_mmr)
+            })
+            .await
+    }
+
+    /// Prunes with an explicit row limit, unlike [`NtxDbWriter::apply_committed_block`] which
+    /// always uses the per-block limit.
+    pub(crate) async fn prune_consumed_notes(
+        &self,
+        prune_before: BlockNumber,
+        limit: u32,
+    ) -> Result<(), DatabaseError> {
+        self.writer
+            .write("prune_consumed_notes", move |tx| {
+                queries::prune_consumed_notes(tx, prune_before, limit)
             })
             .await
     }

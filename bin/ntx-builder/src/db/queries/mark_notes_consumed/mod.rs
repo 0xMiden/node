@@ -11,8 +11,8 @@ const SQL: &str = include_str!("mark_note_consumed.sql");
 /// contained their nullifier. Rows for nullifiers we never inserted (notes whose targets are not
 /// network accounts, or notes that arrived before our subscription cursor) are silently skipped.
 ///
-/// Rows are kept around (not deleted) so the `GetNetworkNoteStatus` endpoint can report the full
-/// lifecycle of any note the ntx-builder has ever seen.
+/// Rows are kept (not deleted) so the `GetNetworkNoteStatus` endpoint can report a consumed note
+/// until [`prune_consumed_notes`](super::prune_consumed_notes) deletes it.
 pub fn mark_notes_consumed(
     tx: &WriteTx<'_>,
     nullifiers: &[Nullifier],

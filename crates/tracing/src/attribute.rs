@@ -83,6 +83,7 @@ const NUMBER_FIELD_NAMES: &[&str] = &[
     "note_transport.retained_bytes",
     "ntx_builder.max_concurrent_txs",
     "ntx_builder.max_cycles",
+    "ntx_builder.note_retention",
     "ntx_builder.tx_expiration_delta",
     "port",
     "pow.hash",

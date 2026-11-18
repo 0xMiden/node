@@ -61,6 +61,9 @@ pub use mark_sponsorships_consumed::mark_sponsorships_consumed;
 mod notes_failed;
 pub use notes_failed::notes_failed;
 
+mod prune_consumed_notes;
+pub use prune_consumed_notes::prune_consumed_notes;
+
 mod ready_accounts;
 pub use ready_accounts::ready_accounts;
 
@@ -100,6 +103,13 @@ mod tests;
 // COMMITTED BLOCK APPLICATION
 // ================================================================================================
 
+/// Maximum number of consumed notes, and of consumed `FEE_SPONSORSHIP` notes, deleted per block.
+///
+/// Bounds how long a block application holds the write lock when many notes leave the retention
+/// window at once, for example after the window is shortened. The value is well above the number
+/// of notes consumed in a block, so a backlog shrinks over the following blocks.
+const MAX_PRUNED_NOTES_PER_BLOCK: u32 = 5_000;
+
 /// Applies a committed block's effects to the database in a single transaction:
 ///
 /// - Upserts each touched network account: creations insert the new account, updates apply to the
@@ -107,8 +117,10 @@ mod tests;
 /// - Inserts each network note and `FEE_SPONSORSHIP` note (`INSERT OR IGNORE` to tolerate
 ///   redeliveries).
 /// - Marks any of our pending notes (feature and sponsorship alike) whose nullifiers appear in
-///   this block as `committed_at = block_num`, preserving the row so the `GetNetworkNoteStatus`
-///   endpoint can report the full lifecycle.
+///   this block as `committed_at = block_num`, keeping the row so the `GetNetworkNoteStatus`
+///   endpoint can report the note until it is pruned.
+/// - Deletes the notes consumed before `prune_before`, if given, up to
+///   [`MAX_PRUNED_NOTES_PER_BLOCK`] of them (see [`prune_consumed_notes`]).
 /// - Updates the singleton `chain_state` row's tip with the new block header and the
 ///   post-application chain MMR.
 ///
@@ -120,6 +132,7 @@ pub fn apply_committed_block(
     tx: &WriteTx<'_>,
     effects: &CommittedBlockEffects,
     chain_mmr: &PartialMmr,
+    prune_before: Option<BlockNumber>,
 ) -> Result<(), DatabaseError> {
     // Each non-genesis account update has an originating transaction in the same block. Genesis
     // account updates use the zero sentinel because genesis contains no transactions.
@@ -164,6 +177,10 @@ pub fn apply_committed_block(
     // Applied after the consumption marks so a feature note consumed in this same block is not made
     // eligible again.
     reset_sponsored_notes(tx, &effects.sponsorship_notes, block_num)?;
+
+    if let Some(prune_before) = prune_before {
+        prune_consumed_notes(tx, prune_before, MAX_PRUNED_NOTES_PER_BLOCK)?;
+    }
 
     update_chain_state_tip(tx, effects.header.block_num(), &effects.header, chain_mmr)?;
 

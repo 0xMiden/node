@@ -18,7 +18,9 @@ service NetworkTransactionBuilderService {
     //
     // The response also lists the FEE_SPONSORSHIP notes that pay the fee for the note.
     //
-    // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder.
+    // Returns `NOT_FOUND` if the note ID is not tracked by the network transaction builder. A
+    // consumed note is tracked for a limited number of blocks after its consumption, set by
+    // the network operator.
     rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
 }
 
