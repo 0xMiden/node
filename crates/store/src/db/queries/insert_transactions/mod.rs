@@ -89,8 +89,8 @@ fn insert_transaction(
     reason = "We will not approach the item count where i64 and usize cause issues"
 )]
 fn estimated_sync_record_size(header: &TransactionHeader) -> i64 {
-    // Covers the block number, transaction/account IDs, four commitments and nested protobuf
-    // framing, including the maximum block number.
+    // Covers the block number, transaction index, transaction/account IDs, four commitments and
+    // nested protobuf framing, including the maximum block number and transaction index.
     const HEADER_BASE_SIZE_BYTES: usize = 256;
     const INPUT_NOTE_COMMITMENT_SIZE_BYTES: usize = 192;
     const OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES: usize = 1024;
@@ -147,6 +147,7 @@ mod tests {
         let record = node::TransactionRecord {
             header: Some((&header).into()),
             block_num: u32::MAX,
+            transaction_index: u32::MAX,
             consumed_note_refs: notes
                 .iter()
                 .map(|note| node::ConsumedNoteRef {
@@ -179,6 +180,7 @@ mod tests {
         let record = node::TransactionRecord {
             header: Some((&header).into()),
             block_num: u32::MAX,
+            transaction_index: u32::MAX,
             ..Default::default()
         };
         assert!(

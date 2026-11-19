@@ -170,6 +170,8 @@ impl PartialEq<(Nullifier, BlockNumber)> for NullifierInfo {
 #[derive(Debug, PartialEq)]
 pub struct TransactionRecord {
     pub block_num: BlockNumber,
+    /// Position of the transaction within its block.
+    pub transaction_index: u32,
     pub header: TransactionHeader,
     /// Inclusion proofs for committed output notes. Notes in `header.output_notes()` without a
     /// corresponding proof here were erased (created and consumed within the same batch).
