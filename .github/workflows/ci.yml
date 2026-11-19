@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 4
+          fetch-depth: 8
       - uses: $/.github/actions/cleanup-runner
         if: env.TRIAL_MODE == 'fork'
       - name: Select source revision
@@ -42,7 +42,7 @@ jobs:
             git switch --detach 18a18e2462cb7fccbaeff67cf721f3ee551aecf9
           fi
           test ! -e target
-          store="$(dirname "$GITHUB_WORKSPACE")/.tests-kache"
+          store="$GITHUB_WORKSPACE/target/kache-trial-store"
           test ! -e "$store"
           echo "KACHE_CACHE_DIR=$store" >> "$GITHUB_ENV"
           echo "KACHE_RUNTIME_DIR=$RUNNER_TEMP/tests-runtime" >> "$GITHUB_ENV"
@@ -68,8 +68,8 @@ jobs:
         with:
           key: gh-warm-tests-v1-${{ github.run_id }}
           path: |
-            ../.tests-kache/index.db*
-            ../.tests-kache/store
+            target/kache-trial-store/index.db*
+            target/kache-trial-store/store
           fail-on-cache-miss: true
       - name: Configure local and remote cache
         env:
@@ -131,8 +131,18 @@ jobs:
         with:
           key: gh-warm-tests-v1-${{ github.run_id }}
           path: |
-            ../.tests-kache/index.db*
-            ../.tests-kache/store
+            target/kache-trial-store/index.db*
+            target/kache-trial-store/store
+      - name: Verify published snapshot
+        if: success() && env.TRIAL_MODE == 'seed'
+        uses: actions/cache/restore@v5.0.3
+        with:
+          key: gh-warm-tests-v1-${{ github.run_id }}
+          path: |
+            target/kache-trial-store/index.db*
+            target/kache-trial-store/store
+          lookup-only: true
+          fail-on-cache-miss: true
 
   compare:
     name: ${{ matrix.mode }} / ${{ matrix.runner }}
