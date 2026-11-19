@@ -59,6 +59,7 @@ impl BlockProducerApiConfig {
             max_txs_per_batch: self.max_txs_per_batch.get(),
             block_budget: BlockBudget {
                 batches: self.max_batches_per_block.get(),
+                ..BlockBudget::default()
             },
             tx_capacity: self.mempool_tx_capacity,
             ..Default::default()

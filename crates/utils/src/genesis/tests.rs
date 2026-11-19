@@ -11,6 +11,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::smt::Smt;
+use miden_protocol::transaction::PublicTransactionLogs;
 use miden_protocol::utils::serde::Deserializable;
 
 use super::*;
@@ -32,7 +33,13 @@ fn official_network_endpoints() {
 }
 
 fn genesis(block_num: BlockNumber, config: &ProtocolConfig) -> SignedBlock {
-    let body = BlockBody::new_unchecked(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let body = BlockBody::new_unchecked(
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        PublicTransactionLogs::default(),
+    );
     let key = SigningKey::read_from_bytes(&[7; 32]).unwrap();
     let header = BlockHeader::new(
         Word::empty(),

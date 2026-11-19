@@ -1,5 +1,7 @@
 //! Inserts the transactions included in a block.
 
+use std::collections::BTreeMap;
+
 use miden_node_db::sqlite::WriteTx;
 use miden_node_tracing::instrument;
 use miden_protocol::block::BlockNumber;
@@ -8,6 +10,8 @@ use miden_protocol::transaction::{
     InputNoteCommitment,
     OrderedTransactionHeaders,
     TransactionHeader,
+    TransactionId,
+    TransactionLogError,
 };
 
 use crate::errors::DatabaseError;
@@ -24,10 +28,18 @@ pub(crate) fn insert_transactions(
     tx: &WriteTx<'_>,
     block_num: BlockNumber,
     transactions: &OrderedTransactionHeaders,
+    first_index: u32,
+    public_log_counts: &BTreeMap<TransactionId, u32>,
 ) -> Result<usize, DatabaseError> {
     let mut count = 0;
-    for header in transactions.as_slice() {
-        count += insert_transaction(tx, block_num, header)?;
+    for (offset, header) in transactions.as_slice().iter().enumerate() {
+        let public_log_count = public_log_counts.get(&header.id()).copied();
+        if header.account_id().is_public() != public_log_count.is_some() {
+            return Err(TransactionLogError::PublicLogsAssociationMismatch.into());
+        }
+        let index =
+            first_index + u32::try_from(offset).expect("batch transaction positions fit u32");
+        count += insert_transaction(tx, block_num, header, index, public_log_count)?;
     }
     Ok(count)
 }
@@ -37,6 +49,8 @@ fn insert_transaction(
     tx: &WriteTx<'_>,
     block_num: BlockNumber,
     header: &TransactionHeader,
+    transaction_index: u32,
+    public_log_count: Option<u32>,
 ) -> Result<usize, DatabaseError> {
     // Serialize input notes as full InputNoteCommitments (nullifier + optional NoteHeader).
     let input_notes: Vec<InputNoteCommitment> = header.input_notes().iter().cloned().collect();
@@ -59,6 +73,8 @@ fn insert_transaction(
             &estimated_sync_record_size(header),
             &header.logs_commitment(),
             &header.code_patch_commitment().as_word(),
+            &transaction_index,
+            &public_log_count,
         ],
     )?)
 }
