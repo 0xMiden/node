@@ -141,6 +141,8 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::generated::miden::node::v1::NoteSyncMetadata;
+    use miden_node_proto::generated::note::NoteMetadata as ProtoNoteMetadata;
     use miden_node_proto::prost::Message;
     use miden_protocol::account::{AccountId, AccountIdVersion, AccountType, AssetCallbackFlag};
     use miden_protocol::block::{BlockNoteIndex, BlockNumber, ValidatorConfig};
@@ -157,6 +159,7 @@ mod tests {
     };
     use miden_protocol::{
         BLOCK_NOTE_TREE_DEPTH,
+        Felt,
         Hasher,
         MAX_BATCHES_PER_BLOCK,
         MAX_OUTPUT_NOTES_PER_BATCH,
@@ -244,25 +247,40 @@ mod tests {
         let attachments_commitment = Hasher::hash_elements(&commitment_elements);
         assert_eq!(attachments_commitment, attachments.to_commitment());
 
-        let mut attachment_schemes = proto_metadata
+        let reconstructed = reconstruct_metadata(&proto_metadata, attachments_commitment);
+        assert_eq!(reconstructed.to_commitment(), expected_metadata_commitment);
+
+        for index in 0..attachment_commitments.len() {
+            let mut tampered = attachment_commitments.clone();
+            tampered[index] = Hasher::hash_elements(&[Felt::ONE]);
+            let elements = tampered.iter().flat_map(Word::as_elements).copied().collect::<Vec<_>>();
+            let changed = reconstruct_metadata(&proto_metadata, Hasher::hash_elements(&elements));
+            assert_ne!(changed.to_commitment(), expected_metadata_commitment);
+        }
+    }
+
+    fn reconstruct_metadata(
+        metadata: &NoteSyncMetadata,
+        attachments_commitment: Word,
+    ) -> NoteMetadata {
+        let mut attachment_schemes = metadata
             .attachments
             .iter()
             .map(|attachment| attachment.scheme)
             .collect::<Vec<_>>();
         attachment_schemes.resize(NoteAttachments::MAX_COUNT, 0);
-        let reconstructed: NoteMetadata = proto::note::NoteMetadata {
-            version: proto_metadata.version,
-            sender: proto_metadata.sender,
-            note_type: proto_metadata.note_type,
-            tag: proto_metadata.tag,
+        ProtoNoteMetadata {
+            version: metadata.version,
+            sender: metadata.sender,
+            note_type: metadata.note_type,
+            tag: metadata.tag,
             attachment_schemes,
             attachments_commitment: Some(attachments_commitment.into()),
         }
         .decode_fields()
         .unwrap()
         .verify()
-        .unwrap();
-        assert_eq!(reconstructed.to_commitment(), expected_metadata_commitment);
+        .unwrap()
     }
 
     #[test]

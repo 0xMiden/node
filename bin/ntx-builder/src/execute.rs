@@ -7,7 +7,6 @@ use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Instrument, info, instrument, miden_span_record, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::{self, Retryable};
-use miden_protocol::Word;
 use miden_protocol::account::{
     AccountCode,
     AccountId,
@@ -19,7 +18,9 @@ use miden_protocol::account::{
     StorageSlotType,
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::code::ProcedureRoot;
 use miden_protocol::crypto::merkle::smt::SmtProofError;
 use miden_protocol::errors::{AccountError, AssetError, TransactionInputError};
 use miden_protocol::note::{Note, NoteId, NoteScript, NoteScriptRoot};
@@ -36,6 +37,7 @@ use miden_protocol::transaction::{
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
+use miden_protocol::{MastForest, Word};
 use miden_standards::account::fees::FeePolicyManager;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
@@ -948,6 +950,22 @@ impl DataStore for NtxDataStore {
     /// 1. In-memory LRU cache.
     /// 2. Local SQLite database.
     /// 3. Remote RPC via gRPC.
+    fn get_code_witnesses(
+        &self,
+        _code_tree_root: CodeTreeRoot,
+        _procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move { Err(DataStoreError::other("code witnesses are unavailable in this data store")) }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
+    }
+
     fn get_note_script(
         &self,
         script_root: NoteScriptRoot,

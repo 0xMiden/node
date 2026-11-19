@@ -764,5 +764,35 @@ mod tests {
             .decode_and_build_unchecked()
             .unwrap();
         assert_eq!(inputs, decoded);
+        assert_ne!(sealer.seal(id, &inputs).unwrap().ciphertext, envelope.ciphertext);
+        for associated_data in [
+            transaction_inputs_associated_data(1, &TEST_KEY_ID, Word::empty(), id),
+            transaction_inputs_associated_data(1, &TEST_KEY_ID, genesis(), tx_id(11)),
+            transaction_inputs_associated_data(1, &[1, 2, 3, 4], genesis(), id),
+            transaction_inputs_associated_data(2, &TEST_KEY_ID, genesis(), id),
+        ] {
+            assert!(
+                UnsealingKey::X25519XChaCha20Poly1305(
+                    KeyExchangeKey::read_from_bytes(&[7; 32]).unwrap(),
+                )
+                .unseal_bytes_with_associated_data(
+                    SealedMessage::read_from_bytes(&envelope.ciphertext).unwrap(),
+                    &associated_data,
+                )
+                .is_err()
+            );
+        }
+    }
+
+    /// Pins the V1 domain followed by scheme 1 (u32 LE), key ID length 4 (u32 LE), deadbeef,
+    /// genesis [1, 2, 3, 4] (u64 LE elements), key length 32 (u32 LE), and the Ed25519 public key
+    /// derived from 32 seed bytes of 7. There is no next-key suffix.
+    #[test]
+    fn encryption_key_attestation_eidos_vector() {
+        let (info, _) = unsigned_encryption_key().decode_key_info().unwrap();
+        assert_eq!(
+            info.attestation_commitment(genesis()).to_hex(),
+            "0x231080e939d67a4d34957d2615d79b1dfe9eb2e864efde4b38bfd5ddc5f6e941"
+        );
     }
 }

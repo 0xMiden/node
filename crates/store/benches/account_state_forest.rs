@@ -1,7 +1,6 @@
 use std::hint::black_box;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::{
     ForestInMemoryBackend,
     LargeSmtForest,
@@ -12,7 +11,7 @@ use miden_crypto::merkle::smt::{
     SmtUpdateBatch,
     TreeId,
 };
-use miden_protocol::Word;
+use miden_protocol::{Hasher, Word};
 
 const INITIAL_VERSION: u64 = 1;
 const RECREATED_VERSION: u64 = 2;
@@ -26,7 +25,7 @@ fn word(value: u32) -> Word {
 }
 
 fn key(value: u32) -> Word {
-    Rpo256::hash(&value.to_le_bytes())
+    Hasher::hash(&value.to_le_bytes())
 }
 
 fn forest_with_entries(entry_count: u32) -> LargeSmtForest<ForestInMemoryBackend> {

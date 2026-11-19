@@ -12,7 +12,7 @@ use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountBuilder, AccountId, AccountType};
 use miden_protocol::asset::{Asset, AssetAmount, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::block::{FeeParameters, ValidatorConfig};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey as RpoSecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey as FalconSecretKey;
 use miden_protocol::errors::TokenSymbolError;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::{Felt, ONE};
@@ -176,7 +176,7 @@ impl GenesisConfig {
             secrets.push((
                 format!("faucet_{symbol}.mac", symbol = symbol.to_string().to_lowercase()),
                 faucet_account.id(),
-                Some(AuthSecretKey::Falcon512Poseidon2(secret_key)),
+                Some(AuthSecretKey::Falcon512Eidos(secret_key)),
             ));
         }
 
@@ -202,7 +202,7 @@ impl GenesisConfig {
                 .as_deref()
                 .map(AuthScheme::from_str)
                 .transpose()?
-                .unwrap_or(AuthScheme::Falcon512Poseidon2);
+                .unwrap_or(AuthScheme::Falcon512Eidos);
 
             let mut rng = genesis_rng()?;
             let secret_key = AuthSecretKey::with_scheme_and_rng(auth_scheme, &mut rng)?;
@@ -332,7 +332,7 @@ pub struct FungibleFaucetConfig {
 
 impl FungibleFaucetConfig {
     /// Create a fungible faucet from a config entry
-    fn build_account(self) -> Result<(Account, RpoSecretKey), GenesisConfigError> {
+    fn build_account(self) -> Result<(Account, FalconSecretKey), GenesisConfigError> {
         let FungibleFaucetConfig {
             symbol,
             decimals,
@@ -340,10 +340,10 @@ impl FungibleFaucetConfig {
             account_type,
         } = self;
         let mut rng = genesis_rng()?;
-        let secret_key = RpoSecretKey::with_rng(&mut rng);
+        let secret_key = FalconSecretKey::with_rng(&mut rng);
         let auth = AuthSingleSig::new(Approver::new(
             secret_key.public_key().into(),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         ));
         let init_seed: [u8; 32] = rng.random();
 
@@ -388,7 +388,7 @@ pub struct WalletConfig {
     #[serde(default)]
     account_type: AccountTypeConfig,
     /// Signature scheme of the account's authentication component, named as [`AuthScheme`] writes
-    /// it. Defaults to `Falcon512Poseidon2`.
+    /// it. Defaults to `Falcon512Eidos`.
     #[serde(default)]
     auth_scheme: Option<String>,
     assets: Vec<AssetEntry>,

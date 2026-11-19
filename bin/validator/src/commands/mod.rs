@@ -560,9 +560,7 @@ mod tests {
     fn transaction_inputs() -> TransactionInputs {
         let mut builder = MockChainBuilder::new();
         let account = builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
         builder.build().unwrap().get_transaction_inputs(&account, &[], &[]).unwrap()
     }

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 
-use miden_crypto::hash::rpo::Rpo256;
 use miden_crypto::merkle::smt::{
     Backend,
     BackendReader,
@@ -42,7 +41,7 @@ use miden_protocol::crypto::merkle::smt::{
 use miden_protocol::crypto::merkle::{EmptySubtreeRoots, MerkleError};
 use miden_protocol::errors::{AssetError, StorageMapError};
 use miden_protocol::utils::serde::Serializable;
-use miden_protocol::{EMPTY_WORD, Word};
+use miden_protocol::{EMPTY_WORD, Hasher, Word};
 use thiserror::Error;
 
 pub use crate::db::HISTORICAL_BLOCK_RETENTION;
@@ -198,11 +197,11 @@ impl<B: BackendReader> AccountStateForest<B> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&account_id.to_bytes());
         bytes.extend_from_slice(slot_name.as_str().as_bytes());
-        LineageId::new(Rpo256::hash(&bytes).as_bytes())
+        LineageId::new(Hasher::hash(&bytes).as_bytes())
     }
 
     fn vault_lineage_id(account_id: AccountId) -> LineageId {
-        LineageId::new(Rpo256::hash(&account_id.to_bytes()).as_bytes())
+        LineageId::new(Hasher::hash(&account_id.to_bytes()).as_bytes())
     }
 
     fn build_forest_operations(

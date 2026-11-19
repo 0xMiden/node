@@ -24,8 +24,8 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockNumber;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAssets,
@@ -45,6 +45,7 @@ use miden_standards::code_builder::CodeBuilder;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
 use miden_tx::auth::BasicAuthenticator;
 use miden_tx::{LocalTransactionProver, TransactionExecutor};
+use rand::RngExt;
 use tokio::sync::Mutex;
 
 use crate::config::MonitorConfig;
@@ -107,7 +108,7 @@ struct TxBuilder {
     secret_key: SecretKey,
     increment_script: NoteScript,
     counter_anchor: Arc<CounterAnchor>,
-    rng: RandomCoin,
+    rng: EidosRandomCoin,
 }
 
 // FAILURE TRACKER
@@ -362,7 +363,7 @@ impl IncrementService {
             }
 
             let authenticator =
-                BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
+                BasicAuthenticator::new(&[AuthSecretKey::Falcon512Eidos(secret_key)]);
             let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
             let executed_tx = futures::executor::block_on(executor.execute_transaction(
@@ -727,7 +728,7 @@ fn setup_increment_task(
         secret_key,
         increment_script,
         counter_anchor: Arc::new(counter_anchor),
-        rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
+        rng: EidosRandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
     };
 
     Ok((tx, IncrementDetails::default()))
@@ -1044,9 +1045,12 @@ fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> 
 /// Build the auth args committing to paying the transaction fee in the chain's native fee asset at
 /// rate 1/1, together with the advice-map preimage `miden::standards::fee::load_conversion_info`
 /// verifies against them in-VM.
-fn fee_conversion_auth_args(fee_faucet_id: AccountId, rng: &mut RandomCoin) -> (Word, Vec<Felt>) {
+fn fee_conversion_auth_args(
+    fee_faucet_id: AccountId,
+    rng: &mut EidosRandomCoin,
+) -> (Word, Vec<Felt>) {
     // The salt keeps the auth args usable as a per-transaction unique value for replay protection.
-    let salt = rng.draw_word();
+    let salt = rng.random();
     commit_fee_conversion_info(FeeConversionInfo::one_to_one(fee_faucet_id), salt)
 }
 
@@ -1055,7 +1059,7 @@ fn create_network_note(
     wallet_account: &Account,
     counter_account_id: AccountId,
     script: NoteScript,
-    rng: &mut RandomCoin,
+    rng: &mut EidosRandomCoin,
 ) -> Result<(Note, NoteRecipient)> {
     let target = NetworkAccountTarget::new(counter_account_id, NoteExecutionHint::Always)
         .context("Failed to create NetworkAccountTarget for counter account")?;
@@ -1064,7 +1068,7 @@ fn create_network_note(
 
     let partial_metadata = PartialNoteMetadata::new(wallet_account.id(), NoteType::Public);
 
-    let serial_num = rng.draw_word();
+    let serial_num = rng.random();
 
     let recipient = NoteRecipient::new(serial_num, script, NoteStorage::new(vec![])?);
 
@@ -1103,7 +1107,7 @@ mod tests {
     use miden_protocol::account::auth::AuthSecretKey;
     use miden_protocol::account::{Account, AccountId};
     use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
-    use miden_protocol::crypto::rand::RandomCoin;
+    use miden_protocol::crypto::rand::EidosRandomCoin;
     use miden_protocol::note::NoteType;
     use miden_protocol::transaction::{InputNote, InputNotes, TransactionArgs};
     use miden_standards::account::access::AccessControl;
@@ -1210,7 +1214,7 @@ mod tests {
         );
 
         let increment_script = create_increment_script()?;
-        let mut rng = RandomCoin::new(Word::from([11u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([11u32; 4]));
         let (network_note, note_recipient) =
             create_network_note(&wallet, committed_counter.id(), increment_script, &mut rng)?;
         let script = create_increment_tx_script(&network_note)?;
@@ -1231,8 +1235,7 @@ mod tests {
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(ForeignAccount::from_account(committed_counter, witness));
 
-        let authenticator =
-            BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
+        let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Eidos(secret_key)]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
         let executed_tx = executor
@@ -1417,7 +1420,7 @@ mod tests {
             .expect("a witness was requested for the counter");
 
         let increment_script = create_increment_script()?;
-        let mut rng = RandomCoin::new(Word::from([11u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([11u32; 4]));
         let (network_note, note_recipient) =
             create_network_note(&wallet, committed_counter.id(), increment_script, &mut rng)?;
         let script = create_increment_tx_script(&network_note)?;
@@ -1438,8 +1441,7 @@ mod tests {
         data_store.add_account(wallet.clone());
         data_store.add_foreign_account(ForeignAccount::from_account(committed_counter, witness));
 
-        let authenticator =
-            BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(secret_key)]);
+        let authenticator = BasicAuthenticator::new(&[AuthSecretKey::Falcon512Eidos(secret_key)]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
         let funded = MonitorConfig::parse_from(["monitor"]).wallet_funding_amount.get();
@@ -1532,7 +1534,7 @@ mod tests {
             .expect("counter account should build");
         let note_script = create_increment_script().expect("note script should compile");
 
-        let mut rng = RandomCoin::new(Word::from([7u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([7u32; 4]));
         let (network_note, _recipient) =
             create_network_note(&wallet, counter.id(), note_script, &mut rng)
                 .expect("network note should build");

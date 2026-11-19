@@ -10,7 +10,7 @@ use miden_node_tracing::{instrument, miden_span_record};
 use miden_protocol::account::auth::AuthSecretKey;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::block::BlockHeader;
-use miden_protocol::crypto::rand::{FeltRng, RandomCoin};
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, PartialNote};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
@@ -25,6 +25,7 @@ use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_in
 use miden_standards::tx_script::{ExpirationTransactionScript, SendNotesTransactionScript};
 use miden_tx::TransactionExecutor;
 use miden_tx::auth::BasicAuthenticator;
+use rand::RngExt;
 
 use crate::data_store::InMemoryDataStore;
 
@@ -66,7 +67,7 @@ pub async fn execute(
     inputs: ExecutionInputs,
     deposits: Vec<Note>,
     outputs: Vec<Note>,
-    rng: &mut RandomCoin,
+    rng: &mut EidosRandomCoin,
 ) -> Result<ExecutedTransaction> {
     let ExecutionInputs {
         rpc_client,
@@ -148,7 +149,7 @@ fn build_tx_args(
     fee_faucet_id: AccountId,
     outputs: &[Note],
     expiration_delta: NonZeroU16,
-    rng: &mut RandomCoin,
+    rng: &mut EidosRandomCoin,
 ) -> Result<TransactionArgs> {
     let mut tx_args = if outputs.is_empty() {
         let script = ExpirationTransactionScript::new(expiration_delta);
@@ -176,7 +177,7 @@ fn build_tx_args(
     };
 
     let (auth_args, conversion_info_preimage) =
-        commit_fee_conversion_info(FeeConversionInfo::one_to_one(fee_faucet_id), rng.draw_word());
+        commit_fee_conversion_info(FeeConversionInfo::one_to_one(fee_faucet_id), rng.random());
     tx_args = tx_args.with_auth_args(auth_args);
     tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
 
@@ -242,7 +243,7 @@ mod tests {
     fn funding_notes(
         fixture: &Fixture,
         targets: &[(AccountId, u64)],
-        rng: &mut RandomCoin,
+        rng: &mut EidosRandomCoin,
     ) -> Result<Vec<Note>> {
         targets
             .iter()
@@ -319,7 +320,7 @@ mod tests {
         assert_eq!(metadata["symbol"], "MIDEN");
         assert_eq!(metadata["decimals"], 6);
         assert_eq!(metadata["asset_id"], AssetId::new_fungible(fixture.fee_faucet_id).to_string());
-        let mut rng = RandomCoin::new(Word::from([91u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([91u32; 4]));
         let targets = targets(&fixture)?;
         let notes = funding_notes(&fixture, &targets, &mut rng)?;
         let executed = execute(inputs, vec![], notes, &mut rng).await?;
@@ -336,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn one_transaction_creates_every_note_and_pays_the_fee() -> Result<()> {
         let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([11u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([11u32; 4]));
 
         let targets = targets(&fixture)?;
         let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
@@ -395,7 +396,7 @@ mod tests {
         use crate::test_utils::telemetry::{Telemetry, attribute};
 
         let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([19_u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([19_u32; 4]));
         let notes = funding_notes(&fixture, &targets(&fixture)?[..1], &mut rng)?;
         let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
         // The test node does not serve the prover API, so every remote proof fails.
@@ -429,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn one_transaction_consumes_one_deposit_and_creates_notes() -> Result<()> {
         let fixture = Fixture::new(0, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([13u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([13u32; 4]));
 
         let targets = targets(&fixture)?;
         let requested: u64 = targets.iter().map(|(_, amount)| amount).sum();
@@ -478,7 +479,7 @@ mod tests {
     #[tokio::test]
     async fn deposits_are_consumed_at_a_zero_balance() -> Result<()> {
         let fixture = Fixture::new(0, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([29u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([29u32; 4]));
         let deposit = deposit_note(&fixture, 5_000_000, 7);
 
         let (inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
@@ -495,7 +496,7 @@ mod tests {
     #[tokio::test]
     async fn one_transaction_consumes_several_deposits_for_one_fee() -> Result<()> {
         let fixture = Fixture::new(0, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([37u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([37u32; 4]));
         let deposits: Vec<_> =
             (1..=8).map(|serial| deposit_note(&fixture, 1_000_000, serial)).collect();
         let collected = 8 * 1_000_000;
@@ -529,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn execution_requires_the_fee_faucet_as_a_foreign_account() -> Result<()> {
         let fixture = Fixture::new(BALANCE, TEST_BASE_FEE)?;
-        let mut rng = RandomCoin::new(Word::from([17u32; 4]));
+        let mut rng = EidosRandomCoin::new(Word::from([17u32; 4]));
         let (target, _) = genesis_style_wallet(fixture.fee_faucet_id, 0, [41; 32])?;
 
         let note = build_funding_note(
