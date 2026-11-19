@@ -1,6 +1,7 @@
 use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountPatch, AccountUpdateDetails};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockBody,
@@ -16,7 +17,6 @@ use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks};
 use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::OrderedTransactionHeaders;
 
 pub mod config;
 
@@ -95,7 +95,8 @@ impl GenesisState {
         let empty_output_notes = Vec::new();
         let empty_block_note_tree = BlockNoteTree::empty();
 
-        let empty_transactions = OrderedTransactionHeaders::new_unchecked(Vec::new());
+        let body =
+            BlockBody::new_unchecked(accounts, empty_output_notes, empty_nullifiers, Vec::new());
 
         let validator_config = self.validator_config;
 
@@ -105,8 +106,9 @@ impl GenesisState {
             MmrPeaks::new(Forest::empty(), Vec::new()).unwrap().hash_peaks(),
             account_smt.root(),
             empty_nullifier_tree.root(),
+            CodeTree::<Smt>::default().root(),
             empty_block_note_tree.root(),
-            empty_transactions.commitment(),
+            body.compute_transactions_commitment(),
             validator_config,
             self.fee_parameters,
             self.protocol_config.to_commitment(),
@@ -114,16 +116,55 @@ impl GenesisState {
             self.timestamp,
         );
 
-        let body = BlockBody::new_unchecked(
-            accounts,
-            empty_output_notes,
-            empty_nullifiers,
-            empty_transactions,
-        );
-
         let signatures = BlockSignatures::new(Vec::new())
             .map_err(|err| anyhow::anyhow!("failed to build empty genesis signatures: {err}"))?;
 
         GenesisBlock::new(SignedBlock::new(header, body, signatures)?, self.protocol_config)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::{BlockInputs, ProposedBlock};
+    use miden_protocol::crypto::merkle::smt::Smt;
+    use miden_protocol::testing::random_secret_key::random_secret_key;
+    use miden_protocol::transaction::PartialBlockchain;
+
+    use super::*;
+
+    #[test]
+    fn genesis_and_child_preserve_code_tree_root() {
+        let genesis = GenesisState::new(
+            vec![],
+            test_fee_params(),
+            0,
+            ValidatorConfig::new(vec![random_secret_key().public_key()], 1).unwrap(),
+            test_protocol_config(),
+        )
+        .into_block()
+        .unwrap();
+        let expected_root = CodeTree::<Smt>::default().root();
+        assert_eq!(genesis.inner().header().code_tree_root(), expected_root);
+        let proposal = ProposedBlock::new(
+            BlockInputs::new(
+                genesis.inner().header().clone(),
+                PartialBlockchain::default(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+            ),
+            vec![],
+        )
+        .unwrap();
+        let (child, _) = proposal.into_header_and_body().unwrap();
+        assert_eq!(child.code_tree_root(), expected_root);
+        let restored: SignedBlock =
+            miden_node_persistence::decode(&miden_node_persistence::encode(genesis.inner()))
+                .unwrap();
+        assert_eq!(restored.header().code_tree_root(), expected_root);
+        assert_eq!(restored.header().commitment(), genesis.inner().header().commitment());
     }
 }

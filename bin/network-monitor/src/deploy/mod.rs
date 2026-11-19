@@ -68,9 +68,7 @@ use miden_protocol::transaction::{
     PartialBlockchain,
     ProvenTransaction,
     TransactionArgs,
-    TransactionInputs,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
 use miden_standards::note::P2idNoteStorage;
 use miden_standards::tx_script::SendNotesTransactionScript;
@@ -196,7 +194,7 @@ impl TransactionSubmissionClient {
     pub async fn submit(
         &self,
         proven_tx: &ProvenTransaction,
-        transaction_inputs: &[u8],
+        transaction_inputs: &miden_protocol::transaction::TransactionInputs,
     ) -> Result<BlockNumber> {
         let tx_id = proven_tx.id();
 
@@ -224,7 +222,7 @@ impl TransactionSubmissionClient {
     async fn submit_once(
         &self,
         proven_tx: &ProvenTransaction,
-        transaction_inputs: &[u8],
+        transaction_inputs: &miden_protocol::transaction::TransactionInputs,
     ) -> Result<BlockNumber> {
         let transaction: miden_node_proto::generated::transaction::ProvenTransaction =
             proven_tx.into();
@@ -1023,7 +1021,7 @@ fn counter_creation_tx_args(counter_account: &Account) -> Result<TransactionArgs
 
     let mut tx_args = TransactionArgs::default()
         .with_tx_script_and_args(script.tx_script().clone(), script.tx_script_args());
-    tx_args.add_output_note_recipient(Box::new(recipient));
+    tx_args.add_output_note_recipient(recipient);
     Ok(tx_args)
 }
 
@@ -1041,7 +1039,7 @@ pub async fn build_probe_transaction_inputs(
     rpc_url: &Url,
     max_decoding_message_size: usize,
     funding: Option<&FundingClient>,
-) -> Result<TransactionInputs> {
+) -> Result<miden_protocol::transaction::TransactionWitness> {
     let (wallet_account, _secret_key) = create_wallet_account()?;
 
     let (mut rpc_client, genesis_commitment) = create_genesis_aware_rpc_client(
@@ -1095,7 +1093,7 @@ pub async fn build_probe_transaction_inputs(
     ))
     .await?;
 
-    Ok(executed_tx.tx_inputs().clone())
+    Ok(executed_tx.into())
 }
 
 /// Deploy a counter account to the network by submitting its genesis transaction via RPC.
@@ -1125,7 +1123,7 @@ pub async fn deploy_counter_account(
     ))
     .await?;
 
-    let transaction_inputs = executed_tx.tx_inputs().to_bytes();
+    let transaction_inputs = executed_tx.tx_inputs().clone();
 
     let mut committed_counter = counter_account.clone();
     committed_counter
@@ -1442,8 +1440,9 @@ mod tests {
             Word::new([1_u32.into(), 0_u32.into(), 0_u32.into(), 0_u32.into()]),
             base.account_root(),
             base.nullifier_root(),
+            base.code_tree_root(),
             base.note_root(),
-            base.tx_commitment(),
+            base.transactions_commitment(),
             base.validator_config().clone(),
             base.fee_parameters().clone(),
             base.protocol_config_commitment(),

@@ -14,6 +14,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, OrderedBatches, ProvenBatch};
 use miden_protocol::block::account_tree::{AccountTree, AccountWitness};
+use miden_protocol::block::code_tree::{CodePatch, CodeTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{
     BlockHeader,
@@ -26,6 +27,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::SparseMerklePath;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::{Note, NoteInclusionProof, Nullifier};
 use miden_protocol::protocol_config::NextProtocolConfig;
 use miden_protocol::transaction::{
@@ -115,6 +117,7 @@ fn nonempty_block_request() -> BlockProofRequest {
         partial_blockchain.peaks().hash_peaks(),
         account_tree.root(),
         nullifier_tree.root(),
+        CodeTree::<Smt>::default().root(),
         note_tree.root(),
         Word::empty(),
         validator_config,
@@ -161,6 +164,8 @@ fn nonempty_block_request() -> BlockProofRequest {
                 final_state,
                 input_notes.clone(),
                 Vec::new(),
+                miden_protocol::transaction::TransactionLogs::default().commitment(),
+                CodePatch::default().commitment(),
             )
             .unwrap();
             let update = BatchAccountUpdate::new(
@@ -271,7 +276,13 @@ fn recovered_proving_inputs_reject_a_different_body() {
     let original = nonempty_block_request();
     let expected = block_from_request(&original);
     let (_, empty_body) = ProposedBlock::new_at(
-        original.block_inputs.clone(),
+        BlockInputs::new(
+            original.block_inputs.prev_block_header().clone(),
+            original.block_inputs.partial_blockchain().clone(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        ),
         Vec::new(),
         original.block_header.timestamp(),
     )

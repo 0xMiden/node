@@ -8,7 +8,13 @@ use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Reques
 use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient;
 use miden_node_proto::generated::miden::remote_prover::v1::{ProveRequest, ProveResponse};
-use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
+use miden_node_proto::{
+    BlockProofRequest,
+    BuildUnchecked,
+    DecodeMessage,
+    VerifyWith,
+    generated as proto,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
@@ -61,7 +67,7 @@ trait ProofRequestExt {
 
 impl ProofRequestExt for ProveRequest {
     fn from_tx(tx: &ExecutedTransaction) -> ProveRequest {
-        let tx_inputs = tx.tx_inputs().clone();
+        let tx_inputs = miden_protocol::transaction::TransactionWitness::from(tx.clone());
 
         ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),
@@ -127,7 +133,7 @@ impl ProofRequestExt for ProveRequest {
 
         let tx_context = mock_chain
             .build_transaction(account.id())
-            .authenticated_input_note(note_1.id())
+            .authenticated_input_note(note_1.clone())
             .build()
             .unwrap();
 
@@ -160,12 +166,12 @@ impl ProofRequestExt for ProveRequest {
 
         let tx = mock_chain
             .build_transaction(account.id())
-            .authenticated_input_note(note_1.id())
+            .authenticated_input_note(note_1.clone())
             .build()
             .unwrap();
 
         let tx = Box::pin(tx.execute()).await.unwrap();
-        let tx = LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap();
+        let tx = LocalTransactionProver::default().prove(tx.clone()).unwrap();
 
         ProposedBatch::new(
             vec![Arc::new(tx)],
@@ -347,9 +353,7 @@ async fn malformed_transaction_inputs_are_rejected() {
         .expect("server should spawn");
 
     let request = ProveRequest {
-        request: Some(Request::Transaction(
-            miden_node_proto::generated::transaction::TransactionInputs::default(),
-        )),
+        request: Some(Request::Transaction(proto::transaction::TransactionWitness::default())),
     };
     let mut client = Client::connect(port).await;
     let err = client.submit_request(request).await.unwrap_err();
@@ -432,7 +436,7 @@ async fn unsupported_proof_kind_is_rejected() {
 /// The proof is verified and the transaction IDs of request and response must correspond.
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn transaction_proof_is_correct() {
+async fn transaction_witness_roundtrip_is_provable() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn(CancellationToken::new())
         .await
@@ -451,9 +455,29 @@ async fn transaction_proof_is_correct() {
     };
 
     assert_eq!(response.id(), tx.id());
+    assert_eq!(response.ref_block_num(), tx.tx_inputs().ref_block());
+    assert_eq!(response.expiration_block_num(), tx.expiration_block_num());
     let _ = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
 
     server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transaction_witness_rejects_changed_outputs() {
+    use miden_protocol::transaction::TransactionWitness;
+    let tx = ProveRequest::mock_tx().await;
+    let witness = TransactionWitness::from(tx);
+    let (inputs, account, expiration) = witness.into_parts();
+    let wrong_account = inputs.account().to_header();
+    for witness in [
+        TransactionWitness::new_unchecked(inputs.clone(), wrong_account, expiration),
+        TransactionWitness::new_unchecked(inputs, account, (expiration.as_u32() - 1).into()),
+    ] {
+        let request = ProveRequest {
+            request: Some(Request::Transaction(witness.into())),
+        };
+        assert!(super::prover::Prover::new(ProofKind::Transaction).prove(request).is_err());
+    }
 }
 
 /// Checks that the a batch request results in a correct proof.

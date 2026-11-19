@@ -5,7 +5,7 @@ package miden.remote_prover.v1;
 import "batch.proto";
 import "primitives.proto";
 import "transaction.proto";
-import "transaction_inputs.proto";
+import "transaction_witness.proto";
 import "types/block_proving.proto";
 
 // PROVER SERVICE
@@ -31,7 +31,7 @@ enum ProofType {
 // Request message for proof generation.
 message ProveRequest {
     oneof request {
-        transaction.TransactionInputs transaction = 1;
+        transaction.TransactionWitness transaction = 1;
         transaction.ProposedBatch batch = 2;
         block_proving.BlockProofRequest block = 3;
     }

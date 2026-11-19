@@ -265,7 +265,7 @@ impl miden_validator_v1_validator_service::SubmitProvenTransaction for Validator
                 &associated_data,
             )
             .unwrap();
-        let inputs = TransactionInputs::read_from_bytes(&plaintext).unwrap();
+        let inputs = miden_node_persistence::decode::<TransactionInputs>(&plaintext).unwrap();
         assert!(inputs.account().is_new());
         assert_eq!(inputs.account().id(), transaction.account_id());
         assert!(transaction.input_notes().is_empty());

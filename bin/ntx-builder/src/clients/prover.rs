@@ -5,7 +5,7 @@ use miden_node_proto::errors::ConversionError;
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
 use miden_node_proto::generated::miden::remote_prover::v1::{DecodedProveResponse, ProveRequest};
 use miden_node_proto::{BuildUnchecked, DecodeMessage};
-use miden_protocol::transaction::{ProvenTransaction, TransactionInputs};
+use miden_protocol::transaction::{ProvenTransaction, TransactionWitness};
 use miden_tx::TransactionProverError;
 use url::Url;
 
@@ -40,7 +40,7 @@ impl RemoteTransactionProver {
 
     pub async fn prove(
         &self,
-        tx_inputs: &TransactionInputs,
+        tx_inputs: &TransactionWitness,
     ) -> Result<ProvenTransaction, TransactionProverError> {
         let request = tonic::Request::new(ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),

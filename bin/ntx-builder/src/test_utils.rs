@@ -222,15 +222,9 @@ pub fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::Block
 /// Like a real genesis block, it carries no signatures.
 pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     use miden_protocol::block::{BlockBody, BlockSignatures, SignedBlock};
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        OrderedTransactionHeaders::new_unchecked(Vec::new()),
-    );
+    let body = BlockBody::new_unchecked(Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     SignedBlock::new_unchecked(header, body, signatures)
 }
@@ -256,7 +250,6 @@ pub fn mock_network_account_update() -> (Account, miden_protocol::account::Accou
 pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::SignedBlock, AccountId)
 {
     use miden_protocol::block::{BlockAccountUpdate, BlockBody, BlockSignatures, SignedBlock};
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let (account, details) = mock_network_account_update();
     let account_id = account.id();
@@ -264,12 +257,7 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
         .expect("test account update should be valid");
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(
-        vec![update],
-        Vec::new(),
-        Vec::new(),
-        OrderedTransactionHeaders::new_unchecked(Vec::new()),
-    );
+    let body = BlockBody::new_unchecked(vec![update], Vec::new(), Vec::new(), Vec::new());
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     (SignedBlock::new_unchecked(header, body, signatures), account_id)
 }

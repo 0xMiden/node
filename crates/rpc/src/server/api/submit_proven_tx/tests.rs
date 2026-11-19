@@ -11,6 +11,7 @@ use miden_protocol::account::{
     AccountType,
     AccountUpdateDetails,
 };
+use miden_protocol::block::code_tree::{CodePatch, CodeTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{
     BlockBody,
@@ -21,11 +22,13 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::merkle::mmr::Mmr;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::note::Nullifier;
+use miden_protocol::testing::assembler::assemble_test_package;
 use miden_protocol::testing::dummy_execution_proof;
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::testing::random_secret_key::random_secret_key;
-use miden_protocol::transaction::{InputNoteCommitment, OrderedTransactionHeaders};
+use miden_protocol::transaction::InputNoteCommitment;
 use miden_standards::account::wallets::BasicWallet;
 use tonic::Code;
 
@@ -136,6 +139,9 @@ impl Fixture {
             AccountUpdateDetails::Private,
         )
         .unwrap();
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
         ProvenTransaction::new(
             update,
             nullifiers.iter().map(|n| InputNoteCommitment::from_parts_unchecked(*n, None)),
@@ -144,6 +150,8 @@ impl Fixture {
             self.genesis.commitment(),
             expiration.into(),
             dummy_execution_proof(),
+            log_details,
+            CodePatch::default(),
         )
         .unwrap()
     }
@@ -151,13 +159,7 @@ impl Fixture {
     async fn commit_block(&mut self, nullifiers: &[Nullifier]) {
         let block_num = self.genesis.block_num().child();
         let tree = NullifierTree::with_entries(nullifiers.iter().map(|n| (*n, block_num))).unwrap();
-        let body = BlockBody::new(
-            vec![],
-            vec![],
-            nullifiers.to_vec(),
-            OrderedTransactionHeaders::new_unchecked(vec![]),
-        )
-        .unwrap();
+        let body = BlockBody::new(vec![], vec![], nullifiers.to_vec(), Vec::new()).unwrap();
         let mut mmr = Mmr::new();
         mmr.add(self.genesis.commitment()).unwrap();
         let header = BlockHeader::new(
@@ -166,8 +168,9 @@ impl Fixture {
             mmr.peaks().hash_peaks(),
             self.genesis.account_root(),
             tree.root(),
+            CodeTree::<Smt>::default().root(),
             body.compute_block_note_tree().root(),
-            body.transaction_commitment(),
+            body.compute_transactions_commitment(),
             self.genesis.validator_config().clone(),
             self.genesis.fee_parameters().clone(),
             self.genesis.protocol_config_commitment(),
@@ -176,5 +179,74 @@ impl Fixture {
         );
         let block = SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap());
         self.writer.apply_block(block, None).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn decorator_stripping_preserves_logs_and_code_patch() {
+    use miden_protocol::code::ProcedureRoot;
+    use miden_protocol::transaction::TransactionLogDetails;
+    let fixture = Fixture::new().await;
+    let base = fixture.transaction(fixture.account.id(), &[], 2);
+    let package = assemble_test_package(
+        "rpc-code-patch",
+        "test::rpc_patch",
+        "pub proc entry push.1 drop end",
+    );
+    let mast = package.mast_forest().clone();
+    let patch = CodePatch::new(
+        mast.procedure_digests().map(ProcedureRoot::from_raw).collect(),
+        vec![],
+        mast,
+    )
+    .unwrap();
+    let public_account = AccountBuilder::new([9; 32])
+        .account_type(AccountType::Public)
+        .with_component(BasicWallet)
+        .with_component(NoopAuthComponent)
+        .build_existing()
+        .unwrap();
+    let account_patch =
+        miden_protocol::account::AccountPatch::try_from(public_account.clone()).unwrap();
+    let public_update = TxAccountUpdate::new(
+        public_account.id(),
+        Word::empty(),
+        public_account.to_commitment(),
+        account_patch.to_commitment(),
+        AccountUpdateDetails::Public(account_patch),
+    )
+    .unwrap();
+    for update in [base.account_update().clone(), public_update] {
+        use miden_protocol::transaction::{LogTopic, TransactionLog, TransactionLogs};
+        let logs = TransactionLogs::new(vec![
+            TransactionLog::new(
+                update.account_id(),
+                LogTopic::from_name("rpc-log-test"),
+                vec![Word::from([37_u32; 4])],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let details = if update.account_id().is_public() {
+            TransactionLogDetails::Public(logs)
+        } else {
+            TransactionLogDetails::Private(logs.commitment())
+        };
+        let tx = ProvenTransaction::new(
+            update,
+            base.input_notes().iter().cloned(),
+            base.output_notes().iter().cloned(),
+            base.ref_block_num(),
+            base.ref_block_commitment(),
+            base.expiration_block_num(),
+            base.proof().clone(),
+            details,
+            patch.clone(),
+        )
+        .unwrap();
+        let forwarded = strip_transaction_decorators(&tx).unwrap();
+        assert_eq!(forwarded.id(), tx.id());
+        assert_eq!(forwarded.log_details(), tx.log_details());
+        assert_eq!(forwarded.code_patch(), tx.code_patch());
     }
 }

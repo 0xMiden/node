@@ -17,6 +17,7 @@ use miden_protocol::account::{
     AssetCallbackFlag,
 };
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::note::{Note, Nullifier};
 use miden_protocol::transaction::{
     InputNote,
@@ -48,6 +49,9 @@ fn transaction_and_inputs() -> (Arc<ProvenTransaction>, TransactionInputs) {
         Nullifier::from_raw(Word::from([1u32, 0, 0, 0])),
         Nullifier::from_raw(Word::from([2u32, 0, 0, 0])),
     ];
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details =
+        miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
     let tx = ProvenTransaction::new(
         account_update,
         nullifiers,
@@ -56,6 +60,8 @@ fn transaction_and_inputs() -> (Arc<ProvenTransaction>, TransactionInputs) {
         Word::empty(),
         BlockNumber::from(100),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap();
     let inputs = TransactionInputs {
@@ -150,6 +156,8 @@ fn note_authentication_preserves_ids_across_serialization() {
         tx.ref_block_commitment(),
         tx.expiration_block_num(),
         miden_protocol::testing::dummy_execution_proof(),
+        tx.log_details().clone(),
+        CodePatch::default(),
     )
     .unwrap();
     inputs.nullifiers = tx.nullifiers().map(|nullifier| (nullifier, None)).collect();

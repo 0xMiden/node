@@ -59,8 +59,10 @@ pub(crate) fn read_inputs(path: &Path) -> Result<Vec<TransactionInputs>> {
 
 #[cfg(test)]
 mod tests {
+    use miden_node_proto::generated as proto;
     use miden_protocol::account::{Account, AccountCode, AccountStorage, AccountUpdateDetails};
     use miden_protocol::asset::AssetVault;
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{BlockHeader, BlockNumber};
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
@@ -84,6 +86,9 @@ mod tests {
             AccountUpdateDetails::Private,
         )
         .unwrap();
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
         ProvenTransaction::new(
             update,
             Vec::<InputNoteCommitment>::new(),
@@ -92,6 +97,8 @@ mod tests {
             Word::empty(),
             (seed + 1).into(),
             miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            CodePatch::default(),
         )
         .unwrap()
     }
@@ -106,14 +113,14 @@ mod tests {
         );
         let blockchain = PartialBlockchain::default();
         let header = BlockHeader::mock(0_u32, Some(blockchain.peaks().hash_peaks()), None, &[]);
-        TransactionInputs::new(
-            (&account).into(),
-            header,
-            ProtocolConfig::mock(),
-            blockchain,
-            InputNotes::default(),
-        )
-        .unwrap()
+        TransactionInputs::builder()
+            .account((&account).into())
+            .block_header(header)
+            .protocol_config(ProtocolConfig::mock())
+            .blockchain(blockchain)
+            .input_notes(InputNotes::default())
+            .build()
+            .unwrap()
     }
 
     #[test]
@@ -170,7 +177,7 @@ mod tests {
         fs_err::write(
             &path,
             BenchmarkTransactionInputs {
-                inputs: vec![miden_node_proto::generated::transaction::TransactionInputs::default()],
+                inputs: vec![proto::transaction::TransactionInputs::default()],
             }
             .encode_to_vec(),
         )

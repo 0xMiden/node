@@ -210,11 +210,12 @@ impl StateView {
 #[cfg(test)]
 mod tests {
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
+    use miden_protocol::block::code_tree::CodeTree;
     use miden_protocol::block::{BlockBody, SignedBlock, ValidatorConfig};
     use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use miden_protocol::testing::random_secret_key::random_secret_key;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     use super::*;
     use crate::GenesisState;
@@ -237,21 +238,16 @@ mod tests {
         let mut parent = parent.expect("chain should have a parent block");
 
         for _ in 0..count {
-            let body = BlockBody::new(
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                OrderedTransactionHeaders::new_unchecked(Vec::new()),
-            )
-            .unwrap();
+            let body = BlockBody::new(Vec::new(), Vec::new(), Vec::new(), Vec::new()).unwrap();
             let header = BlockHeader::new(
                 parent.commitment(),
                 parent.block_num().child(),
                 mmr.peaks().hash_peaks(),
                 parent.account_root(),
                 parent.nullifier_root(),
+                CodeTree::<Smt>::default().root(),
                 body.compute_block_note_tree().root(),
-                body.transaction_commitment(),
+                body.compute_transactions_commitment(),
                 parent.validator_config().clone(),
                 parent.fee_parameters().clone(),
                 parent.protocol_config_commitment(),
