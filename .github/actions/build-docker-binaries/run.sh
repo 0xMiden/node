@@ -24,6 +24,7 @@ if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
         --mount "type=bind,src=${RUSTC_WRAPPER},dst=/usr/local/bin/kache,readonly"
         --mount "type=bind,src=${RUSTC_WRAPPER%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
         -e CACHE_WRITABLE -e KACHE_R2_ENDPOINT -e KACHE_S3_ACCESS_KEY -e KACHE_S3_SECRET_KEY
+        -e KACHE_PULL_REQUEST_PREFIX
         -e GITHUB_ACTIONS -e GITHUB_EVENT_NAME -e GITHUB_REF_TYPE -e GITHUB_REF_PROTECTED
         -e KACHE_MANIFEST_KEY="node-docker-${ARCHITECTURE}"
         -e KACHE_NAMESPACE="node-docker-${ARCHITECTURE}"

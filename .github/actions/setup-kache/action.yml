@@ -22,13 +22,16 @@ runs:
       shell: bash
       env:
         WRITABLE: >-
-          ${{ github.event_name == 'push' && github.ref_protected &&
-              (github.ref == 'refs/heads/next' || startsWith(github.ref, 'refs/heads/release/v')) }}
+          ${{ github.event_name == 'pull_request' ||
+              (github.event_name == 'push' && github.ref_protected &&
+              (github.ref == 'refs/heads/next' || startsWith(github.ref, 'refs/heads/release/v'))) }}
       run: |
         if [[ ! "${KACHE_R2_ENDPOINT}" =~ ^https://[[:alnum:].-]+\.r2\.cloudflarestorage\.com/?$ ]]; then
           echo "::error::KACHE_R2_ENDPOINT must be the account's R2 S3 API URL." >&2
           exit 1
         fi
+        # Kache reads the protected prefix first and publishes PR entries under this shared prefix.
+        echo "KACHE_PULL_REQUEST_PREFIX=artifacts-pr" >> "${GITHUB_ENV}"
         echo "writable=${WRITABLE}" >> "${GITHUB_OUTPUT}"
 
     # Docker starts its own daemon inside the build container.
