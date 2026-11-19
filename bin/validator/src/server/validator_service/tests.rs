@@ -1,5 +1,6 @@
 mod proving_inputs;
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
@@ -306,7 +307,11 @@ impl TestValidator {
     ///
     /// Panics if the block is rejected.
     async fn apply_empty_block(&mut self) {
-        let proposed = self.propose_empty_block();
+        self.apply_block(self.propose_empty_block()).await;
+    }
+
+    /// Submits a proposal and advances the local chain state.
+    async fn apply_block(&mut self, proposed: ProposedBlock) {
         self.call_sign_block(&proposed).await.unwrap();
         let (header, _) = proposed.into_header_and_body().unwrap();
         // Advance our local chain state to match what the server now has.
@@ -347,14 +352,27 @@ async fn setup_db_with_genesis(
 /// Builds an empty [`ProposedBlock`] that extends the given parent block header using the provided
 /// partial blockchain state.
 fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> ProposedBlock {
-    let block_inputs = BlockInputs::new(
+    ProposedBlock::new(empty_block_inputs(parent_header, chain), vec![]).unwrap()
+}
+
+/// Builds an empty proposal with an explicit timestamp.
+fn empty_block_at(
+    parent_header: &BlockHeader,
+    chain: &PartialBlockchain,
+    timestamp: u32,
+) -> ProposedBlock {
+    ProposedBlock::new_at(empty_block_inputs(parent_header, chain), vec![], timestamp).unwrap()
+}
+
+/// Builds the inputs for an empty proposal extending the given parent.
+fn empty_block_inputs(parent_header: &BlockHeader, chain: &PartialBlockchain) -> BlockInputs {
+    BlockInputs::new(
         parent_header.clone(),
         chain.clone(),
         BTreeMap::new(),
         BTreeMap::new(),
         BTreeMap::new(),
-    );
-    ProposedBlock::new(block_inputs, vec![]).unwrap()
+    )
 }
 
 /// Builds a syntactically valid [`ProvenTransaction`] with a dummy proof.
@@ -645,20 +663,14 @@ async fn chain_tip_replacement_succeeds() {
     // then replace.
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
-    tv.apply_empty_block().await;
+    let original =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 1);
+    tv.apply_block(original).await;
     let original_header = tv.chain_tip.clone();
 
-    // Submit a different block at the same height (block 1), which is a replacement. Use an
-    // explicit timestamp far in the future to ensure the replacement block differs.
-    let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        chain_at_genesis.clone(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
-    let far_future_timestamp = genesis_header.timestamp() + 1_000_000;
-    let replacement = ProposedBlock::new_at(block_inputs, vec![], far_future_timestamp).unwrap();
+    // Submit a block at the same height with a different commitment.
+    let replacement =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 2);
     let (replacement_header, _) = replacement.clone().into_header_and_body().unwrap();
 
     assert_eq!(replacement_header.block_num(), original_header.block_num());
@@ -713,19 +725,13 @@ async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
     let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
-    tv.apply_empty_block().await;
+    let original =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 1);
+    tv.apply_block(original).await;
     assert_eq!(tv.call_status().await.signed_blocks_count, 1);
 
-    let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        chain_at_genesis,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
     let replacement =
-        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
-            .unwrap();
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 2);
     tv.call_sign_block(&replacement)
         .await
         .expect("chain tip replacement should succeed");
@@ -733,6 +739,24 @@ async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
     assert_eq!(tv.call_status().await.signed_blocks_count, 1);
     let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
     assert_eq!(stored - stored_at_genesis, 1);
+}
+
+#[tokio::test]
+async fn rejects_future_timestamp_and_accepts_current_time_after_long_gap() {
+    let tv = TestValidator::new().await;
+    let genesis = tv.chain_tip.clone();
+    let now =
+        u32::try_from(SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()).unwrap();
+
+    let future = empty_block_at(&genesis, &tv.chain, now + 3_600);
+    let error = tv.call_sign_block(&future).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.load_chain_tip().await, genesis);
+
+    assert!(now - genesis.timestamp() >= 24 * 60 * 60);
+    let current = empty_block_at(&genesis, &tv.chain, now);
+    tv.call_sign_block(&current).await.unwrap();
+    assert_eq!(tv.load_chain_tip().await.timestamp(), now);
 }
 
 /// A block at chain tip + 2 (skipping a block number) should be rejected.
@@ -1058,20 +1082,15 @@ async fn new_block_after_replacement_with_stale_commitment_rejected() {
     // Advance to block 1 and save the state needed to build on top of it.
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
-    tv.apply_empty_block().await;
+    let original =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 1);
+    tv.apply_block(original).await;
     let original_block_1_header = tv.chain_tip.clone();
     let chain_after_block_1 = tv.chain.clone();
 
     // Replace block 1 with a different block at the same height.
-    let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        chain_at_genesis.clone(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
-    let far_future_timestamp = genesis_header.timestamp() + 1_000_000;
-    let replacement = ProposedBlock::new_at(block_inputs, vec![], far_future_timestamp).unwrap();
+    let replacement =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 2);
     let (replacement_header, _) = replacement.clone().into_header_and_body().unwrap();
     assert_ne!(
         replacement_header.commitment(),

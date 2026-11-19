@@ -69,7 +69,8 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
     // A replacement block retains its own proving inputs, and corrupt inputs cause backup reads to
     // fail.
     let tv = TestValidator::new().await;
-    let proposal = tv.propose_empty_block();
+    let parent_timestamp = tv.chain_tip.timestamp();
+    let proposal = empty_block_at(&tv.chain_tip, &tv.chain, parent_timestamp + 1);
     tv.call_sign_block(&proposal).await.unwrap();
     let original = tv.server.db.load_block(1.into()).await.unwrap().unwrap();
     let inputs = tv
@@ -83,8 +84,7 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
         .unwrap();
     let original_inputs = miden_node_persistence::encode(&inputs);
     let replacement =
-        ProposedBlock::new_at(inputs.block_inputs, vec![], original.header().timestamp() + 1)
-            .unwrap();
+        ProposedBlock::new_at(inputs.block_inputs, vec![], parent_timestamp + 2).unwrap();
     tv.call_sign_block(&replacement).await.unwrap();
     let backup = tv.server.db.load_block_backup(1.into()).await.unwrap().unwrap();
     let inputs = backup.proving_inputs.unwrap();
