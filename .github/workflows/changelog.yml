@@ -10,6 +10,9 @@ on:
 permissions:
   contents: read
 
+env:
+  KACHE_R2_ENDPOINT: ${{ vars.KACHE_R2_ENDPOINT }}
+
 jobs:
   # Adds release-note metadata only to Dependabot PRs confined to CI and Markdown
   # tooling. This job edits PR metadata without checking out or running PR code.

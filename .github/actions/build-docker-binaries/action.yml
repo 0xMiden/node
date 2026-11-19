@@ -27,7 +27,6 @@ runs:
       shell: bash
       env:
         CACHE_WRITABLE: ${{ steps.cache.outputs.writable }}
-        R2_ENDPOINT: ${{ vars.KACHE_R2_ENDPOINT }}
         ARCHITECTURE: ${{ inputs.architecture }}
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/run.sh"

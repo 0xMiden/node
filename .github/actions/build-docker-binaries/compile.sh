@@ -35,7 +35,7 @@ if command -v kache >/dev/null; then
 type = "s3"
 bucket = "kache"
 region = "auto"
-endpoint = "${R2_ENDPOINT}"
+endpoint = "${KACHE_R2_ENDPOINT}"
 prefix = "artifacts"
 
 [cc]

@@ -58,6 +58,7 @@ permissions:
   contents: read
 
 env:
+  KACHE_R2_ENDPOINT: ${{ vars.KACHE_R2_ENDPOINT }}
   USE_WARP: >-
     ${{
       github.event_name != 'pull_request' ||
