@@ -13,10 +13,10 @@ workflows:
         - 'actions/cache@v5.0.3'
         - 'actions/checkout@v7.0.1'
     '.github/workflows/ci.yml':
-        - 'actions/cache@v5.0.3'
         - 'actions/checkout@v7.0.1'
         - 'docker/bake-action@v7.5.0'
         - 'docker/setup-buildx-action@v4.4.1'
+        - 'warpbuilds/cache@v2.0.0'
     '.github/workflows/cleanup-workflows.yml':
         - 'actions/checkout@v7.0.1'
     '.github/workflows/docker.yml':
@@ -128,6 +128,11 @@ dependencies:
         commit: 'sha1-cfdb7ed4ccc7c7dce37759eae89dc5674b469b39'
         owner_id: 43724913
         repo_id: 442947557
+    'warpbuilds/cache@v2.0.0':
+        ref: 'v2.0.0'
+        commit: 'sha1-dad44e2487e9dc889ad6e6bd198e77bb2d828eee'
+        owner_id: 142974432
+        repo_id: 721583430
     'warpbuilds/rust-cache@v2.9.1':
         ref: 'v2.9.1'
         commit: 'sha1-9d0cc3090d9c87de74ea67617b246e978735b1a1'

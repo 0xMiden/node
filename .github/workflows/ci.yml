@@ -1,8 +1,8 @@
-name: Docker amd64 with a GitHub warm cache
+name: Docker amd64 with a Warp warm cache
 
 on:
   push:
-    branches: [bench/github-warm-kache-docker]
+    branches: [bench/warp-warm-kache-docker]
   workflow_dispatch:
 
 permissions:
@@ -32,8 +32,6 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 8
-      - uses: $/.github/actions/cleanup-runner
-        if: env.TRIAL_MODE == 'fork'
       - name: Select source revision
         run: |
           cp scripts/trial-cdn-meter.cjs "$RUNNER_TEMP/"
@@ -61,12 +59,12 @@ jobs:
           echo "7afef202644a2b4dd7fed9e8f568fd381dfb8958da457ceb832d8a189eb0ad4f  $file" | sha256sum -c -
           tar xzf "$file" kache kache-engine
           echo "CACHE_BINARY_DIR=$PWD" >> "$GITHUB_ENV"
-      - name: Restore GitHub snapshot
-        if: env.TRIAL_MODE == 'warm' || env.TRIAL_MODE == 'fork'
+      - name: Restore Warp snapshot
+        if: env.TRIAL_MODE == 'warm'
         id: snapshot
-        uses: actions/cache/restore@v5.0.3
+        uses: WarpBuilds/cache/restore@v2.0.0
         with:
-          key: gh-warm-docker-amd64-v1-${{ github.run_id }}
+          key: warp-warm-docker-amd64-v1-${{ github.run_id }}
           path: |
             target/docker-trial/kache-cache/index.db*
             target/docker-trial/kache-cache/store
@@ -80,20 +78,17 @@ jobs:
           mkdir -p "$KACHE_CACHE_DIR" "$RUNNER_TEMP/docker-binaries/app/bin"
           config="$RUNNER_TEMP/docker-trial-config.toml"
           echo "KACHE_CONFIG=$config" >> "$GITHUB_ENV"
-          if [[ "$TRIAL_MODE" == warm || "$TRIAL_MODE" == fork ]]; then
+          if [[ "$TRIAL_MODE" == warm ]]; then
             test -s "$KACHE_CACHE_DIR/index.db"
           fi
-          if [[ "$TRIAL_MODE" == fork ]]; then
-            printf '[cache]\nlocal_only = true\n' > "$config"
-          else
-            test -n "$CDN_URL" && test -n "$REMOTE_BUCKET" && test -n "$REMOTE_REGION"
-            nohup node "$RUNNER_TEMP/trial-cdn-meter.cjs" > "$RUNNER_TEMP/meter.log" 2>&1 </dev/null &
-            for _ in {1..50}; do
-              if curl -fsS http://127.0.0.1:18459/stats > /dev/null 2>&1; then break; fi
-              sleep .1
-            done
-            curl -fsS http://127.0.0.1:18459/stats
-            cat > "$config" <<TOML
+          test -n "$CDN_URL" && test -n "$REMOTE_BUCKET" && test -n "$REMOTE_REGION"
+          nohup node "$RUNNER_TEMP/trial-cdn-meter.cjs" > "$RUNNER_TEMP/meter.log" 2>&1 </dev/null &
+          for _ in {1..50}; do
+            if curl -fsS http://127.0.0.1:18459/stats > /dev/null 2>&1; then break; fi
+            sleep .1
+          done
+          curl -fsS http://127.0.0.1:18459/stats
+          cat > "$config" <<TOML
           [cache]
           remote_readonly = true
           [cache.remote]
@@ -104,7 +99,6 @@ jobs:
           download_endpoint = "http://127.0.0.1:18458"
           endpoint = "http://127.0.0.1:18459"
           TOML
-          fi
           df -h "$GITHUB_WORKSPACE"
       - name: Compile Docker release binaries
         run: |
@@ -126,11 +120,9 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "$KACHE_CACHE_DIR"
           jq '{cache:.summary | {hit_rate_pct,local_hits,remote_hits,prefetch_hits,misses}, blob_bytes:.storage.blob_bytes}' "$RUNNER_TEMP/docker-binaries/report.json"
           df -h "$GITHUB_WORKSPACE"
-          if [[ "$TRIAL_MODE" != fork ]]; then
-            curl -fsS http://127.0.0.1:18459/stats | tee "$RUNNER_TEMP/counts.json"
-            jq -e '.originAttempts == 0 and .unconfirmedResponses == 0' "$RUNNER_TEMP/counts.json" > /dev/null
-            if [[ "$TRIAL_MODE" == cold || "$TRIAL_MODE" == seed ]]; then jq -e ".confirmed > 0" "$RUNNER_TEMP/counts.json" > /dev/null; fi
-          fi
+          curl -fsS http://127.0.0.1:18459/stats | tee "$RUNNER_TEMP/counts.json"
+          jq -e '.originAttempts == 0 and .unconfirmedResponses == 0' "$RUNNER_TEMP/counts.json" > /dev/null
+          if [[ "$TRIAL_MODE" == cold || "$TRIAL_MODE" == seed ]]; then jq -e ".confirmed > 0" "$RUNNER_TEMP/counts.json" > /dev/null; fi
       - name: Set up Docker builder
         uses: docker/setup-buildx-action@v4.4.1
         with:
@@ -149,19 +141,19 @@ jobs:
             *.args.CREATED=${{ env.SOURCE_DATE }}
             *.args.VERSION=sha-${{ env.SOURCE_COMMIT }}
             *.args.COMMIT=${{ env.SOURCE_COMMIT }}
-      - name: Save GitHub snapshot
+      - name: Save Warp snapshot
         if: success() && env.TRIAL_MODE == 'seed'
-        uses: actions/cache/save@v5.0.3
+        uses: WarpBuilds/cache/save@v2.0.0
         with:
-          key: gh-warm-docker-amd64-v1-${{ github.run_id }}
+          key: warp-warm-docker-amd64-v1-${{ github.run_id }}
           path: |
             target/docker-trial/kache-cache/index.db*
             target/docker-trial/kache-cache/store
-      - name: Verify published snapshot
+      - name: Verify published Warp snapshot
         if: success() && env.TRIAL_MODE == 'seed'
-        uses: actions/cache/restore@v5.0.3
+        uses: WarpBuilds/cache/restore@v2.0.0
         with:
-          key: gh-warm-docker-amd64-v1-${{ github.run_id }}
+          key: warp-warm-docker-amd64-v1-${{ github.run_id }}
           path: |
             target/docker-trial/kache-cache/index.db*
             target/docker-trial/kache-cache/store
@@ -169,17 +161,17 @@ jobs:
           fail-on-cache-miss: true
 
   compare:
-    name: ${{ matrix.mode }} / ${{ matrix.runner }}
+    name: Docker amd64 / ${{ matrix.sample }}
     needs: seed
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {mode: cold, runner: warp-ubuntu-latest-x64-8x, timeout: 120}
-          - {mode: warm, runner: warp-ubuntu-latest-x64-8x, timeout: 120}
-          - {mode: fork, runner: ubuntu-24.04, timeout: 120}
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.timeout }}
+          - {mode: cold, sample: cold}
+          - {mode: warm, sample: warm-1}
+          - {mode: warm, sample: warm-2}
+    runs-on: warp-ubuntu-latest-x64-8x
+    timeout-minutes: 120
     env:
       TRIAL_MODE: ${{ matrix.mode }}
     steps: *docker
