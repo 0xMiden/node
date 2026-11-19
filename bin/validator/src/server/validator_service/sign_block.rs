@@ -1,4 +1,5 @@
 use std::sync::atomic::Ordering;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::{DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
@@ -10,6 +11,9 @@ use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use super::{StatusResultExt, ValidatorService};
+
+/// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
+const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
@@ -96,6 +100,19 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             })
             .await
             .or_internal("Block decoding task failed")??;
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .or_internal("Validator clock is before the Unix epoch")?
+            .as_secs();
+        let timestamp = proposed_block.timestamp();
+        let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
+        if u64::from(timestamp) > latest_timestamp {
+            return Err(tonic::Status::invalid_argument(format!(
+                "block timestamp {timestamp} is too far in the future (maximum {latest_timestamp})"
+            )));
+        }
+
         let protocol_config = self
             .resolve_protocol_config(protocol_config_commitment, protocol_config)
             .await?;
