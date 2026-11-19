@@ -25,6 +25,7 @@ use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
@@ -99,6 +100,7 @@ mod get_network_note_status;
 mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
+mod get_transaction_logs;
 mod is_account_allowed;
 mod is_invitation_code_valid;
 mod register_account;
@@ -130,6 +132,7 @@ pub struct RpcService {
     genesis_commitment: Option<Word>,
     block_header_cache: LruCache<BlockNumber, BlockHeader>,
     upstream_status: status::UpstreamStatusCache,
+    transaction_log_requests: Semaphore,
 }
 
 impl RpcService {
@@ -141,6 +144,7 @@ impl RpcService {
         network_tx_auth: Option<NetworkTxAuth>,
     ) -> Self {
         Self {
+            transaction_log_requests: Semaphore::new(get_transaction_logs::MAX_ACTIVE_REQUESTS),
             state,
             backend,
             ntx_builder,

@@ -112,6 +112,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 mod allowlist;
 mod error_details;
 mod status;
+mod transaction_logs;
 mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
@@ -2995,4 +2996,16 @@ async fn block_subscription_preserves_public_logs_and_enforces_message_size() {
         .unwrap()
         .into_inner();
     assert_eq!(stream.message().await.unwrap_err().code(), Code::OutOfRange);
+}
+
+#[cfg(test)]
+pub(crate) async fn transaction_log_test_service() -> RpcService {
+    let store = TestStore::start().await;
+    RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(10).unwrap(),
+        None,
+    )
 }
