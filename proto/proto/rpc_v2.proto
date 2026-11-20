@@ -13,6 +13,7 @@ import "types/submission.proto";
 import "transaction.proto";
 
 service NodeService {
+    rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
     rpc GetAccountWitnesses(GetAccountWitnessesRequest) returns (GetAccountWitnessesResponse) {}
 
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
@@ -690,4 +691,17 @@ message GetAccountWitnessesResponse {
     fixed32 block_num = 1;
     // Proves inclusion or absence for every requested ID against the target block's account root.
     primitives.PartialSmt account_tree = 2;
+}
+
+message GetAccountVaultWitnessesRequest {
+    account.AccountId account_id = 1;
+    optional fixed32 block_num = 2;
+    repeated asset.AssetId asset_ids = 3;
+}
+
+message GetAccountVaultWitnessesResponse {
+    fixed32 block_num = 1;
+    // Compact proof covering every requested ID, including absent assets. Verify against the
+    // vault root in the already authenticated account header. No full-vault substitution.
+    primitives.PartialSmt vault = 2;
 }
