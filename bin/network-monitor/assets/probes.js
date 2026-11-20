@@ -2,6 +2,7 @@
 //   1. gRPC-Web probes — issued from the user's browser to test reachability + CORS from
 //      the same origin the dashboard runs in.
 //   2. copy-to-clipboard via navigator.clipboard.
+//   3. the light / dark theme toggle, remembered in localStorage.
 //
 // The server emits placeholder `<div class="probe-section">` slots and `data-grpc-url` /
 // `data-grpc-path` attributes on every card that needs probing. We populate those slots after
@@ -17,9 +18,8 @@ const probeResults = new Map();
 
 let periodicProbeTimer = null;
 
-const rootStyle = getComputedStyle(document.documentElement);
-const COLOR_HEALTHY = rootStyle.getPropertyValue("--color-healthy").trim();
-const COLOR_UNHEALTHY = rootStyle.getPropertyValue("--color-unhealthy").trim();
+const COLOR_HEALTHY = "var(--color-healthy)";
+const COLOR_UNHEALTHY = "var(--color-unhealthy)";
 
 // gRPC-Web probe
 // ============================================================================
@@ -187,10 +187,29 @@ async function copyToClipboard(text, event) {
 }
 window.copyToClipboard = copyToClipboard;
 
+// Theme
+// ============================================================================
+
+function toggleTheme() {
+    const root = document.documentElement;
+    const dark = root.dataset.theme !== "dark";
+    if (dark) {
+        root.dataset.theme = "dark";
+    } else {
+        delete root.dataset.theme;
+    }
+    try {
+        localStorage.setItem("theme", dark ? "dark" : "light");
+    } catch (err) {
+        // Storage can be unavailable (private mode); the toggle still works for this page view.
+    }
+}
+
 // Lifecycle
 // ============================================================================
 
 document.addEventListener("DOMContentLoaded", () => {
+    document.getElementById("theme-toggle")?.addEventListener("click", toggleTheme);
     runProbes();
     periodicProbeTimer = setInterval(runProbes, PROBE_INTERVAL_MS);
 });

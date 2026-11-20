@@ -2,7 +2,7 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{format_timestamp, num_or_dash};
+use super::super::helpers::{format_timestamp, num_or_dash, status_label};
 use crate::status::{ServiceStatus, Status, ValidatorStatusDetails};
 
 pub(in crate::view) fn render_validators(
@@ -47,24 +47,31 @@ pub(in crate::view) fn render_validators(
                     @let name = service.name.strip_prefix("Validator (")
                         .and_then(|name| name.strip_suffix(')')).unwrap_or(&service.name);
                     @let healthy = service.status == Status::Healthy;
-                    @let (status_class, status_text) = match service.status {
-                        Status::Healthy => ("healthy", "✓ HEALTHY"),
-                        Status::Unhealthy => ("unhealthy", "✗ UNHEALTHY"),
-                        Status::Unknown => ("unknown", "? UNKNOWN"),
+                    @let status_class = match service.status {
+                        Status::Healthy => "healthy",
+                        Status::Unhealthy => "unhealthy",
+                        Status::Unknown => "unknown",
                     };
                     tbody {
                         tr {
                             th scope="row" {
-                                (name)
-                                @if !details.version.is_empty() {
-                                    div class="validator-meta" { "Version " (details.version) }
-                                }
-                                div class="validator-meta" {
-                                    "Last checked: " (format_timestamp(service.last_checked))
+                                div class="validator-name" {
+                                    @if let Some(initial) = name.chars().next() {
+                                        span class="validator-avatar" aria-hidden="true" { (initial) }
+                                    }
+                                    div {
+                                        (name)
+                                        @if !details.version.is_empty() {
+                                            div class="validator-meta" { "Version " (details.version) }
+                                        }
+                                        div class="validator-meta" {
+                                            "Last checked: " (format_timestamp(service.last_checked))
+                                        }
+                                    }
                                 }
                             }
                             td data-label="Health" {
-                                span class={"service-status " (status_class)} { (status_text) }
+                                span class={"service-status " (status_class)} { (status_label(&service.status)) }
                             }
                             td data-label="Chain Tip" { (num_or_dash(u64::from(details.chain_tip), healthy)) }
                             td data-label="Validated Transactions" { (num_or_dash(details.validated_transactions_count, healthy)) }
