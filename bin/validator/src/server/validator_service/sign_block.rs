@@ -92,8 +92,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         // each batch proof. Local checks established the parent, transaction IDs, and signing key.
         //
         // FIXME: Correct note aggregation and batch expiration remain unverified by the batch kernel.
-        let signature =
-            self.sign_header(header).await.or_invalid_argument("Failed to sign block")?;
+        let signature = self.sign_header(header).await.or_internal("Failed to sign block")?;
         let block_commitment = header.commitment();
 
         // The backup contains this validator's signature. The producer assembles the full set.
