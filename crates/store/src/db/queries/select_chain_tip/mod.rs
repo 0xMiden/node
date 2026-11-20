@@ -3,8 +3,8 @@
 use miden_node_db::sqlite::ReadTx;
 use miden_protocol::block::BlockHeader;
 
-use super::block_header_row::block_header_from_row;
 use crate::DatabaseError;
+use crate::read::block_header_from_row;
 
 const SQL: &str = include_str!("query.sql");
 
