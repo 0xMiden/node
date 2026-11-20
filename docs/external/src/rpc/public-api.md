@@ -127,6 +127,8 @@ delta after target validation.
 Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
 block number, not a timestamp or the authenticated target.
 
+Use `GetAccountInfos` for public headers at the authenticated target.
+
 `SyncNotes` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
 and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note
@@ -196,10 +198,10 @@ included in the resumed scan toward `M`. An unchanged completed prefix needs no 
 staging until final verification; it is not independently authenticated by the checkpoint.
 
 Before publishing the synchronization update, bring each required stream to the same authenticated target. A vault or
-map scan already completed at `N` can catch up with `(N, M]`. Refresh account details at the final target. Use these
-details to reconcile storage-slot changes, including removed slots, and verify the reconstructed vault, storage and
-account commitments. Commit the account state and global synchronization height only after the other required
-synchronization work also completes.
+map scan already completed at `N` can catch up with `(N, M]`. Refresh account witnesses and `GetAccountInfos` headers at
+the final target. Use these details to reconcile storage-slot changes, including removed slots, and verify the
+reconstructed vault, storage and account commitments. Commit the account state and global synchronization height only
+after the other required synchronization work also completes.
 
 Use `SyncTransactions` to discover account activity, including transactions that leave the account commitment unchanged.
 Note proofs must be verified against their authenticated target headers. Previously verified immutable note bodies can

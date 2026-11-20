@@ -53,7 +53,10 @@ impl RpcLimits {
         let v2 = v2::GetLimitsResponse {
             endpoints: shared
                 .into_iter()
-                .chain([("GetTransactionsById", HashMap::from([limit::<TransactionId>()]))])
+                .chain([
+                    ("GetAccountInfos", HashMap::from([limit::<AccountId>()])),
+                    ("GetTransactionsById", HashMap::from([limit::<TransactionId>()])),
+                ])
                 .map(|(name, parameters)| (name.into(), v2::EndpointLimits { parameters }))
                 .collect(),
         };

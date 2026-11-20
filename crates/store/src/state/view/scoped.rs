@@ -71,7 +71,7 @@ impl ScopedBlockRange {
     /// Returns the end of the validated range as a scoped block number.
     ///
     /// Sound because the range's upper bound is exactly what its proof covers.
-    pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
+    pub fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
     }
 
