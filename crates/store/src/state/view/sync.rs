@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use miden_node_tracing::instrument;
@@ -123,6 +124,23 @@ impl StateView {
         let query = AccountVaultAssets::new(account_id, block_range.scoped_end());
         let page = self.db.page(query, block_range.start()).await?;
         Ok((page.last_block_included(block_range.end()), page.items))
+    }
+
+    /// Loads a bounded page of complete transaction events, including partial blocks.
+    pub async fn sync_transactions_v2_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::TransactionCursor>,
+        byte_limit: NonZeroUsize,
+    ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::TransactionRecordsPaged::new(ids, range, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionRecordsPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
     }
 
     /// Returns storage map values for syncing within a block range.
