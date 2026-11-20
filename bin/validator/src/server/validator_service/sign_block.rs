@@ -78,14 +78,14 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
         let parent = proving_inputs.block_inputs.prev_block_header();
         let protocol_config =
-            if header.protocol_config_commitment() != parent.protocol_config_commitment() {
+            if header.protocol_config_commitment() == parent.protocol_config_commitment() {
+                None
+            } else {
                 Some(supplied_config.ok_or_else(|| {
                     tonic::Status::invalid_argument(
                         "protocol_config is required when the active configuration changes",
                     )
                 })?)
-            } else {
-                None
             };
 
         // Reconstruction checked the witnesses against the supplied parent, and decode verified
