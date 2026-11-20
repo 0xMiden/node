@@ -126,14 +126,10 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .expect("a single signature is within the signature set bounds");
         let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
 
-        let new_block_num = signed_block.header().block_num();
         self.db
             .upsert_signed_block(signed_block, protocol_config, proving_inputs)
             .await
             .or_internal("Failed to persist signed block")?;
-
-        // Publish the tip only after the block and its metadata have committed together.
-        self.committed_tip.send_replace(new_block_num);
 
         Ok((signature, block_commitment, self.signer.public_key()))
     }

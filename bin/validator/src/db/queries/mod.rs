@@ -45,7 +45,7 @@ mod load_block_header;
 pub use load_block_header::load_block_header;
 
 mod load_chain_tip;
-pub use load_chain_tip::load_chain_tip;
+pub use load_chain_tip::{load_chain_tip, load_chain_tip_height};
 
 mod load_private_record;
 pub use load_private_record::load_private_record;

@@ -1918,10 +1918,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        InitialMetrics {
-            chain_tip: 1,
-            ..InitialMetrics::default()
-        },
+        InitialMetrics::default(),
     )
     .await
     .unwrap();

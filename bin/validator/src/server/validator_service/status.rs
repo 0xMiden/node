@@ -20,7 +20,7 @@ impl grpc::server::miden_validator_v1_validator_service::Status for ValidatorSer
             Err(_) => "BACKUP",
         };
 
-        let chain_tip = self.committed_tip.borrow().as_u32();
+        let chain_tip = self.committed_height().await?;
         Ok(grpc::miden::validator::v1::StatusResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             status: status.to_string(),

@@ -87,6 +87,11 @@ impl ValidatorDbReader {
         self.reader.read("load_chain_tip", queries::load_chain_tip).await
     }
 
+    /// Returns the highest stored block number, or `None` before bootstrap.
+    pub(crate) async fn load_chain_tip_height(&self) -> Result<Option<u32>, DatabaseError> {
+        self.reader.read("load_chain_tip_height", queries::load_chain_tip_height).await
+    }
+
     /// Loads the block header at the given height, or `None` if no block header is stored there.
     pub(crate) async fn load_block_header(
         &self,
@@ -123,8 +128,7 @@ impl ValidatorDbReader {
         self.reader
             .read("load_initial_metrics", |tx| {
                 Ok(InitialMetrics {
-                    chain_tip: queries::load_chain_tip(tx)?
-                        .map_or(0, |header| header.block_num().as_u32()),
+                    chain_tip: queries::load_chain_tip_height(tx)?.unwrap_or(0),
                     validated_transactions: u64::try_from(queries::count_validated_transactions(
                         tx,
                     )?)
