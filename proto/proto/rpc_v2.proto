@@ -13,6 +13,8 @@ import "types/submission.proto";
 import "transaction.proto";
 
 service NodeService {
+    rpc GetAccountWitnesses(GetAccountWitnessesRequest) returns (GetAccountWitnessesResponse) {}
+
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
 
     // Returns the chain MMR delta from the client's current height through the target block,
@@ -676,4 +678,16 @@ message GetAccountInfosResponse {
 message AccountHeaders {
     account.AccountHeader account_header = 1;
     account.AccountStorageHeader storage_header = 2;
+}
+
+message GetAccountWitnessesRequest {
+    // One or more distinct public or private IDs, up to the account_id limit in GetLimits.
+    repeated account.AccountId account_ids = 1;
+    optional fixed32 block_num = 2;
+}
+
+message GetAccountWitnessesResponse {
+    fixed32 block_num = 1;
+    // Proves inclusion or absence for every requested ID against the target block's account root.
+    primitives.PartialSmt account_tree = 2;
 }

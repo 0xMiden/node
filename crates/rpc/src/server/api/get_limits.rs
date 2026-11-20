@@ -55,6 +55,7 @@ impl RpcLimits {
                 .into_iter()
                 .chain([
                     ("GetAccountInfos", HashMap::from([limit::<AccountId>()])),
+                    ("GetAccountWitnesses", HashMap::from([limit::<AccountId>()])),
                     ("GetTransactionsById", HashMap::from([limit::<TransactionId>()])),
                 ])
                 .map(|(name, parameters)| (name.into(), v2::EndpointLimits { parameters }))

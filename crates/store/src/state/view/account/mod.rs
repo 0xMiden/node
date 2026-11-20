@@ -18,6 +18,7 @@ use miden_node_tracing::instrument;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotName, StorageSlotType};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::crypto::merkle::smt::PartialSmt;
 
 use super::{ScopedBlockNum, StateView};
 use crate::account_state_forest::AccountStorageMapResult;
@@ -59,6 +60,28 @@ impl StateView {
             block_num: *scoped_block,
             witness,
             details,
+        })
+    }
+
+    /// Opens the requested account leaves against a single historical tree.
+    pub fn account_tree_witnesses(
+        &self,
+        target: BlockNumber,
+        ids: &[AccountId],
+    ) -> Result<PartialSmt, GetAccountError> {
+        let target = self.scope_block(target).ok_or(GetAccountError::UnknownBlock(target))?;
+        self.with_inner_read_blocking(|state| {
+            let proofs = ids
+                .iter()
+                .map(|id| {
+                    state
+                        .account_tree
+                        .open_at(*id, *target)
+                        .map(AccountWitness::into_proof)
+                        .ok_or(GetAccountError::BlockPruned(*target))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            PartialSmt::from_proofs(proofs).map_err(|e| DatabaseError::MerkleError(e).into())
         })
     }
 
