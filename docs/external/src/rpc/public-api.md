@@ -118,6 +118,7 @@ delta after target validation.
 | Method                   | Purpose                                                                           |
 | ------------------------ | --------------------------------------------------------------------------------- |
 | `SyncNotes`              | Streams block frames and compact matching notes with target-anchored block paths. |
+| `SyncNullifiers`         | Streams every matching 16-bit-prefix consumption through the target.              |
 | `SyncAccountVault`       | Streams the final target value of every changed vault key.                        |
 | `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                  |
 

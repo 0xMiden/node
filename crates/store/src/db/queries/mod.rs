@@ -246,3 +246,7 @@ pub use check_account_history_target::check_account_history_target;
 mod select_note_sync_page;
 pub(crate) use select_note_sync_page::NoteSyncPaged;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
+
+mod select_nullifier_updates_page;
+pub(crate) use select_nullifier_updates_page::NullifierUpdatesPaged;
+pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};
