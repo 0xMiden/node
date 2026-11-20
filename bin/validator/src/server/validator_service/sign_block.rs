@@ -6,7 +6,6 @@ use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx_batch::BatchVerifier;
 
@@ -55,7 +54,11 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
     async fn handle(
         &self,
-        BlockSigningInputs { proving_inputs, body, protocol_config }: Self::Input,
+        BlockSigningInputs {
+            proving_inputs,
+            body,
+            protocol_config: supplied_config,
+        }: Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
@@ -86,10 +89,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             )));
         }
 
-        let protocol_config = self
-            .resolve_protocol_config(header.protocol_config_commitment(), protocol_config)
-            .await?;
-
         // Load the current chain tip from the database.
         let chain_tip = self
             .db
@@ -101,6 +100,18 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         self.validate_block(header, &body, chain_tip)
             .await
             .or_invalid_argument("Failed to validate block")?;
+
+        let parent = proving_inputs.block_inputs.prev_block_header();
+        let protocol_config =
+            if header.protocol_config_commitment() != parent.protocol_config_commitment() {
+                Some(supplied_config.ok_or_else(|| {
+                    tonic::Status::invalid_argument(
+                        "protocol_config is required when the active configuration changes",
+                    )
+                })?)
+            } else {
+                None
+            };
 
         // Reconstruction checked the witnesses against the supplied parent, and decode verified
         // each batch proof. Local checks established the parent, transaction IDs, and signing key.
@@ -142,29 +153,5 @@ impl ValidatorService {
             .sign_commitment(header.commitment())
             .await
             .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
-    }
-
-    /// Resolves and validates the active configuration before the block is signed.
-    async fn resolve_protocol_config(
-        &self,
-        commitment: Word,
-        supplied: Option<ProtocolConfig>,
-    ) -> tonic::Result<ProtocolConfig> {
-        let stored = self
-            .db
-            .load_protocol_config(commitment)
-            .await
-            .or_internal("Failed to load protocol config")?;
-
-        match (supplied, stored) {
-            (Some(supplied), Some(stored)) if supplied != stored => Err(tonic::Status::internal(
-                format!("Stored protocol config {commitment} differs from the supplied config"),
-            )),
-            (Some(supplied), _) => Ok(supplied),
-            (None, Some(stored)) => Ok(stored),
-            (None, None) => Err(tonic::Status::invalid_argument(format!(
-                "Protocol config {commitment} is not stored"
-            ))),
-        }
     }
 }

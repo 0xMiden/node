@@ -593,37 +593,13 @@ async fn sign_block_returns_signed_commitment() {
 }
 
 #[tokio::test]
-async fn sign_block_accepts_an_omitted_known_protocol_config() {
+async fn sign_block_accepts_an_omitted_unchanged_protocol_config() {
     let tv = TestValidator::new().await;
     let proposed = tv.propose_empty_block();
 
     tv.call_sign_block_with_protocol_config(&proposed, None)
         .await
-        .expect("a stored active config may be omitted");
-}
-
-#[tokio::test]
-async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
-    let tv = TestValidator::new().await;
-    let commitment = tv.protocol_config.to_commitment();
-    crate::db::delete_protocol_config_for_test(&tv.server.db, commitment)
-        .await
-        .unwrap();
-    let proposed = tv.propose_empty_block();
-
-    let status = tv
-        .call_sign_block_with_protocol_config(&proposed, None)
-        .await
-        .expect_err("an unknown active config cannot be omitted");
-
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
-    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
-    assert_eq!(
-        tv.server.db.load_block(1.into()).await.unwrap(),
-        None,
-        "an unknown config must be rejected before backup"
-    );
+        .expect("an unchanged active config may be omitted");
 }
 
 #[tokio::test]
