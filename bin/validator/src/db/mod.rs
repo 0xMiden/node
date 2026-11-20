@@ -255,7 +255,7 @@ impl ValidatorDbWriter {
     /// The write replaces the header row. If the height holds a block, the `ON DELETE CASCADE` on
     /// `block_transactions` deletes the links of that block, and this method does not link the
     /// transactions of the new block. Only tests use this method. Server code uses
-    /// [`Self::insert_signed_block`] and [`Self::replace_signed_block`].
+    /// [`Self::upsert_signed_block`].
     #[cfg(test)]
     #[instrument()]
     pub(crate) async fn upsert_block_header_with_protocol_config(
@@ -272,17 +272,14 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Persists a signed block, its proving request, configuration activation, and transaction positions
-    /// in one database transaction.
+    /// Stores a signed block, its proving inputs, configuration activation, and transaction
+    /// positions atomically at the validated height.
     ///
-    /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
-    /// one.
-    ///
-    /// `proving_inputs` must be the request `block` was built from. It is stored without being
-    /// checked, because rebuilding the block to compare it would repeat the signing path's most
-    /// expensive step; [`ValidatorDbReader::load_block_backup`] checks it when it is read back.
+    /// Deleting any previous block at this height also clears its transaction links by cascade.
+    /// The caller supplies the inputs used to build the block. [`ValidatorDbReader::load_block_backup`]
+    /// checks them against the stored block when reading a backup.
     #[instrument()]
-    pub(crate) async fn insert_signed_block(
+    pub(crate) async fn upsert_signed_block(
         &self,
         block: SignedBlock,
         protocol_config: ProtocolConfig,
@@ -291,35 +288,7 @@ impl ValidatorDbWriter {
     ) -> Result<(), DatabaseError> {
         let retention = self.proving_input_retention_blocks;
         self.writer
-            .write("insert_signed_block", move |tx| {
-                persist_signed_block(
-                    tx,
-                    &block,
-                    protocol_config,
-                    &transactions,
-                    Some(&proving_inputs),
-                )?;
-                prune_expired_proving_inputs(tx, retention)
-            })
-            .await
-    }
-
-    /// Replaces the block signed at `block`'s height, in one database transaction: deletes the
-    /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
-    /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
-    /// then persists the new header, links, and proving request exactly as
-    /// [`Self::insert_signed_block`] does.
-    #[instrument()]
-    pub(crate) async fn replace_signed_block(
-        &self,
-        block: SignedBlock,
-        protocol_config: ProtocolConfig,
-        transactions: Vec<TransactionId>,
-        proving_inputs: BlockProofRequest,
-    ) -> Result<(), DatabaseError> {
-        let retention = self.proving_input_retention_blocks;
-        self.writer
-            .write("replace_signed_block", move |tx| {
+            .write("upsert_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
                 persist_signed_block(
                     tx,
@@ -332,6 +301,7 @@ impl ValidatorDbWriter {
             })
             .await
     }
+
     /// Inserts a signed block without proving inputs to model a legacy backup.
     #[cfg(test)]
     pub(crate) async fn insert_legacy_signed_block(

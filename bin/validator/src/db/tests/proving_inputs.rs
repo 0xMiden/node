@@ -46,7 +46,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
     for (id, seed) in [(original_id, 1), (replacement_id, 2)] {
         db.insert_validated_private_transaction(private_record(id, seed)).await.unwrap();
     }
-    db.insert_signed_block(original.clone(), config.clone(), vec![original_id], inputs)
+    db.upsert_signed_block(original.clone(), config.clone(), vec![original_id], inputs)
         .await
         .unwrap();
     let history = protocol_config_history::history(&db).await;
@@ -54,7 +54,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
     let (replacement, inputs) =
         empty_pair(&genesis, PartialBlockchain::default(), genesis.timestamp() + 2);
     assert!(
-        db.replace_signed_block(replacement, config.clone(), vec![replacement_id], inputs)
+        db.upsert_signed_block(replacement, config.clone(), vec![replacement_id], inputs)
             .await
             .is_err()
     );
@@ -62,7 +62,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
     chain.add_block(&genesis, false);
     let (next, inputs) = empty_pair(original.header(), chain, original.header().timestamp() + 1);
     assert!(
-        db.insert_signed_block(next, config, vec![replacement_id], inputs)
+        db.upsert_signed_block(next, config, vec![replacement_id], inputs)
             .await
             .is_err()
     );
@@ -112,7 +112,7 @@ async fn append_empty_block(db: &ValidatorDbWriter) -> (SignedBlock, BlockProofR
     let (block, inputs) = empty_pair(&parent, chain, parent.timestamp() + 1);
     let retained_inputs =
         miden_node_persistence::decode(&miden_node_persistence::encode(&inputs)).unwrap();
-    db.insert_signed_block(block.clone(), config, vec![], inputs).await.unwrap();
+    db.upsert_signed_block(block.clone(), config, vec![], inputs).await.unwrap();
     (block, retained_inputs)
 }
 
@@ -201,7 +201,7 @@ async fn tip_replacement_preserves_the_retention_boundary() {
     let replacement =
         SignedBlock::new_unchecked(header.clone(), body, original.signatures().clone());
     let inputs = BlockProofRequest { block_header: header, ..inputs };
-    db.replace_signed_block(replacement.clone(), config, vec![], inputs)
+    db.upsert_signed_block(replacement.clone(), config, vec![], inputs)
         .await
         .unwrap();
     assert_inputs(&db, &[(1, false), (2, true), (3, true)]).await;
@@ -240,7 +240,7 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
     )
     .unwrap();
     assert!(
-        db.insert_signed_block(next.clone(), config.clone(), vec![transaction_id], inputs)
+        db.upsert_signed_block(next.clone(), config.clone(), vec![transaction_id], inputs)
             .await
             .is_err()
     );

@@ -5,7 +5,7 @@ use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
-use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures, SignedBlock};
+use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
@@ -130,38 +130,17 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .map(TransactionHeader::id)
             .collect();
 
-        // The signed block, proving inputs, and transaction positions are persisted atomically.
-        //
-        // A block at the current tip's height replaces that tip in the same transaction, so a crash
-        // cannot leave transaction links from the replaced block behind.
-        let new_block_num = signed_block.header().block_num().as_u32();
-        let is_replacement = signed_block.header().block_num() == chain_tip_num;
-        if is_replacement {
-            self.db
-                .replace_signed_block(
-                    signed_block,
-                    protocol_config,
-                    block_transactions,
-                    proving_inputs,
-                )
-                .await
-        } else {
-            self.db
-                .insert_signed_block(
-                    signed_block,
-                    protocol_config,
-                    block_transactions,
-                    proving_inputs,
-                )
-                .await
-        }
-        .or_internal("Failed to persist signed block")?;
+        let new_block_num = signed_block.header().block_num();
+        self.db
+            .upsert_signed_block(signed_block, protocol_config, block_transactions, proving_inputs)
+            .await
+            .or_internal("Failed to persist signed block")?;
 
         // Publish the tip only after the block and its metadata have committed together.
-        self.committed_tip.send_replace(BlockNumber::from(new_block_num));
+        self.committed_tip.send_replace(new_block_num);
         // A replacement stores no additional block. The count must stay equal to the number of
         // stored block headers, which is the value a restart reads.
-        if !is_replacement {
+        if new_block_num > chain_tip_num {
             self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
         }
 
