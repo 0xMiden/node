@@ -7,7 +7,6 @@ use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
-use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::TransactionId;
 use tokio::sync::{Semaphore, watch};
 
@@ -37,8 +36,6 @@ mod submit_proven_transaction;
 pub enum ValidatorError {
     #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
-    #[error("failed to build block")]
-    BlockBuildingFailed(#[source] ProposedBlockError),
     #[error("failed to sign block: {0}")]
     BlockSigningFailed(String),
     #[error("failed to select transactions")]

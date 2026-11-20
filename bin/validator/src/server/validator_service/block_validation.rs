@@ -1,16 +1,14 @@
-use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{instrument, miden_span_record};
-use miden_protocol::block::{BlockHeader, BlockSignatures, ProposedBlock, SignedBlock};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
 
 use super::{ValidatorError, ValidatorService};
 
 impl ValidatorService {
     /// Validates a proposed block by checking:
     /// 1. All transactions have been previously validated by this validator.
-    /// 2. The block header can be successfully built from the proposed block.
-    /// 3. The block is either: a. The valid next block in the chain (sequential block number, matching
+    /// 2. The block is either: a. The valid next block in the chain (sequential block number, matching
     ///    previous block commitment), or b. A replacement block at the same height as the current chain
     ///    tip, validated against the previous block header.
     ///
@@ -18,14 +16,19 @@ impl ValidatorService {
     #[instrument(err)]
     pub async fn validate_block(
         &self,
-        proposed_block: ProposedBlock,
+        proposed_header: BlockHeader,
+        proposed_body: BlockBody,
         chain_tip: BlockHeader,
     ) -> Result<(Signature, SignedBlock), ValidatorError> {
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
-        let proposed_tx_ids =
-            proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
+        let proposed_tx_ids = proposed_body
+            .transactions()
+            .iter()
+            .flat_map(OrderedTransactionHeaders::as_slice)
+            .map(TransactionHeader::id)
+            .collect::<Vec<_>>();
         let unvalidated_txs = self
             .db
             .find_unvalidated_transactions(proposed_tx_ids)
@@ -36,14 +39,6 @@ impl ValidatorService {
         if !unvalidated_txs.is_empty() {
             return Err(ValidatorError::UnvalidatedTransactions(unvalidated_txs));
         }
-        // Build the block header. This computes the account, nullifier and note tree roots plus the
-        // chain and transaction commitments — hashing proportional to block contents — so it runs
-        // on a blocking thread rather than pinning an async worker.
-        let (proposed_header, proposed_body) =
-            spawn_blocking_in_current_span(move || proposed_block.into_header_and_body())
-                .await
-                .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
-                .map_err(ValidatorError::BlockBuildingFailed)?;
 
         miden_span_record!(
             block.number = proposed_header.block_num(),
