@@ -173,6 +173,9 @@ impl RpcService {
                 StateSyncError::RangeBeyondTip(_) => {
                     SyncChainMmrErrorCode::FutureBlock.invalid_argument(err)
                 },
+                StateSyncError::DatabaseError(DatabaseError::BlockPruned { .. }) => {
+                    tonic::Status::out_of_range(err.to_string())
+                },
                 StateSyncError::DatabaseError(err) => super::database_error_to_status(&err),
                 _ => log_internal_error(&err),
             })?;

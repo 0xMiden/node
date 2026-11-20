@@ -194,6 +194,28 @@ fn upsert_accounts(
     })
 }
 
+/// Loads one vault page from the test database to inspect target squashing and continuation.
+fn select_account_vault_updates_v2(
+    db: &TestDb,
+    account_id: AccountId,
+    block_range: RangeInclusive<BlockNumber>,
+    cursor: Option<super::AccountVaultCursor>,
+    page_size: NonZeroUsize,
+) -> Result<super::AccountVaultValuesPage> {
+    db.read(move |tx| {
+        let query = queries::AccountVaultUpdatesV2::new(
+            account_id,
+            crate::ScopedBlockRange::new_unchecked(block_range),
+            page_size,
+        );
+        let page = query.page(tx, &cursor)?;
+        Ok(super::AccountVaultValuesPage {
+            values: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    })
+}
+
 fn insert_storage_map_value(
     db: &TestDb,
     account_id: AccountId,
@@ -789,6 +811,176 @@ fn sync_account_vault_basic_validation() {
         values.iter().find(|v| v.vault_key == vault_key_1 && v.block_num == block_to);
     assert!(vault_key_1_asset.is_some(), "should find updated vault asset");
     assert_eq!(vault_key_1_asset.unwrap().asset, Some(updated_fungible_asset_1));
+}
+
+/// Vault history must select one target value per changed key and preserve removal markers.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_returns_one_target_value_per_changed_key() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let blocks: Vec<BlockNumber> = (1..=6).map(BlockNumber::from).collect();
+
+    for block in &blocks {
+        create_block(db, *block);
+        upsert_mock_account(db, account_id, 0, *block).unwrap();
+    }
+
+    let faucet_a = account_id;
+    let faucet_b = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let faucet_c = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2).unwrap();
+    let faucet_d = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3).unwrap();
+
+    let asset_a_1 = Asset::from(FungibleAsset::new(faucet_a, 100).unwrap());
+    let asset_a_3 = Asset::from(FungibleAsset::new(faucet_a, 300).unwrap());
+    let asset_a_6 = Asset::from(FungibleAsset::new(faucet_a, 600).unwrap());
+    let asset_b_2 = Asset::from(FungibleAsset::new(faucet_b, 200).unwrap());
+    let asset_c_1 = Asset::from(FungibleAsset::new(faucet_c, 100).unwrap());
+    let asset_d_4 = Asset::from(FungibleAsset::new(faucet_d, 400).unwrap());
+
+    for (block, asset) in [
+        (blocks[0], asset_a_1),
+        (blocks[0], asset_c_1),
+        (blocks[1], asset_b_2),
+        (blocks[2], asset_a_3),
+        (blocks[3], asset_d_4),
+    ] {
+        insert_vault_asset(db, account_id, block, asset.id(), Some(asset)).unwrap();
+    }
+
+    // Remove D at the inclusive target and update A after the target. The V2 query must return D's
+    // tombstone and A's block-3 value, whose validity interval is finite but covers block 5.
+    insert_vault_asset(db, account_id, blocks[4], asset_d_4.id(), None).unwrap();
+    insert_vault_asset(db, account_id, blocks[5], asset_a_6.id(), Some(asset_a_6)).unwrap();
+
+    let range = blocks[1]..=blocks[4];
+    for size in [1, 2, 3, 20] {
+        let page_size = NonZeroUsize::new(size).unwrap();
+        let mut cursor = None;
+        let mut values = Vec::new();
+        loop {
+            let page =
+                select_account_vault_updates_v2(db, account_id, range.clone(), cursor, page_size)
+                    .unwrap();
+            values.extend(page.values);
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            cursor = Some(next_cursor);
+        }
+
+        assert_eq!(values.len(), 3);
+        assert_eq!(values[0].block_num, blocks[1]);
+        assert_eq!(values[0].vault_key, asset_b_2.id());
+        assert_eq!(values[0].asset, Some(asset_b_2));
+        assert_eq!(values[1].block_num, blocks[2]);
+        assert_eq!(values[1].vault_key, asset_a_3.id());
+        assert_eq!(values[1].asset, Some(asset_a_3));
+        assert_eq!(values[2].block_num, blocks[4]);
+        assert_eq!(values[2].vault_key, asset_d_4.id());
+        assert_eq!(values[2].asset, None);
+
+        // C changed before the inclusive range and A's block-1/block-6 values lie outside it.
+        assert!(values.iter().all(|value| value.vault_key != asset_c_1.id()));
+    }
+
+    let page_size = NonZeroUsize::MIN;
+    let invalid =
+        select_account_vault_updates_v2(db, account_id, blocks[4]..=blocks[1], None, page_size);
+    assert_matches!(invalid, Err(DatabaseError::InvalidBlockRange { .. }));
+
+    let private_account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let private = select_account_vault_updates_v2(db, private_account, range, None, page_size);
+    assert_matches!(private, Err(DatabaseError::AccountNotPublic(id)) if id == private_account);
+}
+
+/// Pruning between page reads must fail the attempt instead of returning a partial vault update.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn sync_account_vault_v2_rejects_targets_below_pruning_horizon_between_pages() {
+    let db = &TestDb::new();
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let target = BlockNumber::from(5);
+
+    for block in 1..=target.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_mock_account(db, account_id, 0, block).unwrap();
+    }
+
+    let asset_a_at_target = Asset::from(FungibleAsset::new(account_id, 300).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
+    insert_vault_asset(db, account_id, BlockNumber::from(2), asset_b.id(), Some(asset_b)).unwrap();
+    insert_vault_asset(
+        db,
+        account_id,
+        BlockNumber::from(3),
+        asset_a_at_target.id(),
+        Some(asset_a_at_target),
+    )
+    .unwrap();
+
+    let page_size = NonZeroUsize::new(1).unwrap();
+    let first_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        None,
+        page_size,
+    )
+    .unwrap();
+    assert_eq!(first_page.values.len(), 1);
+    let cursor = first_page.next_cursor.expect("two updates require another page");
+    assert_eq!(cursor.block_num, BlockNumber::from(3));
+    assert_eq!(cursor.vault_key, asset_a_at_target.id());
+
+    // Supersede A immediately after the target, then advance far enough that the target falls one
+    // block below the pruning horizon. Pruning removes A's value at the target, so the next page
+    // must fail instead of silently omitting it.
+    let oldest_available = target + 1;
+    let chain_tip = oldest_available + HISTORICAL_BLOCK_RETENTION;
+    for block in oldest_available.as_u32()..=chain_tip.as_u32() {
+        let block = BlockNumber::from(block);
+        create_block(db, block);
+        upsert_mock_account(db, account_id, 0, block).unwrap();
+    }
+    let asset_a_after_target = Asset::from(FungibleAsset::new(account_id, 600).unwrap());
+    insert_vault_asset(
+        db,
+        account_id,
+        oldest_available,
+        asset_a_after_target.id(),
+        Some(asset_a_after_target),
+    )
+    .unwrap();
+    prune_history(db, chain_tip).unwrap();
+
+    let next_page = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=target,
+        Some(cursor),
+        page_size,
+    );
+    assert_matches!(
+        next_page,
+        Err(DatabaseError::BlockPruned {
+            block_num,
+            oldest_available: cutoff,
+        }) if block_num == target && cutoff == oldest_available
+    );
+
+    // The cutoff block itself remains queryable because pruning keeps rows whose validity extends
+    // beyond it.
+    let boundary = select_account_vault_updates_v2(
+        db,
+        account_id,
+        BlockNumber::from(1)..=oldest_available,
+        None,
+        page_size,
+    );
+    assert!(boundary.is_ok(), "the pruning cutoff should remain queryable");
 }
 
 #[test]
@@ -4436,7 +4628,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     let expected = TransactionRecord {
         block_num,
         transaction_index: 0,
-        header: tx,
+        header: tx.clone(),
         output_note_proofs: vec![],
         consumed_note_refs: vec![],
     };
@@ -4822,4 +5014,95 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     // Verify map_a block 1 is no longer accessible
     let map_a_root_at_1 = forest.get_storage_map_root(account_id, &slot_map_a, block_1);
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
+}
+
+/// Vault pages include the first key at the range start and split a block without omissions.
+#[test]
+fn vault_pages_include_range_start_and_continue_within_one_block() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    create_block(db, 1.into());
+    upsert_mock_account(db, account, 0, 1.into()).unwrap();
+    let mut expected: Vec<_> = [
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2,
+    ]
+    .into_iter()
+    .map(|id| {
+        let asset = Asset::from(FungibleAsset::new(AccountId::try_from(id).unwrap(), 10).unwrap());
+        insert_vault_asset(db, account, 1.into(), asset.id(), Some(asset)).unwrap();
+        AccountVaultValue {
+            block_num: 1.into(),
+            vault_key: asset.id(),
+            asset: Some(asset),
+        }
+    })
+    .collect();
+    expected.sort_by_key(|value| Word::from(value.vault_key).to_bytes());
+    for size in [1, 2, 3, 20] {
+        let mut cursor = None;
+        let mut actual = vec![];
+        loop {
+            let page = select_account_vault_updates_v2(
+                db,
+                account,
+                1.into()..=1.into(),
+                cursor,
+                NonZeroUsize::new(size).unwrap(),
+            )
+            .unwrap();
+            assert_ne!(page.values, []);
+            actual.extend(page.values);
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+            assert!(actual.len() < expected.len());
+        }
+        assert_eq!(actual, expected);
+    }
+    let start = super::AccountVaultCursor {
+        block_num: 0.into(),
+        vault_key: expected[2].vault_key,
+    };
+    let page = select_account_vault_updates_v2(
+        db,
+        account,
+        1.into()..=1.into(),
+        Some(start),
+        NonZeroUsize::new(20).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(page.values, expected);
+    assert!(page.next_cursor.is_none());
+    let past_end = super::AccountVaultCursor {
+        block_num: 2.into(),
+        vault_key: expected[0].vault_key,
+    };
+    let page = select_account_vault_updates_v2(
+        db,
+        account,
+        1.into()..=1.into(),
+        Some(past_end),
+        NonZeroUsize::MIN,
+    )
+    .unwrap();
+    assert_eq!(page.values, []);
+    assert!(page.next_cursor.is_none());
+}
+
+#[test]
+fn streaming_history_queries_validate_retention_before_empty_selection() {
+    let db = TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    create_block(&db, (HISTORICAL_BLOCK_RETENTION + 2).into());
+    db.read(move |tx| -> Result<()> {
+        let range = || crate::ScopedBlockRange::new_unchecked(0.into()..=1.into());
+        let vault = queries::AccountVaultUpdatesV2::new(account, range(), NonZeroUsize::MIN)
+            .page(tx, &None);
+        assert_matches!(vault, Err(DatabaseError::BlockPruned { .. }));
+        Ok(())
+    })
+    .unwrap();
 }

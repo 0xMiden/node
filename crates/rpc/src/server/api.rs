@@ -97,6 +97,7 @@ mod is_invitation_code_valid;
 mod register_account;
 mod shared_v2;
 mod status;
+mod stream_settings;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
 mod submit_proven_tx;
@@ -104,9 +105,11 @@ mod submit_proven_tx_batch;
 mod subscription;
 mod sync_account_storage_maps;
 mod sync_account_vault;
+mod sync_account_vault_v2;
 mod sync_chain_mmr;
 mod sync_notes;
 mod sync_nullifiers;
+mod sync_stream;
 mod sync_transactions;
 
 // ================================================================================================
@@ -285,6 +288,9 @@ fn database_error_to_status(err: &DatabaseError) -> Status {
         DatabaseError::RangeBelowRetention(_) | DatabaseError::InvalidBlockRange { .. } => {
             SyncErrorCode::InvalidBlockRange.invalid_argument(message)
         },
+        DatabaseError::RangeBeyondTip(_) | DatabaseError::BlockPruned { .. } => {
+            Status::invalid_argument(message)
+        },
         _ => log_internal_error(err),
     }
 }
@@ -321,6 +327,7 @@ fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
 #[cfg(test)]
 mod tests {
     use miden_node_proto::generated::server::miden_node_v1_node_service::GetLimits;
+    use miden_protocol::block::BlockNumber;
 
     use super::*;
 
@@ -390,5 +397,17 @@ mod tests {
         let status = database_error_to_status(&error);
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
         assert_eq!(status.details(), &[SyncErrorCode::InvalidBlockRange as u8]);
+    }
+
+    /// Unavailable retained history must remain a client target failure instead of an internal
+    /// failure.
+    #[test]
+    fn block_pruned_database_error_is_invalid_argument() {
+        let status = database_error_to_status(&DatabaseError::BlockPruned {
+            block_num: BlockNumber::from(49),
+            oldest_available: BlockNumber::from(50),
+        });
+
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
     }
 }
