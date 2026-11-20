@@ -685,6 +685,7 @@ fn transaction_record_to_proto(
         block_num: record.block_num.as_u32(),
         output_note_proofs,
         consumed_note_refs,
+        transaction_index: record.transaction_index,
     }
 }
 
