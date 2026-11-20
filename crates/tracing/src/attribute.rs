@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountIdPrefix, StorageMapKey, StorageSlotName};
+use miden_protocol::asset::AssetId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteId, Nullifier};
@@ -410,6 +411,7 @@ impl_display_attribute!(
 impl_display_attribute!(AccountIdPrefix, &["account.id.network_prefix"]);
 impl_display_attribute!(StorageMapKey, &["account.storage.map.key"]);
 impl_display_attribute!(StorageSlotName, &["account.storage.slot"]);
+impl_display_attribute!(AssetId, &["asset.id"]);
 impl_display_attribute!(BatchId, &["batch.id", "block.batch.id"]);
 impl_display_attribute!(NoteId, &["note.id"]);
 impl_display_attribute!(Nullifier, &["note.nullifier"]);

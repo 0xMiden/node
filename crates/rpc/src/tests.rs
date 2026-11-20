@@ -4211,6 +4211,7 @@ async fn v2_service_parity() {
             "GetTransactionsById",
             "GetAccountInfos",
             "GetAccountWitnesses",
+            "GetAccountVaultWitnesses"
         ]),
     );
     for shared in ["GetNotesById", "SyncNotes", "SyncNullifiers", "SyncTransactions"] {
