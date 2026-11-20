@@ -115,13 +115,19 @@ synchronization. Delta streams take `StateDeltaRange`: `from_block_exclusive = C
 `(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return an empty
 delta after target validation.
 
-| Method                   | Purpose                                                          |
-| ------------------------ | ---------------------------------------------------------------- |
-| `SyncAccountVault`       | Streams the final target value of every changed vault key.       |
-| `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key. |
+| Method                   | Purpose                                                                           |
+| ------------------------ | --------------------------------------------------------------------------------- |
+| `SyncNotes`              | Streams block frames and compact matching notes with target-anchored block paths. |
+| `SyncAccountVault`       | Streams the final target value of every changed vault key.                        |
+| `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                  |
 
 Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
 block number, not a timestamp or the authenticated target.
+
+`SyncNotes` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
+repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
+and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note
+bodies and missing attachment content with `GetNotesById`. Reject malformed or incomplete records.
 
 All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
 all responses and their negative lookup outcomes. Commit one local update only after every required stream and proof

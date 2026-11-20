@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use super::*;
 use crate::db::queries::VALID_FOREVER;
 
-const EXPECTED_SCHEMA_HASHES: [SchemaHash; 9] = [
+const EXPECTED_SCHEMA_HASHES: [SchemaHash; 10] = [
     SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
     SchemaHash::from_hex("7c783947d0bb2c9745d28f4bdcf329f84ad970c36aa07ea85441e62718d8bbbb"),
     SchemaHash::from_hex("e026a70464e897ae9a217f45c80d72341b1bfb757200e57e41145348473a9961"),
@@ -15,6 +15,7 @@ const EXPECTED_SCHEMA_HASHES: [SchemaHash; 9] = [
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
     SchemaHash::from_hex("93db886dab52c2175a4572a23823fe3a05138d7f7d08ea55cd5e60ee6d4ec3a8"),
     SchemaHash::from_hex("baaeabe602a81b84ef7161f781fd571750b7baf4afe028cf85ded57d6ca3b373"),
+    SchemaHash::from_hex("38a0860de170e1b3b7571476227907dbb2008e99dfa8bdd434469b087a7c08a1"),
 ];
 
 #[test]
