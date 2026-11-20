@@ -109,8 +109,8 @@ mod tests {
                     .unwrap_err();
                 assert_eq!(error.code(), Code::NotFound);
             }
-            // Occupy the only blocking worker so the SQLite lookup holds its admission permit until the
-            // test cancels the request.
+            // Occupy the only blocking worker so the SQLite lookup holds its admission permit until
+            // the test cancels the request.
             let (release, wait) = tokio::sync::oneshot::channel::<()>();
             let blocker = miden_node_tracing::spawn::spawn_blocking_in_current_span(move || {
                 wait.blocking_recv()
