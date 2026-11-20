@@ -1761,17 +1761,7 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
 }
 
 #[tokio::test]
-async fn authenticated_batch_defers_validation_to_async_handler() {
-    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
-        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
-        auth_inputs: Vec::new(),
-        batch_proof: None,
-    };
-    let input = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
-        proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
-    )
-    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
-
+async fn authenticated_batch_reports_missing_request_fields() {
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
     let block_producer = BlockProducerApi::new(
@@ -1785,19 +1775,24 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         block_producer,
         account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
-    let error = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::handle(
-        &service,
-        input,
-        &MetadataMap::new(),
-        &Extensions::new(),
-    )
-    .await
-    .expect_err("the async handler should reject the malformed proposed batch");
-
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("failed to decode"), "{error}");
-    assert!(error.message().contains("proposed_batch.reference_block_header:"), "{error}");
-    assert!(error.message().contains("missing"), "{error}");
+    let malformed = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
+        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
+        ..Default::default()
+    };
+    for (batch, missing_field) in [
+        (None, "batch:"),
+        (Some(malformed), "batch.proposed_batch.reference_block_header:"),
+    ] {
+        let error = service
+            .submit_authenticated_tx_batch(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains(missing_field), "{error}");
+        assert!(error.message().contains("missing"), "{error}");
+    }
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
