@@ -125,9 +125,9 @@ block number, not a timestamp or the authenticated target.
 
 All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
 all responses and their negative lookup outcomes. Commit one local update only after every required stream and proof
-check succeeds at the common target. A terminal error never establishes an empty suffix or a negative lookup result. If
-a vault scan is interrupted, retain completed blocks and replay the first incomplete block before verifying the vault
-root.
+check succeeds at the common target. A terminal error never establishes an empty suffix or a negative lookup result.
+Vault and storage-map scans can preserve progress using [block-level resumption](#resuming-vault-and-storage-map-scans).
+Other incomplete streams must be retried in full under their existing contracts.
 
 Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
 and request-list limits remain.
