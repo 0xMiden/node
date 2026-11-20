@@ -56,6 +56,10 @@ impl RpcLimits {
                 .chain([
                     ("GetAccountInfos", HashMap::from([limit::<AccountId>()])),
                     ("GetAccountWitnesses", HashMap::from([limit::<AccountId>()])),
+                    (
+                        "GetAccountStorageWitnesses",
+                        HashMap::from([limit::<StorageMapKeyTotal>(), limit::<StorageMapSlot>()]),
+                    ),
                     ("GetAccountVaultWitnesses", HashMap::from([limit::<VaultAsset>()])),
                     ("GetTransactionsById", HashMap::from([limit::<TransactionId>()])),
                 ])

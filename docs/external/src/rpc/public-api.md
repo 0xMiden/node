@@ -133,6 +133,8 @@ Verify the account commitments returned by `GetAccountWitnesses` against the tar
 
 Verify `GetAccountVaultWitnesses` against the account header’s vault root.
 
+Verify `GetAccountStorageWitnesses` against the corresponding slot roots.
+
 `SyncNotes` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
 and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note
