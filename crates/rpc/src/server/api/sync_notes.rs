@@ -13,6 +13,7 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
     type Output = proto::miden::node::v1::SyncNotesResponse;
 
     fn decode(request: proto::miden::node::v1::SyncNotesRequest) -> tonic::Result<Self::Input> {
+        check::<QueryParamNoteTagLimit>(request.note_tags.len())?;
         request
             .decode_fields()
             .map_err(|err| SyncNotesErrorCode::DeserializationFailed.invalid_argument(err))
@@ -46,8 +47,6 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
             note.tags = note_tags.as_slice(),
             note.tag.count = note_tags.len()
         );
-
-        check::<QueryParamNoteTagLimit>(note_tags.len())?;
 
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
         let (chain_tip, (results, last_block_checked)) = self

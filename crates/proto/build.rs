@@ -567,7 +567,8 @@ impl UnaryMethod {
     ///
     /// ```rust
     /// trait <Method::name> {
-    ///     type Input;
+    ///     const DECODE_EXECUTION: crate::DecodeExecution = crate::DecodeExecution::Inline;
+    ///     type Input: Send + 'static;
     ///     type Output;
     ///
     ///     fn decode(request: <Method::request>) -> tonic::Result<Self::Input>;
@@ -585,7 +586,7 @@ impl UnaryMethod {
     ///     ) -> tonic::Result<<Method::response>> {
     ///         let (metadata, extensions, message) = request.into_parts();
     ///         miden_node_tracing::Span::current().record("rpc.request.size", prost::Message::encoded_len(&message));
-    ///         let input = Self::decode(message)?;
+    ///         let input = Self::DECODE_EXECUTION.run(move || Self::decode(message)).await?;
     ///         let output = self.handle(input, &metadata, &extensions).await?;
     ///         let response = Self::encode(output)?;
     ///         miden_node_tracing::Span::current().record("rpc.response.size", prost::Message::encoded_len(&response));
@@ -597,7 +598,7 @@ impl UnaryMethod {
         let mut ret = Trait::new(&self.name);
         ret.vis("pub");
         ret.attr("tonic::async_trait");
-        ret.associated_type("Input");
+        add_decode_policy(&mut ret);
         ret.associated_type("Output");
 
         ret.new_fn("decode")
@@ -625,7 +626,7 @@ impl UnaryMethod {
             .line(
                 r#"miden_node_tracing::Span::current().record("rpc.request.size", prost::Message::encoded_len(&message));"#,
             )
-            .line("let input = Self::decode(message)?;")
+            .line("let input = Self::DECODE_EXECUTION.run(move || Self::decode(message)).await?;")
             .line("let output = self.handle(input, &metadata, &extensions).await?;")
             .line("let response = Self::encode(output)?;")
             .line(
@@ -635,6 +636,16 @@ impl UnaryMethod {
 
         ret
     }
+}
+
+/// Adds the execution policy shared by unary and server-streaming request decoders.
+fn add_decode_policy(method: &mut Trait) {
+    // codegen emits the text after the colon verbatim, including the default initializer.
+    method.associated_const(
+        "DECODE_EXECUTION",
+        "crate::DecodeExecution = crate::DecodeExecution::Inline",
+    );
+    method.associated_type("Input").bound("Send").bound("'static");
 }
 
 impl ServerStream {
@@ -651,7 +662,8 @@ impl ServerStream {
     ///
     /// ```rust
     /// trait <Method::name> {
-    ///     type Input;
+    ///     const DECODE_EXECUTION: crate::DecodeExecution = crate::DecodeExecution::Inline;
+    ///     type Input: Send + 'static;
     ///     type Item;
     ///     type ItemStream: Stream<Item = tonic::Result<Self::Item>> + Send + 'static;
     ///
@@ -668,7 +680,7 @@ impl ServerStream {
     ///         use tokio_stream::StreamExt as _;
     ///         let (metadata, extensions, message) = request.into_parts();
     ///         miden_node_tracing::Span::current().record("rpc.request.size", prost::Message::encoded_len(&message));
-    ///         let input = Self::decode(message)?;
+    ///         let input = Self::DECODE_EXECUTION.run(move || Self::decode(message)).await?;
     ///         let stream = self.handle(input, &metadata, &extensions).await?;
     ///         Ok(Box::pin(stream.map(|item| item.and_then(Self::encode))))
     ///     }
@@ -685,7 +697,7 @@ impl ServerStream {
         let mut ret = Trait::new(&self.name);
         ret.vis("pub");
         ret.attr("tonic::async_trait");
-        ret.associated_type("Input");
+        add_decode_policy(&mut ret);
         ret.associated_type("Item");
         ret.associated_type("ItemStream")
             .bound(&stream_bound)
@@ -718,7 +730,7 @@ impl ServerStream {
             .line(
                 r#"miden_node_tracing::Span::current().record("rpc.request.size", prost::Message::encoded_len(&message));"#,
             )
-            .line("let input = Self::decode(message)?;")
+            .line("let input = Self::DECODE_EXECUTION.run(move || Self::decode(message)).await?;")
             .line("let stream = self.handle(input, &metadata, &extensions).await?;")
             .line("Ok(Box::pin(stream.map(|item| item.and_then(Self::encode))))");
 

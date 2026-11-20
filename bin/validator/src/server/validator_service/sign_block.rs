@@ -1,7 +1,6 @@
 use std::sync::atomic::Ordering;
 
-use miden_node_proto::{DecodeMessageExt, generated as grpc};
-use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_proto::{BlockProofRequest, DecodeExecution, DecodeMessageExt, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::Word;
 use miden_protocol::block::{BlockNumber, ProposedBlock};
@@ -13,12 +12,44 @@ use super::{StatusResultExt, ValidatorService};
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
-    type Input = grpc::miden::validator::v1::SignBlockRequest;
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
+    type Input = (ProposedBlock, Option<ProtocolConfig>, Word, BlockProofRequest);
     type Output = (Signature, Word, PublicKey);
 
     #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        let request = request
+            // SAFETY: Construction checks local batch invariants and block witnesses.
+            // validate_block checks transaction IDs and the trusted parent before signing.
+            //
+            // FIXME: Verify batch proofs and contents before signing. Validated transaction
+            // IDs do not establish correct note aggregation or expiration. The current batch
+            // kernel does not bind these fields, and transaction headers omit reference
+            // blocks and expiration. Full validation needs more data or protocol support.
+            .decode_and_build_unchecked()
+            .map_err(miden_node_proto::errors::ConversionError::into_status)?;
+        let proving_inputs = BlockProofRequest {
+            tx_batches: miden_protocol::batch::OrderedBatches::new(
+                request.tx_batches.as_slice().to_vec(),
+            ),
+            block_header: request.block_header.clone(),
+            block_inputs: request.block_inputs.clone(),
+        };
+        let protocol_config = request.protocol_config;
+        let protocol_config_commitment = request.block_header.protocol_config_commitment();
+        let proposed_block = ProposedBlock::new_at(
+            request.block_inputs,
+            request.tx_batches.into_vec(),
+            request.block_header.timestamp(),
+        )
+        .map(|block| {
+            block
+                .with_next_validator_config(request.block_header.validator_config().clone())
+                .with_next_protocol_config(request.block_header.next_protocol_config().cloned())
+        })
+        .or_invalid_argument("Failed to build proposed block")?;
+        Ok((proposed_block, protocol_config, protocol_config_commitment, proving_inputs))
     }
 
     #[instrument(err)]
@@ -35,7 +66,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
     async fn handle(
         &self,
-        request: Self::Input,
+        (proposed_block, protocol_config, protocol_config_commitment, proving_inputs): Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
@@ -53,49 +84,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_internal("sign_block semaphore closed")?;
 
-        let (proposed_block, protocol_config, protocol_config_commitment, proving_inputs) =
-            spawn_blocking_in_current_span(move || {
-                let request = request
-                    // SAFETY: Construction checks local batch invariants and block witnesses.
-                    // validate_block checks transaction IDs and the trusted parent before signing.
-                    //
-                    // FIXME: Verify batch proofs and contents before signing. Validated transaction
-                    // IDs do not establish correct note aggregation or expiration. The current batch
-                    // kernel does not bind these fields, and transaction headers omit reference
-                    // blocks and expiration. Full validation needs more data or protocol support.
-                    .decode_and_build_unchecked()
-                    .map_err(miden_node_proto::errors::ConversionError::into_status)?;
-                let proving_inputs = miden_node_proto::BlockProofRequest {
-                    tx_batches: miden_protocol::batch::OrderedBatches::new(
-                        request.tx_batches.as_slice().to_vec(),
-                    ),
-                    block_header: request.block_header.clone(),
-                    block_inputs: request.block_inputs.clone(),
-                };
-                let protocol_config = request.protocol_config;
-                let protocol_config_commitment = request.block_header.protocol_config_commitment();
-                let proposed_block = ProposedBlock::new_at(
-                    request.block_inputs,
-                    request.tx_batches.into_vec(),
-                    request.block_header.timestamp(),
-                )
-                .map(|block| {
-                    block
-                        .with_next_validator_config(request.block_header.validator_config().clone())
-                        .with_next_protocol_config(
-                            request.block_header.next_protocol_config().cloned(),
-                        )
-                })
-                .or_invalid_argument("Failed to build proposed block")?;
-                Ok::<_, tonic::Status>((
-                    proposed_block,
-                    protocol_config,
-                    protocol_config_commitment,
-                    proving_inputs,
-                ))
-            })
-            .await
-            .or_internal("Block decoding task failed")??;
         let protocol_config = self
             .resolve_protocol_config(protocol_config_commitment, protocol_config)
             .await?;

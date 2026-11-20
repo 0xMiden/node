@@ -25,7 +25,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{
     miden_node_v1_node_service,
     miden_ntx_builder_v1_network_transaction_builder_service,
-    miden_sequencer_v1_sequencer_service,
     miden_validator_v1_validator_service,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
@@ -1741,17 +1740,7 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
 }
 
 #[tokio::test]
-async fn authenticated_batch_defers_validation_to_async_handler() {
-    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
-        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
-        auth_inputs: Vec::new(),
-        batch_proof: None,
-    };
-    let input = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
-        proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
-    )
-    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
-
+async fn authenticated_batch_reports_missing_request_fields() {
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
     let block_producer = BlockProducerApi::new(
@@ -1765,19 +1754,24 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         block_producer,
         account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
-    let error = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::handle(
-        &service,
-        input,
-        &MetadataMap::new(),
-        &Extensions::new(),
-    )
-    .await
-    .expect_err("the async handler should reject the malformed proposed batch");
-
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("failed to decode"), "{error}");
-    assert!(error.message().contains("proposed_batch.reference_block_header:"), "{error}");
-    assert!(error.message().contains("missing"), "{error}");
+    let malformed = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
+        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
+        ..Default::default()
+    };
+    for (batch, missing_field) in [
+        (None, "batch:"),
+        (Some(malformed), "batch.proposed_batch.reference_block_header:"),
+    ] {
+        let error = service
+            .submit_authenticated_tx_batch(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains(missing_field), "{error}");
+        assert!(error.message().contains("missing"), "{error}");
+    }
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
@@ -2356,6 +2350,32 @@ async fn sync_endpoints_preserve_account_verification_context() {
         assert!(error.message().starts_with(field), "{error}");
         assert!(error.message().contains("not a known account ID version"), "{error}");
     }
+}
+
+#[tokio::test]
+async fn sync_endpoints_reject_filters_over_the_advertised_limit() {
+    let (mut client, _addr, _store, _server) = start_rpc().await;
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
+    let notes = client
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
+            note_tags: vec![0; QueryParamNoteTagLimit::LIMIT + 1],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(notes.code(), tonic::Code::OutOfRange);
+    assert!(notes.message().contains("note_tag exceeded limit"), "{notes}");
+
+    let nullifiers = client
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+            nullifiers: vec![0; QueryParamNullifierPrefixLimit::LIMIT + 1],
+            prefix_len: 16,
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(nullifiers.code(), tonic::Code::OutOfRange);
+    assert!(nullifiers.message().contains("nullifier_prefix exceeded limit"), "{nullifiers}");
 }
 
 #[tokio::test]
