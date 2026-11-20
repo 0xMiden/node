@@ -1,6 +1,6 @@
 # Miden node tracing
 
-This crate defines the Miden node's tracing attributes and macros, and configures its OpenTelemetry and stdout tracing
+This crate defines the Miden node's tracing attributes and macros, and configures its OpenTelemetry and stderr tracing
 layers.
 
 It is part of the [Miden node](https://github.com/0xMiden/node#readme) repository.
@@ -8,7 +8,7 @@ It is part of the [Miden node](https://github.com/0xMiden/node#readme) repositor
 ## Administration API
 
 Merge `miden_node_tracing::admin::router()` into a private administration router after calling `setup_tracing`. It
-provides independent stdout and OpenTelemetry filter updates and declared target listing. The caller must provide
+provides independent stderr and OpenTelemetry filter updates and declared target listing. The caller must provide
 external authentication and network isolation. See [Logging](../../docs/external/src/logging.md) for the HTTP contract
 and operating procedure.
 
@@ -93,9 +93,9 @@ representation.
 
 The default OpenTelemetry layer records the outer message as `exception.message` and the source messages as the
 `exception.stacktrace` array. The subscriber traverses the source chain. This array contains error messages from
-`source()`. The compact stdout formatter prints the outer message in `error` and the causes in `error.sources`.
+`source()`. The compact stderr formatter prints the outer message in `error` and the causes in `error.sources`.
 
-The optional `tracing-forest` stdout layer records only the outer message. It does not traverse typed error sources.
+The optional `tracing-forest` stderr layer records only the outer message. It does not traverse typed error sources.
 
 A span status description is an optional explanation of why the operation failed, such as `database unavailable`. It
 applies only to the error status. An empty description is valid. The default OpenTelemetry layer sets the span status to
