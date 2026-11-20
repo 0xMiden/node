@@ -109,6 +109,12 @@ error_codes!(SyncNotesV2ErrorCode {
     FutureTarget = 3,
 });
 
+error_codes!(GetTransactionsByIdErrorCode {
+    DeserializationFailed = 1,
+    MissingTarget = 2,
+    FutureTarget = 3,
+});
+
 error_codes!(SyncTransactionsV2ErrorCode {
     DeserializationFailed = 1,
     InvalidRange = 2,

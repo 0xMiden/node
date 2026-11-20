@@ -115,11 +115,21 @@ service NodeService {
     // storage verification against authenticated account details at the completed target.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (stream SyncAccountStorageMapsResponse) {}
 
+    // Streams requested transactions committed at or before an explicit target block.
+    //
+    // Use this endpoint to reconcile locally pending or unconfirmed transaction IDs.
+    // An ID absent from a successfully completed stream was not committed by the target.
+    // Absence alone does not establish expiration, conflict, or permanent rejection.
+    // The endpoint does not discover unknown transaction IDs or add transaction inclusion proofs.
+    // Discard partial lookup conclusions if the stream fails.
+    rpc GetTransactionsById(GetTransactionsByIdRequest) returns (stream GetTransactionsByIdResponse) {}
+
     // Streams complete transaction events for requested accounts within a fixed synchronization delta.
     //
     // Use this endpoint for account event discovery, including externally submitted transactions whose
     // IDs are unknown locally. Records preserve erased output commitments and consumed public-note references.
     // These references support recovery of previously untracked public notes consumed by an account.
+    // Use GetTransactionsById when only known pending transaction IDs need reconciliation.
     // Pin the target to SyncChainMmr and apply results only after successful stream completion.
     rpc SyncTransactions(SyncTransactionsRequest) returns (stream SyncTransactionsResponse) {}
 }
@@ -209,6 +219,16 @@ message NoteBlockStart {
     blockchain.BlockHeader block_header = 1;
     primitives.MerklePath mmr_path = 2;
 }
+
+// Zero selects genesis. Absence is invalid. IDs omitted from an OK-completed stream were not
+// committed by the target. A failed stream gives no conclusion about absent IDs.
+message GetTransactionsByIdRequest {
+    optional fixed32 target_block_num = 1;
+    repeated transaction.TransactionId transaction_ids = 2;
+}
+// One complete bounded record per message; aggregate stream size is unrestricted.
+// This lookup does not add a transaction inclusion proof.
+message GetTransactionsByIdResponse { TransactionRecord transaction = 1; }
 
 // Complete event discovery for requested accounts, including externally submitted transactions.
 // Zero target selects genesis; absence is invalid. Individual records are bounded, the stream is not.

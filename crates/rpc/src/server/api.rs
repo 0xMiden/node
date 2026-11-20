@@ -92,6 +92,7 @@ mod get_note_script_by_root;
 mod get_notes_by_id;
 mod get_transaction_encryption_key;
 mod get_transaction_logs;
+mod get_transactions_by_id;
 mod is_account_allowed;
 mod is_invitation_code_valid;
 mod register_account;
