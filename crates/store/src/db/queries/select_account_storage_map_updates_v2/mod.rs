@@ -48,17 +48,12 @@ impl AccountStorageMapUpdatesV2 {
             page_size,
         }
     }
-}
 
-impl Paginated for AccountStorageMapUpdatesV2 {
-    type Item = StorageMapValue;
-    type Cursor = Option<StorageMapCursor>;
-
-    fn page(
+    fn read_page(
         &self,
         tx: &ReadTx<'_>,
-        next: &Self::Cursor,
-    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        next: Option<&StorageMapCursor>,
+    ) -> Result<Page<StorageMapValue, Option<StorageMapCursor>>, DatabaseError> {
         if !self.account_id.is_public() {
             return Err(DatabaseError::AccountNotPublic(self.account_id));
         }
@@ -69,7 +64,7 @@ impl Paginated for AccountStorageMapUpdatesV2 {
             });
         }
         check_account_history_target(tx, *self.range.end())?;
-        let next = next.as_ref().filter(|next| next.block_num >= *self.range.start());
+        let next = next.filter(|next| next.block_num >= *self.range.start());
         let block = next.map_or(*self.range.start(), |next| next.block_num);
         let slot = next.map_or("", |next| next.slot_name.as_str());
         let key = key_cursor(next.map(|next| &next.key));
@@ -97,15 +92,28 @@ impl Paginated for AccountStorageMapUpdatesV2 {
     }
 }
 
+impl Paginated for AccountStorageMapUpdatesV2 {
+    type Item = StorageMapValue;
+    type Cursor = Option<StorageMapCursor>;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &Self::Cursor,
+    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        self.read_page(tx, next.as_ref())
+    }
+}
+
 /// Fetches one bounded page of account updates within the supplied read transaction.
 pub fn account_storage_map_updates_page(
     tx: &ReadTx<'_>,
     account: AccountId,
     range: ScopedBlockRange,
-    cursor: &Option<StorageMapCursor>,
+    cursor: Option<&StorageMapCursor>,
     page_size: NonZeroUsize,
 ) -> Result<StorageMapUpdatesPage, DatabaseError> {
-    let page = AccountStorageMapUpdatesV2::new(account, range, page_size).page(tx, cursor)?;
+    let page = AccountStorageMapUpdatesV2::new(account, range, page_size).read_page(tx, cursor)?;
     Ok(StorageMapUpdatesPage {
         values: page.items,
         next_cursor: page.next.flatten(),

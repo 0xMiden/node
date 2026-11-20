@@ -254,7 +254,7 @@ fn account_sync_resumption_replays_genesis_and_handles_empty_suffixes() {
         apply(&mut state, history.scan(3, 5, 1).unwrap());
         assert_eq!(state, BTreeMap::from([(1, 51), (2, 12), (3, 33)]));
         history.advance(6, 10);
-        assert!(history.scan(6, 10, 1).unwrap().is_empty());
+        assert_eq!(history.scan(6, 10, 1).unwrap(), []);
     }
 }
 
