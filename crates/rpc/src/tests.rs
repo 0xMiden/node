@@ -2374,6 +2374,32 @@ async fn sync_endpoints_preserve_account_verification_context() {
 }
 
 #[tokio::test]
+async fn sync_endpoints_reject_filters_over_the_advertised_limit() {
+    let (mut client, _addr, _store, _server) = start_rpc().await;
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
+    let notes = client
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
+            note_tags: vec![0; QueryParamNoteTagLimit::LIMIT + 1],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(notes.code(), tonic::Code::OutOfRange);
+    assert!(notes.message().contains("note_tag exceeded limit"), "{notes}");
+
+    let nullifiers = client
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+            nullifiers: vec![0; QueryParamNullifierPrefixLimit::LIMIT + 1],
+            prefix_len: 16,
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(nullifiers.code(), tonic::Code::OutOfRange);
+    assert!(nullifiers.message().contains("nullifier_prefix exceeded limit"), "{nullifiers}");
+}
+
+#[tokio::test]
 async fn sync_transactions_rejects_oversized_requests_before_decoding_fields() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
     let error = rpc_client
