@@ -52,4 +52,4 @@ container so Docker can route the mapped port.
 The full node syncs blocks and proofs from the upstream RPC, stores local state, and serves its own RPC API. It does not
 produce blocks.
 
-See [Logging](/logging) to configure stdout verbosity and component-specific targets.
+See [Logging](/logging) to configure stderr verbosity and component-specific targets.
