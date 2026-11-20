@@ -3179,9 +3179,10 @@ async fn v2_service_parity() {
         limits.endpoints.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from(["GetNotesById",]),
     );
-    for shared in ["GetNotesById"] {
-        assert_eq!(limits.endpoints[shared].parameters, previous.endpoints[shared].parameters);
-    }
+    assert_eq!(
+        limits.endpoints["GetNotesById"].parameters,
+        previous.endpoints["GetNotesById"].parameters
+    );
     let account = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();
     let register = v2::RegisterAccountRequest {
         invitation_code: "unissued".into(),
