@@ -1,12 +1,18 @@
+use miden_protocol::Felt;
 use miden_protocol::account::component::AccountComponentMetadata;
 use miden_protocol::account::{
+    AccountCodePatch,
     AccountComponent,
     AccountHeader,
+    AccountStoragePatch,
+    AccountVaultPatch,
     StorageMap,
     StorageMapKey,
     StorageSlot,
     StorageSlotName,
 };
+use miden_protocol::block::account_tree::AccountTree;
+use miden_protocol::block::{BlockAccountUpdate, BlockBody, BlockHeader};
 use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
 use miden_standards::code_builder::CodeBuilder;
 use v2::node_service_server::NodeService as V2Api;
@@ -63,6 +69,62 @@ fn service(store: &TestStore) -> RpcService {
     )
 }
 
+async fn apply(
+    store: &mut TestStore,
+    genesis: &ProvenBlock,
+    config: &ProtocolConfig,
+    account: &mut Account,
+    patch: AccountPatch,
+) {
+    account.apply_patch(&patch).unwrap();
+    let root = AccountTree::with_entries(genesis.body().updated_accounts().iter().map(|item| {
+        (
+            item.account_id(),
+            if item.account_id() == account.id() {
+                account.to_commitment()
+            } else {
+                item.final_state_commitment()
+            },
+        )
+    }))
+    .unwrap()
+    .root();
+    let update = BlockAccountUpdate::new(
+        account.id(),
+        account.to_commitment(),
+        AccountUpdateDetails::Public(patch),
+    )
+    .unwrap();
+    let body =
+        BlockBody::new(vec![update], vec![], vec![], vec![], PublicTransactionLogs::default())
+            .unwrap();
+    let base = next_block_with_protocol_config(store, config).await;
+    let h = base.header();
+    let header = BlockHeader::new(
+        h.prev_block_commitment(),
+        h.block_num(),
+        h.chain_commitment(),
+        root,
+        h.nullifier_root(),
+        h.code_tree_root(),
+        body.compute_block_note_tree().root(),
+        body.compute_transactions_commitment(),
+        h.validator_config().clone(),
+        h.fee_parameters().clone(),
+        h.protocol_config_commitment(),
+        None,
+        h.timestamp(),
+    );
+    store
+        .writer
+        .apply_block(
+            SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_account_infos() {
     use v2::get_account_infos_request::AccountQuery;
@@ -111,4 +173,66 @@ async fn v2_account_infos() {
         assert_eq!(call(height, accounts).await.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
     assert!(call(Some(2), vec![absent]).await.is_err());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_account_witnesses() {
+    use miden_protocol::block::account_tree::AccountIdKey;
+    let initial = account(1, 0, 1);
+    let id = initial.id();
+    let same_prefix =
+        AccountId::try_from_elements(id.suffix() + Felt::from(256u32), id.prefix().as_felt())
+            .unwrap();
+    let private = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let mut builder = MockChainBuilder::new();
+    builder.add_account(initial.clone()).unwrap();
+    let mut other = builder.add_existing_wallet(Auth::IncrNonce).unwrap();
+    let chain = builder.build().unwrap();
+    let genesis = chain.latest_block();
+    let config = chain.protocol_config().clone();
+    let mut store = TestStore::start_from_mock_genesis(&genesis, &config).await;
+    let patch = AccountPatch::new(
+        other.id(),
+        AccountStoragePatch::default(),
+        AccountVaultPatch::default(),
+        AccountCodePatch::default(),
+        Some(other.nonce() + Felt::ONE),
+    )
+    .unwrap();
+    apply(&mut store, &genesis, &config, &mut other, patch).await;
+    let latest = store.state.view().get_block_header(None, false).await.unwrap().0.unwrap();
+    assert_ne!(genesis.header().account_root(), latest.account_root());
+    let rpc = service(&store);
+    let call = |height, ids: Vec<AccountId>| {
+        rpc.get_account_witnesses(Request::new(v2::GetAccountWitnessesRequest {
+            account_ids: ids.into_iter().map(Into::into).collect(),
+            block_num: height,
+        }))
+    };
+    for (height, root) in [(0, genesis.header().account_root()), (1, latest.account_root())] {
+        let response =
+            call(Some(height), vec![same_prefix, private, id]).await.unwrap().into_inner();
+        assert_eq!(response.block_num, height);
+        let tree = response.account_tree.unwrap().decode_fields().unwrap().verify().unwrap();
+        assert_eq!(tree.root(), root);
+        assert_eq!(
+            tree.get_value(&AccountIdKey::from(id).as_word()).unwrap(),
+            initial.to_commitment()
+        );
+        for absent in [private, same_prefix] {
+            assert_eq!(
+                tree.get_value(&AccountIdKey::from(absent).as_word()).unwrap(),
+                Word::empty()
+            );
+        }
+    }
+    for (height, ids) in [
+        (None, vec![id]),
+        (Some(0), vec![]),
+        (Some(0), vec![id, id]),
+        (Some(2), vec![id]),
+        (Some(0), vec![id; 1001]),
+    ] {
+        assert!(call(height, ids).await.is_err());
+    }
 }
