@@ -1,5 +1,3 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
@@ -10,9 +8,6 @@ use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx_batch::BatchVerifier;
 
 use super::{StatusResultExt, ValidatorError, ValidatorService};
-
-/// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
-const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
@@ -76,30 +71,10 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_internal("sign_block semaphore closed")?;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .or_internal("Validator clock is before the Unix epoch")?
-            .as_secs();
         let header = &proving_inputs.block_header;
-        let timestamp = header.timestamp();
-        let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
-        if u64::from(timestamp) > latest_timestamp {
-            return Err(tonic::Status::invalid_argument(format!(
-                "block timestamp {timestamp} is too far in the future (maximum {latest_timestamp})"
-            )));
-        }
-
-        // Load the current chain tip from the database.
-        let chain_tip = self
-            .db
-            .load_chain_tip()
+        self.validate_block(header, &body)
             .await
-            .or_internal("Failed to load chain tip")?
-            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
-
-        self.validate_block(header, &body, chain_tip)
-            .await
-            .or_invalid_argument("Failed to validate block")?;
+            .map_err(ValidatorError::into_validation_status)?;
 
         let parent = proving_inputs.block_inputs.prev_block_header();
         let protocol_config =

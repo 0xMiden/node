@@ -1,19 +1,42 @@
-use miden_node_tracing::{instrument, miden_span_record};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use miden_node_tracing::{ErrorReport, instrument, miden_span_record};
 use miden_protocol::block::{BlockBody, BlockHeader};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
 
 use super::{ValidatorError, ValidatorService};
 
+/// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
+const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
+
 impl ValidatorService {
-    /// Checks that the validator recognizes the transactions, accepts the parent for this height,
-    /// and holds a key authorized by that parent.
+    /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
+    /// against local state, and checks that the parent authorizes the signing key.
     #[instrument(err)]
     pub(super) async fn validate_block(
         &self,
         proposed_header: &BlockHeader,
         proposed_body: &BlockBody,
-        chain_tip: BlockHeader,
     ) -> Result<(), ValidatorError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(ValidatorError::ClockBeforeUnixEpoch)?
+            .as_secs();
+        let timestamp = proposed_header.timestamp();
+        let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
+        if u64::from(timestamp) > latest_timestamp {
+            return Err(ValidatorError::BlockTimestampTooFarInFuture {
+                timestamp,
+                latest_timestamp,
+            });
+        }
+
+        let chain_tip = self
+            .db
+            .load_chain_tip()
+            .await
+            .map_err(ValidatorError::DatabaseError)?
+            .ok_or(ValidatorError::NoChainTip)?;
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
@@ -39,12 +62,11 @@ impl ValidatorService {
             block.commitment = proposed_header.commitment()
         );
 
-        // If the proposed block has the same block number as the current chain tip, this is a
-        // replacement block. Validate it against the previous block header.
         let prev = if proposed_header.block_num() == chain_tip.block_num() {
-            // The genesis block cannot be replaced (genesis block has no parent).
+            // Replacements are rare, so load the tip's parent on demand. An ordinary extension
+            // needs only the tip header.
             let prev_block_num =
-                chain_tip.block_num().parent().ok_or(ValidatorError::NoPrevBlockHeader)?;
+                chain_tip.block_num().parent().ok_or(ValidatorError::CannotReplaceGenesis)?;
             self.db
                 .load_block_header(prev_block_num)
                 .await
@@ -80,5 +102,20 @@ impl ValidatorService {
         }
 
         Ok(())
+    }
+}
+
+impl ValidatorError {
+    pub(super) fn into_validation_status(self) -> tonic::Status {
+        let message = self.as_report_context("Failed to validate block");
+        match self {
+            Self::UnvalidatedTransactions(_)
+            | Self::BlockTimestampTooFarInFuture { .. }
+            | Self::BlockNumberMismatch { .. }
+            | Self::CannotReplaceGenesis
+            | Self::PrevBlockCommitmentMismatch
+            | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),
+            _ => tonic::Status::internal(message),
+        }
     }
 }

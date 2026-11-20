@@ -917,7 +917,7 @@ async fn unknown_transactions_rejected() {
 
     // Build a ProposedBlock containing the batch with the unknown transaction.
     let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
+        genesis_header,
         PartialBlockchain::default(),
         BTreeMap::new(),
         BTreeMap::new(),
@@ -926,7 +926,7 @@ async fn unknown_transactions_rejected() {
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
 
     let (header, body) = proposed.into_header_and_body().unwrap();
-    let result = tv.server.validate_block(&header, &body, genesis_header).await;
+    let result = tv.server.validate_block(&header, &body).await;
     assert!(result.is_err(), "block with unknown transactions should be rejected");
     match result.unwrap_err() {
         ValidatorError::UnvalidatedTransactions(ids) => {
@@ -1114,7 +1114,7 @@ async fn validate_block_number_mismatch() {
     let block_3 = empty_block(&block_2_header, &chain);
 
     let (header, body) = block_3.into_header_and_body().unwrap();
-    let result = tv.server.validate_block(&header, &body, block_1_header).await;
+    let result = tv.server.validate_block(&header, &body).await;
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), ValidatorError::BlockNumberMismatch { .. }),

@@ -34,11 +34,15 @@ mod submit_proven_transaction;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidatorError {
+    #[error("Validator clock is before the Unix epoch")]
+    ClockBeforeUnixEpoch(#[source] std::time::SystemTimeError),
+    #[error("block timestamp {timestamp} is too far in the future (maximum {latest_timestamp})")]
+    BlockTimestampTooFarInFuture { timestamp: u32, latest_timestamp: u64 },
     #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
     #[error("failed to sign block: {0}")]
     BlockSigningFailed(String),
-    #[error("failed to select transactions")]
+    #[error("validator database read failed")]
     DatabaseError(#[source] DatabaseError),
     #[error("block number mismatch: expected {expected}, got {actual}")]
     BlockNumberMismatch {
@@ -47,6 +51,8 @@ pub enum ValidatorError {
     },
     #[error("previous block commitment does not match chain tip")]
     PrevBlockCommitmentMismatch,
+    #[error("genesis block cannot be replaced")]
+    CannotReplaceGenesis,
     #[error("no previous block header available for chain tip overwrite")]
     NoPrevBlockHeader,
     #[error(
