@@ -61,8 +61,6 @@ struct InvalidNetworkAccountType(i64);
 // BLOCK QUERIES
 // =================================================================================================
 
-mod block_header_row;
-
 mod select_transaction_logs;
 pub(crate) use select_transaction_logs::select_transaction_logs;
 
@@ -81,10 +79,7 @@ pub(crate) use select_block_header_and_signatures_by_block_num::select_block_hea
 mod select_chain_tip;
 pub(crate) use select_chain_tip::select_chain_tip;
 
-pub(crate) use crate::read::select_block_header;
-
-mod select_block_headers;
-pub(crate) use select_block_headers::select_block_headers;
+pub(crate) use crate::read::{select_block_header, select_block_headers};
 
 // PROTOCOL CONFIG QUERIES
 // =================================================================================================
@@ -126,8 +121,7 @@ pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 mod select_note_ids_by_nullifier;
 pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
 
-mod select_note_inclusion_proofs;
-pub(crate) use select_note_inclusion_proofs::select_note_inclusion_proofs;
+pub(crate) use crate::read::select_note_inclusion_proofs;
 
 mod select_note_sync_records;
 pub(crate) use select_note_sync_records::select_note_sync_records;

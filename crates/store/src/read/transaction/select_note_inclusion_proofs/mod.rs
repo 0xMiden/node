@@ -1,5 +1,3 @@
-//! Returns inclusion proofs for a set of notes.
-
 use std::collections::{BTreeMap, BTreeSet};
 
 use miden_node_db::sqlite::{InList, ReadTx};
@@ -9,9 +7,24 @@ use miden_protocol::block::{BlockNoteIndex, BlockNumber};
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::note::{NoteId, NoteInclusionProof};
 
+use super::ReadTransaction;
 use crate::errors::DatabaseError;
 
-const SQL: &str = include_str!("select_note_inclusion_proofs.sql");
+const SQL: &str = include_str!("query.sql");
+
+impl ReadTransaction<'_> {
+    /// Returns inclusion proofs for the requested notes committed at or before `up_to_block`.
+    ///
+    /// Notes that are absent or committed after `up_to_block` are omitted from the result.
+    pub fn select_note_inclusion_proofs(
+        &self,
+        note_ids: &BTreeSet<NoteId>,
+        up_to_block: BlockNumber,
+    ) -> Result<BTreeMap<NoteId, NoteInclusionProof>, DatabaseError> {
+        let note_commitments = note_ids.iter().map(NoteId::as_word).collect();
+        select_note_inclusion_proofs(self.inner, &note_commitments, up_to_block)
+    }
+}
 
 /// Select note inclusion proofs matching the note commitments, restricted to notes committed at
 /// or before `up_to_block`.
@@ -54,3 +67,6 @@ pub(crate) fn select_note_inclusion_proofs(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
