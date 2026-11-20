@@ -15,9 +15,6 @@ pub use protocol_config::{
     load_before as load_protocol_config_commitment_before,
 };
 
-mod count_signed_blocks;
-pub use count_signed_blocks::count_signed_blocks;
-
 mod count_validated_transactions;
 pub use count_validated_transactions::count_validated_transactions;
 
@@ -48,7 +45,7 @@ mod load_block_header;
 pub use load_block_header::load_block_header;
 
 mod load_chain_tip;
-pub use load_chain_tip::load_chain_tip;
+pub use load_chain_tip::{load_chain_tip, load_chain_tip_height};
 
 mod load_private_record;
 pub use load_private_record::load_private_record;

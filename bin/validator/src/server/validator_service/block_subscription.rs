@@ -5,7 +5,6 @@ use std::task::{Context, Poll};
 use miden_node_proto::generated as grpc;
 use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
 use miden_node_tracing::{ErrorReport, error, info, instrument, miden_span_record};
-use miden_protocol::block::BlockNumber;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
@@ -54,22 +53,18 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
     ) -> tonic::Result<Self::ItemStream> {
         miden_span_record!(block.from = request.block_from);
 
-        let committed_tip = *self.committed_tip.borrow();
-        if request.block_from > committed_tip.as_u32() {
+        // Hold the exclusive lock from tip selection until the backup stream is dropped.
+        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
+            Status::resource_exhausted("cannot stream backup while validator is serving requests")
+        })?;
+
+        let committed_tip = self.committed_height().await?;
+        if request.block_from > committed_tip {
             return Err(Status::out_of_range(
                 "subscriber's requested starting block should be <= the committed chain tip",
             ));
         }
 
-        // Hold the exclusive backup lock for the entire lifetime of the stream. While a backup
-        // subscription is active no other RPCs may run, and vice versa.
-        let guard = Arc::clone(&self.serve_lock).try_write_owned().map_err(|_| {
-            Status::resource_exhausted("cannot stream backup while validator is serving requests")
-        })?;
-
-        let from = BlockNumber::from(request.block_from);
-        // The tip should never move since we are in recovery mode and therefore there is no active
-        // sequencer.
         miden_span_record!(tip.number = committed_tip);
 
         let (tx, rx) = tokio::sync::mpsc::channel(32);
@@ -78,7 +73,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
             let db = self.db.reader();
             async move {
                 let mut previous_config_commitment = None;
-                for block in from.as_u32()..=committed_tip.as_u32() {
+                for block in request.block_from..=committed_tip {
                     let response = match db.load_block_backup(block.into()).await {
                         Ok(Some(backup)) => {
                             let commitment = backup.block.header().protocol_config_commitment();
@@ -101,7 +96,7 @@ impl grpc::server::miden_validator_v1_validator_service::BlockSubscription for V
                             };
                             protocol_config.map(|protocol_config| BlockSubscriptionResponse {
                                 block: Some(backup.block.into()),
-                                committed_chain_tip: committed_tip.as_u32(),
+                                committed_chain_tip: committed_tip,
                                 protocol_config,
                                 proving_inputs: backup.proving_inputs.as_ref().map(Into::into),
                             })
