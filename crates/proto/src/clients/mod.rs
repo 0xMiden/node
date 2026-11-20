@@ -310,6 +310,7 @@ pub mod services {
 }
 
 pub use services::miden_node_v1_node_service::NodeServiceClient as RpcClient;
+pub use services::miden_node_v2_node_service::NodeServiceClient as RpcV2Client;
 pub use services::miden_note_transport_v1_note_transport_service::NoteTransportServiceClient as NoteTransportClient;
 pub use services::miden_ntx_builder_v1_network_transaction_builder_service::NetworkTransactionBuilderServiceClient as NtxBuilderClient;
 pub use services::miden_remote_prover_v1_prover_service::ProverServiceClient as RemoteProverClient;

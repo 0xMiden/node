@@ -9,6 +9,10 @@ This crate is intended for projects that need to generate gRPC bindings from the
 the node. It includes descriptors for the public RPC, remote prover, and note transport APIs, and an optional feature
 for internal component APIs used by the Miden node workspace.
 
+Use `rpc_api_descriptor()` for `miden.node.v1.NodeService` and `rpc_v2_api_descriptor()` for
+`miden.node.v2.NodeService`. The v2 descriptor includes v1 because both services use the same note and transaction
+records.
+
 Each descriptor set includes its imported schemas. External clients can use these self-contained descriptors to generate
 bindings in other languages. Canonical object schemas come from the published `miden-objects` crate through its
 `FILE_DESCRIPTOR_SET`. The raw node protobuf files in this repository do not contain all imported schemas. Clients that

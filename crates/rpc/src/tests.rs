@@ -14,6 +14,7 @@ use miden_node_proto::clients::{
     Interceptor,
     NtxBuilderClient,
     RpcClient,
+    RpcV2Client,
     SequencerClient,
     ValidatorClient,
 };
@@ -21,6 +22,7 @@ use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInput
 use miden_node_proto::generated::miden::node::v1::BlockSubscriptionRequest;
 use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
 use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
+use miden_node_proto::generated::miden::node::v2;
 use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
 use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{
@@ -68,6 +70,7 @@ use miden_protocol::batch::ProposedBatch;
 use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
+    BlockNumber,
     BlockSignatures,
     FeeParameters,
     ProvenBlock,
@@ -134,6 +137,7 @@ pub(crate) fn new_tempdir() -> std::path::PathBuf {
 struct TestStore {
     state: Arc<State>,
     writer: miden_node_store::state::BlockWriter,
+    proof_writer: miden_node_store::state::ProofWriter,
     genesis_commitment: Word,
     data_directory: std::path::PathBuf,
 }
@@ -181,10 +185,11 @@ impl TestStore {
         let data_directory = new_tempdir();
         let genesis_commitment =
             Self::bootstrap_with_base_fee(&data_directory, verification_base_fee).await;
-        let (state, writer, ..) = State::for_tests(&data_directory).await;
+        let (state, writer, proof_writer) = State::for_tests(&data_directory).await;
         Self {
             state,
             writer,
+            proof_writer,
             genesis_commitment,
             data_directory,
         }
@@ -198,10 +203,11 @@ impl TestStore {
         let genesis_commitment =
             Self::bootstrap_from_mock_genesis(&data_directory, genesis_block, protocol_config)
                 .await;
-        let (state, writer, ..) = State::for_tests(&data_directory).await;
+        let (state, writer, proof_writer) = State::for_tests(&data_directory).await;
         Self {
             state,
             writer,
+            proof_writer,
             genesis_commitment,
             data_directory,
         }
@@ -1626,7 +1632,16 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         .into_inner();
 
     assert_eq!(response, expected);
-    assert_eq!(ntx_builder_call_count.load(Ordering::SeqCst), 1);
+    let v2_response = v2::node_service_server::NodeService::get_network_note_status(
+        &full_node,
+        Request::new(v2::GetNetworkNoteStatusRequest { note_id: Some(note_id.into()) }),
+    )
+    .await
+    .unwrap()
+    .into_inner();
+    assert_eq!(v2_response.sponsorships[0].last_attempt_block_num, Some(40));
+    assert_eq!(v2_response.sponsorships[0].reclaim_height, Some(100));
+    assert_eq!(ntx_builder_call_count.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
@@ -1856,12 +1871,11 @@ async fn send_request(
     rpc_client.get_block_header_by_number(request).await
 }
 
-async fn connect_rpc(url: Url) -> RpcClient {
-    let endpoint = tonic::transport::Endpoint::from_shared(url.to_string())
-        .expect("Url type always results in valid endpoint");
+async fn connect_rpc<C: GrpcClient>(address: std::net::SocketAddr) -> C {
+    let endpoint = tonic::transport::Endpoint::from_shared(format!("http://{address}")).unwrap();
     let channel = endpoint.connect().await.expect("Failed to build channel");
     let interceptor = Interceptor::default();
-    RpcClient::with_interceptor(
+    C::with_interceptor(
         miden_node_proto::clients::RecoveringChannel::new(endpoint, channel),
         interceptor,
     )
@@ -1874,9 +1888,13 @@ async fn start_rpc() -> (RpcClient, std::net::SocketAddr, TestStore, TestServerG
     start_rpc_with_allowlist(false).await
 }
 
-async fn start_rpc_with_allowlist(
+async fn start_rpc_v2() -> (RpcV2Client, std::net::SocketAddr, TestStore, TestServerGuard) {
+    start_rpc_with_allowlist(false).await
+}
+
+async fn start_rpc_with_allowlist<C: GrpcClient>(
     disabled: bool,
-) -> (RpcClient, std::net::SocketAddr, TestStore, TestServerGuard) {
+) -> (C, std::net::SocketAddr, TestStore, TestServerGuard) {
     let grpc_options = GrpcOptions::test();
     let store = TestStore::start().await;
     let allowlist = store.bootstrap_allowlist();
@@ -1928,10 +1946,7 @@ async fn start_rpc_with_allowlist(
             .expect("Failed to start serving RPC");
         }
     });
-    let url = rpc_addr.to_string();
-    // SAFETY: The rpc_addr is always valid as it is created from a `SocketAddr`.
-    let url = Url::parse(format!("http://{url}").as_str()).unwrap();
-    let rpc_client = connect_rpc(url).await;
+    let rpc_client = connect_rpc(rpc_addr).await;
 
     (rpc_client, rpc_addr, store, TestServerGuard(shutdown))
 }
@@ -2091,7 +2106,7 @@ async fn register_account_and_lookup_preserve_conversion_errors() {
 #[case::disabled(true)]
 #[tokio::test]
 async fn allowlist_database_failures_hide_the_cause(#[case] disabled: bool) {
-    let (mut rpc, _addr, store, _server) = start_rpc_with_allowlist(disabled).await;
+    let (mut rpc, _addr, store, _server) = start_rpc_with_allowlist::<RpcClient>(disabled).await;
     let path = DataDirectory::load(store.data_directory.clone())
         .unwrap()
         .allowlist_database_path();
@@ -2132,12 +2147,8 @@ async fn allowlist_database_failures_hide_the_cause(#[case] disabled: bool) {
 #[tokio::test]
 async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
     let (source_rpc, _addr, source_store, _server) = start_rpc().await;
-    let allowlist = AccountAllowlist::load(
-        DataDirectory::load(source_store.data_directory.clone())
-            .unwrap()
-            .allowlist_database_path(),
-    )
-    .unwrap();
+    let source_dir = DataDirectory::load(source_store.data_directory.clone()).unwrap();
+    let allowlist = AccountAllowlist::load(source_dir.allowlist_database_path()).unwrap();
     let store = TestStore::start().await;
     for (index, pre_auth) in [
         None,
@@ -2279,7 +2290,7 @@ async fn get_limits_endpoint() {
         QueryParamNoteTagLimit::LIMIT
     );
 
-    // SyncAccountVault and SyncAccountStorageMaps accept a singular account_id, not a repeated
+    // The account vault and storage-map endpoints accept a singular account_id, not a repeated
     // list, so they do not have list parameter limits.
     assert!(
         !limits.endpoints.contains_key("SyncAccountVault"),
@@ -3043,4 +3054,243 @@ pub(crate) async fn transaction_log_test_service() -> RpcService {
         NonZeroUsize::new(10).unwrap(),
         None,
     )
+}
+
+#[tokio::test]
+async fn both_node_services_are_discoverable_and_serving() {
+    use tonic_health::pb::HealthCheckRequest;
+    use tonic_health::pb::health_check_response::ServingStatus;
+    use tonic_health::pb::health_client::HealthClient;
+    use tonic_reflection::pb::v1::ServerReflectionRequest;
+    use tonic_reflection::pb::v1::server_reflection_client::ServerReflectionClient;
+    use tonic_reflection::pb::v1::server_reflection_request::MessageRequest;
+    use tonic_reflection::pb::v1::server_reflection_response::MessageResponse;
+
+    let (_, address, _store, _guard) = start_rpc().await;
+    let channel = tonic::transport::Endpoint::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let mut reflection = ServerReflectionClient::new(channel.clone());
+    let request = ServerReflectionRequest {
+        message_request: Some(MessageRequest::ListServices(String::new())),
+        ..Default::default()
+    };
+    let mut stream = reflection
+        .server_reflection_info(tokio_stream::iter([request]))
+        .await
+        .unwrap()
+        .into_inner();
+    let response = stream.message().await.unwrap().unwrap().message_response.unwrap();
+    let MessageResponse::ListServicesResponse(services) = response else {
+        panic!("expected a list of reflected services, got {response:?}");
+    };
+
+    let mut health = HealthClient::new(channel);
+    for service in ["miden.node.v1.NodeService", "miden.node.v2.NodeService"] {
+        assert!(services.service.iter().any(|item| item.name == service), "{service}");
+        let status = health
+            .check(HealthCheckRequest { service: service.into() })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(status.status(), ServingStatus::Serving, "{service}");
+    }
+}
+
+#[tokio::test]
+async fn v2_service_parity() {
+    use std::collections::BTreeSet;
+
+    use miden_node_proto::generated::miden::node::v1;
+    let (mut legacy, addr, store, _guard) = start_rpc_with_allowlist::<RpcClient>(true).await;
+    let build = |genesis| {
+        Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
+            .without_tls()
+            .with_timeout(REQUEST_TIMEOUT)
+            .without_metadata_version()
+            .with_metadata_genesis(genesis)
+            .without_otel_context_injection()
+            .connect_lazy::<RpcV2Client>()
+    };
+    let mut client = build(store.genesis_commitment());
+    let status = client.status(v2::StatusRequest {}).await.unwrap().into_inner();
+    let previous = legacy.status(v1::StatusRequest {}).await.unwrap().into_inner();
+    assert_eq!(status.chain_tip, previous.chain_tip);
+    assert_eq!(status.genesis_commitment, previous.genesis_commitment);
+    let limits = client.get_limits(v2::GetLimitsRequest {}).await.unwrap().into_inner();
+    let previous = legacy.get_limits(v1::GetLimitsRequest {}).await.unwrap().into_inner();
+    assert_eq!(
+        previous.endpoints.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "GetNotesById",
+            "SyncNotes",
+            "SyncNullifiers",
+            "SyncTransactions",
+            "GetAccount"
+        ]),
+    );
+    assert_eq!(
+        limits.endpoints.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+        BTreeSet::from(["GetNotesById",]),
+    );
+    assert_eq!(
+        limits.endpoints["GetNotesById"].parameters,
+        previous.endpoints["GetNotesById"].parameters
+    );
+    let account = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();
+    let register = v2::RegisterAccountRequest {
+        invitation_code: "unissued".into(),
+        account_id: Some(account.into()),
+    };
+    let denied = build(Word::empty()).register_account(register.clone()).await.unwrap_err();
+    assert_eq!(denied.code(), tonic::Code::InvalidArgument);
+    client.register_account(register).await.unwrap();
+    let mut blocks = client
+        .block_subscription(v2::BlockSubscriptionRequest { block_from: 0 })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(blocks.message().await.unwrap().unwrap().block.is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn v2_chain_target() {
+    use miden_protocol::protocol_config::KernelConfig;
+    use v2::FinalityLevel::{Committed, Proven};
+    let (mut client, _, mut store, _guard) = start_rpc_v2().await;
+    let genesis = store
+        .state
+        .view()
+        .get_block_header(Some(BlockNumber::GENESIS), false)
+        .await
+        .unwrap()
+        .0
+        .unwrap();
+    let original = store
+        .state
+        .view()
+        .get_protocol_config(genesis.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let changed = ProtocolConfig::new(
+        original.fee_asset_id(),
+        KernelConfig::new(Word::from([42u32, 0, 0, 0]), vec![]).unwrap(),
+        original.batch_kernel().clone(),
+        original.block_kernel().clone(),
+        original.proof_verification().clone(),
+    )
+    .unwrap();
+    let signatures = commit_signed_chain(&mut store, [&changed, &original, &original]).await;
+    let request = |start, target, finality: v2::FinalityLevel| v2::SyncChainMmrRequest {
+        current_client_block_height: start,
+        target_block_num: target,
+        finality_level: finality.into(),
+    };
+    for (target, level, expected) in [
+        (None, Committed, 3),
+        (None, Proven, 2),
+        (Some(1), Proven, 1),
+        (Some(0), Committed, 0),
+        (Some(1), Committed, 1),
+    ] {
+        let response = client.sync_chain_mmr(request(0, target, level)).await.unwrap().into_inner();
+        let expected_header = store
+            .state
+            .view()
+            .get_block_header(Some(expected.into()), false)
+            .await
+            .unwrap()
+            .0
+            .unwrap();
+        if expected > 0 {
+            assert_eq!(response.block_signatures, [signatures[expected as usize - 1].clone()]);
+        }
+        assert_eq!(response.block_header, Some(expected_header.into()));
+        assert_eq!(
+            response.protocol_config,
+            Some(
+                if expected == 1 {
+                    changed.clone()
+                } else {
+                    original.clone()
+                }
+                .into()
+            )
+        );
+        assert_eq!(response.block_range.unwrap().block_to, expected);
+    }
+    let equal = client
+        .sync_chain_mmr(request(1, Some(1), Committed))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(equal.mmr_delta.unwrap().update_data, []);
+    for (start, target, level, code) in [
+        (1, 0, Committed, tonic::Code::InvalidArgument),
+        (0, 3, Proven, tonic::Code::OutOfRange),
+        (0, 4, Committed, tonic::Code::OutOfRange),
+    ] {
+        assert_eq!(
+            client
+                .sync_chain_mmr(request(start, Some(target), level))
+                .await
+                .unwrap_err()
+                .code(),
+            code
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_rejects_unknown_finality() {
+    let store = TestStore::start().await;
+    let rpc = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let result = v2::node_service_server::NodeService::sync_chain_mmr(
+        &rpc,
+        Request::new(v2::SyncChainMmrRequest {
+            current_client_block_height: 0,
+            target_block_num: None,
+            finality_level: 77,
+        }),
+    )
+    .await;
+    assert_eq!(result.unwrap_err().code(), tonic::Code::InvalidArgument);
+}
+
+async fn commit_signed_chain(
+    store: &mut TestStore,
+    configs: [&ProtocolConfig; 3],
+) -> Vec<proto::primitives::Signature> {
+    let signer =
+        miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
+            .unwrap();
+    let mut signatures = Vec::new();
+    for config in configs {
+        let (header, body, _) = next_block_with_protocol_config(store, config).await.into_parts();
+        let signature = signer.sign(header.commitment());
+        signatures.push(proto::primitives::Signature::from(&signature));
+        let block = SignedBlock::new_unchecked(
+            header,
+            body,
+            BlockSignatures::new(vec![signature]).unwrap(),
+        );
+        store.writer.apply_block(block, Some(config.clone())).await.unwrap();
+    }
+    for height in [1u32, 2] {
+        store
+            .proof_writer
+            .apply_proof(height.into(), miden_protocol::testing::dummy_execution_proof().to_bytes())
+            .await
+            .unwrap();
+    }
+    signatures
 }

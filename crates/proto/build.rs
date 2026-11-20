@@ -10,6 +10,7 @@ use miden_node_proto_build::{
     ntx_builder_api_descriptor,
     remote_prover_api_descriptor,
     rpc_api_descriptor,
+    rpc_v2_api_descriptor,
     sequencer_api_descriptor,
     validator_api_descriptor,
 };
@@ -30,6 +31,7 @@ fn main() -> miette::Result<()> {
     let descriptor_sets = [
         note_transport_api_descriptor(),
         rpc_api_descriptor(),
+        rpc_v2_api_descriptor(),
         remote_prover_api_descriptor(),
         validator_api_descriptor(),
         ntx_builder_api_descriptor(),
@@ -104,6 +106,9 @@ fn generate_client_facades(
                 } else {
                     "Completes the unary response, including body and trailers, within the configured budget."
                 };
+                if method.options.as_ref().is_some_and(prost_types::MethodOptions::deprecated) {
+                    contents.push_str("#[expect(deprecated, reason = \"forwards to the deprecated tonic method\")]\n#[deprecated]\n");
+                }
                 writeln!(
                     contents,
                     "/// {comment}\nfn {}({request}) -> {response};",
@@ -183,7 +188,9 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
         // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
-        if name == "miden.node.v1.RegisterAccountRequest"
+        if name == "miden.node.v2.RegisterAccountRequest"
+            || name == "miden.node.v2.IsInvitationCodeValidRequest"
+            || name == "miden.node.v1.RegisterAccountRequest"
             || name == "miden.node.v1.IsInvitationCodeValidRequest"
         {
             continue;
@@ -374,7 +381,12 @@ impl Service {
     fn generate(&self) -> Module {
         let mut module = Module::new(&self.name);
 
-        module.push_fn(self.service_constructor());
+        module.push_fn(self.service_constructor("service", "T", "new"));
+        module.push_fn(self.service_constructor(
+            "service_from_arc",
+            "std::sync::Arc<T>",
+            "from_arc",
+        ));
         module.push_fn(self.service_name());
         module.push_trait(self.service_trait());
         module.push_impl(self.blanket_impl());
@@ -486,18 +498,18 @@ impl Service {
     }
 
     /// Constructs the underlying tonic server so callers can configure its transport limits.
-    fn service_constructor(&self) -> Function {
-        let mut ret = Function::new("service");
+    fn service_constructor(&self, name: &str, input: &str, constructor: &str) -> Function {
+        let mut ret = Function::new(name);
         ret.vis("pub")
             .attr("allow(deprecated)")
             .generic("T")
-            .arg("service", "T")
+            .arg("service", input)
             .ret(format!("{}<T>", self.tonic_server_path()))
             .bound("T", self.service_trait().ty())
             .bound("T", "Send")
             .bound("T", "Sync")
             .bound("T", "'static")
-            .line(format!("{}::new(service)", self.tonic_server_path()));
+            .line(format!("{}::{constructor}(service)", self.tonic_server_path()));
 
         ret
     }

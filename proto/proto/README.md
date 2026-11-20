@@ -13,6 +13,7 @@ The organization of the files is as follows:
 
 ```text
 rpc.proto
+rpc_v2.proto
 remote_prover.proto
 note_transport.proto
 types/

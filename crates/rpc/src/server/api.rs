@@ -1,5 +1,5 @@
 use std::num::NonZeroUsize;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use anyhow::Context as AnyhowContext;
 use miden_node_block_producer::BlockProducerApi;
@@ -10,16 +10,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_tracing::instrument;
-use miden_node_utils::limiter::{
-    QueryParamAccountIdLimit,
-    QueryParamLimiter,
-    QueryParamNoteIdLimit,
-    QueryParamNoteTagLimit,
-    QueryParamNullifierPrefixLimit,
-    QueryParamStorageMapKeyTotalLimit,
-    QueryParamStorageMapSlotLimit,
-    QueryParamVaultAssetLimit,
-};
+use miden_node_utils::limiter::QueryParamLimiter;
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
@@ -104,6 +95,7 @@ mod get_transaction_logs;
 mod is_account_allowed;
 mod is_invitation_code_valid;
 mod register_account;
+mod shared_v2;
 mod status;
 mod submit_auth_tx;
 mod submit_auth_tx_batch;
@@ -125,6 +117,7 @@ const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 // ================================================================================================
 
 pub struct RpcService {
+    limits: get_limits::RpcLimits,
     state: Arc<State>,
     backend: RpcBackend,
     ntx_builder: Option<NtxBuilderClient>,
@@ -145,6 +138,7 @@ impl RpcService {
     ) -> Self {
         Self {
             transaction_log_requests: Semaphore::new(get_transaction_logs::MAX_ACTIVE_REQUESTS),
+            limits: get_limits::RpcLimits::new(),
             state,
             backend,
             ntx_builder,
@@ -322,48 +316,6 @@ fn out_of_range_error<E: core::fmt::Display>(err: E) -> Status {
 fn check<Q: QueryParamLimiter>(n: usize) -> Result<(), Status> {
     <Q as QueryParamLimiter>::check(n).map_err(out_of_range_error)
 }
-
-/// Helper to build an [`EndpointLimits`](proto::miden::node::v1::EndpointLimits) from (name, limit)
-/// pairs.
-fn endpoint_limits(params: &[(&str, usize)]) -> proto::miden::node::v1::EndpointLimits {
-    proto::miden::node::v1::EndpointLimits {
-        parameters: params.iter().map(|(k, v)| ((*k).to_string(), *v as u32)).collect(),
-    }
-}
-
-/// Cached RPC query parameter limits.
-static RPC_LIMITS: LazyLock<proto::miden::node::v1::GetLimitsResponse> = LazyLock::new(|| {
-    use QueryParamAccountIdLimit as AccountId;
-    use QueryParamNoteIdLimit as NoteId;
-    use QueryParamNoteTagLimit as NoteTag;
-    use QueryParamNullifierPrefixLimit as NullifierPrefix;
-    use QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal;
-    use QueryParamStorageMapSlotLimit as StorageMapSlot;
-    use QueryParamVaultAssetLimit as VaultAsset;
-
-    proto::miden::node::v1::GetLimitsResponse {
-        endpoints: std::collections::HashMap::from([
-            (
-                "SyncNullifiers".into(),
-                endpoint_limits(&[(NullifierPrefix::PARAM_NAME, NullifierPrefix::LIMIT)]),
-            ),
-            (
-                "SyncTransactions".into(),
-                endpoint_limits(&[(AccountId::PARAM_NAME, AccountId::LIMIT)]),
-            ),
-            ("SyncNotes".into(), endpoint_limits(&[(NoteTag::PARAM_NAME, NoteTag::LIMIT)])),
-            ("GetNotesById".into(), endpoint_limits(&[(NoteId::PARAM_NAME, NoteId::LIMIT)])),
-            (
-                "GetAccount".into(),
-                endpoint_limits(&[
-                    (StorageMapKeyTotal::PARAM_NAME, StorageMapKeyTotal::LIMIT),
-                    (StorageMapSlot::PARAM_NAME, StorageMapSlot::LIMIT),
-                    (VaultAsset::PARAM_NAME, VaultAsset::LIMIT),
-                ]),
-            ),
-        ]),
-    }
-});
 
 #[cfg(test)]
 mod tests {
