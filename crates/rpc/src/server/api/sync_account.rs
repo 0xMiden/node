@@ -190,7 +190,7 @@ fn read_account_delta(
     // Page queries take an inclusive range; the client's starting block is exclusive.
     let range = target.range_from(from.child()).map_err(database_error_to_sync_status)?;
     let maps =
-        queries::account_storage_map_updates_page(tx, account, range.clone(), &None, entry_limit)
+        queries::account_storage_map_updates_page(tx, account, range.clone(), None, entry_limit)
             .map_err(database_error_to_sync_status)?;
     // More map entries remain than the delta budget allows; return a snapshot instead.
     if maps.next_cursor.is_some() {
@@ -202,7 +202,7 @@ fn read_account_delta(
         tx,
         account,
         range,
-        &None,
+        None,
         NonZeroUsize::new(remaining).unwrap_or(NonZeroUsize::MIN),
     )
     .map_err(database_error_to_sync_status)?;
