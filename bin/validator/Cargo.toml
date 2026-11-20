@@ -51,7 +51,9 @@ miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
 miden-tx-batch         = { workspace = true }
 rand_core_06           = { workspace = true }
+reqwest                = { features = ["json"], workspace = true }
 serde                  = { workspace = true }
+serde_json             = { workspace = true }
 tempfile               = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
@@ -76,6 +78,5 @@ miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }
 rand_chacha_03   = { workspace = true }
 rstest           = { workspace = true }
-serde_json       = { workspace = true }
 tokio            = { features = ["macros", "rt-multi-thread", "sync"], workspace = true }
 tower            = { features = ["util"], workspace = true }

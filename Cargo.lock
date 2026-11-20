@@ -5550,6 +5550,7 @@ dependencies = [
  "rand 0.10.3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "reqwest",
  "rstest",
  "serde",
  "serde_json",

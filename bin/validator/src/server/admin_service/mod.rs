@@ -54,6 +54,15 @@ impl ValidatorAdminServer {
     pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let listener =
             TcpListener::bind(self.address).await.context("failed to bind admin address")?;
+        self.serve_on(listener, shutdown).await
+    }
+
+    /// Serves the private validator administration API on an already-bound listener.
+    pub async fn serve_on(
+        self,
+        listener: TcpListener,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         let endpoint =
             listener.local_addr().context("failed to read validator admin listen address")?;
         info!(

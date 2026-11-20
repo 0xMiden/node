@@ -40,45 +40,51 @@ For storage compatibility and migration procedures, see
 
 ## Changing the chain's validator configuration
 
-Register the new keys and quorum on your validator before it signs the block that introduces them. Operators can
-register at different times. The block needs enough signatures to satisfy the quorum in its parent header.
+You can add validator signing keys, change the quorum, or do both in one block. Operators can register the change at
+different times. The block needs enough signatures to satisfy the quorum in its parent header.
 
-Set `VALIDATOR_ADMIN_URL` to your validator's [private admin URL](#administration-api). Read its current configuration
-and check for a pending change.
-
-```bash
-url="${VALIDATOR_ADMIN_URL}/admin/v1/validator-config"
-curl --fail-with-body "$url" -o status.json
-jq . status.json
-```
-
-Save the agreed configuration in `proposed.json`. Use the same format as `active`: a `keys` array of hex public keys and
-a numeric `quorum`. Keep every current key. The current protocol requires the quorum to equal the number of keys.
-
-Submit the configuration you read and the one you want your validator to sign:
+Set `VALIDATOR_ADMIN_URL` to your running validator's [private admin URL](#administration-api), or pass `--admin-url` to
+the command. Save its configuration to `change.json`.
 
 ```bash
-jq --slurpfile next proposed.json '{current: .active, proposed: $next[0]}' status.json > change.json
-curl --fail-with-body -X PUT -H 'Content-Type: application/json' --data-binary @change.json "$url/pending"
+export VALIDATOR_ADMIN_URL=http://127.0.0.1:50102
+miden-validator validator-config status > change.json
 ```
 
-HTTP 204 confirms registration. The change survives a restart. Your validator can continue signing blocks with the
-active configuration. If the request returns HTTP 409, check the status again: the active configuration may have
-changed, or another change may already be pending.
+Review `active` and any existing `pending` change. In `pending.keys`, include every active key and any keys you want to
+add. Set `pending.quorum` to the number of signatures required per block. This example adds a third validator and
+requires signatures from any two of the three.
 
-After your validator signs the transition block, GET shows the new configuration under `active` and `null` under
+```json
+{
+  "active": { "keys": ["<key-1>", "<key-2>"], "quorum": 2 },
+  "pending": { "keys": ["<key-1>", "<key-2>", "<key-3>"], "quorum": 2 }
+}
+```
+
+Each participating operator should review the same file and register it on their validator.
+
+```bash
+miden-validator validator-config register change.json
+```
+
+A successful registration survives a restart. Your validator will continue signing blocks with the active configuration.
+If registration returns a conflict, run `status` again. The active configuration may have changed, or a different change
+may be pending.
+
+After your validator signs the transition block, `status` shows the new configuration under `active` and `null` under
 `pending`. Check with the sequencer to confirm the block was committed.
 
 ### Cancel a pending change
 
-Withdraw the change on each validator where you registered it:
+On each validator where you registered the change, cancel it with the same file.
 
 ```bash
-curl --fail-with-body -X DELETE "${VALIDATOR_ADMIN_URL}/admin/v1/validator-config/pending"
+miden-validator validator-config cancel change.json
 ```
 
-Cancellation waits for any block the validator is signing. HTTP 204 means no change is pending. Check `active` to see
-whether your validator signed the transition before cancellation.
+Success confirms that the validator cancelled the change in the file. If the configuration is already active, `cancel`
+reports that directly. For other conflicts, run `status` to see which change, if any, is pending.
 
 ## Storage Key Setup
 
@@ -194,17 +200,21 @@ authentication and authorization externally, and prevent direct access to this l
 network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
 access.
 
-| Method | Path                                              | Request                                               | Result                                                                                          |
-| ------ | ------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `GET`  | `/admin/v1/transactions`                          | Query parameters                                      | One page of committed transactions and a `pagination` object.                                   |
-| `GET`  | `/admin/v1/transactions/{transaction_id}`         | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it. |
-| `POST` | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                  |
-| `POST` | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                     | `{"plaintext":"<hex>"}`                                                                         |
+| Method   | Path                                              | Request                                                | Result                                                                                          |
+| -------- | ------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `GET`    | `/admin/v1/validator-config`                      | None                                                   | The active and pending validator configurations.                                                |
+| `PUT`    | `/admin/v1/validator-config/pending`              | JSON object with `active` and `pending` configurations | `204` on registration, `409` if `active` differs from the tip or a different change is pending. |
+| `DELETE` | `/admin/v1/validator-config/pending`              | Same JSON object used for registration                 | `204` when the matching change is cancelled, `409` on a conflict.                               |
+| `GET`    | `/admin/v1/transactions`                          | Query parameters                                       | One page of committed transactions and a `pagination` object.                                   |
+| `GET`    | `/admin/v1/transactions/{transaction_id}`         | None                                                   | The stored record of one validated transaction, or `404` if this validator did not validate it. |
+| `POST`   | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}`  | `{"decryption_share":"<hex>"}`                                                                  |
+| `POST`   | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                      | `{"plaintext":"<hex>"}`                                                                         |
 
-Byte values are hexadecimal strings without a `0x` prefix. Errors from request handlers have the form
-`{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return `500`. Requests rejected
-before reaching a handler return a plain-text error body. These include malformed query parameters or malformed JSON
-(`400`), a JSON body with the wrong shape (`422`), and a missing or unsupported JSON content type (`415`).
+Byte values in transaction and decryption requests are hexadecimal strings without a `0x` prefix. Errors from request
+handlers have the form `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return
+`500`. Requests rejected before reaching a handler return a plain-text error body. These include malformed query
+parameters or malformed JSON (`400`), a JSON body with the wrong shape (`422`), and a missing or unsupported JSON
+content type (`415`).
 
 ### List Transactions
 

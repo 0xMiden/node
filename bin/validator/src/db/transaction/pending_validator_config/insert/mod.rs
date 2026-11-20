@@ -9,9 +9,9 @@ impl WriteTransaction<'_> {
     /// Stores the validator configuration registered by the operator.
     pub(crate) fn insert_pending_validator_config(
         &self,
-        proposed: &ValidatorConfig,
+        pending: &ValidatorConfig,
     ) -> Result<(), DatabaseError> {
-        self.inner.execute(SQL, &[proposed])?;
+        self.inner.execute(SQL, &[pending])?;
         Ok(())
     }
 }

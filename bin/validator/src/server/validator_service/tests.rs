@@ -1903,11 +1903,11 @@ async fn validator_config_approval_survives_restart_and_is_consumed_by_signing()
         tonic::Code::InvalidArgument
     );
 
-    let proposed_config = next.clone();
+    let pending_config = next.clone();
     tv.server
         .db
         .write("register test configuration", move |tx| {
-            tx.insert_pending_validator_config(&proposed_config)
+            tx.insert_pending_validator_config(&pending_config)
         })
         .await
         .unwrap();

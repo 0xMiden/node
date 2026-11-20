@@ -14,6 +14,9 @@ use tokio::sync::Mutex;
 use super::error::ApiError;
 use crate::db::ValidatorDbWriter;
 
+const ACTIVE_MISMATCH: &str = "`active` does not match the configuration at the chain tip";
+const DIFFERENT_PENDING: &str = "a different validator configuration is pending";
+
 #[derive(Clone)]
 struct ConfigService {
     db: ValidatorDbWriter,
@@ -67,9 +70,20 @@ impl ValidatorConfigJson {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct RegisterConfigRequest {
-    current: ValidatorConfigJson,
-    proposed: ValidatorConfigJson,
+struct ValidatorConfigChange {
+    active: ValidatorConfigJson,
+    pending: ValidatorConfigJson,
+}
+
+impl ValidatorConfigChange {
+    fn decode(self) -> Result<(ValidatorConfig, ValidatorConfig), ApiError> {
+        let active = self.active.decode()?;
+        let pending = self.pending.decode()?;
+        if active == pending {
+            return Err(ApiError::bad_request("active and pending configurations are identical"));
+        }
+        Ok((active, pending))
+    }
 }
 
 #[derive(Serialize)]
@@ -94,19 +108,15 @@ async fn status(State(admin): State<ConfigService>) -> Result<Json<Status>, ApiE
 
 async fn register(
     State(admin): State<ConfigService>,
-    Json(request): Json<RegisterConfigRequest>,
+    Json(change): Json<ValidatorConfigChange>,
 ) -> Result<StatusCode, ApiError> {
-    let current = request.current.decode()?;
-    let proposed = request.proposed.decode()?;
-    if !proposed.keys().contains(&admin.signing_key) {
+    let (active, pending) = change.decode()?;
+    if !pending.keys().contains(&admin.signing_key) {
         return Err(ApiError::bad_request(
-            "the proposed configuration must contain the local signing key",
+            "the pending configuration must contain the local signing key",
         ));
     }
-    if proposed == current {
-        return Err(ApiError::bad_request("current and proposed configurations are identical"));
-    }
-    if !current.keys().iter().all(|key| proposed.keys().contains(key)) {
+    if !active.keys().iter().all(|key| pending.keys().contains(key)) {
         return Err(ApiError::bad_request("removing validators is unsupported"));
     }
     let signing_guard = admin.signing_lock.lock_owned().await;
@@ -114,19 +124,15 @@ async fn register(
         .db
         .write("register_validator_config", move |tx| {
             let tip = tx.select_chain_tip()?.ok_or_else(missing_chain_tip)?;
-            if tip.validator_config() != &current {
-                return Err(ApiError::conflict(
-                    "current does not match the configuration at the chain tip",
-                ));
+            if tip.validator_config() != &active {
+                return Err(ApiError::conflict(ACTIVE_MISMATCH));
             }
             match tx.select_pending_validator_config()? {
-                Some(config) if config != proposed => {
-                    return Err(ApiError::conflict(
-                        "a different validator configuration is pending",
-                    ));
+                Some(config) if config != pending => {
+                    return Err(ApiError::conflict(DIFFERENT_PENDING));
                 },
                 Some(_) => {},
-                None => tx.insert_pending_validator_config(&proposed)?,
+                None => tx.insert_pending_validator_config(&pending)?,
             }
             Ok(signing_guard)
         })
@@ -134,13 +140,30 @@ async fn register(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn cancel(State(admin): State<ConfigService>) -> Result<StatusCode, ApiError> {
+async fn cancel(
+    State(admin): State<ConfigService>,
+    Json(change): Json<ValidatorConfigChange>,
+) -> Result<StatusCode, ApiError> {
+    let (active, pending) = change.decode()?;
     let signing_guard = admin.signing_lock.lock_owned().await;
     let _guard_until_commit = admin
         .db
         .write("cancel_validator_config", move |tx| {
-            tx.delete_pending_validator_config()?;
-            Ok::<_, ApiError>(signing_guard)
+            let tip = tx.select_chain_tip()?.ok_or_else(missing_chain_tip)?;
+            if tip.validator_config() == &pending {
+                return Err(ApiError::conflict("the requested configuration is already active"));
+            }
+            if tip.validator_config() != &active {
+                return Err(ApiError::conflict(ACTIVE_MISMATCH));
+            }
+            match tx.select_pending_validator_config()? {
+                Some(config) if config == pending => tx.delete_pending_validator_config()?,
+                Some(_) => return Err(ApiError::conflict(DIFFERENT_PENDING)),
+                None => {
+                    return Err(ApiError::conflict("no validator configuration change is pending"));
+                },
+            }
+            Ok(signing_guard)
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
