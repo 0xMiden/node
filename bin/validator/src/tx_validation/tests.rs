@@ -210,8 +210,9 @@ async fn captured_foreign_execution() -> ExecutedTransaction {
     use miden_standards::account::policies::{
         BurnPolicy,
         MintPolicy,
+        ReceivePolicy,
+        SendPolicy,
         TokenPolicyManager,
-        TransferPolicy,
     };
     use miden_standards::note::P2idNote;
     use miden_standards::tx_script::SendNotesTransactionScript;
@@ -237,8 +238,8 @@ async fn captured_foreign_execution() -> ExecutedTransaction {
                     TokenPolicyManager::builder()
                         .active_mint_policy(MintPolicy::allow_all())
                         .active_burn_policy(BurnPolicy::allow_all())
-                        .active_send_policy(TransferPolicy::empty_basic_blocklist())
-                        .active_receive_policy(TransferPolicy::empty_basic_blocklist())
+                        .active_send_policy(SendPolicy::empty_basic_blocklist())
+                        .active_receive_policy(ReceivePolicy::empty_basic_blocklist())
                         .build(),
                 ),
             AccountState::Exists,

@@ -300,7 +300,8 @@ mod tests {
         let fixture = Fixture::with_transfer_policy(
             BALANCE,
             TEST_BASE_FEE,
-            miden_standards::account::policies::TransferPolicy::empty_basic_blocklist(),
+            miden_standards::account::policies::SendPolicy::empty_basic_blocklist(),
+            miden_standards::account::policies::ReceivePolicy::empty_basic_blocklist(),
         )?;
         let server = crate::node::tests::large_faucet_server(&fixture).await;
         let (mut inputs, _wallet_server) = execution_inputs(&fixture, EXPIRATION).await?;
