@@ -109,11 +109,19 @@ mod sync_account_vault;
 mod sync_account_vault_v2;
 mod sync_chain_mmr;
 mod sync_notes;
+mod sync_notes_v2;
 mod sync_nullifiers;
 mod sync_stream;
 mod sync_transactions;
 
 // ================================================================================================
+
+/// Maximum number of values sampled from a repeated RPC argument for tracing.
+const TRACE_SAMPLE_SIZE: usize = 10;
+
+fn trace_sample<T>(values: &[T]) -> &[T] {
+    &values[..values.len().min(TRACE_SAMPLE_SIZE)]
+}
 
 const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
