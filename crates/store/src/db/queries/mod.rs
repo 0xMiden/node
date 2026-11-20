@@ -13,6 +13,9 @@
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
 
+mod account_reads;
+pub use account_reads::account_headers;
+
 // SHARED COLUMN TYPES
 // =================================================================================================
 
