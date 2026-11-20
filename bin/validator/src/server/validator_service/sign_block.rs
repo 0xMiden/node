@@ -5,14 +5,14 @@ use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
-use miden_protocol::block::BlockNumber;
+use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx_batch::BatchVerifier;
 
-use super::{StatusResultExt, ValidatorService};
+use super::{StatusResultExt, ValidatorError, ValidatorService};
 
 /// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
 const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
@@ -32,11 +32,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .map_err(ConversionError::into_status)?
             // SAFETY: Construction checks local batch invariants and block witnesses.
             // validate_block checks transaction IDs and the trusted parent before signing.
-            //
-            // FIXME: Verify batch contents before signing. Validated transaction
-            // IDs do not establish correct note aggregation or expiration. The current batch
-            // kernel does not bind these fields, and transaction headers omit reference
-            // blocks and expiration. Full validation needs more data or protocol support.
             .build_with_body_unchecked()
             .context("failed to build unchecked")
             .map_err(ConversionError::into_status)?;
@@ -110,15 +105,22 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         // the tip cannot change in between.
         let chain_tip_num = chain_tip.block_num();
 
-        // Validate the block against the current chain tip.
-        let (signature, signed_block) = self
-            .validate_block(header.clone(), body, chain_tip)
+        self.validate_block(header, &body, chain_tip)
             .await
             .or_invalid_argument("Failed to validate block")?;
 
-        // Capture the commitment that was signed before the block is moved into the persistence
-        // closure, so it can be returned to the block producer for cross-checking.
-        let block_commitment = signed_block.header().commitment();
+        // Reconstruction checked the witnesses against the supplied parent, and decode verified
+        // each batch proof. Local checks established the parent, transaction IDs, and signing key.
+        //
+        // FIXME: Correct note aggregation and batch expiration remain unverified by the batch kernel.
+        let signature =
+            self.sign_header(header).await.or_invalid_argument("Failed to sign block")?;
+        let block_commitment = header.commitment();
+
+        // The backup contains this validator's signature. The producer assembles the full set.
+        let own_signature = BlockSignatures::new(vec![signature.clone()])
+            .expect("a single signature is within the signature set bounds");
+        let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
 
         let block_transactions: Vec<TransactionId> = signed_block
             .body()
@@ -168,6 +170,21 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 }
 
 impl ValidatorService {
+    /// Signs a block header using the validator's signer.
+    #[instrument(
+        name = "sign_block",
+        err,
+        fields(
+            block.number = header.block_num(),
+        ),
+    )]
+    async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
+        self.signer
+            .sign_commitment(header.commitment())
+            .await
+            .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
+    }
+
     /// Resolves and validates the active configuration before the block is signed.
     async fn resolve_protocol_config(
         &self,

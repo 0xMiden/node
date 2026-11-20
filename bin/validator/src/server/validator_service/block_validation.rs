@@ -1,25 +1,19 @@
 use miden_node_tracing::{instrument, miden_span_record};
-use miden_protocol::block::{BlockBody, BlockHeader, BlockSignatures, SignedBlock};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
+use miden_protocol::block::{BlockBody, BlockHeader};
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
 
 use super::{ValidatorError, ValidatorService};
 
 impl ValidatorService {
-    /// Validates a proposed block by checking:
-    /// 1. All transactions have been previously validated by this validator.
-    /// 2. The block is either: a. The valid next block in the chain (sequential block number, matching
-    ///    previous block commitment), or b. A replacement block at the same height as the current chain
-    ///    tip, validated against the previous block header.
-    ///
-    /// On success, returns the signature and validated signed block for persistence.
+    /// Checks that the validator recognizes the transactions, accepts the parent for this height,
+    /// and holds a key authorized by that parent.
     #[instrument(err)]
-    pub async fn validate_block(
+    pub(super) async fn validate_block(
         &self,
-        proposed_header: BlockHeader,
-        proposed_body: BlockBody,
+        proposed_header: &BlockHeader,
+        proposed_body: &BlockBody,
         chain_tip: BlockHeader,
-    ) -> Result<(Signature, SignedBlock), ValidatorError> {
+    ) -> Result<(), ValidatorError> {
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
@@ -85,33 +79,6 @@ impl ValidatorService {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
-        let signature = self.sign_header(&proposed_header).await?;
-
-        // Prepare the signed block for persistence.
-        //
-        // Note that the backup only carries this validator's own signature: the complete,
-        // positionally ordered signature set exists only at the block producer once it has
-        // aggregated the responses of all validators. Consumers of the backup stream must not
-        // expect to verify the full signature set from these blocks.
-        let own_signature = BlockSignatures::new(vec![signature.clone()])
-            .expect("a single signature is within the signature set bounds");
-        let signed_block =
-            SignedBlock::new_unchecked(proposed_header, proposed_body, own_signature);
-        Ok((signature, signed_block))
-    }
-
-    /// Signs a block header using the validator's signer.
-    #[instrument(
-        name = "sign_block",
-        err,
-        fields(
-            block.number = header.block_num(),
-        ),
-    )]
-    async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
-        self.signer
-            .sign_commitment(header.commitment())
-            .await
-            .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
+        Ok(())
     }
 }
