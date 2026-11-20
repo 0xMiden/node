@@ -1,6 +1,5 @@
 # Continuous integration jobs.
-# Fork pull requests use GitHub-hosted runners with read-only CloudFront caching.
-# Internal builds use WarpBuild runners and upload Rust artifacts to S3.
+# Trusted builds share compiler artifacts through R2.
 name: CI
 
 permissions:
@@ -20,13 +19,12 @@ on:
       - "**.txt"
 
 env:
-  USE_CACHE: >-
+  KACHE_R2_ENDPOINT: ${{ vars.KACHE_R2_ENDPOINT }}
+  USE_WARP: >-
     ${{
       github.event_name != 'pull_request' ||
           github.event.pull_request.head.repo.full_name == github.repository
     }}
-  # Only protected-branch pushes save the separate xtask binary cache.
-  SAVE_CACHE: ${{ github.event_name == 'push' }}
   # Reduce cache usage by removing debug information.
   CARGO_PROFILE_DEV_DEBUG: 0
 
@@ -42,9 +40,6 @@ jobs:
 
   # Normal cargo build that verifies the workspace compiles.
   build:
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -56,17 +51,15 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - uses: $/.github/actions/install-rocksdb
       - uses: $/.github/actions/install-protobuf-compiler
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: &r2-credentials
+          KACHE_S3_ACCESS_KEY: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
+          KACHE_S3_SECRET_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
       - name: cargo build
         run: cargo build --workspace --all-targets --locked
       - name: Check static linkage
@@ -111,8 +104,6 @@ jobs:
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
         with:
           diagnostics: "true"
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
 
   docker:
     name: Docker dry-run
@@ -123,15 +114,15 @@ jobs:
       id-token: write
       packages: write
     uses: $/.github/workflows/docker.yml
+    secrets:
+      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
+      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
     with:
       mode: dry-run
       ref: ${{ github.sha }}
 
   clippy:
     name: lint - clippy
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -143,24 +134,17 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: *r2-credentials
       - name: clippy
         run: cargo clippy --locked --all-targets --all-features --workspace -- -D warnings
       - uses: $/.github/actions/report-kache
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   tests:
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -177,7 +161,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - name: Verify protected branch ruleset target
         uses: $/.github/actions/verify-ruleset-target
         with:
@@ -190,11 +174,7 @@ jobs:
         with:
           tool: nextest@0.9.122
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: *r2-credentials
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
@@ -205,9 +185,6 @@ jobs:
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
 
   doc:
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -219,15 +196,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: *r2-credentials
       - name: Build docs
         run: cargo doc --no-deps --workspace --all-features --locked
       - uses: $/.github/actions/report-kache
@@ -259,9 +232,6 @@ jobs:
   # Ensure the stress-test still functions by running some cheap benchmarks.
   stress-test:
     name: stress test
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -280,15 +250,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: *r2-credentials
       - uses: taiki-e/install-action@v2.89.1
         with:
           tool: nextest@0.9.122
@@ -329,9 +295,6 @@ jobs:
       # Full variable/type debug information makes cached executables exceed
       # 1 GiB each and adds substantial transfer and restore work to this job.
       CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
-    permissions:
-      contents: read
-      id-token: write
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
@@ -348,15 +311,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/cleanup-runner
-        if: env.USE_CACHE != 'true'
+        if: env.USE_WARP != 'true'
       - name: Rustup
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
-        with:
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
-          s3-role-arn: ${{ vars.KACHE_S3_ROLE_ARN }}
-          download-endpoint: ${{ vars.KACHE_DOWNLOAD_ENDPOINT }}
+        env: *r2-credentials
       - name: Build benchmark stack
         run: |
           cargo build --release --locked \
@@ -381,8 +340,6 @@ jobs:
         if: ${{ !cancelled() && env.KACHE_RUNTIME_DIR != '' }}
         with:
           diagnostics: "true"
-          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
-          s3-region: ${{ vars.KACHE_S3_REGION }}
       - name: Dump component logs on failure
         if: failure()
         run: |
@@ -615,8 +572,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: $/.github/actions/setup-xtask
-        with:
-          save-cache: ${{ env.SAVE_CACHE }}
+        env: *r2-credentials
       - name: Rustup +nightly
         run: rustup toolchain install --no-self-update nightly --component rustfmt
       - name: Setup Node.js
