@@ -38,8 +38,6 @@ pub async fn start(
     database_options: ValidatorDatabaseOptions,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    // The pool is opened once here and shared: the public API owns the sole writer, and both
-    // servers read through cloned read handles.
     let db = miden_validator::db::load_with_retention(
         database_options.data_directory.database_path(),
         database_options.connection_pool_size,
@@ -47,7 +45,6 @@ pub async fn start(
     )
     .await
     .context("failed to initialize validator database")?;
-    let reader = db.reader();
     let private_record_sealer = PrivateRecordSealer::from_operator_key(&keys.operator_key);
     let public_server = ValidatorServer {
         address,
@@ -56,16 +53,14 @@ pub async fn start(
         decrypter: keys.decrypter,
         private_record_sealer,
         db,
+        signing_lock: Arc::default(),
     };
+    let admin_server = admin_address
+        .map(|address| ValidatorAdminServer::new(address, keys.operator_key, &public_server));
 
     let mut tasks = Tasks::new();
     tasks.spawn("validator public API", public_server.serve(shutdown.clone()));
-    if let Some(address) = admin_address {
-        let admin_server = ValidatorAdminServer {
-            address,
-            operator_key: keys.operator_key,
-            reader,
-        };
+    if let Some(admin_server) = admin_server {
         tasks.spawn("validator admin API", admin_server.serve(shutdown.clone()));
     }
 

@@ -79,7 +79,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
     for (id, seed) in [(original_id, 1), (replacement_id, 2)] {
         db.insert_validated_private_transaction(private_record(id, seed)).await.unwrap();
     }
-    db.upsert_signed_block(original.clone(), Some(config), inputs).await.unwrap();
+    store_block(&db, original.clone(), Some(config), inputs).await.unwrap();
     let history = protocol_config_history::history(&db).await;
     reject_proving_input_writes_for_test(&db).await.unwrap();
     let (replacement, inputs) = block_pair(
@@ -88,7 +88,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
         genesis.timestamp() + 2,
         vec![replacement_batch.clone()],
     );
-    assert!(db.upsert_signed_block(replacement, None, inputs).await.is_err());
+    assert!(store_block(&db, replacement, None, inputs).await.is_err());
     let mut chain = PartialBlockchain::default();
     chain.add_block(&genesis, true);
     let (next, inputs) = block_pair(
@@ -97,7 +97,7 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
         original.header().timestamp() + 1,
         vec![replacement_batch],
     );
-    assert!(db.upsert_signed_block(next, None, inputs).await.is_err());
+    assert!(store_block(&db, next, None, inputs).await.is_err());
     db.writer
         .write("remove failure trigger", |tx| {
             tx.execute("DROP TRIGGER reject_proving_inputs", &[])?;
@@ -134,6 +134,18 @@ async fn retained_db(path: PathBuf, retention: u32) -> ValidatorDbWriter {
         .unwrap()
 }
 
+async fn store_block(
+    db: &ValidatorDbWriter,
+    block: SignedBlock,
+    protocol_config: Option<ProtocolConfig>,
+    proving_inputs: BlockProofRequest,
+) -> Result<(), DatabaseError> {
+    db.write("upsert_signed_block", move |tx| {
+        tx.upsert_signed_block(&block, protocol_config.as_ref(), &proving_inputs)
+    })
+    .await
+}
+
 async fn append_empty_block(db: &ValidatorDbWriter) -> (SignedBlock, BlockProofRequest) {
     let parent = db.load_chain_tip().await.unwrap().unwrap();
     let mut chain = PartialBlockchain::default();
@@ -143,7 +155,7 @@ async fn append_empty_block(db: &ValidatorDbWriter) -> (SignedBlock, BlockProofR
     let (block, inputs) = block_pair(&parent, chain, parent.timestamp() + 1, vec![]);
     let retained_inputs =
         miden_node_persistence::decode(&miden_node_persistence::encode(&inputs)).unwrap();
-    db.upsert_signed_block(block.clone(), None, inputs).await.unwrap();
+    store_block(db, block.clone(), None, inputs).await.unwrap();
     (block, retained_inputs)
 }
 
@@ -227,7 +239,7 @@ async fn tip_replacement_preserves_the_retention_boundary() {
     let replacement =
         SignedBlock::new_unchecked(header.clone(), body, original.signatures().clone());
     let inputs = BlockProofRequest { block_header: header, ..inputs };
-    db.upsert_signed_block(replacement.clone(), None, inputs).await.unwrap();
+    store_block(&db, replacement.clone(), None, inputs).await.unwrap();
     assert_inputs(&db, &[(1, false), (2, true), (3, true)]).await;
     assert_eq!(db.load_block(3.into()).await.unwrap().unwrap(), replacement);
 }
@@ -256,7 +268,7 @@ async fn replacement_inheriting_parent_config_removes_superseded_activation() {
         .unwrap();
     let (replacement, inputs) =
         block_pair(&parent, PartialBlockchain::default(), parent.timestamp() + 2, vec![]);
-    db.upsert_signed_block(replacement, None, inputs).await.unwrap();
+    store_block(&db, replacement, None, inputs).await.unwrap();
     assert_eq!(protocol_config_history::history(&db).await, genesis_history);
 }
 
@@ -287,7 +299,7 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
         &miden_node_persistence::encode(&inputs),
     )
     .unwrap();
-    assert!(db.upsert_signed_block(next.clone(), None, inputs).await.is_err());
+    assert!(store_block(&db, next.clone(), None, inputs).await.is_err());
     assert_eq!(db.load_chain_tip().await.unwrap().unwrap(), *original.header());
     assert_inputs(&db, &[(1, true)]).await;
     assert!(db.load_block(2.into()).await.unwrap().is_none());

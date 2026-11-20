@@ -38,12 +38,47 @@ directory alone is not sufficient to restart the validator.
 For storage compatibility and migration procedures, see
 [Upgrades and Migrations](/network-operator/upgrades-and-migrations).
 
-## Key Rotation
+## Changing the chain's validator configuration
 
-Each block header includes the validator key that must be used for the next block. Because the current validator signs
-the block header, this next-key commitment is authenticated by the existing validator key. This makes validator key
-rotation safe: the network can verify that the next validator key was authorized by the validator that signed the
-current block.
+Register the new keys and quorum on your validator before it signs the block that introduces them. Operators can
+register at different times. The block needs enough signatures to satisfy the quorum in its parent header.
+
+Set `VALIDATOR_ADMIN_URL` to your validator's [private admin URL](#administration-api). Read its current configuration
+and check for a pending change.
+
+```bash
+url="${VALIDATOR_ADMIN_URL}/admin/v1/validator-config"
+curl --fail-with-body "$url" -o status.json
+jq . status.json
+```
+
+Save the agreed configuration in `proposed.json`. Use the same format as `active`: a `keys` array of hex public keys and
+a numeric `quorum`. Keep every current key. The current protocol requires the quorum to equal the number of keys.
+
+Submit the configuration you read and the one you want your validator to sign:
+
+```bash
+jq --slurpfile next proposed.json '{current: .active, proposed: $next[0]}' status.json > change.json
+curl --fail-with-body -X PUT -H 'Content-Type: application/json' --data-binary @change.json "$url/pending"
+```
+
+HTTP 204 confirms registration. The change survives a restart. Your validator can continue signing blocks with the
+active configuration. If the request returns HTTP 409, check the status again: the active configuration may have
+changed, or another change may already be pending.
+
+After your validator signs the transition block, GET shows the new configuration under `active` and `null` under
+`pending`. Check with the sequencer to confirm the block was committed.
+
+### Cancel a pending change
+
+Withdraw the change on each validator where you registered it:
+
+```bash
+curl --fail-with-body -X DELETE "${VALIDATOR_ADMIN_URL}/admin/v1/validator-config/pending"
+```
+
+Cancellation waits for any block the validator is signing. HTTP 204 means no change is pending. Check `active` to see
+whether your validator signed the transition before cancellation.
 
 ## Storage Key Setup
 
@@ -147,9 +182,8 @@ Use `miden-validator start --help` for the complete current option list.
 
 ## Administration API
 
-The validator can serve a private JSON administration API. Operators use it to find the stored records of validated
-transactions and to request the decryption shares that open them. The listener is disabled by default. Configure its
-address to enable it:
+Use the private JSON API to [register a pending validator configuration](#changing-the-chains-validator-configuration),
+inspect stored transactions, and request decryption shares. The listener is disabled by default. Enable it with:
 
 ```bash
 --admin.listen 127.0.0.1:50102

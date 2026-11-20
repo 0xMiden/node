@@ -95,6 +95,12 @@ codec!(
     |value: &miden_protocol::crypto::merkle::mmr::PartialMmr| value.into()
 );
 codec!(
+    miden_protocol::block::ValidatorConfig,
+    proto::blockchain::ValidatorConfig,
+    decode_and_verify,
+    |value: &miden_protocol::block::ValidatorConfig| value.into()
+);
+codec!(
     miden_protocol::block::BlockHeader,
     proto::blockchain::BlockHeader,
     decode_and_build_unchecked,

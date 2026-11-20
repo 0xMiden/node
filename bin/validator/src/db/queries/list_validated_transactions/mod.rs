@@ -9,8 +9,9 @@ use miden_node_db::sqlite::ReadTx;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::transaction::TransactionId;
 
+use crate::db::ReadTransaction;
+use crate::db::queries::load_private_record;
 use crate::db::queries::private_record_row::fixed_32;
-use crate::db::queries::{load_chain_tip, load_private_record};
 use crate::{StorageKeyEpoch, StoredPrivateRecord};
 
 const SQL: &str = include_str!("list_validated_transactions.sql");
@@ -81,7 +82,9 @@ pub fn list_validated_transactions(
                 record: None,
             })
         })?;
-    let chain_tip = load_chain_tip(tx)?.map_or(BlockNumber::GENESIS, |header| header.block_num());
+    let chain_tip = ReadTransaction::new(tx)
+        .select_chain_tip()?
+        .map_or(BlockNumber::GENESIS, |header| header.block_num());
     if params.include_records {
         for item in &mut transactions {
             // The block link's foreign key requires a stored record for every listed transaction.

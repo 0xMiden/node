@@ -1,6 +1,7 @@
 use std::io;
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbReader, DbWriter};
@@ -8,7 +9,7 @@ use miden_node_proto::BlockProofRequest;
 use miden_node_tracing::{info, instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use miden_protocol::transaction::TransactionId;
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::metrics::InitialMetrics;
@@ -16,10 +17,11 @@ use crate::{StorageKeyEpoch, StoredPrivateRecord};
 
 mod migrations;
 mod queries;
-
+mod transaction;
 pub(crate) use queries::{ListTransactionsParams, ListedTransaction};
 #[cfg(test)]
 pub(crate) use tests::block_with_header;
+pub(crate) use transaction::{ReadTransaction, WriteTransaction};
 
 /// Number of recent signed blocks whose proving inputs are retained by default.
 pub const DEFAULT_PROVING_INPUT_RETENTION_BLOCKS: NonZeroU32 = NonZeroU32::new(10_000).unwrap();
@@ -44,6 +46,19 @@ pub struct BlockBackup {
 }
 
 impl ValidatorDbReader {
+    /// Runs the caller's queries against one read-only snapshot.
+    pub(crate) async fn read<R, E>(
+        &self,
+        operation: &'static str,
+        query: impl FnOnce(ReadTransaction<'_>) -> Result<R, E> + Send + 'static,
+    ) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<DatabaseError> + Send + 'static,
+    {
+        self.reader.read(operation, move |tx| query(ReadTransaction::new(tx))).await
+    }
+
     /// Loads a signed block and any retained proving request from one database snapshot.
     ///
     /// The request must reconstruct the stored block; corrupt or mismatched inputs cause an error.
@@ -84,12 +99,12 @@ impl ValidatorDbReader {
     /// not been run).
     #[instrument()]
     pub(crate) async fn load_chain_tip(&self) -> Result<Option<BlockHeader>, DatabaseError> {
-        self.reader.read("load_chain_tip", queries::load_chain_tip).await
+        self.read("load_chain_tip", |tx| tx.select_chain_tip()).await
     }
 
     /// Returns the highest stored block number, or `None` before bootstrap.
     pub(crate) async fn load_chain_tip_height(&self) -> Result<Option<u32>, DatabaseError> {
-        self.reader.read("load_chain_tip_height", queries::load_chain_tip_height).await
+        self.read("load_chain_tip_height", |tx| tx.select_chain_tip_height()).await
     }
 
     /// Loads the block header at the given height, or `None` if no block header is stored there.
@@ -128,7 +143,7 @@ impl ValidatorDbReader {
         self.reader
             .read("load_initial_metrics", |tx| {
                 Ok(InitialMetrics {
-                    chain_tip: queries::load_chain_tip_height(tx)?.unwrap_or(0),
+                    chain_tip: ReadTransaction::new(tx).select_chain_tip_height()?.unwrap_or(0),
                     validated_transactions: u64::try_from(queries::count_validated_transactions(
                         tx,
                     )?)
@@ -202,11 +217,11 @@ impl ValidatorDbReader {
 
 /// Write handle to the validator database.
 ///
-/// Wraps the framework [`DbWriter`] and additionally holds a [`ValidatorDbReader`], so it exposes
-/// the write queries directly and every read query through `Deref`. **Not `Clone`**: writes have a
-/// single owner, matching SQLite's single-writer model.
+/// Shares the SQLite writer connection with the configuration administration handle. Signed blocks
+/// and private transaction records are written through this handle.
+#[derive(Clone)]
 pub struct ValidatorDbWriter {
-    writer: DbWriter,
+    writer: Arc<DbWriter>,
     proving_input_retention_blocks: NonZeroU32,
     reader: ValidatorDbReader,
 }
@@ -220,6 +235,22 @@ impl std::ops::Deref for ValidatorDbWriter {
 }
 
 impl ValidatorDbWriter {
+    /// Commits the caller's writes together when the closure succeeds.
+    pub(crate) async fn write<R, E>(
+        &self,
+        operation: &'static str,
+        query: impl FnOnce(WriteTransaction<'_>) -> Result<R, E> + Send + 'static,
+    ) -> Result<R, E>
+    where
+        R: Send + 'static,
+        E: From<DatabaseError> + Send + 'static,
+    {
+        let retention = self.proving_input_retention_blocks;
+        self.writer
+            .write(operation, move |tx| query(WriteTransaction::new(tx, retention)))
+            .await
+    }
+
     /// Returns a read-only handle onto the same connection pool, for handing to components that
     /// must not be able to write.
     pub fn reader(&self) -> ValidatorDbReader {
@@ -258,7 +289,7 @@ impl ValidatorDbWriter {
     /// The write replaces the header row. If the height holds a block, the `ON DELETE CASCADE` on
     /// `block_transactions` deletes the links of that block, and this method does not link the
     /// transactions of the new block. Only tests use this method. Server code uses
-    /// [`Self::upsert_signed_block`].
+    /// [`WriteTransaction::upsert_signed_block`].
     #[cfg(test)]
     #[instrument()]
     pub(crate) async fn upsert_block_header_with_protocol_config(
@@ -271,42 +302,6 @@ impl ValidatorDbWriter {
                 record_protocol_config_activation(tx, &header, protocol_config)?;
                 queries::delete_block(tx, header.block_num())?;
                 queries::insert_block(tx, &block_with_header(header), None)
-            })
-            .await
-    }
-
-    /// Stores a signed block, its proving inputs, configuration activation, and transaction
-    /// positions atomically at the validated height.
-    ///
-    /// Deleting any previous block at this height also clears its transaction links by cascade.
-    /// The caller supplies the inputs used to build the block. [`ValidatorDbReader::load_block_backup`]
-    /// checks them against the stored block when reading a backup.
-    #[instrument()]
-    pub(crate) async fn upsert_signed_block(
-        &self,
-        block: SignedBlock,
-        protocol_config: Option<ProtocolConfig>,
-        proving_inputs: BlockProofRequest,
-    ) -> Result<(), DatabaseError> {
-        let retention = self.proving_input_retention_blocks;
-        self.writer
-            .write("upsert_signed_block", move |tx| {
-                let height = block.header().block_num();
-                let replaced = queries::delete_block(tx, height)?;
-                if let Some(config) = protocol_config {
-                    queries::insert_protocol_config(tx, &config, height)?;
-                } else if replaced {
-                    // A replacement that inherits its parent's config supersedes any activation
-                    // here.
-                    tx.execute(
-                        "DELETE FROM protocol_configs WHERE block_number = ?1",
-                        &[&height.as_u32()],
-                    )?;
-                }
-                let transactions =
-                    block.body().transactions().as_slice().iter().map(TransactionHeader::id);
-                persist_signed_block(tx, &block, transactions, Some(&proving_inputs))?;
-                prune_expired_proving_inputs(tx, retention)
             })
             .await
     }
@@ -363,7 +358,7 @@ fn prune_expired_proving_inputs(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     retention: NonZeroU32,
 ) -> Result<(), DatabaseError> {
-    if let Some(tip) = queries::load_chain_tip(tx)?
+    if let Some(tip) = ReadTransaction::new(tx).select_chain_tip()?
         && let Some(cutoff) = tip.block_num().as_u32().checked_sub(retention.get())
     {
         queries::prune_proving_inputs(tx, cutoff.into())?;
@@ -506,7 +501,7 @@ fn open_with_pool_size(
         db.sqlite.connection_pool_size = connection_pool_size.get()
     );
     Ok(ValidatorDbWriter {
-        writer,
+        writer: Arc::new(writer),
         proving_input_retention_blocks: DEFAULT_PROVING_INPUT_RETENTION_BLOCKS,
         reader: ValidatorDbReader { reader },
     })
@@ -996,7 +991,10 @@ mod tests {
         .unwrap();
 
         let snapshot = db.reader.reader.begin_read().await.unwrap();
-        let tip = snapshot.run("pin_listing_snapshot", queries::load_chain_tip).await.unwrap();
+        let tip = snapshot
+            .run("pin_listing_snapshot", |tx| ReadTransaction::new(tx).select_chain_tip())
+            .await
+            .unwrap();
         assert_eq!(tip.unwrap().block_num(), BlockNumber::from(1u32));
 
         db.replace_legacy_signed_block(

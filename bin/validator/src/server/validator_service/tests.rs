@@ -1,5 +1,6 @@
 mod proving_inputs;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
@@ -120,6 +121,7 @@ impl TestValidator {
                 db,
                 std::sync::Arc::new(test_decrypter()),
                 PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+                Arc::default(),
                 InitialMetrics::default(),
             )
             .await
@@ -540,6 +542,7 @@ async fn signing_key_mismatch_rejected() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await;
@@ -1829,6 +1832,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await
@@ -1864,6 +1868,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await
@@ -1884,4 +1889,44 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     assert_eq!(streamed, backed_up);
     assert_eq!(streamed.header(), &header);
     assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn validator_config_approval_survives_restart_and_is_consumed_by_signing() {
+    let mut tv = TestValidator::new().await;
+    let active = tv.chain_tip.validator_config().clone();
+    let signer = tv.server.signer.public_key();
+    let next = ValidatorConfig::new(vec![signer, random_secret_key().public_key()], 2).unwrap();
+    let proposed = tv.propose_empty_block().with_next_validator_config(next.clone());
+    assert_eq!(
+        tv.call_sign_block(&proposed).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+
+    let proposed_config = next.clone();
+    tv.server
+        .db
+        .write("register test configuration", move |tx| {
+            tx.insert_pending_validator_config(&proposed_config)
+        })
+        .await
+        .unwrap();
+    tv.apply_empty_block().await;
+    assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
+    drop(tv.server.db);
+    tv.server.db = crate::db::load(tv.temp_dir.path().join("validator.sqlite3")).await.unwrap();
+
+    let old = tv.propose_empty_block();
+    let transition = old.clone().with_next_validator_config(next.clone());
+    tv.call_sign_block(&transition).await.unwrap();
+    assert_eq!(tv.load_chain_tip().await.validator_config(), &next);
+    let pending = tv
+        .server
+        .db
+        .read("check pending configuration", |tx| tx.select_pending_validator_config())
+        .await
+        .unwrap();
+    assert_eq!(pending, None);
+    tv.call_sign_block(&transition).await.unwrap();
+    assert_eq!(tv.call_sign_block(&old).await.unwrap_err().code(), tonic::Code::InvalidArgument);
 }

@@ -11,13 +11,14 @@ const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 
 impl ValidatorService {
     /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
-    /// against local state, and checks that the parent authorizes the signing key.
+    /// against local state, and checks that the parent authorizes the signing key. Returns whether
+    /// the proposed header changes the validator configuration at the signed tip.
     #[instrument(err)]
     pub(super) async fn validate_block(
         &self,
         proposed_header: &BlockHeader,
         proposed_body: &BlockBody,
-    ) -> Result<(), ValidatorError> {
+    ) -> Result<bool, ValidatorError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(ValidatorError::ClockBeforeUnixEpoch)?
@@ -62,6 +63,8 @@ impl ValidatorService {
             block.commitment = proposed_header.commitment()
         );
 
+        let changes_validator_config =
+            proposed_header.validator_config() != chain_tip.validator_config();
         let prev = if proposed_header.block_num() == chain_tip.block_num() {
             // Replacements are rare, so load the tip's parent on demand. An ordinary extension
             // needs only the tip header.
@@ -91,6 +94,17 @@ impl ValidatorService {
             return Err(ValidatorError::PrevBlockCommitmentMismatch);
         }
 
+        if changes_validator_config {
+            let pending = self
+                .db
+                .read("pending_validator_config", |tx| tx.select_pending_validator_config())
+                .await
+                .map_err(ValidatorError::DatabaseError)?;
+            if pending.as_ref() != Some(proposed_header.validator_config()) {
+                return Err(ValidatorError::UnapprovedValidatorConfig);
+            }
+        }
+
         // Check that our key is a member of the validator set authorized to sign this block,
         // which is the set committed to by the parent's header.
         //
@@ -101,7 +115,7 @@ impl ValidatorService {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
-        Ok(())
+        Ok(changes_validator_config)
     }
 }
 
@@ -112,6 +126,7 @@ impl ValidatorError {
             Self::UnvalidatedTransactions(_)
             | Self::BlockTimestampTooFarInFuture { .. }
             | Self::BlockNumberMismatch { .. }
+            | Self::UnapprovedValidatorConfig
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),
