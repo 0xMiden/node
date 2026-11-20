@@ -121,6 +121,7 @@ delta after target validation.
 | `SyncNullifiers`         | Streams every matching 16-bit-prefix consumption through the target.              |
 | `SyncAccountVault`       | Streams the final target value of every changed vault key.                        |
 | `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                  |
+| `SyncTransactions`       | Streams complete account transaction events in the requested range.               |
 
 Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
 block number, not a timestamp or the authenticated target.
@@ -191,6 +192,10 @@ map scan already completed at `N` can catch up with `(N, M]`. Refresh account de
 details to reconcile storage-slot changes, including removed slots, and verify the reconstructed vault, storage and
 account commitments. Commit the account state and global synchronization height only after the other required
 synchronization work also completes.
+
+Use `SyncTransactions` to discover account activity, including transactions that leave the account commitment unchanged.
+Note proofs must be verified against their authenticated target headers. Previously verified immutable note bodies can
+be cached, but negative lookups or omitted account IDs at an old target do not establish absence at a newer one.
 
 Malformed records, decreasing order, an incompatible chain, or a failed final commitment check invalidate the staging
 attempt. Correct invalid requests before retrying, and investigate internal failures rather than automatically moving

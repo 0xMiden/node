@@ -247,6 +247,13 @@ mod select_note_sync_page;
 pub(crate) use select_note_sync_page::NoteSyncPaged;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
 
+mod transaction_page;
+mod transaction_record;
+
+mod select_transactions_records_page;
+pub(crate) use select_transactions_records_page::TransactionRecordsPaged;
+pub use select_transactions_records_page::{TransactionCursor, TransactionRecordsPage};
+
 mod select_nullifier_updates_page;
 pub(crate) use select_nullifier_updates_page::NullifierUpdatesPaged;
 pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};

@@ -87,10 +87,12 @@ use miden_protocol::testing::account_id::{
 };
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
+    InputNotes,
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
     PublicTransactionLogs,
+    TransactionHeader,
     TransactionLogs,
     TxAccountUpdate,
 };
@@ -3708,6 +3710,149 @@ async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
     }
 }
 
+/// Builds full transaction records whose combined block exceeds the transport message limit.
+///
+/// Uses complete output proof shapes to test transport bounds independently of proof authentication.
+fn large_transaction_stream_fixture(
+    account: AccountId,
+) -> (Vec<TransactionHeader>, Vec<miden_node_store::NoteRecord>) {
+    use miden_protocol::block::BlockNoteIndex;
+    use miden_protocol::crypto::merkle::SparseMerklePath;
+    use miden_protocol::note::{
+        NoteAttachments,
+        NoteDetailsCommitment,
+        NoteHeader,
+        NoteMetadata,
+        PartialNoteMetadata,
+    };
+    let metadata = NoteMetadata::new(
+        PartialNoteMetadata::new(account, NoteType::Public),
+        &NoteAttachments::empty(),
+    );
+    let mut records = vec![];
+    let headers = (0_u32..10)
+        .map(|number| {
+            let notes: Vec<_> = (0..miden_protocol::MAX_OUTPUT_NOTES_PER_TX)
+                .map(|index| {
+                    let header = NoteHeader::new(
+                        NoteDetailsCommitment::from_raw(Word::from([
+                            number,
+                            u32::try_from(index).unwrap(),
+                            5,
+                            0,
+                        ])),
+                        metadata,
+                    );
+                    records.push(miden_node_store::NoteRecord {
+                        block_num: BlockNumber::GENESIS,
+                        note_index: BlockNoteIndex::new(number as usize, index).unwrap(),
+                        note_id: header.id().as_word(),
+                        metadata,
+                        details: None,
+                        attachments: NoteAttachments::empty(),
+                        inclusion_path: SparseMerklePath::from_parts(
+                            0,
+                            vec![Word::from([miden_protocol::Felt::MAX; 4]); 16],
+                        )
+                        .unwrap(),
+                    });
+                    header
+                })
+                .collect();
+            TransactionHeader::new(
+                account,
+                Word::from([number + 1, 0, 0, 0]),
+                Word::from([number + 2, 0, 0, 0]),
+                InputNotes::new_unchecked(vec![]),
+                notes,
+                TransactionLogs::default().commitment(),
+                CodePatch::default().commitment(),
+            )
+            .unwrap()
+        })
+        .collect();
+    (headers, records)
+}
+
+/// Aggregate block size must not omit transaction events while each individual message stays
+/// bounded.
+#[tokio::test]
+async fn transaction_history_stream_returns_a_whole_block_larger_than_four_mebibytes() {
+    use miden_node_proto::prost::Message;
+    let (mut client, _, store, _guard) = start_rpc_v2().await;
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let (headers, notes) = large_transaction_stream_fixture(account);
+    let path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(&path, account, BlockNumber::GENESIS, &[])
+        .await;
+    miden_node_store::test_support::seed_notes(&path, notes).await;
+    miden_node_store::test_support::seed_transactions(&path, BlockNumber::GENESIS, headers.clone())
+        .await;
+    let mut stream = client
+        .sync_transactions(v2::SyncTransactionsRequest {
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![account.into(), account.into()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = HashSet::new();
+    let mut total_bytes = 0;
+    while let Some(item) = stream.message().await.unwrap() {
+        assert!(item.encoded_len() < 4 * 1024 * 1024);
+        total_bytes += item.encoded_len();
+        let record = item.transaction.unwrap();
+        assert_eq!(record.block_num, 0);
+        assert_eq!(record.output_note_proofs.len(), 1024);
+        let header: TransactionHeader =
+            record.header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+        assert!(actual.insert(header.id()));
+    }
+    assert!(total_bytes > 4 * 1024 * 1024);
+    assert_eq!(actual, headers.iter().map(TransactionHeader::id).collect());
+}
+
+/// Event discovery must enforce account limits and validate the target of an empty delta.
+#[tokio::test]
+async fn transaction_history_stream_validates_lists_and_empty_delta_targets() {
+    let (mut client, _, _store, _guard) = start_rpc_v2().await;
+    let status = client
+        .sync_transactions(v2::SyncTransactionsRequest {
+            range: None,
+            account_ids: vec![proto::account::AccountId::default(); 1001],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    let status = client
+        .sync_transactions(v2::SyncTransactionsRequest {
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert_eq!(status.details(), &[3]);
+    let mut stream = client
+        .sync_transactions(v2::SyncTransactionsRequest {
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: Some(0),
+                to_block_inclusive: Some(0),
+            }),
+            account_ids: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(stream.message().await.unwrap().is_none());
+}
+
 /// Consumption discovery must retain every matching identity and reject invalid or oversized prefix
 /// lists.
 #[tokio::test]
@@ -3790,6 +3935,66 @@ async fn nullifier_stream_reconciles_every_record_and_validates_prefixes() {
     assert_eq!(status.code(), tonic::Code::OutOfRange);
 }
 
+#[test]
+fn v2_record_wire_compatibility() {
+    use miden_node_proto::generated::miden::node::{v1, v2};
+    use miden_node_proto::prost::Message;
+
+    let word: proto::primitives::Word = Word::from([1u32, 2, 3, 4]).into();
+    let proof = proto::note::NoteInclusionProof {
+        note_index_in_block: 17,
+        inclusion_path: Some(proto::primitives::SparseMerklePath {
+            siblings: vec![word.clone()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let note = v2::NoteSyncRecord {
+        metadata: Some(v2::NoteSyncMetadata {
+            tag: 123,
+            attachments: vec![v2::NoteSyncAttachment {
+                scheme: 9,
+                payload: Some(v2::note_sync_attachment::Payload::Value(word.clone())),
+            }],
+            ..Default::default()
+        }),
+        inclusion_proof: Some(proof.clone()),
+    };
+    let decoded = v1::NoteSyncRecord::decode(note.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.inclusion_proof, Some(proof));
+    let metadata = decoded.metadata.unwrap();
+    assert_eq!(metadata.tag, 123);
+    assert_eq!(
+        metadata.attachments,
+        [v1::NoteSyncAttachment {
+            scheme: 9,
+            payload: Some(v1::note_sync_attachment::Payload::Value(word.clone())),
+        }]
+    );
+
+    let header = proto::transaction::TransactionHeader {
+        output_notes: vec![proto::note::NoteHeader::default()],
+        ..Default::default()
+    };
+    let record = v2::TransactionRecord {
+        block_num: 31,
+        header: Some(header.clone()),
+        output_note_proofs: vec![],
+        consumed_note_refs: vec![v2::ConsumedNoteRef {
+            nullifier: Some(word.clone()),
+            note_id: None,
+        }],
+    };
+    let decoded = v1::TransactionRecord::decode(record.encode_to_vec().as_slice()).unwrap();
+    assert_eq!(decoded.block_num, 31);
+    assert_eq!(decoded.header, Some(header));
+    assert_eq!(decoded.output_note_proofs, []);
+    assert_eq!(
+        decoded.consumed_note_refs,
+        [v1::ConsumedNoteRef { nullifier: Some(word), note_id: None }]
+    );
+}
+
 #[tokio::test]
 async fn v2_service_parity() {
     use std::collections::BTreeSet;
@@ -3824,9 +4029,9 @@ async fn v2_service_parity() {
     );
     assert_eq!(
         limits.endpoints.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        BTreeSet::from(["GetNotesById", "SyncNotes", "SyncNullifiers",]),
+        BTreeSet::from(["GetNotesById", "SyncNotes", "SyncNullifiers", "SyncTransactions",]),
     );
-    for shared in ["GetNotesById", "SyncNotes", "SyncNullifiers"] {
+    for shared in ["GetNotesById", "SyncNotes", "SyncNullifiers", "SyncTransactions"] {
         assert_eq!(limits.endpoints[shared].parameters, previous.endpoints[shared].parameters);
     }
     let account = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();

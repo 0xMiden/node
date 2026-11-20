@@ -114,6 +114,8 @@ mod sync_nullifiers;
 mod sync_nullifiers_v2;
 mod sync_stream;
 mod sync_transactions;
+mod sync_transactions_v2;
+mod transaction_stream;
 
 // ================================================================================================
 
