@@ -5243,6 +5243,89 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
     assert_eq!(before_second_block.notes.len(), 4);
 }
 
+/// Prefix discovery must preserve same-block page boundaries and exclude post-target insertions.
+#[test]
+fn nullifier_updates_page_preserves_partial_blocks_and_target() {
+    let db = &TestDb::new();
+    create_block(db, 1.into());
+    create_block(db, 2.into());
+    let expected: Vec<_> = (0..7).map(|i| num_to_nullifier(((1 + i % 2) << 48) + i)).collect();
+    insert_nullifiers_for_block(db, &expected, 1.into()).unwrap();
+    insert_nullifiers_for_block(db, &[num_to_nullifier(4 << 48)], 1.into()).unwrap();
+    for size in [1, 2, 3, 20] {
+        let page_size = NonZeroUsize::new(size).unwrap();
+        let mut cursor: Option<queries::NullifierCursor> = None;
+        let mut found = std::collections::HashSet::new();
+        let mut ordered = vec![];
+        loop {
+            let start = cursor;
+            let page = db
+                .read(move |tx| {
+                    queries::NullifierUpdatesPaged::new(
+                        vec![1, 2, 1],
+                        crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                        page_size,
+                    )
+                    .page(tx, &cursor)
+                })
+                .unwrap();
+            if let Some(start) = start {
+                assert_eq!(
+                    (page.items[0].block_num, page.items[0].nullifier),
+                    (start.block, start.nullifier)
+                );
+            }
+            for row in page.items {
+                assert_eq!(row.block_num, BlockNumber::from(1));
+                assert!(found.insert(row.nullifier));
+                ordered.push(row.nullifier);
+            }
+            if cursor.is_none() && page_size.get() == 1 {
+                insert_nullifiers_for_block(db, &[num_to_nullifier((1 << 48) + 99)], 2.into())
+                    .unwrap();
+                let earlier_cursor = page.next.flatten();
+                let later = db
+                    .read(move |tx| {
+                        queries::NullifierUpdatesPaged::new(
+                            vec![1],
+                            crate::ScopedBlockRange::new_unchecked(2.into()..=2.into()),
+                            NonZeroUsize::MIN,
+                        )
+                        .page(tx, &earlier_cursor)
+                    })
+                    .unwrap();
+                assert_eq!(later.items.len(), 1);
+                assert_eq!(later.items[0].block_num, BlockNumber::from(2));
+                assert_eq!(later.items[0].nullifier, num_to_nullifier((1 << 48) + 99));
+                assert!(later.next.flatten().is_none());
+            }
+            cursor = page.next.flatten();
+            if cursor.is_none() {
+                break;
+            }
+        }
+        assert_eq!(found, expected.iter().copied().collect());
+        let mut expected_order = expected.clone();
+        expected_order.sort_by_key(Serializable::to_bytes);
+        assert_eq!(ordered, expected_order);
+    }
+
+    for prefixes in [vec![], vec![3]] {
+        let page = db
+            .read(move |tx| {
+                queries::NullifierUpdatesPaged::new(
+                    prefixes,
+                    crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                    std::num::NonZeroUsize::MIN,
+                )
+                .page(tx, &None)
+            })
+            .unwrap();
+        assert_eq!(page.items, [] as [NullifierInfo; 0]);
+        assert!(page.next.flatten().is_none());
+    }
+}
+
 /// Vault pages include the first key at the range start and split a block without omissions.
 #[test]
 fn vault_pages_include_range_start_and_continue_within_one_block() {

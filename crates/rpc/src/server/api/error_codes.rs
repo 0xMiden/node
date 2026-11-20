@@ -108,3 +108,10 @@ error_codes!(SyncNotesV2ErrorCode {
     InvalidRange = 2,
     FutureTarget = 3,
 });
+
+error_codes!(SyncNullifiersV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    InvalidPrefixLength = 6,
+});
