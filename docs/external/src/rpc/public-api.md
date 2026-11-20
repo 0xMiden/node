@@ -5,12 +5,13 @@ sidebar_position: 1
 
 # Public RPC
 
-This page summarizes the public gRPC `miden.node.v1.NodeService` service.
+This page summarizes the public gRPC services `miden.node.v1.NodeService` and `miden.node.v2.NodeService`.
 
 As a reminder, you can inspect the exact schema on any deployed network using gRPC reflection:
 
 ```bash
 grpcurl rpc.testnet.miden.io:443 describe miden.node.v1.NodeService
+grpcurl rpc.testnet.miden.io:443 describe miden.node.v2.NodeService
 ```
 
 ## Status and Limits
@@ -107,6 +108,12 @@ codes returned in gRPC status details.
 
 ## State Synchronization
 
+Call `SyncChainMmr` on v2. Omit `target_block_num` to select the committed or proven tip, or supply a block number at or
+below that tip. Zero selects genesis. Authenticate the `SyncChainMmr` target header and its MMR delta first.
+
+The following paginated unary methods are available on v1. Each returns as much of the requested block range as fits in
+one response, and the caller repeats the request for the remainder.
+
 | Method                   | Purpose                                                                                 |
 | ------------------------ | --------------------------------------------------------------------------------------- |
 | `SyncTransactions`       | Returns transaction records for specified accounts within a block range.                |
@@ -114,19 +121,16 @@ codes returned in gRPC status details.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
-| `SyncChainMmr`           | Returns the chain MMR delta, target header, and protocol config when required.          |
 
-Use `GetLimits` to discover the maximum request sizes accepted by the node before batching large sync requests.
-
-## Streaming
+## Block Streaming
 
 | Method              | Purpose                                                                               |
 | ------------------- | ------------------------------------------------------------------------------------- |
 | `BlockSubscription` | Streams committed blocks from `block_from`, replaying history before live blocks.     |
 | `ProofSubscription` | Streams block proofs from `block_from`, replaying existing proofs before live proofs. |
 
-These streams are the primary mechanism full nodes use to replicate chain data from an upstream source. They are also
-useful for indexers, explorers, and other services that need an append-only view of network progress.
+These subscriptions replicate chain data from an upstream source. They also support indexers and explorers that need an
+append-only view of network progress.
 
 ## Network Note Debugging
 

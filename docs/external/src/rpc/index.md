@@ -8,8 +8,9 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
-The service name is `miden.node.v1.NodeService`. Clients use this name in each gRPC method path. The existing `ACCEPT`
-header version check remains in effect, and write methods still require the network genesis commitment.
+Both public services share one address. Use `miden.node.v2.NodeService` for historical chain targets. V1 retains the
+paginated sync methods and `GetAccount`. Both versions support registration, transaction submission, and block and proof
+subscriptions. Write requests require the network genesis commitment.
 
 The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
 details for stable client-side handling.
@@ -28,6 +29,7 @@ For a local development network without TLS, use `-plaintext`:
 
 ```bash
 grpcurl -plaintext localhost:57291 describe miden.node.v1.NodeService
+grpcurl -plaintext localhost:57291 describe miden.node.v2.NodeService
 ```
 
 For Rust developers, we also ship a Rust crate
@@ -49,15 +51,16 @@ The RPC server supports:
 
 ## Endpoint Groups
 
-| Group                  | Methods                                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Status and limits      | `Status`, `GetLimits`                                                                                           |
-| State queries          | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`               |
-| Transaction submission | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                          |
-| Account registration   | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                                  |
-| State synchronization  | `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncChainMmr` |
-| Block streaming        | `BlockSubscription`, `ProofSubscription`                                                                        |
-| Network note debugging | `GetNetworkNoteStatus`                                                                                          |
+| Group                      | Methods                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------- |
+| Status and limits          | `Status`, `GetLimits`                                                                             |
+| State queries              | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot` |
+| Transaction submission     | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                            |
+| Account registration       | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                    |
+| State synchronization (v1) | `SyncChainMmr`                                                                                    |
+| State synchronization (v2) | `SyncChainMmr`                                                                                    |
+| Block streaming            | `BlockSubscription`, `ProofSubscription`                                                          |
+| Network note debugging     | `GetNetworkNoteStatus`                                                                            |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
 [Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.

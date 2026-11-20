@@ -34,8 +34,8 @@ If you are missing specific error information that could be useful, please open 
 
 ## Method-Specific Error Codes
 
-Codes are specific to each method. Code `0` identifies an internal failure with the `INTERNAL` gRPC status. This code
-applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNumber`.
+The following codes apply to methods on `miden.node.v1.NodeService`. Code `0` identifies an internal failure with the
+`INTERNAL` gRPC status. This code applies to all methods in the table, `GetBlockByNumber`, and `GetBlockHeaderByNumber`.
 
 | Method                                       | Error                   | Value | gRPC status        |
 | -------------------------------------------- | ----------------------- | ----- | ------------------ |
@@ -135,6 +135,12 @@ fall into the ordinary-gRPC-status bucket described above:
   re-sealing, and back off rather than retrying in a tight loop, since official endpoints may rate limit requests at the
   infrastructure level.
 
+## Historical account and chain reads
+
+V2 `SyncChainMmr` returns `INVALID_ARGUMENT` for a target below the starting height and `OUT_OF_RANGE` for a target
+above the requested finality tip. If the node has pruned account state at the authenticated height, select a newer
+authenticated block and repeat all account reads there.
+
 ## Request Limits
 
 Use `GetLimits` to discover method-specific request limits before sending large sync requests. Methods such as
@@ -190,5 +196,5 @@ application/vnd.miden; genesis=<genesis-commitment>
 The `genesis` parameter is optional for read requests. Write requests, including `SubmitProvenTx` and
 `SubmitProvenTxBatch`, require it so the client explicitly targets the intended network.
 
-The RPC API is versioned by its protobuf package, currently `miden.node.v1`. Legacy clients may still include a
-`version` parameter in the `Accept` header; the server ignores its value.
+The RPC API is versioned by its protobuf package, currently `miden.node.v1` and `miden.node.v2`. Legacy clients may
+still include a `version` parameter in the `Accept` header; the server ignores its value.
