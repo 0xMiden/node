@@ -143,6 +143,8 @@ fn get_account_error_to_status(err: GetAccountError) -> Status {
 
 #[cfg(test)]
 mod tests {
+    use proto::asset::AssetId;
+    use proto::primitives::Word;
     use miden_node_proto::domain::account::{StorageMapRequest, SlotData as DomainSlotData};
     use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
         StorageMapDetailRequest, StorageMapDetailRequests, VaultAssetIds, storage_map_detail_request::MapKeys,
@@ -203,11 +205,11 @@ mod tests {
         let mut slots =
             vec![StorageMapDetailRequest::default(); QueryParamStorageMapSlotLimit::LIMIT];
         slots[0].slot_data = Some(SlotData::MapKeys(MapKeys {
-            map_keys: vec![Default::default(); QueryParamStorageMapKeyTotalLimit::LIMIT],
+            map_keys: vec![Word::default(); QueryParamStorageMapKeyTotalLimit::LIMIT],
         }));
         let mut details = storage_details(slots);
         details.vault_request = Some(VaultRequest::AssetIds(VaultAssetIds {
-            asset_ids: vec![Default::default(); QueryParamVaultAssetLimit::LIMIT],
+            asset_ids: vec![AssetId::default(); QueryParamVaultAssetLimit::LIMIT],
         }));
         check_request_limits(&details).unwrap();
     }
@@ -215,7 +217,7 @@ mod tests {
     #[test]
     fn excessive_proof_counts_take_precedence_over_malformed_fields() {
         let keys = |n| StorageMapDetailRequest {
-            slot_data: Some(SlotData::MapKeys(MapKeys { map_keys: vec![Default::default(); n] })),
+            slot_data: Some(SlotData::MapKeys(MapKeys { map_keys: vec![Word::default(); n] })),
             ..Default::default()
         };
         for details in [
@@ -226,7 +228,7 @@ mod tests {
             storage_details(vec![keys(QueryParamStorageMapKeyTotalLimit::LIMIT), keys(1)]),
             AccountDetailRequest {
                 vault_request: Some(VaultRequest::AssetIds(VaultAssetIds {
-                    asset_ids: vec![Default::default(); QueryParamVaultAssetLimit::LIMIT + 1],
+                    asset_ids: vec![AssetId::default(); QueryParamVaultAssetLimit::LIMIT + 1],
                 })),
                 ..Default::default()
             },
