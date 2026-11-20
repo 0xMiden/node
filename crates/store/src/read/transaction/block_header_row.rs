@@ -10,7 +10,7 @@ use crate::db::BlockHeaderCommitment;
 /// Maps a `SELECT block_header, commitment` row to its [`BlockHeader`].
 ///
 /// Debug builds also read the stored commitment and assert that it matches the header.
-pub(super) fn block_header_from_row(row: &Row<'_>) -> Result<BlockHeader, DatabaseError> {
+pub(crate) fn block_header_from_row(row: &Row<'_>) -> Result<BlockHeader, DatabaseError> {
     let block_header = row.get::<BlockHeader>(0)?;
     debug_assert_eq!(
         BlockHeaderCommitment::new(&block_header),
