@@ -5,6 +5,4 @@ pub(crate) struct InitialMetrics {
     pub chain_tip: u32,
     /// Total number of validated transactions.
     pub validated_transactions: u64,
-    /// Total number of signed blocks.
-    pub signed_blocks: u64,
 }

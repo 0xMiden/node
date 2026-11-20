@@ -129,7 +129,6 @@ impl ValidatorDbReader {
                         tx,
                     )?)
                     .unwrap_or(0),
-                    signed_blocks: u64::try_from(queries::count_signed_blocks(tx)?).unwrap_or(0),
                 })
             })
             .await
@@ -833,7 +832,6 @@ mod tests {
         let metrics = db.load_initial_metrics().await.unwrap();
         assert_eq!(metrics.chain_tip, 0);
         assert_eq!(metrics.validated_transactions, 0);
-        assert_eq!(metrics.signed_blocks, 0);
     }
 
     #[tokio::test]

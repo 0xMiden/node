@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
@@ -100,11 +99,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .or_internal("Failed to load chain tip")?
             .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
 
-        // Capture the tip height before the tip is consumed: a validated block at the same height
-        // replaces the current tip rather than extending it. The semaphore held above guarantees
-        // the tip cannot change in between.
-        let chain_tip_num = chain_tip.block_num();
-
         self.validate_block(header, &body, chain_tip)
             .await
             .or_invalid_argument("Failed to validate block")?;
@@ -138,11 +132,6 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
         // Publish the tip only after the block and its metadata have committed together.
         self.committed_tip.send_replace(new_block_num);
-        // A replacement stores no additional block. The count must stay equal to the number of
-        // stored block headers, which is the value a restart reads.
-        if new_block_num > chain_tip_num {
-            self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
-        }
 
         Ok((signature, block_commitment, self.signer.public_key()))
     }

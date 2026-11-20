@@ -126,9 +126,6 @@ pub(crate) struct ValidatorService {
     committed_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
-    /// In-memory count of signed blocks, incremented after each signed block that extends the
-    /// chain. A replacement of the tip block does not change it.
-    signed_blocks_count: AtomicU64,
 }
 
 impl ValidatorService {
@@ -188,7 +185,6 @@ impl ValidatorService {
             tx_validation_semaphore: Semaphore::new(max_tx_concurrency()),
             committed_tip: watch::Sender::new(BlockNumber::from(initial_metrics.chain_tip)),
             validated_transactions_count: AtomicU64::new(initial_metrics.validated_transactions),
-            signed_blocks_count: AtomicU64::new(initial_metrics.signed_blocks),
         })
     }
 }

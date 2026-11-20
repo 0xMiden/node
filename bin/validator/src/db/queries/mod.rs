@@ -15,9 +15,6 @@ pub use protocol_config::{
     load_before as load_protocol_config_commitment_before,
 };
 
-mod count_signed_blocks;
-pub use count_signed_blocks::count_signed_blocks;
-
 mod count_validated_transactions;
 pub use count_validated_transactions::count_validated_transactions;
 

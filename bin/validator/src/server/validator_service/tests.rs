@@ -618,7 +618,7 @@ async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
-    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
     assert_eq!(
         tv.server.db.load_block(1.into()).await.unwrap(),
         None,
@@ -642,7 +642,7 @@ async fn sign_block_rejects_a_mismatched_protocol_config_before_signing() {
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
-    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
 }
 
 /// An empty block at chain tip + 1 with the correct previous block commitment should be accepted.
@@ -720,19 +720,16 @@ async fn chain_tip_replacement_succeeds() {
     );
 }
 
-/// A replacement of the tip block stores no additional block, so it does not change the signed
-/// block count. The count in memory then stays equal to the growth of the count that a restart
-/// reads from the database.
 #[tokio::test]
 async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
     let mut tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
-    let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
     let original =
         empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 1);
     tv.apply_block(original).await;
-    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 2);
 
     let replacement =
         empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 2);
@@ -740,9 +737,7 @@ async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
         .await
         .expect("chain tip replacement should succeed");
 
-    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
-    let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
-    assert_eq!(stored - stored_at_genesis, 1);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 2);
 }
 
 #[tokio::test]
