@@ -49,6 +49,7 @@ pub use crate::db::queries::{
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     TransactionRecordsPage,
+    TransactionsByIdPage,
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;

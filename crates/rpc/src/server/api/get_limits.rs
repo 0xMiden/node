@@ -11,6 +11,7 @@ use miden_node_utils::limiter::{
     QueryParamNullifierPrefixLimit as NullifierPrefix,
     QueryParamStorageMapKeyTotalLimit as StorageMapKeyTotal,
     QueryParamStorageMapSlotLimit as StorageMapSlot,
+    QueryParamTransactionIdLimit as TransactionId,
     QueryParamVaultAssetLimit as VaultAsset,
 };
 
@@ -52,6 +53,7 @@ impl RpcLimits {
         let v2 = v2::GetLimitsResponse {
             endpoints: shared
                 .into_iter()
+                .chain([("GetTransactionsById", HashMap::from([limit::<TransactionId>()]))])
                 .map(|(name, parameters)| (name.into(), v2::EndpointLimits { parameters }))
                 .collect(),
         };

@@ -286,6 +286,25 @@ impl StateView {
             .await
     }
 
+    /// Looks up only transactions committed at or before the explicit target.
+    pub async fn get_transactions_by_id_page(
+        &self,
+        ids: Vec<miden_protocol::transaction::TransactionId>,
+        target: BlockNumber,
+        cursor: Option<miden_protocol::transaction::TransactionId>,
+        byte_limit: NonZeroUsize,
+    ) -> Result<crate::db::TransactionsByIdPage, DatabaseError> {
+        let target = self
+            .scope_block(target)
+            .ok_or(crate::RangeBeyondTip { chain_tip: *self.tip(), block_to: target })?;
+        let query = crate::db::queries::TransactionsById::new(ids, target, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionsByIdPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
     /// Loads prefix-matching nullifiers through an explicit target.
     pub async fn sync_nullifiers_v2_page(
         &self,
