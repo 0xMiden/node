@@ -11,8 +11,12 @@ use miden_node_proto::clients::{
     SequencerClient,
     ValidatorClient,
 };
-use miden_node_proto::server::{miden_node_v1_node_service, miden_sequencer_v1_sequencer_service};
-use miden_node_proto_build::rpc_api_descriptor;
+use miden_node_proto::server::{
+    miden_node_v1_node_service,
+    miden_node_v2_node_service,
+    miden_sequencer_v1_sequencer_service,
+};
+use miden_node_proto_build::{rpc_api_descriptor, rpc_v2_api_descriptor};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::info;
@@ -288,7 +292,10 @@ impl Rpc {
 
         let max_decoding_message_size =
             self.grpc_options.message_size.max_decoding_message_size.get();
-        let api_service = miden_node_v1_node_service::service(api)
+        let api = Arc::new(api);
+        let v1_service = miden_node_v1_node_service::service_from_arc(Arc::clone(&api))
+            .max_decoding_message_size(max_decoding_message_size);
+        let v2_service = miden_node_v2_node_service::service_from_arc(api)
             .max_decoding_message_size(max_decoding_message_size);
 
         let mut tasks = Tasks::new();
@@ -297,12 +304,11 @@ impl Rpc {
         let (health_reporter, health_service) = tonic_health::server::health_reporter();
         match self.mode {
             RpcMode::Sequencer { .. } => {
-                health_reporter
-                    .set_service_status(
-                        miden_node_v1_node_service::service_name(),
-                        tonic_health::ServingStatus::Serving,
-                    )
-                    .await;
+                RpcReadiness::set_service_status(
+                    &health_reporter,
+                    tonic_health::ServingStatus::Serving,
+                )
+                .await;
                 let chain_tip = self.state.committed_tip();
                 log_node_ready(mode, endpoint, chain_tip);
             },
@@ -331,6 +337,7 @@ impl Rpc {
 
         let reflection_service = server::Builder::configure()
             .register_file_descriptor_set(rpc_api_descriptor())
+            .register_file_descriptor_set(rpc_v2_api_descriptor())
             .register_encoded_file_descriptor_set(tonic_health::pb::FILE_DESCRIPTOR_SET)
             .build_v1()
             .context("failed to build reflection service")?;
@@ -354,7 +361,8 @@ impl Rpc {
                     .with_genesis_enforced_method("SubmitProvenTx")
                     .with_genesis_enforced_method("SubmitProvenTxBatch"),
             )
-            .add_service(api_service)
+            .add_service(v1_service)
+            .add_service(v2_service)
             .add_service(health_service.max_decoding_message_size(max_decoding_message_size))
             // Enables gRPC reflection service.
             .add_service(reflection_service.max_decoding_message_size(max_decoding_message_size))
@@ -384,11 +392,7 @@ impl Rpc {
         block_writer: BlockWriter,
         proof_writer: ProofWriter,
     ) {
-        health_reporter
-            .set_service_status(
-                miden_node_v1_node_service::service_name(),
-                tonic_health::ServingStatus::NotServing,
-            )
+        RpcReadiness::set_service_status(&health_reporter, tonic_health::ServingStatus::NotServing)
             .await;
         let readiness = RpcReadiness::new(health_reporter, readiness_threshold);
         tasks.spawn(
