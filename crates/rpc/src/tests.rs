@@ -26,7 +26,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{
     miden_node_v1_node_service,
     miden_ntx_builder_v1_network_transaction_builder_service,
-    miden_sequencer_v1_sequencer_service,
     miden_validator_v1_validator_service,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
