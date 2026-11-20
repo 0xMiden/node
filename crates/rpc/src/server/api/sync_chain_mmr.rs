@@ -1,5 +1,5 @@
 use miden_node_proto::generated as proto;
-use miden_node_store::StateSyncError;
+use miden_node_store::{DatabaseError, StateSyncError};
 use miden_node_tracing::{debug, instrument};
 use miden_protocol::block::BlockNumber;
 use proto::miden::node::{v1, v2};
@@ -123,6 +123,9 @@ impl RpcService {
             view.sync_chain_mmr(block_range.clone()).await.map_err(|err| match err {
                 StateSyncError::RangeBeyondTip(_) => {
                     SyncChainMmrErrorCode::FutureBlock.invalid_argument(err)
+                },
+                StateSyncError::DatabaseError(DatabaseError::BlockPruned { .. }) => {
+                    tonic::Status::out_of_range(err.to_string())
                 },
                 _ => log_internal_error(&err),
             })?;

@@ -93,6 +93,59 @@ service NodeService {
     // Each item identifies the block height and the proven chain tip. After RESOURCE_EXHAUSTED,
     // reconnect from the first height whose proof is still missing locally.
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
+
+    // Streams the final target asset for each public account vault key changed in the requested range.
+    //
+    // Use this endpoint to update a local vault after its authenticated account state changes.
+    // Repeated changes to a key produce one absolute target value. An absent asset marks deletion.
+    // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
+    // authenticated target fixed per request; interrupted scans may resume at the incomplete block
+    // with the same or a newer authenticated target. Publish only after OK completion and final
+    // vault verification against authenticated account details at the completed target.
+    rpc SyncAccountVault(SyncAccountVaultRequest) returns (stream SyncAccountVaultResponse) {}
+}
+
+// Changes after an exclusive lower bound, materialized at an explicit target.
+//
+// Vault and storage-map streams also accept a completed scan checkpoint as their lower bound.
+// Such a checkpoint does not represent synchronized account state at that block.
+message StateDeltaRange {
+    // Absence includes genesis. A present value excludes that block.
+    optional fixed32 from_block_exclusive = 1;
+
+    // Required by validation. Zero selects genesis.
+    optional fixed32 to_block_inclusive = 2;
+}
+
+// Account vault synchronization request with squashed, server-streaming responses.
+//
+// Authenticate the target with SyncChainMmr. Clients may stage completed block prefixes and
+// replay an interrupted block at the same or a newer target on that chain. A scan checkpoint
+// is not an account state at that block; publish only after completion and commitment verification.
+message SyncAccountVaultRequest {
+    // Changes over (C, N], where C is the synchronized baseline or a completed scan checkpoint.
+    // After interruption in block B, use C = B - 1 to replay B; omit C for genesis. Keep N fixed
+    // during each request. N must remain within retained history; C may be older.
+    StateDeltaRange range = 1;
+
+    // Public account whose asset vault should be synchronized.
+    account.AccountId account_id = 2;
+}
+
+// One absolute target vault value, ordered by nondecreasing last_updated_at.
+//
+// The first item from a later block completes the preceding block's scan. Only OK termination
+// completes the final block and any empty suffix through the requested target.
+message SyncAccountVaultResponse {
+    // Vault key associated with the asset.
+    primitives.Word vault_key = 1;
+
+    // Asset value related to the vault key.
+    // If not present, the asset was removed from the vault.
+    optional asset.Asset asset = 2;
+
+    // Block number at which the above asset was updated in the account vault.
+    fixed32 last_updated_at = 3;
 }
 
 message StatusRequest {}

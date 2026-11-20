@@ -52,6 +52,12 @@ impl ScopedBlockRange {
         Self(range)
     }
 
+    /// Constructs a scoped range without validation for database tests.
+    #[cfg(test)]
+    pub(crate) fn new_unchecked(range: RangeInclusive<BlockNumber>) -> Self {
+        Self(range)
+    }
+
     /// Returns the start of the validated range.
     pub(crate) fn start(&self) -> BlockNumber {
         *self.0.start()
@@ -67,5 +73,10 @@ impl ScopedBlockRange {
     /// Sound because the range's upper bound is exactly what its proof covers.
     pub(crate) fn scoped_end(&self) -> ScopedBlockNum {
         ScopedBlockNum(*self.0.end())
+    }
+
+    /// Returns the validated range.
+    pub(crate) fn into_inner(self) -> RangeInclusive<BlockNumber> {
+        self.0
     }
 }

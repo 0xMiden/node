@@ -109,7 +109,27 @@ codes returned in gRPC status details.
 ## State Synchronization
 
 Call `SyncChainMmr` on v2. Omit `target_block_num` to select the committed or proven tip, or supply a block number at or
-below that tip. Zero selects genesis. Authenticate the `SyncChainMmr` target header and its MMR delta first.
+below that tip. Zero selects genesis. Authenticate the `SyncChainMmr` target header and its MMR delta first. Keep its
+block number `N` fixed within each request, and reconcile all results to one common target before committing
+synchronization. Delta streams take `StateDeltaRange`: `from_block_exclusive = C` and `to_block_inclusive = N` request
+`(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return an empty
+delta after target validation.
+
+| Method             | Purpose                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| `SyncAccountVault` | Streams the final target value of every changed vault key. |
+
+Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
+block number, not a timestamp or the authenticated target.
+
+All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
+all responses and their negative lookup outcomes. Commit one local update only after every required stream and proof
+check succeeds at the common target. A terminal error never establishes an empty suffix or a negative lookup result. If
+a vault scan is interrupted, retain completed blocks and replay the first incomplete block before verifying the vault
+root.
+
+Use `GetLimits` before batching large request lists. Streaming removes aggregate response pagination, while per-message
+and request-list limits remain.
 
 The following paginated unary methods are available on v1. Each returns as much of the requested block range as fits in
 one response, and the caller repeats the request for the remainder.
