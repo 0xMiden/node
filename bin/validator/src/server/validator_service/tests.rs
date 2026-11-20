@@ -377,6 +377,10 @@ fn empty_block_inputs(parent_header: &BlockHeader, chain: &PartialBlockchain) ->
 
 /// Builds a syntactically valid [`ProvenTransaction`] with a dummy proof.
 fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
+    dummy_proven_tx_at(seed, Word::empty())
+}
+
+fn dummy_proven_tx_at(seed: u8, reference_block: Word) -> ProvenTransaction {
     let account_update = TxAccountUpdate::new(
         miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER
             .try_into()
@@ -399,7 +403,7 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
         Vec::<InputNoteCommitment>::new(),
         Vec::<OutputNote>::new(),
         BlockNumber::GENESIS,
-        Word::empty(),
+        reference_block,
         BlockNumber::from(u32::from(seed) + 1),
         miden_protocol::testing::dummy_execution_proof(),
         log_details,
@@ -965,8 +969,9 @@ async fn unknown_transactions_rejected() {
 /// can filter validated transactions by block range.
 #[tokio::test]
 async fn sign_block_links_transactions_to_the_signed_block() {
-    use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
-    use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
+    use miden_protocol::batch::ProposedBatch;
+    use miden_protocol::block::account_tree::AccountTree;
+    use miden_tx_batch::{BatchExecutor, LocalBatchProver};
     use rand_chacha_03::rand_core::SeedableRng;
     use tokio_stream::StreamExt;
 
@@ -978,18 +983,9 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     let genesis_header = tv.chain_tip.clone();
 
     // Build a dummy transaction and record it as validated, as `submit_proven_transaction` would.
-    let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
-    let tx_header = TransactionHeader::new(
-        account_id,
-        Word::default(),
-        Word::default(),
-        InputNotes::<InputNoteCommitment>::default(),
-        vec![],
-        miden_protocol::transaction::TransactionLogs::default().commitment(),
-        CodePatch::default().commitment(),
-    )
-    .unwrap();
-    let tx_id = tx_header.id();
+    let tx = dummy_proven_tx_at(1, genesis_header.commitment());
+    let account_id = tx.account_update().account_id();
+    let tx_id = tx.id();
     let key_epoch = StorageKeyEpoch::new([2; 32]);
     let record = test_private_record_sealer(key_epoch, [4; 32])
         .seal(
@@ -1002,36 +998,48 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     tv.server.db.insert_validated_private_transaction(record).await.unwrap();
 
     // Build a block containing the transaction and have the validator sign it.
-    let batch = ProvenBatch::new_unchecked(
-        BatchId::from_ids(std::iter::once((tx_id, account_id))),
-        genesis_header.commitment(),
-        BlockNumber::GENESIS,
-        BTreeMap::from([(
-            account_id,
-            BatchAccountUpdate::new_unchecked(
-                account_id,
-                Word::default(),
-                Word::default(),
-                AccountUpdateDetails::Private,
-            ),
-        )]),
-        InputNotes::default(),
-        vec![],
-        BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
-        PublicTransactionLogs::default(),
-        miden_protocol::testing::dummy_execution_proof(),
+    let proposal = ProposedBatch::new_unverified(
+        vec![tx.into()],
+        genesis_header.clone(),
+        tv.chain.clone(),
+        BTreeMap::new(),
     )
     .unwrap();
+    let batch = LocalBatchProver::default()
+        .prove(BatchExecutor::new().execute(proposal).unwrap())
+        .unwrap();
+    let accounts: AccountTree = AccountTree::default();
     let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        PartialBlockchain::default(),
-        BTreeMap::new(),
+        genesis_header,
+        tv.chain.clone(),
+        BTreeMap::from([(account_id, accounts.open(account_id))]),
         BTreeMap::new(),
         BTreeMap::new(),
     );
     let proposed = ProposedBlock::new(block_inputs.clone(), vec![batch]).unwrap();
-    tv.call_sign_block(&proposed).await.expect("block should be signed");
+    let request: proto::miden::validator::v1::SignBlockRequest = SignBlockRequest {
+        tx_batches: proposed.batches().clone(),
+        block_header: proposed.clone().into_header_and_body().unwrap().0,
+        block_inputs: block_inputs.clone(),
+        protocol_config: Some(tv.protocol_config.clone()),
+    }
+    .into();
+
+    let mut invalid = request.clone();
+    invalid.batches[0].proof = Some(miden_protocol::testing::dummy_execution_proof().into());
+    let status = miden_validator_v1_validator_service::SignBlock::full(
+        &tv.server,
+        tonic::Request::new(invalid),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("invalid batch proof"), "{status}");
+    assert!(tv.server.db.load_block(1.into()).await.unwrap().is_none());
+
+    miden_validator_v1_validator_service::SignBlock::full(&tv.server, tonic::Request::new(request))
+        .await
+        .expect("block should be signed");
 
     // Backup streaming retains the ordered nonempty batches and the original state witnesses.
     let mut backup = tv.call_block_subscription(1).await;

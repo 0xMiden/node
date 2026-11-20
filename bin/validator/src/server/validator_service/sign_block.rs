@@ -5,11 +5,12 @@ use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
-use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
+use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+use miden_tx_batch::BatchVerifier;
 
 use super::{StatusResultExt, ValidatorService};
 
@@ -25,20 +26,26 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
     #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
-        request
+        let inputs = request
             .decode_fields()
             .context("failed to decode")
             .map_err(ConversionError::into_status)?
             // SAFETY: Construction checks local batch invariants and block witnesses.
             // validate_block checks transaction IDs and the trusted parent before signing.
             //
-            // FIXME: Verify batch proofs and contents before signing. Validated transaction
+            // FIXME: Verify batch contents before signing. Validated transaction
             // IDs do not establish correct note aggregation or expiration. The current batch
             // kernel does not bind these fields, and transaction headers omit reference
             // blocks and expiration. Full validation needs more data or protocol support.
             .build_with_body_unchecked()
             .context("failed to build unchecked")
-            .map_err(ConversionError::into_status)
+            .map_err(ConversionError::into_status)?;
+
+        let verifier = BatchVerifier::new(MIN_PROOF_SECURITY_LEVEL);
+        for batch in inputs.proving_inputs.tx_batches.as_slice() {
+            verifier.verify(batch).or_invalid_argument("invalid batch proof")?;
+        }
+        Ok(inputs)
     }
 
     #[instrument(err)]

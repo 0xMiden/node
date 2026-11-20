@@ -5500,6 +5500,7 @@ dependencies = [
  "miden-standards",
  "miden-testing",
  "miden-tx",
+ "miden-tx-batch",
  "rand 0.10.3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
