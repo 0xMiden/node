@@ -22,6 +22,7 @@ use tonic::{Request, Status};
 
 pub(crate) use self::error_codes::log_internal_error;
 use self::error_codes::{SyncErrorCode, internal_error};
+use crate::SyncAccountConfig;
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 
 // VALIDATOR FAN-OUT
@@ -108,6 +109,7 @@ mod submit_auth_tx_batch;
 mod submit_proven_tx;
 mod submit_proven_tx_batch;
 mod subscription;
+mod sync_account;
 mod sync_account_storage_maps;
 mod sync_account_storage_maps_v2;
 mod sync_account_vault;
@@ -138,6 +140,7 @@ const NETWORK_TX_AUTH_HEADER_NAME: &str = "x-miden-network-tx-auth";
 
 pub struct RpcService {
     limits: get_limits::RpcLimits,
+    sync_account: SyncAccountConfig,
     state: Arc<State>,
     backend: RpcBackend,
     ntx_builder: Option<NtxBuilderClient>,
@@ -155,10 +158,12 @@ impl RpcService {
         ntx_builder: Option<NtxBuilderClient>,
         commitment_cache_capacity: NonZeroUsize,
         network_tx_auth: Option<NetworkTxAuth>,
+        sync_account: SyncAccountConfig,
     ) -> Self {
         Self {
             transaction_log_requests: Semaphore::new(get_transaction_logs::MAX_ACTIVE_REQUESTS),
-            limits: get_limits::RpcLimits::new(),
+            limits: get_limits::RpcLimits::new(sync_account.limit),
+            sync_account,
             state,
             backend,
             ntx_builder,

@@ -52,17 +52,17 @@ The RPC server supports:
 
 ## Endpoint Groups
 
-| Group                      | Methods                                                                                                                                |
-| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| Status and limits          | `Status`, `GetLimits`                                                                                                                  |
-| State queries              | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`                                      |
-| Transaction submission     | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                                                 |
-| Account registration       | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                                                         |
-| State synchronization (v1) | `SyncChainMmr`, `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`                        |
-| Account reads (v2)         | `GetAccountInfos`, `GetAccountWitnesses`, `GetAccountVaultWitnesses`, `GetAccountStorageWitnesses`                                     |
-| State synchronization (v2) | `SyncChainMmr`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `GetTransactionsById`, `SyncTransactions` |
-| Block streaming            | `BlockSubscription`, `ProofSubscription`                                                                                               |
-| Network note debugging     | `GetNetworkNoteStatus`                                                                                                                 |
+| Group                      | Methods                                                                                                                                               |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Status and limits          | `Status`, `GetLimits`                                                                                                                                 |
+| State queries              | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`                                                     |
+| Transaction submission     | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                                                                |
+| Account registration       | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                                                                        |
+| State synchronization (v1) | `SyncChainMmr`, `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`                                       |
+| Account reads (v2)         | `GetAccountInfos`, `GetAccountWitnesses`, `GetAccountVaultWitnesses`, `GetAccountStorageWitnesses`                                                    |
+| State synchronization (v2) | `SyncChainMmr`, `SyncAccount`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `GetTransactionsById`, `SyncTransactions` |
+| Block streaming            | `BlockSubscription`, `ProofSubscription`                                                                                                              |
+| Network note debugging     | `GetNetworkNoteStatus`                                                                                                                                |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
 [Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.

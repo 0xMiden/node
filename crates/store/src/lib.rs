@@ -24,7 +24,15 @@ pub mod state;
 
 /// Queries for composing reads within a state view's database transaction.
 pub mod queries {
-    pub use crate::db::queries::{account_headers, check_account_history_target};
+    pub use crate::db::queries::{
+        account_code,
+        account_headers,
+        account_size,
+        account_state,
+        account_storage_map_updates_page,
+        account_vault_updates_page,
+        check_account_history_target,
+    };
 }
 
 pub use accounts::{
@@ -36,6 +44,7 @@ pub use accounts::{
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
 pub use db::queries::{
+    AccountSize,
     NoteSyncCursor,
     NoteSyncPage,
     NullifierCursor,
@@ -74,6 +83,7 @@ pub use errors::{
     StateSyncError,
 };
 pub use genesis::GenesisState;
+pub use miden_node_db::sqlite::ReadTx;
 pub use state::{
     BlockWriter,
     LoadedState,

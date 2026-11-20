@@ -178,6 +178,7 @@ fn node_service_versions_expose_their_sync_contracts() {
                 ("GetAccountVaultWitnesses", false),
                 ("GetAccountStorageWitnesses", false),
                 ("GetTransactionsById", true),
+                ("SyncAccount", false),
                 ("SyncChainMmr", false),
                 ("SyncAccountStorageMaps", true),
                 ("SyncAccountVault", true),
@@ -192,11 +193,12 @@ fn node_service_versions_expose_their_sync_contracts() {
     let v1 = methods("miden.node.v1");
     for (name, streaming) in &v2 {
         match name.as_str() {
-            "GetTransactionsById"
-            | "GetAccountInfos"
+            "GetAccountInfos"
             | "GetAccountWitnesses"
             | "GetAccountVaultWitnesses"
-            | "GetAccountStorageWitnesses" => {
+            | "GetAccountStorageWitnesses"
+            | "SyncAccount"
+            | "GetTransactionsById" => {
                 assert!(!v1.iter().any(|(v, _)| v == name));
             },
             name if name.starts_with("Sync") => assert!(v1.contains(&(name.to_owned(), false))),

@@ -55,6 +55,7 @@ async fn sync_readers_preserve_targets_and_leave_block_writes_available() {
         None,
         NonZeroUsize::MIN,
         None,
+        crate::SyncAccountConfig::default(),
     );
     let mut slow = V2Api::sync_nullifiers(&service, request()).await.unwrap().into_inner();
     let disconnected = V2Api::sync_nullifiers(&service, request()).await.unwrap();
