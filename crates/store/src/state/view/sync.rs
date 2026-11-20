@@ -286,6 +286,23 @@ impl StateView {
             .await
     }
 
+    /// Loads prefix-matching nullifiers through an explicit target.
+    pub async fn sync_nullifiers_v2_page(
+        &self,
+        prefixes: Vec<u16>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::NullifierCursor>,
+        page_size: NonZeroUsize,
+    ) -> Result<crate::NullifierUpdatesPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::NullifierUpdatesPaged::new(prefixes, range, page_size);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::NullifierUpdatesPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
     /// Returns storage map values for syncing within a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this

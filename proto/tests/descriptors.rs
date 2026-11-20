@@ -177,6 +177,7 @@ fn node_service_versions_expose_their_sync_contracts() {
                 ("SyncAccountStorageMaps", true),
                 ("SyncAccountVault", true),
                 ("SyncNotes", true),
+                ("SyncNullifiers", true),
             ]
             .map(|(name, streaming)| (name.to_owned(), streaming))
         )

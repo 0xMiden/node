@@ -45,6 +45,7 @@ use crate::db::pagination::{Page, Paginated};
 use crate::db::queries::PreparedTransactionLogs;
 pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
+    NullifierUpdatesPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
 };

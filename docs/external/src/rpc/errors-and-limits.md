@@ -163,6 +163,13 @@ retained history. Other `INVALID_ARGUMENT` codes are not instructions to advance
 and stalled-reader timeouts can retry the retained target; internal failures require diagnosis. Other incomplete streams
 must be retried in full.
 
+## Nullifier stream errors
+
+The v2 `SyncNullifiers` stream uses detail codes `1` (malformed input or a prefix above `u16::MAX`), `2` (invalid or
+missing range), `3` (future target), and `6` (prefix length other than 16), with `INVALID_ARGUMENT`. The request limit
+is 1000 prefixes, checked before decoding and deduplication. Discover it under
+`GetLimits.endpoints["SyncNullifiers"].parameters["nullifier_prefix"]`.
+
 ## Request Limits
 
 Use `GetLimits` to discover method-specific request limits before sending large sync requests. Methods such as
