@@ -4315,6 +4315,7 @@ async fn v2_service_parity() {
             "GetTransactionsById",
             "GetAccountInfos",
             "GetAccountWitnesses",
+            "GetAccountStorageWitnesses",
             "GetAccountVaultWitnesses"
         ]),
     );
