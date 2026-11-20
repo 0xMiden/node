@@ -94,3 +94,11 @@ error_codes!(SyncAccountVaultV2ErrorCode {
     HistoryUnavailable = 4,
     AccountNotPublic = 6,
 });
+
+error_codes!(SyncAccountStorageMapsV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    AccountNotPublic = 6,
+});

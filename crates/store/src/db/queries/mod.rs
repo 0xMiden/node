@@ -191,9 +191,7 @@ pub(crate) use select_account_code_by_commitment::select_account_code_by_commitm
 
 mod select_account_storage_map_values_paged;
 pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesPaged;
-#[cfg(test)]
-pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
-pub use select_account_storage_map_values_paged::StorageMapValuesPage;
+pub use select_account_storage_map_values_paged::{StorageMapValue, StorageMapValuesPage};
 
 mod select_account_vault_updates_v2;
 pub use select_account_vault_updates_v2::account_vault_updates_page;
@@ -217,6 +215,15 @@ pub(crate) use select_latest_storage::select_latest_storage;
 
 mod apply_block;
 pub(crate) use apply_block::apply_block;
+
+mod select_account_storage_map_updates_v2;
+#[cfg(test)]
+pub(crate) use select_account_storage_map_updates_v2::AccountStorageMapUpdatesV2;
+pub use select_account_storage_map_updates_v2::{
+    StorageMapCursor,
+    StorageMapUpdatesPage,
+    account_storage_map_updates_page,
+};
 
 mod check_account_history_target;
 pub use check_account_history_target::check_account_history_target;

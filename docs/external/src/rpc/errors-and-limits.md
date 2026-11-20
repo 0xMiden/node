@@ -146,9 +146,9 @@ authenticated block and repeat all account reads there.
 The following methods belong to `miden.node.v2.NodeService`. On v2, look up each method by its bare name in `GetLimits`.
 Each API version advertises its own methods.
 
-| Method             | Codes with `INVALID_ARGUMENT`                                                                              |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- |
-| `SyncAccountVault` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
+| Method                                       | Codes with `INVALID_ARGUMENT`                                                                              |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `SyncAccountVault`, `SyncAccountStorageMaps` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
 
 Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. Limits apply to the raw lists before
 decoding and deduplication and return `OUT_OF_RANGE`. Streaming does not relax per-message receive limits.
