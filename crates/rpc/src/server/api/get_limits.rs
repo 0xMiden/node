@@ -52,9 +52,6 @@ impl RpcLimits {
         let v2 = v2::GetLimitsResponse {
             endpoints: shared
                 .into_iter()
-                .filter(|(name, _)| {
-                    matches!(*name, "GetNotesById" | "SyncNotes" | "SyncNullifiers")
-                })
                 .map(|(name, parameters)| (name.into(), v2::EndpointLimits { parameters }))
                 .collect(),
         };

@@ -48,6 +48,7 @@ pub use crate::db::queries::{
     NullifierUpdatesPage,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    TransactionRecordsPage,
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;

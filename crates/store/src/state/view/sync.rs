@@ -303,6 +303,23 @@ impl StateView {
         })
     }
 
+    /// Loads a bounded page of complete transaction events, including partial blocks.
+    pub async fn sync_transactions_v2_page(
+        &self,
+        ids: Vec<AccountId>,
+        range: RangeInclusive<BlockNumber>,
+        cursor: Option<crate::TransactionCursor>,
+        byte_limit: NonZeroUsize,
+    ) -> Result<crate::TransactionRecordsPage, DatabaseError> {
+        let range = self.scope_range(range)?;
+        let query = crate::db::queries::TransactionRecordsPaged::new(ids, range, byte_limit);
+        let page = self.db.page(query, cursor).await?;
+        Ok(crate::db::TransactionRecordsPage {
+            records: page.items,
+            next_cursor: page.next.flatten(),
+        })
+    }
+
     /// Returns storage map values for syncing within a block range.
     ///
     /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
