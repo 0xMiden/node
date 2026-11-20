@@ -1,21 +1,10 @@
 name: Build Docker binaries
-description: Compile release binaries in the Docker build environment with the shared S3 compiler cache
+description: Compile release binaries in the Docker build environment with the shared R2 compiler cache
 inputs:
   architecture:
     description: Native Docker architecture
     required: true
-  s3-bucket:
-    description: S3 bucket for compiler artifacts
-    default: ""
-  s3-region:
-    description: AWS region of the cache bucket
-    default: ""
-  s3-role-arn:
-    description: AWS role for the compiler cache
-    default: ""
-  download-endpoint:
-    description: CloudFront URL for compiler artifact downloads
-    default: ""
+
 outputs:
   context:
     description: Directory replacing Docker's builder stage
@@ -32,19 +21,12 @@ runs:
       uses: $/.github/actions/setup-kache
       with:
         prepare-only: "true"
-        s3-bucket: ${{ inputs.s3-bucket }}
-        s3-region: ${{ inputs.s3-region }}
-        s3-role-arn: ${{ inputs.s3-role-arn }}
-        download-endpoint: ${{ inputs.download-endpoint }}
 
     - name: Compile image binaries
       id: build
       shell: bash
       env:
-        CACHE_ENABLED: ${{ steps.cache.outputs.enabled }}
         CACHE_WRITABLE: ${{ steps.cache.outputs.writable }}
-        CACHE_BINARY: ${{ steps.cache.outputs.binary }}
-        CACHE_CONFIG: ${{ steps.cache.outputs.config }}
         ARCHITECTURE: ${{ inputs.architecture }}
         ACTION_PATH: ${{ github.action_path }}
       run: bash "${ACTION_PATH}/run.sh"
