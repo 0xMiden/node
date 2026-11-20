@@ -282,6 +282,7 @@ async fn replicate(
             ntx_builder: None,
             grpc_options: GrpcOptions::default(),
             network_tx_auth: None,
+            sync_account: miden_node_rpc::SyncAccountConfig::default(),
         };
         upstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
         let mut upstream_client = client(upstream_url.clone());
@@ -303,6 +304,7 @@ async fn replicate(
             ntx_builder: None,
             grpc_options: GrpcOptions::default(),
             network_tx_auth: None,
+            sync_account: miden_node_rpc::SyncAccountConfig::default(),
         };
         downstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
         let mut blocks = upstream_client

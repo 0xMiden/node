@@ -52,6 +52,13 @@ Additional internal-only limits in `miden_node_utils::limiter` (not surfaced by 
 | `note_commitment` | `1000` | Internal note proof lookups            |
 | `block_header`    | `1000` | Internal batch/block header operations |
 
+## Account synchronization
+
+V2 binds account reads to an explicit block height. `GetAccountInfos` reads the requested public headers in one SQLite
+transaction. `GetAccountWitnesses` combines historical account leaves into one partial SMT. Selective vault and storage
+reads open entries at the same height. `SyncAccount` supplies bounded contents, while larger accounts can use the vault
+and storage-map streams. Clients authenticate the resulting state against the target block header.
+
 ## Error Handling
 
 The RPC boundary maps errors to gRPC status codes and method-specific detail bytes. The first byte of `Status.details`

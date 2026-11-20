@@ -135,6 +135,16 @@ fall into the ordinary-gRPC-status bucket described above:
   re-sealing, and back off rather than retrying in a tight loop, since official endpoints may rate limit requests at the
   infrastructure level.
 
+## SyncAccount errors
+
+Use the streaming account synchronization endpoints for accounts above the size limit. If the target history is
+unavailable, authenticate a newer target and retry.
+
+The `account_entries` limit advertised by `GetLimits` specifies the maximum storage size supported by `SyncAccount`.
+Accounts whose combined count of storage slots, storage map entries, and vault assets at the target block exceeds this
+limit return `AccountTooLarge` (`RESOURCE_EXHAUSTED`). See
+[`SyncAccount`](./public-api.md#complete-account-synchronization) for request and response details.
+
 ## Historical account and chain reads
 
 V2 `GetAccountInfos` and `GetAccountWitnesses` accept up to 1000 distinct IDs. Account witnesses require at least one

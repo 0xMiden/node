@@ -7,6 +7,8 @@ miden_node_tracing::declare_targets! {
     "miden_node_rpc::funding" => "miden::rpc::client",
 }
 
+use std::num::NonZeroU32;
+
 mod funding;
 
 mod server;
@@ -23,3 +25,24 @@ pub use server::{
     SequencerInternal,
     ValidatorClients,
 };
+
+/// Account eligibility and snapshot selection settings for `SyncAccount`.
+#[derive(Clone, Copy, Debug)]
+pub struct SyncAccountConfig {
+    /// Maximum combined count of storage slots, map entries, and vault assets at the target.
+    pub limit: NonZeroU32,
+    /// Return a snapshot for changed accounts with at most this many map entries and vault assets.
+    pub snapshot_threshold: u32,
+    /// Maximum combined map-entry and vault-asset count returned in a delta.
+    pub delta_limit: NonZeroU32,
+}
+
+impl Default for SyncAccountConfig {
+    fn default() -> Self {
+        Self {
+            limit: NonZeroU32::new(1_000).unwrap(),
+            snapshot_threshold: 100,
+            delta_limit: NonZeroU32::new(100).unwrap(),
+        }
+    }
+}

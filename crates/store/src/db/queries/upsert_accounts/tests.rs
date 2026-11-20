@@ -84,7 +84,7 @@ fn insert_vault_asset(
     block_num: BlockNumber,
     vault_key: AssetId,
     asset: Option<Asset>,
-) -> Result<usize> {
+) -> Result<i64> {
     db.write(move |tx| queries::insert_vault_asset(tx, account_id, block_num, vault_key, asset))
 }
 
@@ -1917,3 +1917,6 @@ fn network_accounts_subset_classifies_correctly() {
     let empty = filter_network_accounts(&db, &[]).unwrap();
     assert!(empty.is_empty());
 }
+
+#[path = "size_tests.rs"]
+mod size_tests;
