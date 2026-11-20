@@ -85,6 +85,7 @@ mod validator_tests;
 mod error_codes;
 mod get_account;
 mod get_account_infos;
+mod get_account_storage_witnesses;
 mod get_account_vault_witnesses;
 mod get_account_witnesses;
 mod get_block_by_number;

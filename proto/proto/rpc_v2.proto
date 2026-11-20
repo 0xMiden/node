@@ -14,6 +14,8 @@ import "transaction.proto";
 
 service NodeService {
     rpc GetAccountVaultWitnesses(GetAccountVaultWitnessesRequest) returns (GetAccountVaultWitnessesResponse) {}
+    rpc GetAccountStorageWitnesses(GetAccountStorageWitnessesRequest) returns (GetAccountStorageWitnessesResponse) {}
+
     rpc GetAccountWitnesses(GetAccountWitnessesRequest) returns (GetAccountWitnessesResponse) {}
 
     rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
@@ -704,4 +706,26 @@ message GetAccountVaultWitnessesResponse {
     // Compact proof covering every requested ID, including absent assets. Verify against the
     // vault root in the already authenticated account header. No full-vault substitution.
     primitives.PartialSmt vault = 2;
+}
+
+message GetAccountStorageWitnessesRequest {
+    message MapQuery {
+        string slot_name = 1;
+        repeated primitives.Word keys = 2;
+    }
+    account.AccountId account_id = 1;
+    optional fixed32 block_num = 2;
+    repeated MapQuery maps = 3;
+}
+
+message GetAccountStorageWitnessesResponse {
+    message MapWitness {
+        string slot_name = 1;
+        // Covers every requested key, including absent keys. Verify against this slot's root
+        // in the already authenticated storage header. Unknown or value-only slots are errors.
+        primitives.PartialSmt map = 2;
+    }
+    fixed32 block_num = 1;
+    // Exactly one result per requested map, in request order. No account/storage headers.
+    repeated MapWitness maps = 2;
 }
