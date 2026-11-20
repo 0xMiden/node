@@ -188,6 +188,9 @@ jobs:
       id-token: write
       packages: write
     uses: $/.github/workflows/docker.yml
+    secrets:
+      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
+      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
     with:
       mode: stage
       ref: ${{ needs.preflight.outputs.tag }}
