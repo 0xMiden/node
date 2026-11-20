@@ -31,7 +31,7 @@ rayon              = { workspace = true }
 tokio              = { workspace = true }
 
 [features]
-# Renders spans as a timing tree on stdout, showing the per-phase breakdown of e.g. the
+# Renders spans as a timing tree on stderr, showing the per-phase breakdown of e.g. the
 # `load-state` benchmark. Opt-in because feature unification would otherwise switch the log
 # format of every binary in a workspace-wide build.
 tracing-forest = ["miden-node-tracing/tracing-forest"]

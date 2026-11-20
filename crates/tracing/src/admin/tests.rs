@@ -64,7 +64,7 @@ fn setup_with_filters(
     let stdout = Recorded::default();
     let otel = Recorded::default();
     let (stdout_filter, stdout_reload) =
-        reloadable_filter(stdout_expression, FilterOutput::Stdout).unwrap();
+        reloadable_filter(stdout_expression, FilterOutput::Stderr).unwrap();
     let (otel_filter, otel_reload) =
         reloadable_filter(otel_expression, FilterOutput::OpenTelemetry).unwrap();
     let subscriber = Registry::default()
@@ -271,7 +271,7 @@ async fn reloaded_otel_filter_preserves_span_attributes_and_export() {
     let provider = PROVIDER.get_or_init(|| {
         SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build()
     });
-    let (stdout_filter, stdout_reload) = reloadable_filter("off", FilterOutput::Stdout).unwrap();
+    let (stdout_filter, stdout_reload) = reloadable_filter("off", FilterOutput::Stderr).unwrap();
     let (otel_filter, otel_reload) = reloadable_filter("off", FilterOutput::OpenTelemetry).unwrap();
     let subscriber = Registry::default().with(Recorded::default().with_filter(stdout_filter)).with(
         tracing_opentelemetry::layer()
@@ -337,7 +337,7 @@ async fn failed_reload_returns_an_error() {
     .await;
 
     let errors = errors.0.lock().unwrap();
-    for output in ["stdout", "otel"] {
+    for output in ["stderr", "otel"] {
         assert!(errors.contains(&format!("failed to update {output} tracing filter")));
         assert!(errors.contains(&format!("failed to read {output} tracing filter")));
     }
