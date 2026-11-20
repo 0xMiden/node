@@ -337,7 +337,7 @@ async fn failed_reload_returns_an_error() {
     .await;
 
     let errors = errors.0.lock().unwrap();
-    for output in ["stdout", "otel"] {
+    for output in ["stderr", "otel"] {
         assert!(errors.contains(&format!("failed to update {output} tracing filter")));
         assert!(errors.contains(&format!("failed to read {output} tracing filter")));
     }
