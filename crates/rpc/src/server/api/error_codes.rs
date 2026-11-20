@@ -84,3 +84,13 @@ pub(crate) fn log_internal_error<E: std::error::Error + 'static>(err: &E) -> Sta
     error!(err, "Internal error");
     internal_error(err.to_string())
 }
+
+// Finite synchronization streams number their codes independently of the unary methods.
+
+error_codes!(SyncAccountVaultV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+    HistoryUnavailable = 4,
+    AccountNotPublic = 6,
+});
