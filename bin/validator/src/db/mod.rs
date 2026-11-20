@@ -8,7 +8,7 @@ use miden_node_proto::BlockProofRequest;
 use miden_node_tracing::{info, instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::metrics::InitialMetrics;
@@ -282,18 +282,23 @@ impl ValidatorDbWriter {
         &self,
         block: SignedBlock,
         protocol_config: ProtocolConfig,
-        transactions: Vec<TransactionId>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
         let retention = self.proving_input_retention_blocks;
         self.writer
             .write("upsert_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
+                let transactions = block
+                    .body()
+                    .transactions()
+                    .iter()
+                    .flat_map(OrderedTransactionHeaders::as_slice)
+                    .map(TransactionHeader::id);
                 persist_signed_block(
                     tx,
                     &block,
                     protocol_config,
-                    &transactions,
+                    transactions,
                     Some(&proving_inputs),
                 )?;
                 prune_expired_proving_inputs(tx, retention)
@@ -311,7 +316,7 @@ impl ValidatorDbWriter {
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("insert_legacy_signed_block", move |tx| {
-                persist_signed_block(tx, &block, protocol_config, &transactions, None)
+                persist_signed_block(tx, &block, protocol_config, transactions, None)
             })
             .await
     }
@@ -327,7 +332,7 @@ impl ValidatorDbWriter {
         self.writer
             .write("replace_legacy_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
-                persist_signed_block(tx, &block, protocol_config, &transactions, None)
+                persist_signed_block(tx, &block, protocol_config, transactions, None)
             })
             .await
     }
@@ -339,7 +344,7 @@ fn persist_signed_block(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     block: &SignedBlock,
     protocol_config: ProtocolConfig,
-    transactions: &[TransactionId],
+    transactions: impl IntoIterator<Item = TransactionId>,
     proving_inputs: Option<&BlockProofRequest>,
 ) -> Result<(), DatabaseError> {
     let header = block.header();
@@ -492,7 +497,7 @@ pub async fn bootstrap(
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
     db.writer
         .write("bootstrap", move |tx| {
-            persist_signed_block(tx, &genesis_block, protocol_config, &[], None)
+            persist_signed_block(tx, &genesis_block, protocol_config, [], None)
         })
         .await
 }

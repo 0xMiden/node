@@ -1,22 +1,32 @@
 use std::collections::BTreeMap;
 
-use miden_protocol::batch::OrderedBatches;
+use miden_protocol::account::AccountUpdateDetails;
+use miden_protocol::batch::{BatchAccountUpdate, BatchId, OrderedBatches, ProvenBatch};
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{BlockInputs, ProposedBlock};
-use miden_protocol::transaction::PartialBlockchain;
+use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
+use miden_protocol::transaction::{
+    InputNotes,
+    OrderedTransactionHeaders,
+    PartialBlockchain,
+    PublicTransactionLogs,
+    TransactionHeader,
+};
 
 use super::*;
 
-pub(super) fn empty_pair(
+fn block_pair(
     parent: &BlockHeader,
     chain: PartialBlockchain,
     timestamp: u32,
+    batches: Vec<ProvenBatch>,
 ) -> (SignedBlock, BlockProofRequest) {
     let block_inputs =
         BlockInputs::new(parent.clone(), chain, BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
-    let proposal = ProposedBlock::new_at(block_inputs.clone(), vec![], timestamp).unwrap();
+    let proposal = ProposedBlock::new_at(block_inputs.clone(), batches.clone(), timestamp).unwrap();
     let (header, body) = proposal.into_header_and_body().unwrap();
     let inputs = BlockProofRequest {
-        tx_batches: OrderedBatches::new(vec![]),
+        tx_batches: OrderedBatches::new(batches),
         block_header: header.clone(),
         block_inputs,
     };
@@ -29,6 +39,40 @@ pub(super) fn empty_pair(
     (block, inputs)
 }
 
+/// Builds a single-transaction batch whose account state stays unchanged, so the block needs no
+/// account witness.
+fn transaction_batch(parent: &BlockHeader, seed: u32) -> (ProvenBatch, TransactionId) {
+    let account = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
+    let state = Word::from([seed, 0, 0, 0]);
+    let header = TransactionHeader::new(
+        account,
+        state,
+        state,
+        InputNotes::default(),
+        vec![],
+        Word::empty(),
+        CodePatch::default().commitment(),
+    )
+    .unwrap();
+    let id = header.id();
+    let update =
+        BatchAccountUpdate::new_unchecked(account, state, state, AccountUpdateDetails::Private);
+    let batch = ProvenBatch::new_unchecked(
+        BatchId::from_ids([(id, account)]),
+        parent.commitment(),
+        parent.block_num(),
+        BTreeMap::from([(account, update)]),
+        InputNotes::default(),
+        vec![],
+        BlockNumber::MAX,
+        OrderedTransactionHeaders::new_unchecked(vec![header]),
+        PublicTransactionLogs::default(),
+        miden_protocol::testing::dummy_execution_proof(),
+    )
+    .unwrap();
+    (batch, id)
+}
+
 #[tokio::test]
 async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history() {
     // A failed proving input write rolls back the block, transaction links, and configuration
@@ -38,34 +82,33 @@ async fn proving_input_failure_rolls_back_blocks_links_and_configuration_history
     let db = setup(path.clone()).await.unwrap();
     let config = test_protocol_config();
     let genesis = genesis_header(&config);
+    let (batch, original_id) = transaction_batch(&genesis, 1);
     let (original, inputs) =
-        empty_pair(&genesis, PartialBlockchain::default(), genesis.timestamp() + 1);
+        block_pair(&genesis, PartialBlockchain::default(), genesis.timestamp() + 1, vec![batch]);
     let expected_inputs = miden_node_persistence::encode(&inputs);
-    let original_id = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
-    let replacement_id = TransactionId::from_raw(Word::from([2u32, 0, 0, 0]));
+    let (replacement_batch, replacement_id) = transaction_batch(&genesis, 2);
     for (id, seed) in [(original_id, 1), (replacement_id, 2)] {
         db.insert_validated_private_transaction(private_record(id, seed)).await.unwrap();
     }
-    db.upsert_signed_block(original.clone(), config.clone(), vec![original_id], inputs)
-        .await
-        .unwrap();
+    db.upsert_signed_block(original.clone(), config.clone(), inputs).await.unwrap();
     let history = protocol_config_history::history(&db).await;
     reject_proving_input_writes_for_test(&db).await.unwrap();
-    let (replacement, inputs) =
-        empty_pair(&genesis, PartialBlockchain::default(), genesis.timestamp() + 2);
-    assert!(
-        db.upsert_signed_block(replacement, config.clone(), vec![replacement_id], inputs)
-            .await
-            .is_err()
+    let (replacement, inputs) = block_pair(
+        &genesis,
+        PartialBlockchain::default(),
+        genesis.timestamp() + 2,
+        vec![replacement_batch.clone()],
     );
+    assert!(db.upsert_signed_block(replacement, config.clone(), inputs).await.is_err());
     let mut chain = PartialBlockchain::default();
-    chain.add_block(&genesis, false);
-    let (next, inputs) = empty_pair(original.header(), chain, original.header().timestamp() + 1);
-    assert!(
-        db.upsert_signed_block(next, config, vec![replacement_id], inputs)
-            .await
-            .is_err()
+    chain.add_block(&genesis, true);
+    let (next, inputs) = block_pair(
+        original.header(),
+        chain,
+        original.header().timestamp() + 1,
+        vec![replacement_batch],
     );
+    assert!(db.upsert_signed_block(next, config, inputs).await.is_err());
     db.writer
         .write("remove failure trigger", |tx| {
             tx.execute("DROP TRIGGER reject_proving_inputs", &[])?;
@@ -109,10 +152,10 @@ async fn append_empty_block(db: &ValidatorDbWriter) -> (SignedBlock, BlockProofR
     for height in 0..parent.block_num().as_u32() {
         chain.add_block(&db.load_block_header(height.into()).await.unwrap().unwrap(), false);
     }
-    let (block, inputs) = empty_pair(&parent, chain, parent.timestamp() + 1);
+    let (block, inputs) = block_pair(&parent, chain, parent.timestamp() + 1, vec![]);
     let retained_inputs =
         miden_node_persistence::decode(&miden_node_persistence::encode(&inputs)).unwrap();
-    db.upsert_signed_block(block.clone(), config, vec![], inputs).await.unwrap();
+    db.upsert_signed_block(block.clone(), config, inputs).await.unwrap();
     (block, retained_inputs)
 }
 
@@ -201,9 +244,7 @@ async fn tip_replacement_preserves_the_retention_boundary() {
     let replacement =
         SignedBlock::new_unchecked(header.clone(), body, original.signatures().clone());
     let inputs = BlockProofRequest { block_header: header, ..inputs };
-    db.upsert_signed_block(replacement.clone(), config, vec![], inputs)
-        .await
-        .unwrap();
+    db.upsert_signed_block(replacement.clone(), config, inputs).await.unwrap();
     assert_inputs(&db, &[(1, false), (2, true), (3, true)]).await;
     assert_eq!(db.load_block(3.into()).await.unwrap().unwrap(), replacement);
 }
@@ -223,7 +264,7 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
     .unwrap();
     let db = retained_db(path.clone(), 1).await;
     let (original, _) = append_empty_block(&db).await;
-    let transaction_id = TransactionId::from_raw(Word::from([1u32, 0, 0, 0]));
+    let (batch, transaction_id) = transaction_batch(original.header(), 1);
     db.insert_validated_private_transaction(private_record(transaction_id, 1))
         .await
         .unwrap();
@@ -234,16 +275,13 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
     }).await.unwrap();
     let mut chain = PartialBlockchain::default();
     chain.add_block(&db.load_block_header(0.into()).await.unwrap().unwrap(), false);
-    let (next, inputs) = empty_pair(original.header(), chain, original.header().timestamp() + 1);
+    let (next, inputs) =
+        block_pair(original.header(), chain, original.header().timestamp() + 1, vec![batch]);
     let retained_inputs = miden_node_persistence::decode::<BlockProofRequest>(
         &miden_node_persistence::encode(&inputs),
     )
     .unwrap();
-    assert!(
-        db.upsert_signed_block(next.clone(), config.clone(), vec![transaction_id], inputs)
-            .await
-            .is_err()
-    );
+    assert!(db.upsert_signed_block(next.clone(), config.clone(), inputs).await.is_err());
     assert_eq!(db.load_chain_tip().await.unwrap().unwrap(), *original.header());
     assert_inputs(&db, &[(1, true)]).await;
     assert!(db.load_block(2.into()).await.unwrap().is_none());
@@ -262,7 +300,7 @@ async fn pruning_failure_rolls_back_the_block_and_is_retryable_on_startup() {
     // Seed an expired backlog to exercise the cleanup used during startup.
     db.writer
         .write("seed backlog", move |tx| {
-            persist_signed_block(tx, &next, config, &[transaction_id], Some(&retained_inputs))
+            persist_signed_block(tx, &next, config, [transaction_id], Some(&retained_inputs))
         })
         .await
         .unwrap();

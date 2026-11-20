@@ -15,11 +15,11 @@ const SQL: &str = include_str!("link_block_transactions.sql");
 pub fn link_block_transactions(
     tx: &WriteTx<'_>,
     block_num: BlockNumber,
-    transactions: &[TransactionId],
+    transactions: impl IntoIterator<Item = TransactionId>,
 ) -> Result<(), DatabaseError> {
-    for (index, transaction_id) in transactions.iter().enumerate() {
+    for (index, transaction_id) in transactions.into_iter().enumerate() {
         let index = u32::try_from(index).expect("a block's transaction count fits in u32");
-        let inserted = tx.execute(SQL, &[&block_num.to_raw_sql(), &index, transaction_id])?;
+        let inserted = tx.execute(SQL, &[&block_num.to_raw_sql(), &index, &transaction_id])?;
         assert_eq!(inserted, 1, "linking a transaction must insert exactly one row");
     }
     Ok(())

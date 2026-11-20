@@ -7,7 +7,6 @@ use miden_node_tracing::{Instrument, info_span, instrument};
 use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx_batch::BatchVerifier;
 
@@ -116,17 +115,9 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .expect("a single signature is within the signature set bounds");
         let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
 
-        let block_transactions: Vec<TransactionId> = signed_block
-            .body()
-            .transactions()
-            .iter()
-            .flat_map(OrderedTransactionHeaders::as_slice)
-            .map(TransactionHeader::id)
-            .collect();
-
         let new_block_num = signed_block.header().block_num();
         self.db
-            .upsert_signed_block(signed_block, protocol_config, block_transactions, proving_inputs)
+            .upsert_signed_block(signed_block, protocol_config, proving_inputs)
             .await
             .or_internal("Failed to persist signed block")?;
 
