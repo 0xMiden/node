@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::{Debug, Formatter};
 
 use miden_node_utils::limiter::{
@@ -820,6 +820,80 @@ impl From<AccountStorageDetails> for proto::miden::node::v1::AccountStorageDetai
             header: Some(header.into()),
             map_details: map_details.into_iter().map(Into::into).collect(),
         }
+    }
+}
+
+// ACCOUNT SYNCHRONIZATION RESPONSE
+//================================================================================================
+
+/// Account headers and absolute storage-map and vault values for synchronization.
+#[derive(Debug, Clone)]
+pub struct AccountSyncState {
+    pub header: AccountHeader,
+    pub storage_header: AccountStorageHeader,
+    pub maps: BTreeMap<StorageSlotName, BTreeMap<StorageMapKey, Word>>,
+    pub vault: BTreeMap<AssetId, Word>,
+}
+
+/// Account contents to replace or apply to the client's starting state.
+pub enum AccountSyncUpdate {
+    Snapshot(AccountSyncState),
+    Delta(AccountSyncState),
+}
+
+/// Account contents at the requested target.
+pub struct SyncAccountResponse {
+    pub block_num: BlockNumber,
+    pub update: AccountSyncUpdate,
+}
+
+impl TryFrom<SyncAccountResponse> for proto::miden::node::v2::SyncAccountResponse {
+    type Error = miden_protocol::errors::AssetError;
+    fn try_from(value: SyncAccountResponse) -> Result<Self, Self::Error> {
+        use proto::miden::node::v2::sync_account_response::Update;
+        Ok(Self {
+            block_num: value.block_num.as_u32(),
+            update: Some(match value.update {
+                AccountSyncUpdate::Snapshot(state) => Update::Snapshot(state.try_into()?),
+                AccountSyncUpdate::Delta(state) => Update::Delta(state.try_into()?),
+            }),
+        })
+    }
+}
+
+impl TryFrom<AccountSyncState> for proto::miden::node::v2::AccountContents {
+    type Error = miden_protocol::errors::AssetError;
+    fn try_from(state: AccountSyncState) -> Result<Self, Self::Error> {
+        use proto::miden::node::v2::account_contents::{MapEntries, VaultEntry};
+        let vault = state
+            .vault
+            .into_iter()
+            .map(|(id, value)| {
+                let asset = if value == Word::empty() {
+                    None
+                } else {
+                    Some(Asset::new(id, value)?.into())
+                };
+                Ok(VaultEntry { asset_id: Some(id.into()), asset })
+            })
+            .collect::<Result<Vec<_>, Self::Error>>()?;
+        Ok(Self {
+            maps: state
+                .maps
+                .into_iter()
+                .map(|(name, entries)| MapEntries {
+                    slot_name: name.to_string(),
+                    entries: entries
+                        .into_iter()
+                        .map(|(key, value)| proto::account::StorageMapEntry {
+                            key: Some(Word::from(key).into()),
+                            value: Some(value.into()),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            vault,
+        })
     }
 }
 

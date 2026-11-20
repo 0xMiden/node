@@ -128,6 +128,7 @@ fn service(store: &TestStore) -> RpcService {
         None,
         NonZeroUsize::MIN,
         None,
+        crate::SyncAccountConfig::default(),
     )
 }
 

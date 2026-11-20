@@ -104,6 +104,7 @@ fn full_node(store: &TestStore, source: RpcClient) -> RpcService {
         None,
         NonZeroUsize::new(100).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     rpc.set_genesis_commitment(store.genesis_commitment()).unwrap();
     rpc

@@ -32,6 +32,7 @@ pub use accounts::{
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
 pub use db::queries::{
+    AccountSize,
     NoteSyncCursor,
     NoteSyncPage,
     NullifierCursor,

@@ -5,7 +5,7 @@ use rusqlite::Connection;
 use super::*;
 use crate::db::queries::VALID_FOREVER;
 
-const EXPECTED_SCHEMA_HASHES: [SchemaHash; 10] = [
+const EXPECTED_SCHEMA_HASHES: [SchemaHash; 11] = [
     SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
     SchemaHash::from_hex("7c783947d0bb2c9745d28f4bdcf329f84ad970c36aa07ea85441e62718d8bbbb"),
     SchemaHash::from_hex("e026a70464e897ae9a217f45c80d72341b1bfb757200e57e41145348473a9961"),
@@ -16,6 +16,7 @@ const EXPECTED_SCHEMA_HASHES: [SchemaHash; 10] = [
     SchemaHash::from_hex("93db886dab52c2175a4572a23823fe3a05138d7f7d08ea55cd5e60ee6d4ec3a8"),
     SchemaHash::from_hex("baaeabe602a81b84ef7161f781fd571750b7baf4afe028cf85ded57d6ca3b373"),
     SchemaHash::from_hex("38a0860de170e1b3b7571476227907dbb2008e99dfa8bdd434469b087a7c08a1"),
+    SchemaHash::from_hex("83a1f80310f3a098a2d16d87a26bff134a2e4521e7bf626fb847c65f31eefc0a"),
 ];
 
 #[test]
@@ -93,5 +94,67 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
         .collect::<Result<Vec<_>, _>>()?;
     pretty_assertions::assert_eq!(storage, vec![(1, 5), (5, VALID_FOREVER)]);
 
+    Ok(())
+}
+
+#[test]
+fn migration_011_backfills_account_sizes_at_each_update() -> Result<()> {
+    use miden_protocol::Word;
+    use miden_protocol::account::{
+        AccountStorageHeader,
+        StorageSlotHeader,
+        StorageSlotName,
+        StorageSlotType,
+    };
+
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("sizes.sqlite3");
+    {
+        let migrator = migrator()?;
+        let mut database = migrator.create_database(&path)?;
+        database.migrate_to(10)?;
+    }
+    let map: StorageSlotName = "test::map".parse()?;
+    let value =
+        StorageSlotHeader::new("test::value".parse()?, StorageSlotType::Value, Word::empty());
+    let first = AccountStorageHeader::new(vec![
+        value.clone(),
+        StorageSlotHeader::new(map.clone(), StorageSlotType::Map, Word::empty()),
+    ])?;
+    let last = AccountStorageHeader::new(vec![value])?;
+    {
+        let conn = rusqlite::Connection::open(&path)?;
+        for (block, header, until) in [(0_i64, first, 5_i64), (5, last, VALID_FOREVER)] {
+            conn.execute(
+                "INSERT INTO accounts (account_id, network_account_type, block_num, account_commitment,
+                 code_commitment, nonce, storage_header, vault_root, created_at_block, valid_until)
+                 VALUES (X'aa', 0, ?1, zeroblob(32), zeroblob(32), 1, ?2, zeroblob(32), 0, ?3)",
+                (block, miden_node_persistence::encode(&header), until),
+            )?;
+        }
+        conn.execute_batch(
+            "INSERT INTO account_storage_map_values VALUES
+             (X'aa', 0, 'test::map', X'01', X'0100000000000000000000000000000000000000000000000000000000000000', 9223372036854775807),
+             (X'aa', 0, 'test::map', X'02', zeroblob(32), 9223372036854775807),
+             (X'aa', 0, 'removed::map', X'03', X'01', 9223372036854775807);
+             INSERT INTO account_vault_assets VALUES
+             (X'aa', 0, X'01', X'01', 5), (X'aa', 5, X'01', NULL, 9223372036854775807);
+             INSERT INTO accounts (account_id, network_account_type, block_num, account_commitment,
+                 created_at_block, valid_until)
+             VALUES (X'bb', 0, 0, zeroblob(32), 0, 9223372036854775807);",
+        )?;
+    }
+    migrate_database(&path)?;
+    let conn = rusqlite::Connection::open(&path)?;
+    let counts = conn.prepare("SELECT block_num, storage_slots, storage_map_entries, vault_assets FROM accounts WHERE account_id = X'aa' ORDER BY block_num")?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(counts, vec![(0, 2, 1, 1), (5, 1, 0, 0)]);
+    let private_counts = conn.query_row(
+        "SELECT storage_slots, storage_map_entries, vault_assets FROM accounts WHERE account_id = X'bb'",
+        [],
+        |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?, row.get::<_, Option<i64>>(2)?)),
+    )?;
+    assert_eq!(private_counts, (None, None, None));
     Ok(())
 }

@@ -14,7 +14,11 @@ use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
 
 mod account_reads;
-pub use account_reads::account_headers;
+pub use account_reads::{account_code, account_headers, account_size, account_state};
+
+mod account_size;
+pub use account_size::AccountSize;
+pub(crate) use account_size::{select_account_size, update_account_size};
 
 // SHARED COLUMN TYPES
 // =================================================================================================
@@ -247,3 +251,6 @@ pub use select_transactions_records_page::{TransactionCursor, TransactionRecords
 mod select_nullifier_updates_page;
 pub(crate) use select_nullifier_updates_page::nullifier_updates_page;
 pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};
+
+mod load_full_account_at;
+pub(crate) use load_full_account_at::load_full_account_at;

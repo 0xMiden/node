@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::num::NonZeroU32;
 
 use miden_node_proto::generated as proto;
 use miden_node_proto::generated::miden::node::{v1, v2};
@@ -28,7 +29,7 @@ fn limit<L: QueryParamLimiter>() -> (String, u32) {
 }
 
 impl RpcLimits {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(account_entries: NonZeroU32) -> Self {
         let shared = [
             ("GetNotesById", HashMap::from([limit::<NoteId>()])),
             ("SyncNotes", HashMap::from([limit::<NoteTag>()])),
@@ -54,6 +55,10 @@ impl RpcLimits {
             endpoints: shared
                 .into_iter()
                 .chain([
+                    (
+                        "SyncAccount",
+                        HashMap::from([("account_entries".into(), account_entries.get())]),
+                    ),
                     ("GetAccountInfos", HashMap::from([limit::<AccountId>()])),
                     ("GetAccountWitnesses", HashMap::from([limit::<AccountId>()])),
                     (

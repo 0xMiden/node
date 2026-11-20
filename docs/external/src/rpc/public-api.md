@@ -115,25 +115,31 @@ synchronization. Delta streams take `StateDeltaRange`: `from_block_exclusive = C
 `(C, N]`. Omit the lower bound to include genesis during bootstrap. The target is required. Equal bounds return an empty
 delta after target validation.
 
-| Method                   | Purpose                                                                           |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| `SyncNotes`              | Streams block frames and compact matching notes with target-anchored block paths. |
-| `SyncNullifiers`         | Streams every matching 16-bit-prefix consumption through the target.              |
-| `SyncAccountVault`       | Streams the final target value of every changed vault key.                        |
-| `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                  |
-| `GetTransactionsById`    | Streams requested transactions committed at or before `target_block_num`.         |
-| `SyncTransactions`       | Streams complete account transaction events in the requested range.               |
+| Method                   | Purpose                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| `SyncAccount`            | Returns a complete account snapshot or delta for accounts within the advertised size limit. |
+| `SyncNotes`              | Streams block frames and compact matching notes with target-anchored block paths.           |
+| `SyncNullifiers`         | Streams every matching 16-bit-prefix consumption through the target.                        |
+| `SyncAccountVault`       | Streams the final target value of every changed vault key.                                  |
+| `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                            |
+| `GetTransactionsById`    | Streams requested transactions committed at or before `target_block_num`.                   |
+| `SyncTransactions`       | Streams complete account transaction events in the requested range.                         |
 
 Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
 block number, not a timestamp or the authenticated target.
 
-Use `GetAccountInfos` for public headers at the authenticated target.
+Use `GetAccountInfos` to fetch public account and storage headers at N. Each ID receives a result in request order. A
+matching known commitment yields `unchanged`. An account absent at N yields `not_found`. `GetAccountWitnesses` returns a
+single partial SMT for the requested public or private IDs, including absent IDs. For selective reads, verify the proof
+from `GetAccountVaultWitnesses` against the account header’s vault root. `GetAccountStorageWitnesses` returns a proof
+for each named map in request order. Verify each against the matching storage slot root. Both methods prove absence as
+well as inclusion.
 
-Verify the account commitments returned by `GetAccountWitnesses` against the target account root.
-
-Verify `GetAccountVaultWitnesses` against the account header’s vault root.
-
-Verify `GetAccountStorageWitnesses` against the corresponding slot roots.
+Verify account witnesses against the target header's account root. Compare each proven commitment with the local account
+header. For divergent public accounts, use [complete account synchronization](#complete-account-synchronization).
+Accounts above its size limit use the streaming account synchronization endpoints. Verify fetched details and the
+recomputed vault/storage commitments before applying the update. Streamed vault deletions have no asset. Storage-map
+deletions have a zero word.
 
 `SyncNotes` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
@@ -166,6 +172,34 @@ one response, and the caller repeats the request for the remainder.
 | `SyncNullifiers`         | Returns nullifiers matching specified 16-bit prefixes within a block range.             |
 | `SyncAccountVault`       | Returns public account vault updates within a block range.                              |
 | `SyncAccountStorageMaps` | Returns public account storage map updates within a block range.                        |
+
+### Complete account synchronization
+
+`SyncAccount` returns the vault and storage-map contents of a public account at a target block. Use it alongside the v2
+header and witness methods to verify the result.
+
+1. Authenticate the target block header with `SyncChainMmr` and fix its height for all subsequent reads.
+2. Request the public headers with `GetAccountInfos` and the account-tree proof with `GetAccountWitnesses`. Verify the
+   proof against the block header's account root, the account header against the proven account commitment, and the
+   storage header against the storage commitment in the account header.
+3. Call `SyncAccount` with the account ID and `range.to_block_inclusive`. Set `range.from_block_exclusive` to the last
+   synchronized block, or omit it to bootstrap. For a snapshot, replace all map and vault contents. For a delta, apply
+   the absolute values to the cached contents. A zero map value deletes a key. An absent asset deletes its vault entry.
+   The target storage header identifies removed slots, value slots and empty maps.
+4. Verify the resulting map and vault roots before committing the new state and height. Clients that execute account
+   code need code matching the account header's code commitment.
+
+Read `GetLimits.endpoints["SyncAccount"].parameters["account_entries"]` on v2 for the configured maximum combined count
+of storage slots, storage-map entries and vault assets at the target. A missing or pruned starting state selects a
+snapshot. The server may also select a snapshot when the target is small or the delta exceeds its entry budget. An
+unchanged account can return an empty delta.
+
+Clients built against the earlier experimental v2 schema must upgrade together with the server. Response fields 2 and 3
+now carry a snapshot and delta. Earlier clients interpreted them as a witness and snapshot respectively.
+
+`RESOURCE_EXHAUSTED` with detail `5` means the target account exceeds this limit. A client may report that the account
+is unsupported. Clients supporting large accounts use the streaming account synchronization endpoints. A pruned target
+requires a newer authenticated target; it does not select a snapshot at another block.
 
 ### Resuming vault and storage-map scans
 

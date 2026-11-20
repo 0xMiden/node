@@ -54,6 +54,7 @@ pub struct Rpc {
     pub ntx_builder: Option<NtxBuilderClient>,
     pub grpc_options: GrpcOptions,
     pub network_tx_auth: Option<AsciiMetadataValue>,
+    pub sync_account: crate::SyncAccountConfig,
 }
 
 #[derive(Clone, Debug)]
@@ -283,6 +284,7 @@ impl Rpc {
             self.ntx_builder.clone(),
             NonZeroUsize::new(1_000_000).unwrap(),
             self.network_tx_auth.map(NetworkTxAuth),
+            self.sync_account,
         );
 
         let genesis =
