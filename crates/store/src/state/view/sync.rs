@@ -145,7 +145,11 @@ impl StateView {
             .reader
             .read("Read vault updates page", move |tx| {
                 crate::db::queries::account_vault_updates_page(
-                    tx, account_id, range, &cursor, page_size,
+                    tx,
+                    account_id,
+                    range,
+                    cursor.as_ref(),
+                    page_size,
                 )
             })
             .await

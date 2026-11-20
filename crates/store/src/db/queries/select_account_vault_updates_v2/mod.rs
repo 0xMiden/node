@@ -37,17 +37,12 @@ impl AccountVaultUpdatesV2 {
             page_size,
         }
     }
-}
 
-impl Paginated for AccountVaultUpdatesV2 {
-    type Item = AccountVaultValue;
-    type Cursor = Option<AccountVaultCursor>;
-
-    fn page(
+    fn read_page(
         &self,
         tx: &ReadTx<'_>,
-        next: &Self::Cursor,
-    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        next: Option<&AccountVaultCursor>,
+    ) -> Result<Page<AccountVaultValue, Option<AccountVaultCursor>>, DatabaseError> {
         if !self.account_id.is_public() {
             return Err(DatabaseError::AccountNotPublic(self.account_id));
         }
@@ -59,7 +54,7 @@ impl Paginated for AccountVaultUpdatesV2 {
         }
         check_account_history_target(tx, *self.range.end())?;
 
-        let next = next.as_ref().filter(|next| next.block_num >= *self.range.start());
+        let next = next.filter(|next| next.block_num >= *self.range.start());
         let block = next.map_or(*self.range.start(), |next| next.block_num);
         let key = key_cursor(next.map(|next| Word::from(next.vault_key)).as_ref());
         let limit = i64::try_from(self.page_size.get().saturating_add(1))
@@ -90,15 +85,28 @@ impl Paginated for AccountVaultUpdatesV2 {
     }
 }
 
+impl Paginated for AccountVaultUpdatesV2 {
+    type Item = AccountVaultValue;
+    type Cursor = Option<AccountVaultCursor>;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &Self::Cursor,
+    ) -> Result<Page<Self::Item, Self::Cursor>, DatabaseError> {
+        self.read_page(tx, next.as_ref())
+    }
+}
+
 /// Fetches one bounded page of account updates within the supplied read transaction.
 pub fn account_vault_updates_page(
     tx: &ReadTx<'_>,
     account: AccountId,
     range: ScopedBlockRange,
-    cursor: &Option<AccountVaultCursor>,
+    cursor: Option<&AccountVaultCursor>,
     page_size: NonZeroUsize,
 ) -> Result<AccountVaultValuesPage, DatabaseError> {
-    let page = AccountVaultUpdatesV2::new(account, range, page_size).page(tx, cursor)?;
+    let page = AccountVaultUpdatesV2::new(account, range, page_size).read_page(tx, cursor)?;
     Ok(AccountVaultValuesPage {
         values: page.items,
         next_cursor: page.next.flatten(),
