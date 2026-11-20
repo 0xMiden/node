@@ -13,6 +13,8 @@ import "types/submission.proto";
 import "transaction.proto";
 
 service NodeService {
+    rpc GetAccountInfos(GetAccountInfosRequest) returns (GetAccountInfosResponse) {}
+
     // Returns the chain MMR delta from the client's current height through the target block,
     // together with the target header and validator signatures.
     //
@@ -127,6 +129,7 @@ service NodeService {
     //
     // Use this endpoint to update local storage maps after an authenticated account state change.
     // Repeated changes to a key produce one absolute target value. A zero word marks deletion.
+    // GetAccountInfos supplies the target storage header, including the current slot layout.
     // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
     // authenticated target fixed per request; interrupted scans may resume at the incomplete block
     // with the same or a newer authenticated target. Publish only after OK completion and final
@@ -640,4 +643,37 @@ message SyncChainMmrResponse {
     // the starting and target headers have different configuration commitments.
     // Verify its commitment against the target header.
     optional protocol_config.ProtocolConfig protocol_config = 5;
+}
+
+message GetAccountInfosRequest {
+    message AccountQuery {
+        account.AccountId account_id = 1;
+        // Omit to request headers unconditionally. A match selects the unchanged response.
+        optional primitives.Word known_commitment = 2;
+    }
+    optional fixed32 block_num = 1;
+    // Unique public account IDs. GetLimits advertises the account_id request limit.
+    repeated AccountQuery accounts = 2;
+}
+
+message GetAccountInfosResponse {
+    message AccountInfo {
+        account.AccountId account_id = 1;
+        // Exactly one result. Unchanged means the supplied commitment matches at block_num.
+        oneof result {
+            AccountHeaders headers = 2;
+            google.protobuf.Empty unchanged = 3;
+            // The public account does not exist at block_num.
+            google.protobuf.Empty not_found = 4;
+        }
+    }
+    fixed32 block_num = 1;
+    // Exactly one result per requested account, in request order. Malformed requests and private account
+    // IDs fail the whole request with INVALID_ARGUMENT.
+    repeated AccountInfo accounts = 2;
+}
+
+message AccountHeaders {
+    account.AccountHeader account_header = 1;
+    account.AccountStorageHeader storage_header = 2;
 }

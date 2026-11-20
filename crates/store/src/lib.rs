@@ -22,6 +22,11 @@ pub mod genesis;
 mod proven_tip;
 pub mod state;
 
+/// Queries for composing reads within a state view's database transaction.
+pub mod queries {
+    pub use crate::db::queries::{account_headers, check_account_history_target};
+}
+
 pub use accounts::{
     AccountTreeWithHistory,
     HistoricalError,
