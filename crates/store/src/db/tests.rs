@@ -5162,6 +5162,110 @@ fn storage_map_stream_rechecks_retention_between_pages() {
     );
 }
 
+/// Note-page cursors must retain exact tag matches when one block spans several pages.
+#[test]
+fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
+    let db = &TestDb::new();
+    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let mut expected = vec![];
+    for block in 1_u32..=3 {
+        create_block(db, block.into());
+        for index in 0..5 {
+            let note = Note::mock_noop(Word::from([block, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            let metadata = NoteMetadata::new(
+                PartialNoteMetadata::new(sender, kind).with_tag(
+                    (if index == 4 {
+                        100
+                    } else if block == 2 {
+                        99
+                    } else {
+                        42
+                    })
+                    .into(),
+                ),
+                note.attachments(),
+            );
+            let record = NoteRecord {
+                block_num: block.into(),
+                note_index: BlockNoteIndex::new(index as usize / 3, index as usize % 3).unwrap(),
+                note_id: note.id().as_word(),
+                metadata,
+                details: None,
+                attachments: note.attachments().clone(),
+                inclusion_path: SparseMerklePath::default(),
+            };
+            insert_notes(db, &[(record.clone(), None)]).unwrap();
+            if index != 4 {
+                expected.push((record.block_num, record.note_index, note.id(), kind));
+            }
+        }
+    }
+    for size in [1, 2, 3, 20] {
+        let page_size = NonZeroUsize::new(size).unwrap();
+        let mut cursor: Option<queries::NoteSyncCursor> = None;
+        let mut actual = vec![];
+        loop {
+            let start = cursor;
+            let page = db
+                .read(move |tx| {
+                    queries::NoteSyncPaged::new(
+                        vec![42, 99, 42],
+                        crate::ScopedBlockRange::new_unchecked(0.into()..=3.into()),
+                        page_size,
+                    )
+                    .page(tx, &cursor)
+                })
+                .unwrap();
+            if let Some(start) = start {
+                assert_eq!(
+                    (page.items[0].block_num, page.items[0].note_index),
+                    (start.block_num, start.index)
+                );
+            }
+            actual.extend(
+                page.items
+                    .into_iter()
+                    .map(|n| (n.block_num, n.note_index, n.note_id, n.metadata.note_type())),
+            );
+            match page.next.flatten() {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    for tags in [vec![], vec![101]] {
+        assert_eq!(
+            db.read(move |tx| queries::NoteSyncPaged::new(
+                tags,
+                crate::ScopedBlockRange::new_unchecked(0.into()..=3.into()),
+                NonZeroUsize::MIN
+            )
+            .page(tx, &None))
+                .unwrap()
+                .items,
+            []
+        );
+    }
+    let before_second_block = db
+        .read(|tx| {
+            queries::NoteSyncPaged::new(
+                vec![42],
+                crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                NonZeroUsize::new(10).unwrap(),
+            )
+            .page(tx, &None)
+        })
+        .unwrap();
+    assert_eq!(before_second_block.items.len(), 4);
+}
+
 /// Vault pages include the first key at the range start and split a block without omissions.
 #[test]
 fn vault_pages_include_range_start_and_continue_within_one_block() {
