@@ -322,7 +322,7 @@ fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> 
         )
         .expect("writing to a String cannot fail");
     }
-    note_section.push_str("        drop\n");
+    note_section.push_str("        exec.::miden::protocol::output_note::seal\n");
 
     let script_src = format!(
         "@transaction_script
