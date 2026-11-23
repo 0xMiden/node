@@ -7,8 +7,6 @@ use jiff::fmt::StdFmtWrite;
 use jiff::fmt::friendly::{Designator, SpanParser, SpanPrinter};
 
 /// A duration with a human-readable representation for CLI arguments and logs.
-///
-/// Days are 24 hours and weeks are seven days.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HumanDuration(Duration);
 
