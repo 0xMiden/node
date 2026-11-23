@@ -993,14 +993,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     let restored: miden_node_proto::BlockProofRequest =
         event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
     assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
-    let expected_inputs = BlockInputs::new(
-        proposed.prev_block_header().clone(),
-        proposed.partial_blockchain().clone(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
-    assert_eq!(restored.block_inputs.to_bytes(), expected_inputs.to_bytes());
+    assert_eq!(restored.block_inputs.to_bytes(), block_inputs.to_bytes());
     let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
     restored.validate_against(&signed).unwrap();
     drop(backup);
