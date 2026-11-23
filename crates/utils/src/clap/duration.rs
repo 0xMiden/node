@@ -57,38 +57,37 @@ impl fmt::Display for HumanDuration {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn parses_cli_durations() {
-        for (input, expected) in [
-            ("0", Duration::ZERO),
-            ("250ms", Duration::from_millis(250)),
-            ("30m", Duration::from_mins(30)),
-            ("1h 30m", Duration::from_mins(90)),
-            ("1w 2d", Duration::from_hours(9 * 24)),
-        ] {
-            assert_eq!(
-                Duration::from(input.parse::<HumanDuration>().unwrap()),
-                expected,
-                "{input}"
-            );
-        }
+    #[rstest]
+    #[case::bare_zero("0", Duration::ZERO)]
+    #[case::milliseconds("250ms", Duration::from_millis(250))]
+    #[case::minutes("30m", Duration::from_mins(30))]
+    #[case::hours_and_minutes("1h 30m", Duration::from_mins(90))]
+    #[case::weeks_and_days("1w 2d", Duration::from_hours(9 * 24))]
+    fn parses_cli_durations(#[case] input: &str, #[case] expected: Duration) {
+        assert_eq!(Duration::from(input.parse::<HumanDuration>().unwrap()), expected);
     }
 
-    #[test]
-    fn rejects_invalid_timeouts() {
-        for input in ["-1s", "1M", "1 month", "1 year", "soon"] {
-            assert!(input.parse::<HumanDuration>().is_err(), "{input}");
-        }
+    #[rstest]
+    #[case::negative("-1s")]
+    #[case::month_abbreviation("1M")]
+    #[case::month("1 month")]
+    #[case::year("1 year")]
+    #[case::unrecognized("soon")]
+    fn rejects_invalid_timeouts(#[case] input: &str) {
+        assert!(input.parse::<HumanDuration>().is_err());
     }
 
-    #[test]
-    fn formatted_durations_round_trip() {
-        for duration in [Duration::ZERO, Duration::new(3601, 123_456_789), Duration::MAX] {
-            let duration = HumanDuration::from(duration);
-            assert_eq!(duration.to_string().parse::<HumanDuration>().unwrap(), duration);
-        }
+    #[rstest]
+    #[case::zero(Duration::ZERO)]
+    #[case::nanosecond_precision(Duration::new(3601, 123_456_789))]
+    #[case::maximum(Duration::MAX)]
+    fn formatted_durations_round_trip(#[case] duration: Duration) {
+        let duration = HumanDuration::from(duration);
+        assert_eq!(duration.to_string().parse::<HumanDuration>().unwrap(), duration);
     }
 
     #[test]

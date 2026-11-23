@@ -52,4 +52,5 @@ miden-crypto = { features = ["rocksdb"], workspace = true }
 
 [dev-dependencies]
 miden-protocol = { features = ["testing"], workspace = true }
+rstest         = { workspace = true }
 tempfile       = { workspace = true }
