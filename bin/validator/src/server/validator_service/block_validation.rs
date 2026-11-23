@@ -2,7 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use miden_node_tracing::{ErrorReport, instrument, miden_span_record};
 use miden_protocol::block::{BlockBody, BlockHeader};
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
+use miden_protocol::transaction::TransactionHeader;
 
 use super::{ValidatorError, ValidatorService};
 
@@ -42,8 +42,8 @@ impl ValidatorService {
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids = proposed_body
             .transactions()
+            .as_slice()
             .iter()
-            .flat_map(OrderedTransactionHeaders::as_slice)
             .map(TransactionHeader::id)
             .collect::<Vec<_>>();
         let unvalidated_txs = self

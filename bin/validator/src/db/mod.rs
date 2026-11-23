@@ -8,7 +8,7 @@ use miden_node_proto::BlockProofRequest;
 use miden_node_tracing::{info, instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::metrics::InitialMetrics;
@@ -306,8 +306,8 @@ impl ValidatorDbWriter {
                 let transactions = block
                     .body()
                     .transactions()
+                    .as_slice()
                     .iter()
-                    .flat_map(OrderedTransactionHeaders::as_slice)
                     .map(TransactionHeader::id);
                 persist_signed_block(tx, &block, transactions, Some(&proving_inputs))?;
                 prune_expired_proving_inputs(tx, retention)
