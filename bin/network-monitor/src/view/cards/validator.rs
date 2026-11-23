@@ -2,35 +2,27 @@
 
 use maud::{Markup, html};
 
-use super::super::helpers::{format_timestamp, num_or_dash, status_label};
+use super::super::helpers::{
+    HealthCounts,
+    format_timestamp,
+    num_or_dash,
+    status_class,
+    status_label,
+};
 use crate::status::{ServiceStatus, Status, ValidatorStatusDetails};
 
 pub(in crate::view) fn render_validators(
     validators: &[(&ServiceStatus, &ValidatorStatusDetails)],
 ) -> Markup {
-    let healthy = validators
-        .iter()
-        .filter(|(service, _)| service.status == Status::Healthy)
-        .count();
-    let unknown = validators
-        .iter()
-        .filter(|(service, _)| service.status == Status::Unknown)
-        .count();
-    let overall_class = if validators.iter().any(|(service, _)| service.status == Status::Unhealthy)
-    {
-        "unhealthy"
-    } else if unknown > 0 {
-        "unknown"
-    } else {
-        "healthy"
-    };
+    let counts = HealthCounts::from_statuses(validators.iter().map(|(service, _)| &service.status));
+    let overall_class = status_class(&counts.status());
     html! {
         section class={"service-card validators-card " (overall_class)} aria-label="Validators" {
             div class="service-header" {
                 div class="service-name" { "Validators" }
                 div class={"service-status validator-summary " (overall_class)} {
-                    (healthy) "/" (validators.len()) " healthy"
-                    @if unknown > 0 { " · " (unknown) " unknown" }
+                    (counts.healthy) "/" (counts.total()) " healthy"
+                    @if counts.unknown > 0 { " · " (counts.unknown) " unknown" }
                 }
             }
             table class="validators-table" {
@@ -47,11 +39,6 @@ pub(in crate::view) fn render_validators(
                     @let name = service.name.strip_prefix("Validator (")
                         .and_then(|name| name.strip_suffix(')')).unwrap_or(&service.name);
                     @let healthy = service.status == Status::Healthy;
-                    @let status_class = match service.status {
-                        Status::Healthy => "healthy",
-                        Status::Unhealthy => "unhealthy",
-                        Status::Unknown => "unknown",
-                    };
                     tbody {
                         tr {
                             th scope="row" {
@@ -71,7 +58,7 @@ pub(in crate::view) fn render_validators(
                                 }
                             }
                             td data-label="Health" {
-                                span class={"service-status " (status_class)} { (status_label(&service.status)) }
+                                span class={"service-status " (status_class(&service.status))} { (status_label(&service.status)) }
                             }
                             td data-label="Chain Tip" { (num_or_dash(u64::from(details.chain_tip), healthy)) }
                             td data-label="Validated Transactions" { (num_or_dash(details.validated_transactions_count, healthy)) }

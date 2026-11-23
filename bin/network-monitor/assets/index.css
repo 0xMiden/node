@@ -143,6 +143,12 @@ a {
 /* Main */
 #status-container {
     flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.dashboard {
+    flex: 1;
     width: 100%;
     max-width: 1440px;
     min-height: 200px;
@@ -196,6 +202,10 @@ a {
 
 .overall-status.unhealthy .pulse {
     background: var(--color-unhealthy);
+}
+
+.overall-status.unknown .pulse {
+    background: var(--color-text-muted);
 }
 
 @keyframes pulse {
@@ -756,7 +766,7 @@ a {
         display: none;
     }
 
-    #status-container {
+    .dashboard {
         padding: 28px 16px 32px;
     }
 
