@@ -23,6 +23,8 @@ runs:
       env:
         WRITABLE: >-
           ${{ github.event_name == 'pull_request' ||
+              (inputs.prepare-only == 'true' && github.event_name == 'schedule' &&
+              github.ref_protected && github.ref == 'refs/heads/next') ||
               (github.event_name == 'push' && github.ref_protected &&
               (github.ref == 'refs/heads/next' || startsWith(github.ref, 'refs/heads/release/v'))) }}
       run: |
@@ -39,7 +41,7 @@ runs:
       if: steps.cache.outcome == 'success'
       uses: kunobi-ninja/kache-action@v1
       with:
-        version: v2.2.0
+        version: v2.3.0
         s3-bucket: ${{ inputs.prepare-only != 'true' && 'kache' || '' }}
         s3-region: auto
         s3-endpoint: ${{ env.KACHE_R2_ENDPOINT }}

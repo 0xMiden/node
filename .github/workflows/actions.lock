@@ -25,7 +25,6 @@ workflows:
     '.github/workflows/cleanup-workflows.yml':
         - 'actions/checkout@v7.0.1'
     '.github/workflows/docker.yml':
-        - '0xmiden/node@next'
         - 'actions/checkout@v7.0.1'
         - 'actions/download-artifact@v8.0.2'
         - 'actions/upload-artifact@v7.0.2'
@@ -47,11 +46,6 @@ workflows:
         - 'kunobi-ninja/kache-action@v1'
         - 'warpbuilds/rust-cache@v2.9.1'
 dependencies:
-    '0xmiden/node@next':
-        ref: 'next'
-        commit: 'sha1-87e5562f7f685ed7f5d021bce86816e62ced91a3'
-        owner_id: 190780847
-        repo_id: 659342082
     'actions/cache@v6.1.0':
         ref: 'v6.1.0'
         commit: 'sha1-55cc8345863c7cc4c66a329aec7e433d2d1c52a9'
