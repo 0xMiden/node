@@ -1,16 +1,34 @@
 name: "Setup xtask"
-description: "Build xtask on Linux and add it to PATH"
+description: "Restore or build xtask on Linux and add it to PATH"
 
 runs:
   using: "composite"
   steps:
+    - name: Compute xtask cache key
+      id: cache-key
+      shell: bash
+      run: |
+        digest="$(git ls-tree HEAD -- xtask rust-toolchain.toml .cargo/config.toml .config/clippy.toml \
+          .github/actions/setup-xtask | sha256sum | cut -d' ' -f1)"
+        echo "key=xtask-${ImageOS}-${RUNNER_ARCH}-${digest}" >> "${GITHUB_OUTPUT}"
+
+    - name: Restore xtask
+      id: cache
+      uses: actions/cache/restore@v6.1.0
+      with:
+        key: ${{ steps.cache-key.outputs.key }}
+        path: ${{ runner.temp }}/xtask-bin/xtask
+
     - name: Rustup
+      if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: rustup toolchain install --no-self-update
 
     - uses: $/.github/actions/setup-kache
+      if: steps.cache.outputs.cache-hit != 'true'
 
     - name: Test, lint, and build xtask
+      if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         CARGO_PROFILE_DEV_DEBUG: "0"
@@ -19,6 +37,13 @@ runs:
         cargo clippy --locked --manifest-path xtask/Cargo.toml --all-targets --all-features -- -D warnings
         cargo build --locked --manifest-path xtask/Cargo.toml
         install -D xtask/target/debug/xtask "${RUNNER_TEMP}/xtask-bin/xtask"
+
+    - name: Save xtask
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6.1.0
+      with:
+        key: ${{ steps.cache-key.outputs.key }}
+        path: ${{ runner.temp }}/xtask-bin/xtask
 
     - name: Add xtask to PATH
       shell: bash
