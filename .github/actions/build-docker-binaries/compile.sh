@@ -42,9 +42,9 @@ prefix = "artifacts"
 extra_allowlist_flags = ["-fmerge-all-constants", "-mno-omit-leaf-frame-pointer"]
 TOML
     export KACHE_CONFIG=/tmp/kache.toml KACHE_CACHE_DIR=/tmp/kache-cache
-    export KACHE_RUNTIME_DIR=/tmp/kache-runtime KACHE_BASE_DIR=/app
+    export KACHE_RUNTIME_DIR=/tmp/kache-runtime KACHE_BASE_DIR="${PWD}"
     export KACHE_MAX_SIZE=50GiB KACHE_CACHE_EXECUTABLES=1
-    export RUSTC_WRAPPER=/app/.github/actions/setup-kache/kache.sh
+    export RUSTC_WRAPPER="${PWD}/.github/actions/setup-kache/kache.sh"
     export CC="kache cc" CXX="kache c++" CC_KNOWN_WRAPPER_CUSTOM=kache
     kache daemon start
     kache doctor
