@@ -1016,7 +1016,7 @@ fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> 
         )
         .expect("writing to a String cannot fail");
     }
-    note_section.push_str("        drop\n");
+    note_section.push_str("        exec.::miden::protocol::output_note::seal\n");
 
     let script_src = format!(
         "@transaction_script
@@ -1120,8 +1120,9 @@ mod tests {
     use miden_standards::account::policies::{
         BurnPolicy,
         MintPolicy,
+        ReceivePolicy,
+        SendPolicy,
         TokenPolicyManager,
-        TransferPolicy,
     };
     use miden_standards::note::{BurnNote, MintNote, P2idNote};
     use miden_testing::MockChain;
@@ -1278,8 +1279,8 @@ mod tests {
         let policies = TokenPolicyManager::builder()
             .active_mint_policy(MintPolicy::owner_only())
             .active_burn_policy(BurnPolicy::allow_all())
-            .active_send_policy(TransferPolicy::allow_all())
-            .active_receive_policy(TransferPolicy::allow_all())
+            .active_send_policy(SendPolicy::allow_all())
+            .active_receive_policy(ReceivePolicy::allow_all())
             .build();
         let fee_policy = BasicConstantFeePolicy::new()
             .with_fees([

@@ -320,8 +320,9 @@ mod tests {
         BlocklistManager,
         BurnPolicy,
         MintPolicy,
+        ReceivePolicy,
+        SendPolicy,
         TokenPolicyManager,
-        TransferPolicy,
     };
     use miden_standards::code_builder::CodeBuilder;
     use miden_standards::errors::standards::ERR_ACCOUNT_IS_BLOCKED;
@@ -452,10 +453,10 @@ mod tests {
                         TokenPolicyManager::builder()
                             .active_mint_policy(MintPolicy::allow_all())
                             .active_burn_policy(BurnPolicy::allow_all())
-                            .active_send_policy(TransferPolicy::with_basic_blocklist([
+                            .active_send_policy(SendPolicy::with_basic_blocklist([blocked_account]))
+                            .active_receive_policy(ReceivePolicy::with_basic_blocklist([
                                 blocked_account,
                             ]))
-                            .active_receive_policy(TransferPolicy::empty_basic_blocklist())
                             .build(),
                     )
                     .with_component(Pausable::unpaused())
