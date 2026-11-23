@@ -42,14 +42,8 @@ fn block_pair(
 fn transaction_batch(parent: &BlockHeader, seed: u32) -> (ProvenBatch, TransactionId) {
     let account = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
     let state = Word::from([seed, 0, 0, 0]);
-    let header = TransactionHeader::new(
-        account,
-        state,
-        state,
-        InputNotes::default(),
-        vec![],
-    )
-    .unwrap();
+    let header =
+        TransactionHeader::new(account, state, state, InputNotes::default(), vec![]).unwrap();
     let id = header.id();
     let update =
         BatchAccountUpdate::new_unchecked(account, state, state, AccountUpdateDetails::Private);

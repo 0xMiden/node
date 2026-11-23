@@ -303,12 +303,8 @@ impl ValidatorDbWriter {
                         &[&height.as_u32()],
                     )?;
                 }
-                let transactions = block
-                    .body()
-                    .transactions()
-                    .as_slice()
-                    .iter()
-                    .map(TransactionHeader::id);
+                let transactions =
+                    block.body().transactions().as_slice().iter().map(TransactionHeader::id);
                 persist_signed_block(tx, &block, transactions, Some(&proving_inputs))?;
                 prune_expired_proving_inputs(tx, retention)
             })
