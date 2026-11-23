@@ -40,7 +40,7 @@ impl ParticipateOptions {
                 .into_iter()
                 .flat_map(|(key, id)| [key.to_string(), format!("{id}@127.0.0.1:9")])
                 .collect(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(30).into(),
             threshold: NonZeroUsize::new(threshold).expect("test threshold must be nonzero"),
             epoch: "09".repeat(32),
             signing_key: ValidatorSigningKey {
@@ -359,7 +359,7 @@ async fn ceremony_times_out_waiting_for_a_peer(#[case] local_is_dialer: bool) ->
         vec![(signing_keys[1].public_key(), peer)],
         2,
     );
-    options.timeout = Duration::from_millis(100);
+    options.timeout = Duration::from_millis(100).into();
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))?;
     options.bind_address = Some(socket.local_addr()?);
     drop(socket);

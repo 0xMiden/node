@@ -19,7 +19,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::GetNotesByIdRequest;
 use miden_node_proto::generated::note::NoteId as ProtoNoteId;
 use miden_node_tracing::{info, warn};
-use miden_node_utils::clap::format_duration;
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -135,7 +135,7 @@ impl FaucetClient {
 pub fn funding_client_from_config(config: &MonitorConfig) -> Option<FundingClient> {
     let url = config.funding_service_url.clone()?;
 
-    Some(FundingClient::new(url, config.funding_request_timeout))
+    Some(FundingClient::new(url, config.funding_request_timeout.into()))
 }
 
 // FUNDING CLIENT
@@ -382,7 +382,7 @@ impl fmt::Display for FundingWait {
             f,
             "waiting for funding note {} from the funding service (requested {} ago)",
             self.note_id,
-            format_duration(elapsed)
+            HumanDuration::from(elapsed)
         )?;
         if let Some(err) = &self.last_error {
             write!(f, "; the last check failed: {err}")?;

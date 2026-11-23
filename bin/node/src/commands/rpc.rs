@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::ArgGroup;
-use miden_node_utils::clap::{duration_to_human_readable_string, parse_duration};
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::genesis::OfficialNetwork;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -58,12 +58,11 @@ pub struct GrpcOptions {
     #[arg(
         long = "rpc.grpc.timeout",
         env = "MIDEN_NODE_RPC_GRPC_TIMEOUT",
-        default_value = duration_to_human_readable_string(Duration::from_secs(10)),
-        value_parser = parse_duration,
+        default_value_t = Duration::from_secs(10).into(),
         value_name = "DURATION",
         help_heading = super::section::RPC_CONFIGURATION_HELP_HEADING
     )]
-    pub timeout: Duration,
+    pub timeout: HumanDuration,
 }
 
 #[derive(clap::Args, Clone, Debug)]

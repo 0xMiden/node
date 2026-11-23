@@ -6,12 +6,11 @@
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::time::Duration;
 
 use alloy_primitives::{Address, address};
 use anyhow::{Context, Result};
 use clap::Parser;
-use miden_node_utils::clap::parse_duration;
+use miden_node_utils::clap::HumanDuration;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use url::Url;
 
@@ -89,10 +88,9 @@ pub struct MonitorConfig {
         long = "funding-request-timeout",
         env = "MIDEN_MONITOR_FUNDING_REQUEST_TIMEOUT",
         default_value = "2m",
-        value_parser = parse_duration,
         help = "Timeout for a funding request to the funding service"
     )]
-    pub funding_request_timeout: Duration,
+    pub funding_request_timeout: HumanDuration,
 
     /// Amount of the fee asset, in base units, that each wallet funding request asks for.
     #[arg(
@@ -109,20 +107,18 @@ pub struct MonitorConfig {
         long = "remote-prover-test-interval",
         env = "MIDEN_MONITOR_REMOTE_PROVER_TEST_INTERVAL",
         default_value = "2m",
-        value_parser = parse_duration,
         help = "The interval at which to test the remote provers services"
     )]
-    pub remote_prover_test_interval: Duration,
+    pub remote_prover_test_interval: HumanDuration,
 
     /// The interval at which to test the faucet services.
     #[arg(
         long = "faucet-test-interval",
         env = "MIDEN_MONITOR_FAUCET_TEST_INTERVAL",
         default_value = "2m",
-        value_parser = parse_duration,
         help = "The interval at which to test the faucet services"
     )]
-    pub faucet_test_interval: Duration,
+    pub faucet_test_interval: HumanDuration,
 
     /// Amount of tokens, in base units, that each faucet check requests.
     #[arg(
@@ -140,10 +136,9 @@ pub struct MonitorConfig {
         long = "status-check-interval",
         env = "MIDEN_MONITOR_STATUS_CHECK_INTERVAL",
         default_value = "3s",
-        value_parser = parse_duration,
         help = "The interval at which to check the status of the services"
     )]
-    pub status_check_interval: Duration,
+    pub status_check_interval: HumanDuration,
 
     /// The port of the monitor.
     #[arg(
@@ -187,20 +182,18 @@ pub struct MonitorConfig {
         long = "counter-increment-interval",
         env = "MIDEN_MONITOR_COUNTER_INCREMENT_INTERVAL",
         default_value = "30s",
-        value_parser = parse_duration,
         help = "The interval at which to send the increment counter transaction"
     )]
-    pub counter_increment_interval: Duration,
+    pub counter_increment_interval: HumanDuration,
 
     /// Maximum time to wait for the counter update after submitting a transaction.
     #[arg(
         long = "counter-latency-timeout",
         env = "MIDEN_MONITOR_COUNTER_LATENCY_TIMEOUT",
         default_value = "2m",
-        value_parser = parse_duration,
         help = "Maximum time to wait for a counter update after submitting a transaction"
     )]
-    pub counter_latency_timeout: Duration,
+    pub counter_latency_timeout: HumanDuration,
 
     /// Maximum allowed gap between the expected and observed counter values before the Network
     /// Transactions card is flipped to unhealthy. A small backlog while transactions are in flight
@@ -219,10 +212,9 @@ pub struct MonitorConfig {
         long = "request-timeout",
         env = "MIDEN_MONITOR_REQUEST_TIMEOUT",
         default_value = "10s",
-        value_parser = parse_duration,
         help = "The timeout for the outgoing requests"
     )]
-    pub request_timeout: Duration,
+    pub request_timeout: HumanDuration,
 
     /// The URL of the explorer service.
     #[arg(
@@ -306,10 +298,9 @@ pub struct MonitorConfig {
         long = "usdcx-bridge-check-interval",
         env = "MIDEN_MONITOR_USDCX_BRIDGE_CHECK_INTERVAL",
         default_value = "30s",
-        value_parser = parse_duration,
         help = "The interval at which to check the USDCx bridge"
     )]
-    pub usdcx_bridge_check_interval: Duration,
+    pub usdcx_bridge_check_interval: HumanDuration,
 
     /// Maximum time without a chain tip update before marking RPC as unhealthy.
     ///
@@ -319,10 +310,9 @@ pub struct MonitorConfig {
         long = "stale-chain-tip-threshold",
         env = "MIDEN_MONITOR_STALE_CHAIN_TIP_THRESHOLD",
         default_value = "1m",
-        value_parser = parse_duration,
         help = "Maximum time without a chain tip update before marking RPC as unhealthy"
     )]
-    pub stale_chain_tip_threshold: Duration,
+    pub stale_chain_tip_threshold: HumanDuration,
 }
 
 /// A validator endpoint identified by an operator-provided display name.
@@ -368,6 +358,8 @@ impl MonitorConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::utils::serde::Deserializable;
 
@@ -408,7 +400,7 @@ mod tests {
         assert!(config.xreserve_rpc_url.is_none());
         assert!(config.xreserve_address.is_none());
         assert_eq!(config.xreserve_local_token, DEFAULT_XRESERVE_LOCAL_TOKEN);
-        assert_eq!(config.usdcx_bridge_check_interval, Duration::from_secs(30));
+        assert_eq!(config.usdcx_bridge_check_interval, Duration::from_secs(30).into());
 
         assert!(
             MonitorConfig::try_parse_from([

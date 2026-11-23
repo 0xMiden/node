@@ -9,7 +9,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_CONCURRENT_PROOFS,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
-use miden_node_utils::clap::{duration_to_human_readable_string, parse_duration};
+use miden_node_utils::clap::HumanDuration;
 use miden_protocol::account::AccountId;
 use url::Url;
 
@@ -39,7 +39,7 @@ pub struct BlockProducerOptions {
 
 impl BlockProducerOptions {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.block.interval.is_zero() {
+        if Duration::from(self.block.interval).is_zero() {
             anyhow::bail!("block.interval must be greater than zero");
         }
 
@@ -94,12 +94,12 @@ mod tests {
                 .unwrap(),
             },
             batch: BatchOptions {
-                interval: DEFAULT_BATCH_INTERVAL,
+                interval: DEFAULT_BATCH_INTERVAL.into(),
                 max_txs: NonZeroUsize::new(max_txs).unwrap(),
                 workers: miden_node_block_producer::DEFAULT_BATCH_WORKERS,
             },
             block: BlockOptions {
-                interval: DEFAULT_BLOCK_INTERVAL,
+                interval: DEFAULT_BLOCK_INTERVAL.into(),
                 max_batches: NonZeroUsize::new(max_batches).unwrap(),
                 max_concurrent_proofs: miden_node_block_producer::DEFAULT_MAX_CONCURRENT_PROOFS,
             },
@@ -115,7 +115,7 @@ mod tests {
     fn rejects_zero_block_interval() {
         let mut options =
             options(miden_protocol::MAX_BATCHES_PER_BLOCK, DEFAULT_MAX_TXS_PER_BATCH.get());
-        options.block.interval = Duration::ZERO;
+        options.block.interval = Duration::ZERO.into();
 
         let err = options
             .validate()
@@ -174,12 +174,11 @@ pub struct BatchOptions {
         id = "batch.interval",
         long = "batch.interval",
         env = "MIDEN_NODE_BATCH_INTERVAL",
-        default_value = duration_to_human_readable_string(DEFAULT_BATCH_INTERVAL),
-        value_parser = parse_duration,
+        default_value_t = DEFAULT_BATCH_INTERVAL.into(),
         value_name = "DURATION",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub interval: Duration,
+    pub interval: HumanDuration,
 
     /// Maximum number of transactions per batch.
     #[arg(
@@ -214,12 +213,11 @@ pub struct BlockOptions {
         id = "block.interval",
         long = "block.interval",
         env = "MIDEN_NODE_BLOCK_INTERVAL",
-        default_value = duration_to_human_readable_string(DEFAULT_BLOCK_INTERVAL),
-        value_parser = parse_duration,
+        default_value_t = DEFAULT_BLOCK_INTERVAL.into(),
         value_name = "DURATION",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
-    pub interval: Duration,
+    pub interval: HumanDuration,
 
     /// Maximum number of batches per block.
     #[arg(

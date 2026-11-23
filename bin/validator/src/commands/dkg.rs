@@ -9,14 +9,13 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, ensure};
 use fs_err::PathExt;
 use golden_core::ParticipantIndex;
 use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
-use miden_node_utils::clap::{format_duration, parse_duration};
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::shutdown::CancellationToken;
 use zeroize::Zeroizing;
 
@@ -97,8 +96,8 @@ struct ParticipateOptions {
     peers: Vec<String>,
 
     /// Maximum duration of peer authentication and all subsequent ceremony steps.
-    #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = parse_duration)]
-    timeout: Duration,
+    #[arg(long, value_name = "DURATION", default_value = "30m")]
+    timeout: HumanDuration,
 
     /// Number of shares needed to decrypt a private record.
     #[arg(long, value_name = "NUM")]
@@ -206,7 +205,7 @@ impl ParticipateOptions {
                 Ok::<_, anyhow::Error>((ceremony, endpoint))
             } => result?,
         };
-        let attempt = tokio::time::timeout(timeout, async {
+        let attempt = tokio::time::timeout(timeout.into(), async {
             let peers = ceremony.authenticate_peers(&endpoint).await?;
             let peers = ceremony.exchange_configs(peers).await?;
             let session = ceremony.exchange_nonces(peers).await?;
@@ -267,7 +266,7 @@ impl ParticipateOptions {
             biased;
             () = shutdown.cancelled() => Err(anyhow::anyhow!("DKG ceremony cancelled")),
             result = attempt => result.with_context(|| {
-                format!("DKG ceremony timed out after {}", format_duration(timeout))
+                format!("DKG ceremony timed out after {timeout}")
             }).and_then(|result| result),
         };
 

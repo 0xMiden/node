@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 
 mod duration;
-pub use duration::{duration_to_human_readable_string, format_duration, parse_duration};
+pub use duration::HumanDuration;
 mod rocksdb;
 pub use rocksdb::*;
 
@@ -39,17 +39,16 @@ pub struct GrpcOptions {
     /// This may occur if the server is overloaded or due to an internal bug.
     #[arg(
         long = "grpc.timeout",
-        default_value = duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
-        value_parser = parse_duration,
+        default_value_t = DEFAULT_REQUEST_TIMEOUT.into(),
         value_name = "DURATION"
     )]
-    pub request_timeout: Duration,
+    pub request_timeout: HumanDuration,
 }
 
 impl Default for GrpcOptions {
     fn default() -> Self {
         Self {
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT.into(),
             message_size: GrpcMessageSizeOptions::default(),
         }
     }
@@ -58,7 +57,7 @@ impl Default for GrpcOptions {
 impl GrpcOptions {
     pub fn test() -> Self {
         Self {
-            request_timeout: TEST_REQUEST_TIMEOUT,
+            request_timeout: TEST_REQUEST_TIMEOUT.into(),
             ..Self::default()
         }
     }

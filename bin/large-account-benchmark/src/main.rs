@@ -10,11 +10,10 @@
 //!   run is the evidence that an account this large can be worked with at all.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use miden_node_utils::clap::parse_duration;
+use miden_node_utils::clap::HumanDuration;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::ONE;
 use miden_protocol::account::Account;
@@ -98,12 +97,12 @@ struct VerifyArgs {
     wait_blocks: u32,
 
     /// How often to poll the counter and the chain tip while waiting.
-    #[arg(long, default_value = "2s", value_parser = parse_duration, value_name = "DURATION")]
-    poll_interval: Duration,
+    #[arg(long, default_value = "2s", value_name = "DURATION")]
+    poll_interval: HumanDuration,
 
     /// Per-request RPC timeout.
-    #[arg(long, default_value = "30s", value_parser = parse_duration, value_name = "DURATION")]
-    request_timeout: Duration,
+    #[arg(long, default_value = "30s", value_name = "DURATION")]
+    request_timeout: HumanDuration,
 }
 
 #[tokio::main]
@@ -201,7 +200,7 @@ async fn verify(args: &VerifyArgs) -> Result<()> {
     // node's encryption key against the trusted validator, so a broken node fails here.
     let client = rpc::SubmissionClient::connect(
         &args.rpc_url,
-        args.request_timeout,
+        args.request_timeout.into(),
         &args.validator_signing_public_keys,
         args.grpc.max_decoding_message_size.get(),
     )
@@ -248,7 +247,7 @@ async fn verify(args: &VerifyArgs) -> Result<()> {
 
     let baseline_value = baseline.unwrap_or(0);
     loop {
-        tokio::time::sleep(args.poll_interval).await;
+        tokio::time::sleep(args.poll_interval.into()).await;
 
         let observed = driver
             .observed_counter(&client)
