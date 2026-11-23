@@ -8,6 +8,7 @@ use miden_node_proto::server::{
 use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_utils::clap::{format_duration, parse_duration};
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
@@ -42,7 +43,7 @@ pub struct Server {
     #[arg(long, value_enum, env = "MIDEN_PROVER_KIND")]
     kind: ProofKind,
     /// Maximum time allowed for a proof request to complete. Once exceeded, the request is aborted.
-    #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = humantime::parse_duration)]
+    #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = parse_duration)]
     timeout: std::time::Duration,
     /// Maximum number of concurrent proof requests that the prover will allow.
     ///
@@ -79,7 +80,7 @@ impl Server {
             "Remote prover ready",
             service.name = "miden-remote-prover",
             service.version = env!("CARGO_PKG_VERSION"),
-            prover.timeout = humantime::Duration::from(self.timeout).to_string(),
+            prover.timeout = format_duration(self.timeout),
             prover.capacity = self.capacity.get(),
             prover.kind = self.kind,
             prover.port = port

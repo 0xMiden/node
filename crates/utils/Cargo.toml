@@ -29,8 +29,8 @@ backon                 = { workspace = true }
 clap                   = { features = ["env"], workspace = true }
 fs-err                 = { workspace = true }
 http                   = { workspace = true }
-humantime              = { workspace = true }
 itertools              = { workspace = true }
+jiff                   = { workspace = true }
 lru                    = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-tracing     = { workspace = true }

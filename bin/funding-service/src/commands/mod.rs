@@ -18,7 +18,7 @@ use miden_funding_service::{
     lifecycle,
 };
 use miden_node_tracing::{OpenTelemetry, info};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::{duration_to_human_readable_string, format_duration, parse_duration};
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 use miden_node_utils::shutdown::CancellationToken;
@@ -101,7 +101,7 @@ pub enum FundingServiceCommand {
             long = "http.timeout",
             env = ENV_HTTP_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_HTTP_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         http_timeout: Duration,
@@ -115,7 +115,7 @@ pub enum FundingServiceCommand {
             long = "rpc.timeout",
             env = ENV_RPC_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_RPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         rpc_timeout: Duration,
@@ -129,7 +129,7 @@ pub enum FundingServiceCommand {
             long = "tx-prover.timeout",
             env = ENV_TX_PROVER_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_TX_PROVER_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         tx_prover_timeout: Duration,
@@ -179,7 +179,7 @@ pub enum FundingServiceCommand {
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,
             default_value = duration_to_human_readable_string(DEFAULT_POLL_INTERVAL),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         poll_interval: Duration,
@@ -260,9 +260,9 @@ impl FundingServiceCommand {
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
             funding_service.listen = listen.to_string(),
-            http.timeout = humantime::Duration::from(http_timeout).to_string(),
+            http.timeout = format_duration(http_timeout),
             rpc.endpoint = format_endpoint(&rpc_url),
-            rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
+            rpc.timeout = format_duration(rpc_timeout),
             tx_prover.endpoint =
                 tx_prover_url.as_ref().map_or_else(|| "local".to_owned(), format_endpoint),
             path = signing_key_file.as_path(),
@@ -271,7 +271,7 @@ impl FundingServiceCommand {
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.max_deposits_per_tx = max_deposits_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
+            funding_service.poll_interval = format_duration(poll_interval)
         );
 
         let service = FundingServiceConfig::new(

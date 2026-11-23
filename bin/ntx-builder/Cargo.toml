@@ -22,7 +22,6 @@ anyhow                 = { workspace = true }
 backon                 = { workspace = true }
 clap                   = { features = ["env", "string"], workspace = true }
 futures                = { workspace = true }
-humantime              = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-proto       = { workspace = true }

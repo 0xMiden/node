@@ -16,6 +16,7 @@ use fs_err::PathExt;
 use golden_core::ParticipantIndex;
 use iroh::{EndpointAddr, EndpointId, SecretKey as IrohSecretKey};
 use miden_node_tracing::info;
+use miden_node_utils::clap::{format_duration, parse_duration};
 use miden_node_utils::shutdown::CancellationToken;
 use zeroize::Zeroizing;
 
@@ -96,7 +97,7 @@ struct ParticipateOptions {
     peers: Vec<String>,
 
     /// Maximum duration of peer authentication and all subsequent ceremony steps.
-    #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = humantime::parse_duration)]
+    #[arg(long, value_name = "DURATION", default_value = "30m", value_parser = parse_duration)]
     timeout: Duration,
 
     /// Number of shares needed to decrypt a private record.
@@ -266,7 +267,7 @@ impl ParticipateOptions {
             biased;
             () = shutdown.cancelled() => Err(anyhow::anyhow!("DKG ceremony cancelled")),
             result = attempt => result.with_context(|| {
-                format!("DKG ceremony timed out after {}", humantime::format_duration(timeout))
+                format!("DKG ceremony timed out after {}", format_duration(timeout))
             }).and_then(|result| result),
         };
 

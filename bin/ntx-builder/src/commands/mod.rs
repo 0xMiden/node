@@ -7,7 +7,7 @@ use anyhow::Context;
 use clap::{ArgGroup, Parser};
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_tracing::{OpenTelemetry, info};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::{duration_to_human_readable_string, format_duration, parse_duration};
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
@@ -60,7 +60,7 @@ pub enum NtxBuilderCommand {
             long = "grpc.timeout",
             env = ENV_GRPC_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_GRPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         grpc_timeout: Duration,
@@ -74,7 +74,7 @@ pub enum NtxBuilderCommand {
             long = "rpc.timeout",
             env = ENV_RPC_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_RPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         rpc_timeout: Duration,
@@ -96,7 +96,7 @@ pub enum NtxBuilderCommand {
             long = "tx-prover.timeout",
             env = ENV_TX_PROVER_TIMEOUT,
             default_value = duration_to_human_readable_string(DEFAULT_TX_PROVER_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            value_parser = parse_duration,
             value_name = "DURATION"
         )]
         tx_prover_timeout: Duration,
@@ -303,12 +303,12 @@ impl NtxBuilderCommand {
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),
             ntx_builder.listen = listen.to_string(),
-            grpc.timeout = humantime::Duration::from(grpc_timeout).to_string(),
+            grpc.timeout = format_duration(grpc_timeout),
             data.directory = data_directory.as_path(),
             rpc.endpoint = format_endpoint(&rpc_url),
-            rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
+            rpc.timeout = format_duration(rpc_timeout),
             tx_prover.endpoint = format_endpoint(&tx_prover_url),
-            tx_prover.timeout = humantime::Duration::from(tx_prover_timeout).to_string(),
+            tx_prover.timeout = format_duration(tx_prover_timeout),
             rpc.authentication.configured = rpc_auth_header_value.is_some(),
             ntx_builder.max_concurrent_txs = max_concurrent_txs,
             account.ids.count = priority_accounts.len(),

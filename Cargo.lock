@@ -3066,12 +3066,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
-name = "humantime"
-version = "2.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4505,7 +4499,6 @@ dependencies = [
  "fs-err",
  "futures",
  "hex",
- "humantime",
  "miden-node-db",
  "miden-node-proto",
  "miden-node-tracing",
@@ -4565,7 +4558,6 @@ dependencies = [
  "anyhow",
  "clap",
  "fs-err",
- "humantime",
  "miden-node-proto",
  "miden-node-utils",
  "miden-objects",
@@ -4646,7 +4638,6 @@ dependencies = [
  "fs-err",
  "futures",
  "hex",
- "humantime",
  "maud",
  "miden-node-proto",
  "miden-node-tracing",
@@ -4678,7 +4669,6 @@ dependencies = [
  "axum",
  "clap",
  "fs-err",
- "humantime",
  "miden-node-block-producer",
  "miden-node-persistence",
  "miden-node-proto",
@@ -4988,8 +4978,8 @@ dependencies = [
  "clap",
  "fs-err",
  "http",
- "humantime",
  "itertools 0.14.0",
+ "jiff",
  "lru",
  "miden-crypto",
  "miden-node-persistence",
@@ -5051,7 +5041,6 @@ dependencies = [
  "clap",
  "fs-err",
  "futures",
- "humantime",
  "miden-node-db",
  "miden-node-persistence",
  "miden-node-proto",
@@ -5272,7 +5261,6 @@ dependencies = [
  "anyhow",
  "assert_matches",
  "clap",
- "humantime",
  "miden-block-prover",
  "miden-node-proto",
  "miden-node-proto-build",
@@ -5485,7 +5473,6 @@ dependencies = [
  "golden-evrf",
  "golden-halo2curves",
  "hex",
- "humantime",
  "iroh",
  "iroh-relay",
  "itertools 0.14.0",

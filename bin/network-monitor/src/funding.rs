@@ -19,6 +19,7 @@ use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::GetNotesByIdRequest;
 use miden_node_proto::generated::note::NoteId as ProtoNoteId;
 use miden_node_tracing::{info, warn};
+use miden_node_utils::clap::format_duration;
 use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -381,7 +382,7 @@ impl fmt::Display for FundingWait {
             f,
             "waiting for funding note {} from the funding service (requested {} ago)",
             self.note_id,
-            humantime::format_duration(elapsed)
+            format_duration(elapsed)
         )?;
         if let Some(err) = &self.last_error {
             write!(f, "; the last check failed: {err}")?;

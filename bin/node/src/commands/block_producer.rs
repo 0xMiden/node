@@ -9,7 +9,7 @@ use miden_node_block_producer::{
     DEFAULT_MAX_CONCURRENT_PROOFS,
     DEFAULT_MAX_TXS_PER_BATCH,
 };
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::{duration_to_human_readable_string, parse_duration};
 use miden_protocol::account::AccountId;
 use url::Url;
 
@@ -175,7 +175,7 @@ pub struct BatchOptions {
         long = "batch.interval",
         env = "MIDEN_NODE_BATCH_INTERVAL",
         default_value = duration_to_human_readable_string(DEFAULT_BATCH_INTERVAL),
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         value_name = "DURATION",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]
@@ -215,7 +215,7 @@ pub struct BlockOptions {
         long = "block.interval",
         env = "MIDEN_NODE_BLOCK_INTERVAL",
         default_value = duration_to_human_readable_string(DEFAULT_BLOCK_INTERVAL),
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         value_name = "DURATION",
         help_heading = super::section::BLOCK_PRODUCTION_HELP_HEADING
     )]

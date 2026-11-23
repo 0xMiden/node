@@ -26,7 +26,7 @@ use miden_node_rpc::{
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
 use miden_node_tracing::{info, warn};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::{duration_to_human_readable_string, format_duration, parse_duration};
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
@@ -226,10 +226,8 @@ impl SequencerCommand {
                 .collect::<Vec<_>>()
                 .join(","),
             ntx_builder.endpoint = format_endpoint(&self.external_services.ntx_builder_url),
-            block.interval =
-                humantime::Duration::from(self.block_producer.block.interval).to_string(),
-            batch.interval =
-                humantime::Duration::from(self.block_producer.batch.interval).to_string(),
+            block.interval = format_duration(self.block_producer.block.interval),
+            batch.interval = format_duration(self.block_producer.batch.interval),
             db.sqlite.connection_pool_size = self.store.sqlite.connection_pool_size.get()
         );
     }
@@ -259,7 +257,7 @@ pub struct SequencerExternalServiceOptions {
         long = "validator.timeout",
         env = "MIDEN_NODE_VALIDATOR_TIMEOUT",
         default_value = duration_to_human_readable_string(DEFAULT_VALIDATOR_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         value_name = "DURATION"
     )]
     pub validator_timeout: Duration,

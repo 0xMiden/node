@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use miden_node_utils::clap::parse_duration;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::ONE;
 use miden_protocol::account::Account;
@@ -97,18 +98,12 @@ struct VerifyArgs {
     wait_blocks: u32,
 
     /// How often to poll the counter and the chain tip while waiting.
-    #[arg(long, default_value = "2s", value_parser = humantime_duration, value_name = "DURATION")]
+    #[arg(long, default_value = "2s", value_parser = parse_duration, value_name = "DURATION")]
     poll_interval: Duration,
 
     /// Per-request RPC timeout.
-    #[arg(long, default_value = "30s", value_parser = humantime_duration, value_name = "DURATION")]
+    #[arg(long, default_value = "30s", value_parser = parse_duration, value_name = "DURATION")]
     request_timeout: Duration,
-}
-
-fn humantime_duration(raw: &str) -> Result<Duration, String> {
-    raw.parse::<humantime::Duration>()
-        .map(Into::into)
-        .map_err(|err| err.to_string())
 }
 
 #[tokio::main]

@@ -5,17 +5,13 @@ use std::time::Duration;
 
 use crate::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 
+mod duration;
+pub use duration::{duration_to_human_readable_string, format_duration, parse_duration};
 mod rocksdb;
 pub use rocksdb::*;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-// Formats a Duration into a human-readable string for display in clap help text and yields a
-// &'static str by _leaking_ the string deliberately.
-pub fn duration_to_human_readable_string(duration: Duration) -> &'static str {
-    Box::new(humantime::format_duration(duration).to_string()).leak()
-}
 
 /// Maximum encoded size accepted by every gRPC client and server in a process.
 #[derive(clap::Args, Copy, Clone, Debug, PartialEq, Eq)]
@@ -44,7 +40,7 @@ pub struct GrpcOptions {
     #[arg(
         long = "grpc.timeout",
         default_value = duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         value_name = "DURATION"
     )]
     pub request_timeout: Duration,

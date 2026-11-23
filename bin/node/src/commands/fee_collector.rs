@@ -6,7 +6,7 @@ use anyhow::Context;
 use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, deploy_fee_collector};
 use miden_node_store::{DataDirectory, State};
 use miden_node_tracing::info;
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::{duration_to_human_readable_string, parse_duration};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -143,7 +143,7 @@ pub struct DeployCommand {
         long = "validator.timeout",
         env = "MIDEN_NODE_VALIDATOR_TIMEOUT",
         default_value = duration_to_human_readable_string(DEFAULT_VALIDATOR_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         value_name = "DURATION"
     )]
     validator_timeout: Duration,

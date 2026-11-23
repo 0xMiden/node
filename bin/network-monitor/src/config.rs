@@ -11,6 +11,7 @@ use std::time::Duration;
 use alloy_primitives::{Address, address};
 use anyhow::{Context, Result};
 use clap::Parser;
+use miden_node_utils::clap::parse_duration;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey as ValidatorPublicKey;
 use url::Url;
 
@@ -88,7 +89,7 @@ pub struct MonitorConfig {
         long = "funding-request-timeout",
         env = "MIDEN_MONITOR_FUNDING_REQUEST_TIMEOUT",
         default_value = "2m",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "Timeout for a funding request to the funding service"
     )]
     pub funding_request_timeout: Duration,
@@ -108,7 +109,7 @@ pub struct MonitorConfig {
         long = "remote-prover-test-interval",
         env = "MIDEN_MONITOR_REMOTE_PROVER_TEST_INTERVAL",
         default_value = "2m",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The interval at which to test the remote provers services"
     )]
     pub remote_prover_test_interval: Duration,
@@ -118,7 +119,7 @@ pub struct MonitorConfig {
         long = "faucet-test-interval",
         env = "MIDEN_MONITOR_FAUCET_TEST_INTERVAL",
         default_value = "2m",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The interval at which to test the faucet services"
     )]
     pub faucet_test_interval: Duration,
@@ -139,7 +140,7 @@ pub struct MonitorConfig {
         long = "status-check-interval",
         env = "MIDEN_MONITOR_STATUS_CHECK_INTERVAL",
         default_value = "3s",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The interval at which to check the status of the services"
     )]
     pub status_check_interval: Duration,
@@ -186,7 +187,7 @@ pub struct MonitorConfig {
         long = "counter-increment-interval",
         env = "MIDEN_MONITOR_COUNTER_INCREMENT_INTERVAL",
         default_value = "30s",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The interval at which to send the increment counter transaction"
     )]
     pub counter_increment_interval: Duration,
@@ -196,7 +197,7 @@ pub struct MonitorConfig {
         long = "counter-latency-timeout",
         env = "MIDEN_MONITOR_COUNTER_LATENCY_TIMEOUT",
         default_value = "2m",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "Maximum time to wait for a counter update after submitting a transaction"
     )]
     pub counter_latency_timeout: Duration,
@@ -218,7 +219,7 @@ pub struct MonitorConfig {
         long = "request-timeout",
         env = "MIDEN_MONITOR_REQUEST_TIMEOUT",
         default_value = "10s",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The timeout for the outgoing requests"
     )]
     pub request_timeout: Duration,
@@ -305,7 +306,7 @@ pub struct MonitorConfig {
         long = "usdcx-bridge-check-interval",
         env = "MIDEN_MONITOR_USDCX_BRIDGE_CHECK_INTERVAL",
         default_value = "30s",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "The interval at which to check the USDCx bridge"
     )]
     pub usdcx_bridge_check_interval: Duration,
@@ -318,7 +319,7 @@ pub struct MonitorConfig {
         long = "stale-chain-tip-threshold",
         env = "MIDEN_MONITOR_STALE_CHAIN_TIP_THRESHOLD",
         default_value = "1m",
-        value_parser = humantime::parse_duration,
+        value_parser = parse_duration,
         help = "Maximum time without a chain tip update before marking RPC as unhealthy"
     )]
     pub stale_chain_tip_threshold: Duration,
