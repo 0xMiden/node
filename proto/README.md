@@ -10,8 +10,7 @@ the node. It includes descriptors for the public RPC, remote prover, and note tr
 for internal component APIs used by the Miden node workspace.
 
 Use `rpc_api_descriptor()` for `miden.node.v1.NodeService` and `rpc_v2_api_descriptor()` for
-`miden.node.v2.NodeService`. The v2 descriptor includes v1 because both services use the same note and transaction
-records.
+`miden.node.v2.NodeService`. Each version defines its service independently and imports the shared schemas it uses.
 
 Each descriptor set includes its imported schemas. External clients can use these self-contained descriptors to generate
 bindings in other languages. Canonical object schemas come from the published `miden-objects` crate through its
