@@ -138,6 +138,16 @@ impl TestValidator {
         empty_block(&self.chain_tip, &self.chain)
     }
 
+    async fn register_validator_config(&self, config: ValidatorConfig) {
+        self.server
+            .db
+            .write("register test configuration", move |tx| {
+                tx.insert_pending_validator_config(&config)
+            })
+            .await
+            .unwrap();
+    }
+
     /// Calls `submit_proven_transaction` on the validator server.
     async fn call_submit_proven_transaction(
         &self,
@@ -1903,14 +1913,7 @@ async fn validator_config_approval_survives_restart_and_is_consumed_by_signing()
         tonic::Code::InvalidArgument
     );
 
-    let pending_config = next.clone();
-    tv.server
-        .db
-        .write("register test configuration", move |tx| {
-            tx.insert_pending_validator_config(&pending_config)
-        })
-        .await
-        .unwrap();
+    tv.register_validator_config(next.clone()).await;
     tv.apply_empty_block().await;
     assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
     drop(tv.server.db);
@@ -1929,4 +1932,31 @@ async fn validator_config_approval_survives_restart_and_is_consumed_by_signing()
     assert_eq!(pending, None);
     tv.call_sign_block(&transition).await.unwrap();
     assert_eq!(tv.call_sign_block(&old).await.unwrap_err().code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn replacing_a_transition_block_preserves_its_validator_config() {
+    let mut tv = TestValidator::new().await;
+    let mut keys = vec![tv.server.signer.public_key(), random_secret_key().public_key()];
+    let two_validators = ValidatorConfig::new(keys.clone(), 2).unwrap();
+    keys.push(random_secret_key().public_key());
+    let three_validators = ValidatorConfig::new(keys, 3).unwrap();
+
+    let original = tv.propose_empty_block();
+    tv.call_sign_block(&original).await.unwrap();
+    tv.register_validator_config(two_validators.clone()).await;
+    let transition = original.clone().with_next_validator_config(two_validators);
+    tv.apply_block(transition.clone()).await;
+
+    tv.register_validator_config(three_validators.clone()).await;
+    let replacement = original.with_next_validator_config(three_validators.clone());
+    assert_eq!(
+        tv.call_sign_block(&replacement).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    tv.call_sign_block(&transition).await.unwrap();
+
+    let child = tv.propose_empty_block().with_next_validator_config(three_validators.clone());
+    tv.apply_block(child).await;
+    assert_eq!(tv.load_chain_tip().await.validator_config(), &three_validators);
 }

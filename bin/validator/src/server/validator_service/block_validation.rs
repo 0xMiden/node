@@ -70,11 +70,19 @@ impl ValidatorService {
             // needs only the tip header.
             let prev_block_num =
                 chain_tip.block_num().parent().ok_or(ValidatorError::CannotReplaceGenesis)?;
-            self.db
+            let parent = self
+                .db
                 .load_block_header(prev_block_num)
                 .await
                 .map_err(ValidatorError::DatabaseError)?
-                .ok_or(ValidatorError::NoPrevBlockHeader)?
+                .ok_or(ValidatorError::NoPrevBlockHeader)?;
+            // Replacing a block that changed the validator configuration must preserve that
+            // configuration.
+            if changes_validator_config && parent.validator_config() != chain_tip.validator_config()
+            {
+                return Err(ValidatorError::CannotReplaceValidatorConfigChange);
+            }
+            parent
         } else {
             // Proposed block is a new block. Block number must be sequential.
             let expected_block_num = chain_tip.block_num().child();
@@ -127,6 +135,7 @@ impl ValidatorError {
             | Self::BlockTimestampTooFarInFuture { .. }
             | Self::BlockNumberMismatch { .. }
             | Self::UnapprovedValidatorConfig
+            | Self::CannotReplaceValidatorConfigChange
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),
