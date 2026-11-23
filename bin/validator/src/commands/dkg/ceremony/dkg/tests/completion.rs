@@ -1,4 +1,4 @@
-use miden_protocol::crypto::hash::rpo::Rpo256;
+use miden_protocol::Hasher;
 
 use super::*;
 use crate::commands::dkg::ceremony::session::{CeremonyNonce, SessionId};
@@ -36,7 +36,7 @@ async fn completion_rejects_mismatch(#[case] mismatch: Mismatch) -> anyhow::Resu
         },
         Mismatch::Dealings => {
             dealings_commitment =
-                DkgDealingsCommitment::decode(&Rpo256::hash(b"different dealings").as_bytes())?;
+                DkgDealingsCommitment::decode(&Hasher::hash(b"different dealings").as_bytes())?;
         },
         Mismatch::PublicKeySet => {
             peer.output.public_key_set.joint_public_key =

@@ -88,7 +88,7 @@ fn private_account_ignores_large_storage_map_entries() {
 #[test]
 fn public_account_note_contains_requested_distinct_vault_assets() {
     let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
+    let rng = Arc::new(Mutex::new(EidosRandomCoin::new(coin_seed.into())));
     let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);
@@ -106,7 +106,7 @@ fn public_account_note_contains_requested_distinct_vault_assets() {
 #[test]
 fn private_account_note_keeps_single_vault_asset() {
     let coin_seed = [1, 2, 3, 4].map(Felt::new_unchecked);
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.into())));
+    let rng = Arc::new(Mutex::new(EidosRandomCoin::new(coin_seed.into())));
     let key_pair = SecretKey::with_rng(&mut StdRng::seed_from_u64(1));
 
     let faucet_ids = benchmark_fungible_faucet_ids(5);

@@ -9,6 +9,7 @@ use anyhow::Context;
 use futures::{Stream, TryStreamExt};
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
+use miden_node_proto::domain::transaction_logs::GetTransactionLogsResponse;
 use miden_node_tracing::{info, instrument, warn};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
@@ -37,10 +38,11 @@ use miden_protocol::note::{
     Nullifier,
 };
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::TransactionHeader;
+use miden_protocol::transaction::{TransactionHeader, TransactionId};
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::pagination::{Page, Paginated};
+use crate::db::queries::PreparedTransactionLogs;
 pub use crate::db::queries::{
     HISTORICAL_BLOCK_RETENTION,
     PrecomputedPublicAccountState,
@@ -119,6 +121,7 @@ fn insert_genesis(tx: &WriteTx<'_>, genesis: GenesisBlock) -> Result<()> {
         &[],
         &PrecomputedPublicAccountStates::new(),
         &new_account_ids,
+        &PreparedTransactionLogs::from_block(genesis_block.body())?,
     )?;
     Ok(())
 }
@@ -272,6 +275,20 @@ impl Db {
     #[cfg(test)]
     pub(crate) fn writer(&self) -> &DbWriter {
         &self.writer
+    }
+
+    /// Returns one transaction's stored log collection within the published chain.
+    pub(crate) async fn select_transaction_logs(
+        &self,
+        native_account_id: AccountId,
+        transaction_id: TransactionId,
+        tip: ScopedBlockNum,
+    ) -> Result<Option<GetTransactionLogsResponse>> {
+        self.reader
+            .read("transaction logs", move |tx| {
+                queries::select_transaction_logs(tx, native_account_id, transaction_id, tip)
+            })
+            .await
     }
 
     /// Selects a protocol configuration by its commitment.
@@ -541,6 +558,7 @@ impl Db {
         new_account_ids: BTreeSet<AccountId>,
         unresolved_note_nullifiers: Vec<Nullifier>,
         prune_tip: BlockNumber,
+        logs: PreparedTransactionLogs,
     ) -> Result<BTreeMap<Nullifier, NoteId>> {
         self.writer
             .write::<_, DatabaseError, _>("apply block", move |tx| {
@@ -557,6 +575,7 @@ impl Db {
                     &notes,
                     &precomputed_public_states,
                     &new_account_ids,
+                    &logs,
                 )?;
                 queries::prune_history(tx, prune_tip)?;
                 Ok(())

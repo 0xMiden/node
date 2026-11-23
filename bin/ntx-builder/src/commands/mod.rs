@@ -30,6 +30,7 @@ const ENV_MAX_CONCURRENT_TXS: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CONCURRENT_TXS"
 const ENV_PRIORITY_ACCOUNTS: &str = "MIDEN_NODE_NTX_BUILDER_PRIORITY_ACCOUNTS";
 const ENV_MAX_CYCLES: &str = "MIDEN_NODE_NTX_BUILDER_MAX_CYCLES";
 const ENV_TX_EXPIRATION_DELTA: &str = "MIDEN_NODE_NTX_BUILDER_TX_EXPIRATION_DELTA";
+const ENV_NOTE_RETENTION: &str = "MIDEN_NODE_NTX_BUILDER_NOTE_RETENTION";
 const ENV_SQLITE_CONNECTION_POOL_SIZE: &str = "MIDEN_NODE_NTX_BUILDER_SQLITE_CONNECTION_POOL_SIZE";
 
 const DEFAULT_MAX_CONCURRENT_TXS: usize = 16;
@@ -158,6 +159,19 @@ pub enum NtxBuilderCommand {
         )]
         tx_expiration_delta: NonZeroU16,
 
+        /// Number of blocks a consumed network note is kept before it is deleted.
+        ///
+        /// The note status endpoint reports a consumed note only during this window. Pending and
+        /// discarded notes are kept regardless. The default is about one day at a block interval
+        /// of three seconds.
+        #[arg(
+            long = "note-retention",
+            env = ENV_NOTE_RETENTION,
+            default_value_t = miden_ntx_builder::DEFAULT_NOTE_RETENTION,
+            value_name = "BLOCKS",
+        )]
+        note_retention: u32,
+
         /// Maximum number of SQLite connections in the ntx-builder database connection pool.
         #[arg(
             long = "sqlite.connection_pool_size",
@@ -276,6 +290,7 @@ impl NtxBuilderCommand {
             priority_accounts,
             max_tx_cycles,
             tx_expiration_delta,
+            note_retention,
             sqlite_connection_pool_size,
             data_directory,
         } = self
@@ -299,6 +314,7 @@ impl NtxBuilderCommand {
             account.ids.count = priority_accounts.len(),
             ntx_builder.max_cycles = max_tx_cycles,
             ntx_builder.tx_expiration_delta = tx_expiration_delta.get(),
+            ntx_builder.note_retention = note_retention,
             db.sqlite.connection_pool_size = sqlite_connection_pool_size.get()
         );
 
@@ -319,6 +335,7 @@ impl NtxBuilderCommand {
                 .with_priority_accounts(priority_accounts)
                 .with_max_cycles(max_tx_cycles)
                 .with_tx_expiration_delta(tx_expiration_delta)
+                .with_note_retention(note_retention)
                 .with_sqlite_connection_pool_size(sqlite_connection_pool_size);
         let config = match rpc_auth_header_value {
             Some(value) => config.with_rpc_auth_header(value),

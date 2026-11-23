@@ -31,6 +31,7 @@ use miden_protocol::account::{
     StorageValuePatch,
 };
 use miden_protocol::asset::{Asset, FungibleAsset};
+use miden_protocol::block::code_tree::CodeTree;
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -39,6 +40,7 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::crypto::merkle::smt::Smt;
 use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
@@ -122,6 +124,7 @@ fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
         Word::default(),
         Word::default(),
         Word::default(),
+        CodeTree::<Smt>::default().root(),
         Word::default(),
         Word::default(),
         ValidatorConfig::new(vec![secret_key.public_key()], 1).unwrap(),
@@ -206,7 +209,7 @@ fn callback_delta_test_account(seed: [u8; 32], slot_index: usize) -> Account {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -342,7 +345,7 @@ fn optimized_delta_matches_full_account_method() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -550,7 +553,7 @@ fn optimized_delta_updates_non_empty_vault() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .with_assets([initial_asset])
         .build_existing()
@@ -786,7 +789,7 @@ fn optimized_delta_updates_storage_map_header() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -930,7 +933,7 @@ fn partial_public_upsert_requires_precomputed_state() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -1003,7 +1006,7 @@ fn partial_public_upsert_rejects_bad_precomputed_root() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -1156,7 +1159,7 @@ fn upsert_full_state_delta() {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();

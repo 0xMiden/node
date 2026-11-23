@@ -36,5 +36,7 @@ thiserror              = { workspace = true }
 [dev-dependencies]
 assert_matches = { workspace = true }
 miden-testing  = { workspace = true }
+miden-tx       = { workspace = true }
 rstest         = { workspace = true }
 tempfile       = { workspace = true }
+tokio          = { features = ["macros", "rt-multi-thread"], workspace = true }

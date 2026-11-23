@@ -18,7 +18,7 @@ use miden_objects::account_file::AccountFile;
 use miden_protocol::ONE;
 use miden_protocol::account::Account;
 use miden_protocol::account::auth::AuthSecretKey;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 use rand::SeedableRng;
 use rand_chacha::ChaCha20Rng;
 use url::Url;
@@ -139,7 +139,7 @@ fn seed(args: &SeedArgs) -> Result<()> {
     let counter_id = counter.id();
 
     write_wallet(&args.output_dir, &wallet, &wallet_secret_key)?;
-    AccountFile::new(faucet, vec![AuthSecretKey::Falcon512Poseidon2(faucet_secret_key)])
+    AccountFile::new(faucet, vec![AuthSecretKey::Falcon512Eidos(faucet_secret_key)])
         .write(args.output_dir.join(FAUCET_FILE))
         .context("failed to write faucet.mac")?;
     AccountFile::new(counter, vec![])
@@ -337,10 +337,10 @@ fn load_pair(dir: &Path) -> Result<(Account, SecretKey, Account)> {
         .auth_secret_keys()
         .iter()
         .find_map(|key| match key {
-            AuthSecretKey::Falcon512Poseidon2(sk) => Some(sk.clone()),
+            AuthSecretKey::Falcon512Eidos(sk) => Some(sk.clone()),
             _ => None,
         })
-        .context("wallet.mac does not contain a Falcon512Poseidon2 secret key")?;
+        .context("wallet.mac does not contain a Falcon512Eidos secret key")?;
 
     Ok((wallet_file.into_parts().0, secret_key, counter_file.into_parts().0))
 }
@@ -350,7 +350,7 @@ fn write_wallet(dir: &Path, wallet: &Account, secret_key: &SecretKey) -> Result<
     let final_path = dir.join(WALLET_FILE);
     let temp_path = dir.join(format!("{WALLET_FILE}.tmp"));
 
-    AccountFile::new(wallet.clone(), vec![AuthSecretKey::Falcon512Poseidon2(secret_key.clone())])
+    AccountFile::new(wallet.clone(), vec![AuthSecretKey::Falcon512Eidos(secret_key.clone())])
         .write(&temp_path)
         .context("failed to write the wallet account file")?;
 

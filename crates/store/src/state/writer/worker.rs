@@ -28,6 +28,7 @@ use crate::account_state_forest::{
 };
 use crate::accounts::AccountTreeWithHistory;
 use crate::blocks::BlockStore;
+use crate::db::queries::PreparedTransactionLogs;
 use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
@@ -73,6 +74,7 @@ pub(in crate::state) struct WriteWorker {
 
 /// Note records and state mutations computed from a validated block, before any modifications.
 struct PreparedBlockUpdate {
+    logs: PreparedTransactionLogs,
     notes: Vec<(NoteRecord, Option<Nullifier>)>,
     nullifier_tree_update: NullifierMutationSet,
     account_tree_update: AccountMutationSet,
@@ -183,7 +185,8 @@ impl WriteWorker {
 
         let block_num = header.block_num();
         let block_commitment = header.commitment();
-        let num_transactions = body.transactions().as_slice().len();
+        let num_transactions =
+            body.transactions().iter().map(|batch| batch.as_slice().len()).sum::<usize>();
 
         miden_span_record!(
             block.number = block_num,
@@ -226,6 +229,7 @@ impl WriteWorker {
         // it is applied after the DB commit below.
         let (prepared, signed_block_bytes) = self.prepare_block_update(&signed_block)?;
         let PreparedBlockUpdate {
+            logs,
             notes,
             nullifier_tree_update,
             account_tree_update,
@@ -268,6 +272,7 @@ impl WriteWorker {
                 new_account_ids,
                 unresolved_note_nullifiers,
                 prune_tip,
+                logs,
             )
             .await
             .map_err(|err| ApplyBlockError::DbUpdateTaskFailed(err.as_report()))?;
@@ -325,11 +330,11 @@ impl WriteWorker {
 
             // The header must commit to the body's transactions. Checked here rather than in
             // `validate_block_header` so the transaction hashing runs on the apply-block pool.
-            let tx_commitment = body.transactions().commitment();
-            if header.tx_commitment() != tx_commitment {
+            let tx_commitment = body.compute_transactions_commitment();
+            if header.transactions_commitment() != tx_commitment {
                 return Err(InvalidBlockError::InvalidBlockTxCommitment {
                     expected: tx_commitment,
-                    actual: header.tx_commitment(),
+                    actual: header.transactions_commitment(),
                 }
                 .into());
             }
@@ -345,7 +350,13 @@ impl WriteWorker {
                     AccountUpdateDetails::Public(patch) => Some(patch.clone()),
                     AccountUpdateDetails::Private => None,
                 });
-            let new_account_ids = body.transactions().created_account_ids().collect();
+            let new_account_ids = body
+                .transactions()
+                .iter()
+                .flat_map(
+                    miden_protocol::transaction::OrderedTransactionHeaders::created_account_ids,
+                )
+                .collect();
             let account_forest_update = self
                 .forest
                 .compute_block_update_mutations(
@@ -356,6 +367,7 @@ impl WriteWorker {
                 .map_err(ApplyBlockError::AccountStateForestPreparation)?;
 
             let prepared = PreparedBlockUpdate {
+                logs: PreparedTransactionLogs::from_block(body)?,
                 notes,
                 nullifier_tree_update,
                 account_tree_update,
@@ -595,14 +607,28 @@ fn raise_thread_priority() {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
     use std::sync::Arc;
 
     use assert_matches::assert_matches;
+    use miden_node_proto::domain::account::GetAccountRequest;
+    use miden_node_proto::generated::blockchain::SignedBlock as ProtoSignedBlock;
     use miden_node_utils::clap::StorageOptions;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_node_utils::shutdown::CancellationToken;
+    use miden_protocol::Word;
+    use miden_protocol::account::{
+        AccountBuilder,
+        AccountId,
+        AccountPatch,
+        AccountType,
+        AccountUpdateDetails,
+    };
     use miden_protocol::asset::AssetId;
+    use miden_protocol::block::account_tree::AccountTree;
+    use miden_protocol::block::code_tree::{CodePatch, CodeTree};
     use miden_protocol::block::{
+        BlockAccountUpdate,
         BlockBody,
         BlockHeader,
         BlockSignatures,
@@ -610,10 +636,13 @@ mod tests {
         ValidatorConfig,
     };
     use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::protocol_config::ProtocolConfig;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
+    use miden_protocol::testing::add_component::AddComponent;
+    use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
     use miden_protocol::testing::random_secret_key::random_secret_key;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
+    use miden_protocol::transaction::PublicTransactionLogs;
     use tempfile::TempDir;
 
     use crate::errors::{ApplyBlockError, DatabaseError};
@@ -666,7 +695,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(Vec::new()),
+            Vec::new(),
+            PublicTransactionLogs::default(),
         )
         .unwrap();
         let header = BlockHeader::new(
@@ -675,8 +705,9 @@ mod tests {
             mmr.peaks().hash_peaks(),
             parent.account_root(),
             parent.nullifier_root(),
+            CodeTree::<Smt>::default().root(),
             body.compute_block_note_tree().root(),
-            body.transaction_commitment(),
+            body.compute_transactions_commitment(),
             parent.validator_config().clone(),
             parent.fee_parameters().clone(),
             protocol_config.to_commitment(),
@@ -888,5 +919,190 @@ mod tests {
             None
         );
         writer.stop(writer_task).await;
+    }
+
+    async fn block_with_account_and_log(
+        state: &State,
+        config: &ProtocolConfig,
+    ) -> (SignedBlock, AccountId, Word) {
+        use miden_node_proto::DecodeMessageExt;
+        use miden_protocol::Word;
+        use miden_protocol::transaction::{
+            InputNotes,
+            LogTopic,
+            OrderedTransactionHeaders,
+            PublicTransactionLogs,
+            TransactionHeader,
+            TransactionLog,
+            TransactionLogs,
+        };
+        let account = AccountBuilder::new([99; 32])
+            .account_type(AccountType::Public)
+            .with_component(NoopAuthComponent)
+            .with_component(AddComponent)
+            .build_existing()
+            .unwrap();
+        let id = account.id();
+        let commitment = account.to_commitment();
+        let patch = AccountPatch::try_from(account).unwrap();
+        let update =
+            BlockAccountUpdate::new(id, commitment, AccountUpdateDetails::Public(patch)).unwrap();
+        let mut account_tree: AccountTree = AccountTree::default();
+        account_tree.insert(id, commitment).unwrap();
+        let logs = TransactionLogs::new(vec![
+            TransactionLog::new(
+                id,
+                LogTopic::new(1_u32.into(), 2_u32.into()),
+                vec![Word::from([7, 8, 9, 10u32])],
+            )
+            .unwrap(),
+        ])
+        .unwrap();
+        let header = TransactionHeader::new(
+            id,
+            Word::empty(),
+            commitment,
+            InputNotes::default(),
+            vec![],
+            logs.commitment(),
+            CodePatch::default().commitment(),
+        )
+        .unwrap();
+        let public = PublicTransactionLogs::new(vec![(header.id(), logs)], once(&header)).unwrap();
+        let body = BlockBody::new(
+            vec![update],
+            vec![],
+            vec![],
+            vec![OrderedTransactionHeaders::new_unchecked(vec![header])],
+            public,
+        )
+        .unwrap();
+        let mut wire = ProtoSignedBlock::from(empty_block(state, config).await);
+        wire.header.as_mut().unwrap().tx_commitment =
+            Some(body.compute_transactions_commitment().into());
+        wire.header.as_mut().unwrap().account_root = Some(account_tree.root().into());
+        wire.body = Some(body.into());
+        let block: SignedBlock = wire.decode_and_build_unchecked().unwrap();
+        (block, id, commitment)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_log_insertion_does_not_publish_a_block_and_can_be_retried() {
+        use miden_protocol::Word;
+        let (_root, state, mut writer, task, config) = start_store().await;
+        let mut notifications = state.subscribe_committed_tip();
+        let (block, id, commitment) = block_with_account_and_log(&state, &config).await;
+        state.db.writer().write::<_, DatabaseError, _>("fail log insertion", |tx| {
+            tx.execute("CREATE TRIGGER fail_log BEFORE INSERT ON transaction_logs BEGIN SELECT RAISE(ABORT, 'log insert failure'); END", &[])?;
+            Ok(())
+        }).await.unwrap();
+        assert!(writer.apply_block(block.clone(), None).await.is_err());
+        assert_eq!(state.committed_tip(), 0.into());
+        assert!(!notifications.has_changed().unwrap());
+        assert!(state.load_block(1.into()).await.unwrap().is_none());
+        let witness = state
+            .view()
+            .get_account(GetAccountRequest {
+                account_id: id,
+                block_num: None,
+                details: None,
+            })
+            .await
+            .unwrap()
+            .witness;
+        assert_eq!(witness.state_commitment(), Word::empty());
+        let counts = state.db.writer().write::<_, DatabaseError, _>("check rollback", |tx| {
+            let counts = tx.query("SELECT (SELECT COUNT(*) FROM block_headers), (SELECT COUNT(*) FROM transactions), (SELECT COUNT(*) FROM transaction_logs), (SELECT COUNT(*) FROM accounts)", &[], |row| Ok((row.get::<u32>(0)?,row.get::<u32>(1)?,row.get::<u32>(2)?,row.get::<u32>(3)?)))?;
+            tx.execute("DROP TRIGGER fail_log", &[])?;
+            Ok(counts)
+        }).await.unwrap();
+        assert_eq!(counts, vec![(1, 0, 0, 0)]);
+        writer.apply_block(block, None).await.unwrap();
+        notifications.changed().await.unwrap();
+        assert_eq!(state.committed_tip(), 1.into());
+        let witness = state
+            .view()
+            .get_account(GetAccountRequest {
+                account_id: id,
+                block_num: None,
+                details: None,
+            })
+            .await
+            .unwrap()
+            .witness;
+        assert_eq!(witness.state_commitment(), commitment);
+        writer.stop(task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn eidos_block_replica_roundtrip_preserves_commitments_and_logs() {
+        use miden_node_persistence::decode;
+        use miden_protocol::block::BlockNumber;
+
+        let source_dir = tempfile::tempdir().unwrap();
+        let replica_dir = tempfile::tempdir().unwrap();
+        let signer = random_secret_key();
+        let config = test_protocol_config();
+        for dir in [&source_dir, &replica_dir] {
+            let genesis = GenesisState::new(
+                Vec::new(),
+                test_fee_params(),
+                0,
+                ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
+                config.clone(),
+            )
+            .into_block()
+            .unwrap();
+            State::bootstrap(genesis, dir.path()).await.unwrap();
+        }
+        let (source, mut writer, source_proofs, source_task) =
+            State::load(source_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let (replica, mut replica_writer, replica_proofs, replica_task) =
+            State::load(replica_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let (block, id, commitment) = block_with_account_and_log(&source, &config).await;
+        let block = SignedBlock::new(
+            block.header().clone(),
+            block.body().clone(),
+            BlockSignatures::new(vec![signer.sign(block.header().commitment())]).unwrap(),
+        )
+        .unwrap();
+        writer.apply_block(block.clone(), None).await.unwrap();
+        let bytes = source.load_block(BlockNumber::ONE).await.unwrap().unwrap();
+        let transported: SignedBlock = decode(&bytes).unwrap();
+        assert_eq!(transported, block);
+        replica_writer.apply_block(transported, None).await.unwrap();
+        assert_eq!(replica.load_block(BlockNumber::ONE).await.unwrap().unwrap(), bytes);
+        replica_writer.stop(replica_task).await;
+        drop(replica_proofs);
+        drop(replica);
+        let (reopened, reopened_writer, _proofs, task) =
+            State::load(replica_dir.path(), StorageOptions::default())
+                .await
+                .unwrap()
+                .start(CancellationToken::new());
+        let stored: SignedBlock =
+            decode(&reopened.load_block(BlockNumber::ONE).await.unwrap().unwrap()).unwrap();
+        assert_eq!(stored.header().commitment(), block.header().commitment());
+        assert_eq!(stored.body().public_logs(), block.body().public_logs());
+        let response = reopened
+            .view()
+            .get_account(GetAccountRequest {
+                account_id: id,
+                block_num: None,
+                details: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(response.witness.state_commitment(), commitment);
+        assert_eq!(reopened.committed_tip(), BlockNumber::ONE);
+        reopened_writer.stop(task).await;
+        writer.stop(source_task).await;
+        drop(source_proofs);
     }
 }

@@ -33,6 +33,7 @@ use miden_protocol::account::{
     StorageSlotPatch,
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
+use miden_protocol::block::code_tree::{CodePatch, CodePatchCommitment, CodeTree};
 use miden_protocol::block::{
     BlockAccountUpdate,
     BlockHeader,
@@ -45,7 +46,8 @@ use miden_protocol::block::{
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::SparseMerklePath;
 use miden_protocol::crypto::merkle::mmr::{Forest, Mmr};
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::merkle::smt::Smt;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{
     Note,
     NoteAttachment,
@@ -76,6 +78,7 @@ use miden_protocol::transaction::{
     InputNoteCommitment,
     InputNotes,
     OrderedTransactionHeaders,
+    PublicTransactionLogs,
     TransactionHeader,
     TransactionId,
 };
@@ -102,11 +105,15 @@ use crate::db::queries::{
     NOTE_SYNC_RECORD_BYTES,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
+    PreparedTransactionLogs,
     StorageMapValue,
     StorageMapValuesPage,
+    insert_transactions as insert_transaction_records,
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
+
+mod transaction_logs;
 
 // QUERY DRIVERS
 // ================================================================================================
@@ -149,7 +156,20 @@ fn insert_transactions(
     transactions: &OrderedTransactionHeaders,
 ) -> Result<usize> {
     let transactions = transactions.clone();
-    db.write(move |tx| queries::insert_transactions(tx, block_num, &transactions))
+    db.write(move |tx| {
+        let first_index = tx.query(
+            "SELECT COUNT(*) FROM transactions WHERE block_num = ?1",
+            &[&block_num],
+            |row| row.get::<u32>(0),
+        )?[0];
+        let counts = transactions
+            .as_slice()
+            .iter()
+            .filter(|header| header.account_id().is_public())
+            .map(|header| (header.id(), 0))
+            .collect();
+        insert_transaction_records(tx, block_num, &transactions, first_index, &counts)
+    })
 }
 
 fn upsert_accounts(
@@ -403,6 +423,7 @@ fn mock_block(block_num: BlockNumber) -> (BlockHeader, BlockSignatures) {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -582,7 +603,7 @@ async fn nullifier_pages_return_every_nullifier_once() {
 
 pub fn create_note(account_id: AccountId) -> Note {
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
+    let rng = Arc::new(Mutex::new(EidosRandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let mut rng = rng.lock().unwrap();
 
     P2idNote::builder()
@@ -951,6 +972,60 @@ fn select_nullifiers_by_prefix_works() {
 }
 
 #[test]
+fn eidos_nullifier_prefix_pages_preserve_all_matches() {
+    use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
+    use miden_protocol::note::NoteScriptRoot;
+    let generated = Nullifier::new(
+        NoteScriptRoot::from_raw(num_to_word(1)),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        num_to_word(5),
+        num_to_word(6),
+    );
+    assert!(generated.prefix() < 0x8000);
+    assert_eq!(utils::get_nullifier_prefix(&generated), generated.prefix());
+    let db = &TestDb::new();
+    // Two valid-sized blocks together exceed one response page, even when all prefixes collide.
+    let per_block = MAX_RESPONSE_PAYLOAD_BYTES / 36 / 2 + 1;
+    let mut expected = Vec::new();
+    for height in 1..=2u32 {
+        let block = BlockNumber::from(height);
+        create_block(db, block);
+        let nullifiers = (0..per_block)
+            .map(|index| {
+                num_to_nullifier((1 << 48) + u64::from(height) * per_block as u64 + index as u64)
+            })
+            .collect::<Vec<_>>();
+        insert_nullifiers_for_block(db, &nullifiers, block).unwrap();
+        expected.extend(
+            nullifiers
+                .into_iter()
+                .map(|nullifier| NullifierInfo { nullifier, block_num: block }),
+        );
+    }
+    let (mut first, reached) =
+        select_nullifiers_by_prefix(db, 16, &[1, 1], BlockNumber::GENESIS..=2.into()).unwrap();
+    assert_eq!(reached, BlockNumber::ONE);
+    let (second, reached) =
+        select_nullifiers_by_prefix(db, 16, &[1], reached.child()..=2.into()).unwrap();
+    first.extend(second);
+    assert_eq!(reached, BlockNumber::from(2));
+    assert!(first.windows(2).all(|pair| pair[0].block_num <= pair[1].block_num));
+    // Ordering within a block is not part of the query contract.
+    first.sort_by_key(|info| info.nullifier);
+    expected.sort_by_key(|info| info.nullifier);
+    assert_eq!(first, expected);
+    for prefix in [0x7fff, 0x8000, 0xffff] {
+        let (matches, reached) =
+            select_nullifiers_by_prefix(db, 16, &[prefix], BlockNumber::GENESIS..=2.into())
+                .unwrap();
+        assert_eq!(matches, [] as [NullifierInfo; 0]);
+        assert_eq!(reached, BlockNumber::from(2));
+    }
+}
+
+#[test]
 #[miden_node_test_macro::enable_logging]
 fn db_block_header() {
     let db = &TestDb::new();
@@ -968,6 +1043,7 @@ fn db_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -1002,6 +1078,7 @@ fn db_block_header() {
         num_to_word(14),
         num_to_word(15),
         num_to_word(16),
+        CodeTree::<Smt>::default().root(),
         num_to_word(17),
         num_to_word(18),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -1302,6 +1379,7 @@ fn note_sync_multi_respects_payload_limit() {
     let tag = 43u32;
     let note_index = BlockNoteIndex::new(0, 0).unwrap();
 
+    let mut expected_ids = Vec::new();
     for block_num_raw in 1..=3u32 {
         let block_num = BlockNumber::from(block_num_raw);
         create_block(db, block_num);
@@ -1319,6 +1397,7 @@ fn note_sync_multi_respects_payload_limit() {
         .unwrap();
 
         let new_note = create_note(sender);
+        expected_ids.push(new_note.id());
         let attachments = NoteAttachments::new(
             (1..=NoteAttachments::MAX_COUNT)
                 .map(|scheme| {
@@ -1370,6 +1449,23 @@ fn note_sync_multi_respects_payload_limit() {
         "the first block is always included, but the second block would exceed the payload cap",
     );
     assert_eq!(page.next, Some(BlockNumber::from(2)), "the next page starts at block 2");
+    let mut collected_ids = page
+        .items
+        .iter()
+        .flat_map(|update| update.notes.iter().map(|note| note.note_id))
+        .collect::<Vec<_>>();
+    let mut next = page.next;
+    while let Some(cursor) = next {
+        let page = get_note_sync_multi(db, &[tag], cursor..=BlockNumber::from(3), one_block_budget)
+            .unwrap();
+        collected_ids.extend(
+            page.items
+                .iter()
+                .flat_map(|update| update.notes.iter().map(|note| note.note_id)),
+        );
+        next = page.next;
+    }
+    assert_eq!(collected_ids, expected_ids);
 }
 
 /// Tests that note sync returns an empty result when no notes match the requested tags.
@@ -2024,7 +2120,7 @@ fn create_account_with_code(code_str: &str, seed: [u8; 32]) -> Account {
         .with_component(component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -2052,6 +2148,8 @@ fn mock_block_transaction(account_id: AccountId, num: u64) -> TransactionHeader 
         final_account_commitment,
         input_notes,
         output_notes,
+        miden_protocol::transaction::TransactionLogs::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .expect("test transaction header should be valid")
 }
@@ -2088,6 +2186,8 @@ fn mock_block_transaction_with_output_notes(
         final_account_commitment,
         input_notes,
         output_notes,
+        miden_protocol::transaction::TransactionLogs::default().commitment(),
+        CodePatch::default().commitment(),
     )
     .expect("test transaction header should be valid")
 }
@@ -2157,7 +2257,7 @@ fn mock_account_code_and_storage(
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap()
@@ -2388,7 +2488,7 @@ async fn genesis_with_account_assets() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2460,7 +2560,7 @@ async fn genesis_with_account_storage_map() {
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2525,7 +2625,7 @@ async fn genesis_with_account_assets_and_storage() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2569,7 +2669,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component1)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2593,7 +2693,7 @@ async fn genesis_with_multiple_accounts() {
         .with_assets([fungible_asset.into()])
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2626,7 +2726,7 @@ async fn genesis_with_multiple_accounts() {
         .with_component(account_component3)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -2720,7 +2820,14 @@ fn serialization_symmetry_core_types() {
     assert_eq!(nullifier, restored, "Nullifier serialization must be symmetric");
 
     // TransactionId
-    let tx_id = TransactionId::new(num_to_word(1), num_to_word(2), num_to_word(3), num_to_word(4));
+    let tx_id = TransactionId::new(
+        num_to_word(1),
+        num_to_word(2),
+        num_to_word(3),
+        num_to_word(4),
+        miden_protocol::transaction::TransactionLogs::default().commitment(),
+        CodePatch::default().commitment(),
+    );
     let bytes = tx_id.to_bytes();
     let restored = TransactionId::read_from_bytes(&bytes).unwrap();
     assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
@@ -2740,6 +2847,7 @@ fn serialization_symmetry_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -2827,6 +2935,7 @@ fn db_roundtrip_block_header() {
         num_to_word(4),
         num_to_word(5),
         num_to_word(6),
+        CodeTree::<Smt>::default().root(),
         num_to_word(7),
         num_to_word(8),
         ValidatorConfig::new(vec![SigningKey::new().public_key()], 1).unwrap(),
@@ -3092,7 +3201,7 @@ fn db_roundtrip_account_storage_with_maps() {
         .with_component(account_component)
         .with_component(AuthSingleSig::new(Approver::new(
             PublicKeyCommitment::from(EMPTY_WORD),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build_existing()
         .unwrap();
@@ -3485,7 +3594,6 @@ fn account_state_forest_matches_db_storage_map_roots_across_updates() {
     use std::collections::BTreeMap;
 
     use miden_protocol::account::{StorageMapPatch, StorageSlotPatch, StorageValuePatch};
-    use miden_protocol::crypto::merkle::smt::Smt;
 
     use crate::account_state_forest::AccountStateForest;
 
@@ -3993,8 +4101,12 @@ fn account_state_forest_preserves_most_recent_vault_only() {
 
 #[test]
 #[miden_node_test_macro::enable_logging]
-fn db_roundtrip_transactions() {
-    let db = &TestDb::new();
+fn transaction_records_preserve_commitments_after_reopen() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("commitments.sqlite3");
+    super::migrations::bootstrap_database(&path).unwrap();
+    let first_db = TestDb::open(&path);
+    let db = &first_db;
     let block_num = BlockNumber::from(1);
     create_block(db, block_num);
 
@@ -4008,7 +4120,17 @@ fn db_roundtrip_transactions() {
     )
     .unwrap();
 
-    let tx = mock_block_transaction(bob, 1);
+    let base = mock_block_transaction(bob, 1);
+    let tx = TransactionHeader::new(
+        bob,
+        base.initial_state_commitment(),
+        base.final_state_commitment(),
+        base.input_notes().clone(),
+        base.output_notes().to_vec(),
+        Word::from([17_u32; 4]),
+        CodePatchCommitment::from_raw(Word::from([23_u32; 4])),
+    )
+    .unwrap();
     let ordered = OrderedTransactionHeaders::new_unchecked(vec![tx.clone()]);
     let output_notes: Vec<_> = tx
         .output_notes()
@@ -4032,8 +4154,10 @@ fn db_roundtrip_transactions() {
     insert_notes(db, &output_notes).unwrap();
     insert_transactions(db, block_num, &ordered).unwrap();
 
+    drop(first_db);
+    let reopened = TestDb::open(&path);
     let retrieved =
-        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
+        select_transactions_records(&reopened, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
     let record = retrieved.1.first().expect("entry should exist");
 
     let expected_sync_records: Vec<_> = tx
@@ -4060,6 +4184,211 @@ fn db_roundtrip_transactions() {
 
     // Verify database roundtrip
     assert_eq!(*record, expected);
+}
+
+fn multi_batch_erasure_fixture()
+-> (miden_protocol::block::SignedBlock, Vec<TransactionHeader>, [Note; 4]) {
+    use miden_protocol::block::{BlockBody, SignedBlock};
+    use miden_protocol::transaction::{OutputNote, PrivateOutputNote, TransactionLogs};
+
+    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let within = Note::mock_noop(num_to_word(71));
+    let across = Note::mock_noop(num_to_word(72));
+    let surviving = Note::mock_noop(num_to_word(73));
+    let external = Note::mock_noop(num_to_word(74));
+    let make_header = |state: u64, inputs, outputs| {
+        TransactionHeader::new(
+            account_id,
+            num_to_word(state),
+            num_to_word(state + 1),
+            InputNotes::new(inputs).unwrap(),
+            outputs,
+            TransactionLogs::default().commitment(),
+            CodePatch::default().commitment(),
+        )
+        .unwrap()
+    };
+    let transactions = vec![
+        make_header(1, vec![], vec![*within.header(), *across.header()]),
+        make_header(
+            2,
+            vec![InputNoteCommitment::from_parts_unchecked(
+                within.nullifier(),
+                Some(*within.header()),
+            )],
+            vec![],
+        ),
+        make_header(
+            3,
+            vec![
+                InputNoteCommitment::from_parts_unchecked(
+                    across.nullifier(),
+                    Some(*across.header()),
+                ),
+                InputNoteCommitment::from(external.nullifier()),
+            ],
+            vec![*surviving.header()],
+        ),
+    ];
+    let groups = vec![
+        OrderedTransactionHeaders::new_unchecked(transactions[..2].to_vec()),
+        OrderedTransactionHeaders::new_unchecked(transactions[2..].to_vec()),
+    ];
+    // Erased notes stay in transaction headers, but only the surviving note and external nullifier
+    // affect persisted note/nullifier state.
+    let body = BlockBody::new(
+        vec![mock_block_account_update(account_id, 4)],
+        vec![
+            vec![],
+            vec![(
+                0,
+                OutputNote::Private(
+                    PrivateOutputNote::new(*surviving.header(), NoteAttachments::default())
+                        .unwrap(),
+                ),
+            )],
+        ],
+        vec![external.nullifier()],
+        groups,
+        PublicTransactionLogs::default(),
+    )
+    .unwrap();
+    let (template, signatures) = mock_block(BlockNumber::ONE);
+    let header = BlockHeader::new(
+        template.prev_block_commitment(),
+        template.block_num(),
+        template.chain_commitment(),
+        template.account_root(),
+        template.nullifier_root(),
+        template.code_tree_root(),
+        body.compute_block_note_tree().root(),
+        body.compute_transactions_commitment(),
+        template.validator_config().clone(),
+        template.fee_parameters().clone(),
+        template.protocol_config_commitment(),
+        template.next_protocol_config().cloned(),
+        template.timestamp(),
+    );
+    let block = SignedBlock::new_unchecked(header, body, signatures);
+    (block, transactions, [within, across, surviving, external])
+}
+
+#[test]
+fn multi_batch_block_roundtrip_preserves_grouping() {
+    use miden_protocol::block::SignedBlock;
+
+    let root = tempdir().unwrap();
+    let (block, transactions, [within, across, surviving, external]) =
+        multi_batch_erasure_fixture();
+    let account_id = transactions[0].account_id();
+    let store_dir = root.path().join("blocks");
+    let store =
+        crate::blocks::BlockStore::bootstrap(store_dir.clone(), &empty_genesis_block()).unwrap();
+    store
+        .save_block_blocking(BlockNumber::ONE, &miden_node_persistence::encode(&block))
+        .unwrap();
+    drop(store);
+    let store = crate::blocks::BlockStore::load(store_dir).unwrap();
+    let reloaded: SignedBlock = miden_node_persistence::decode(
+        &tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(store.load_block(BlockNumber::ONE))
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(reloaded.body().transactions(), block.body().transactions());
+    assert_eq!(
+        reloaded.body().batch_ids().collect::<Vec<_>>(),
+        block.body().batch_ids().collect::<Vec<_>>()
+    );
+    assert_eq!(
+        reloaded.body().compute_batches_commitment(),
+        block.body().compute_batches_commitment()
+    );
+    assert_eq!(
+        reloaded.body().compute_transactions_commitment(),
+        block.header().transactions_commitment()
+    );
+
+    let db = TestDb::new();
+    let note_record = NoteRecord {
+        block_num: BlockNumber::ONE,
+        note_index: BlockNoteIndex::new(1, 0).unwrap(),
+        note_id: surviving.id().as_word(),
+        metadata: *surviving.metadata(),
+        details: None,
+        attachments: NoteAttachments::default(),
+        inclusion_path: SparseMerklePath::default(),
+    };
+    db.write(move |tx| {
+        queries::apply_block(
+            tx,
+            &reloaded,
+            &[(note_record, None)],
+            &PrecomputedPublicAccountStates::new(),
+            &BTreeSet::from([account_id]),
+            &PreparedTransactionLogs::from_block(reloaded.body())?,
+        )
+    })
+    .unwrap();
+    let (_, records) =
+        select_transactions_records(&db, &[account_id], BlockNumber::GENESIS..=BlockNumber::ONE)
+            .unwrap();
+    assert_eq!(records.len(), transactions.len());
+    for transaction in transactions {
+        let record = records.iter().find(|record| record.header.id() == transaction.id()).unwrap();
+        assert_eq!(record.header, transaction);
+        assert_eq!(
+            record.output_note_proofs.len(),
+            usize::from(transaction.output_notes().contains(surviving.header()))
+        );
+    }
+    let notes = select_notes_by_id(&db, &[within.id(), across.id(), surviving.id()]).unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].note_id, surviving.id().as_word());
+    let (nullifiers, _) = select_nullifiers_by_prefix(
+        &db,
+        16,
+        &[utils::get_nullifier_prefix(&external.nullifier())],
+        BlockNumber::GENESIS..=BlockNumber::ONE,
+    )
+    .unwrap();
+    assert_eq!(nullifiers.len(), 1);
+    assert_eq!(nullifiers[0].nullifier, external.nullifier());
+}
+
+#[test]
+fn transaction_records_paginate_with_new_commitments() {
+    let db = &TestDb::new();
+    let block_num = BlockNumber::ONE;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    create_block(db, block_num);
+    upsert_mock_account(db, account_id, 0, block_num).unwrap();
+    // Cross the query's internal chunk boundary so both SQL projections reconstruct commitments.
+    let mut expected: Vec<_> = (1_u32..=1001)
+        .map(|value| {
+            TransactionHeader::new(
+                account_id,
+                Word::from([value; 4]),
+                Word::from([value + 1; 4]),
+                InputNotes::default(),
+                vec![],
+                Word::from([value + 2; 4]),
+                CodePatchCommitment::from_raw(Word::from([value + 3; 4])),
+            )
+            .unwrap()
+        })
+        .collect();
+    insert_transactions(db, block_num, &OrderedTransactionHeaders::new_unchecked(expected.clone()))
+        .unwrap();
+    expected.sort_by_key(TransactionHeader::id);
+    let (last, records) =
+        select_transactions_records(db, &[account_id], BlockNumber::GENESIS..=block_num).unwrap();
+    assert_eq!(last, block_num);
+    let mut retrieved: Vec<_> = records.into_iter().map(|record| record.header).collect();
+    retrieved.sort_by_key(TransactionHeader::id);
+    assert_eq!(retrieved, expected);
 }
 
 #[test]
@@ -4187,7 +4516,7 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
 /// `OUTPUT_NOTE_SYNC_RECORD_SIZE_BYTES` in the query module.
-const OUTPUT_NOTE_SIZE_BYTES: usize = 700;
+const OUTPUT_NOTE_SIZE_BYTES: usize = 1024;
 
 /// When truncation stops mid-range while the accumulated payload is still below the cap, the
 /// response must report the last *complete* block as the cursor, not `block_range.end()`. Reporting

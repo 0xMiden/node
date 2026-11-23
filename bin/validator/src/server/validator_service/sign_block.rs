@@ -1,24 +1,38 @@
-use std::sync::atomic::Ordering;
-
-use miden_node_proto::{DecodeMessageExt, generated as grpc};
-use miden_node_tracing::spawn::spawn_blocking_in_current_span;
+use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
+use miden_node_proto::errors::{ConversionError, ConversionResultExt};
+use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
-use miden_protocol::Word;
-use miden_protocol::block::{BlockNumber, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
-use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
+use miden_tx_batch::BatchVerifier;
 
-use super::{StatusResultExt, ValidatorService};
+use super::{StatusResultExt, ValidatorError, ValidatorService};
 
 #[tonic::async_trait]
 impl grpc::server::miden_validator_v1_validator_service::SignBlock for ValidatorService {
-    type Input = grpc::miden::validator::v1::SignBlockRequest;
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
+    type Input = BlockSigningInputs;
     type Output = (Signature, Word, PublicKey);
 
     #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
-        Ok(request)
+        let inputs = request
+            .decode_fields()
+            .context("failed to decode")
+            .map_err(ConversionError::into_status)?
+            // SAFETY: Construction checks local batch invariants and block witnesses.
+            // validate_block checks transaction IDs and the trusted parent before signing.
+            .build_with_body_unchecked()
+            .context("failed to build unchecked")
+            .map_err(ConversionError::into_status)?;
+
+        let verifier = BatchVerifier::new(MIN_PROOF_SECURITY_LEVEL);
+        for batch in inputs.proving_inputs.tx_batches.as_slice() {
+            verifier.verify(batch).or_invalid_argument("invalid batch proof")?;
+        }
+        Ok(inputs)
     }
 
     #[instrument(err)]
@@ -35,7 +49,11 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
 
     async fn handle(
         &self,
-        request: Self::Input,
+        BlockSigningInputs {
+            proving_inputs,
+            body,
+            protocol_config: supplied_config,
+        }: Self::Input,
         _metadata: &tonic::metadata::MetadataMap,
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
@@ -53,141 +71,57 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await
             .or_internal("sign_block semaphore closed")?;
 
-        let (proposed_block, protocol_config, protocol_config_commitment, proving_inputs) =
-            spawn_blocking_in_current_span(move || {
-                let request = request
-                    // SAFETY: Construction checks local batch invariants and block witnesses.
-                    // validate_block checks transaction IDs and the trusted parent before signing.
-                    //
-                    // FIXME: Verify batch proofs and contents before signing. Validated transaction
-                    // IDs do not establish correct note aggregation or expiration. The current batch
-                    // kernel does not bind these fields, and transaction headers omit reference
-                    // blocks and expiration. Full validation needs more data or protocol support.
-                    .decode_and_build_unchecked()
-                    .map_err(miden_node_proto::errors::ConversionError::into_status)?;
-                let proving_inputs = miden_node_proto::BlockProofRequest {
-                    tx_batches: miden_protocol::batch::OrderedBatches::new(
-                        request.tx_batches.as_slice().to_vec(),
-                    ),
-                    block_header: request.block_header.clone(),
-                    block_inputs: request.block_inputs.clone(),
-                };
-                let protocol_config = request.protocol_config;
-                let protocol_config_commitment = request.block_header.protocol_config_commitment();
-                let proposed_block = ProposedBlock::new_at(
-                    request.block_inputs,
-                    request.tx_batches.into_vec(),
-                    request.block_header.timestamp(),
-                )
-                .map(|block| {
-                    block
-                        .with_next_validator_config(request.block_header.validator_config().clone())
-                        .with_next_protocol_config(
-                            request.block_header.next_protocol_config().cloned(),
-                        )
-                })
-                .or_invalid_argument("Failed to build proposed block")?;
-                Ok::<_, tonic::Status>((
-                    proposed_block,
-                    protocol_config,
-                    protocol_config_commitment,
-                    proving_inputs,
-                ))
-            })
+        let header = &proving_inputs.block_header;
+        self.validate_block(header, &body)
             .await
-            .or_internal("Block decoding task failed")??;
-        let protocol_config = self
-            .resolve_protocol_config(protocol_config_commitment, protocol_config)
-            .await?;
+            .map_err(ValidatorError::into_validation_status)?;
 
-        // Load the current chain tip from the database.
-        let chain_tip = self
-            .db
-            .load_chain_tip()
-            .await
-            .or_internal("Failed to load chain tip")?
-            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))?;
+        let parent = proving_inputs.block_inputs.prev_block_header();
+        let protocol_config =
+            if header.protocol_config_commitment() == parent.protocol_config_commitment() {
+                None
+            } else {
+                Some(supplied_config.ok_or_else(|| {
+                    tonic::Status::invalid_argument(
+                        "protocol_config is required when the active configuration changes",
+                    )
+                })?)
+            };
 
-        // Capture the block's transactions in block order before the proposed block is consumed, so
-        // their positions can be persisted alongside the signed header.
-        let block_transactions: Vec<TransactionId> =
-            proposed_block.transactions().map(TransactionHeader::id).collect();
-        // Capture the tip height before the tip is consumed: a validated block at the same height
-        // replaces the current tip rather than extending it. The semaphore held above guarantees
-        // the tip cannot change in between.
-        let chain_tip_num = chain_tip.block_num();
-
-        // Validate the block against the current chain tip.
-        let (signature, signed_block) = self
-            .validate_block(proposed_block, chain_tip)
-            .await
-            .or_invalid_argument("Failed to validate block")?;
-
-        // Capture the commitment that was signed before the block is moved into the persistence
-        // closure, so it can be returned to the block producer for cross-checking.
-        let block_commitment = signed_block.header().commitment();
-
-        // The signed block, proving inputs, and transaction positions are persisted atomically.
+        // Reconstruction checked the witnesses against the supplied parent, and decode verified
+        // each batch proof. Local checks established the parent, transaction IDs, and signing key.
         //
-        // A block at the current tip's height replaces that tip in the same transaction, so a crash
-        // cannot leave transaction links from the replaced block behind.
-        let new_block_num = signed_block.header().block_num().as_u32();
-        let is_replacement = signed_block.header().block_num() == chain_tip_num;
-        if is_replacement {
-            self.db
-                .replace_signed_block(
-                    signed_block,
-                    protocol_config,
-                    block_transactions,
-                    proving_inputs,
-                )
-                .await
-        } else {
-            self.db
-                .insert_signed_block(
-                    signed_block,
-                    protocol_config,
-                    block_transactions,
-                    proving_inputs,
-                )
-                .await
-        }
-        .or_internal("Failed to persist signed block")?;
+        // FIXME: Correct note aggregation and batch expiration remain unverified by the batch kernel.
+        let signature = self.sign_header(header).await.or_internal("Failed to sign block")?;
+        let block_commitment = header.commitment();
 
-        // Publish the tip only after the block and its metadata have committed together.
-        self.committed_tip.send_replace(BlockNumber::from(new_block_num));
-        // A replacement stores no additional block. The count must stay equal to the number of
-        // stored block headers, which is the value a restart reads.
-        if !is_replacement {
-            self.signed_blocks_count.fetch_add(1, Ordering::Relaxed);
-        }
+        // The backup contains this validator's signature. The producer assembles the full set.
+        let own_signature = BlockSignatures::new(vec![signature.clone()])
+            .expect("a single signature is within the signature set bounds");
+        let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
+
+        self.db
+            .upsert_signed_block(signed_block, protocol_config, proving_inputs)
+            .await
+            .or_internal("Failed to persist signed block")?;
 
         Ok((signature, block_commitment, self.signer.public_key()))
     }
 }
 
 impl ValidatorService {
-    /// Resolves and validates the active configuration before the block is signed.
-    async fn resolve_protocol_config(
-        &self,
-        commitment: Word,
-        supplied: Option<ProtocolConfig>,
-    ) -> tonic::Result<ProtocolConfig> {
-        let stored = self
-            .db
-            .load_protocol_config(commitment)
+    /// Signs a block header using the validator's signer.
+    #[instrument(
+        name = "sign_block",
+        err,
+        fields(
+            block.number = header.block_num(),
+        ),
+    )]
+    async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
+        self.signer
+            .sign_commitment(header.commitment())
             .await
-            .or_internal("Failed to load protocol config")?;
-
-        match (supplied, stored) {
-            (Some(supplied), Some(stored)) if supplied != stored => Err(tonic::Status::internal(
-                format!("Stored protocol config {commitment} differs from the supplied config"),
-            )),
-            (Some(supplied), _) => Ok(supplied),
-            (None, Some(stored)) => Ok(stored),
-            (None, None) => Err(tonic::Status::invalid_argument(format!(
-                "Protocol config {commitment} is not stored"
-            ))),
-        }
+            .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
     }
 }

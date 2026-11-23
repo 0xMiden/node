@@ -65,7 +65,7 @@ impl FunderSetup {
             self.fee_asset_id,
             miden_protocol::testing::account_id::ACCOUNT_ID_SENDER.try_into().unwrap(),
             1_000,
-            &mut RandomCoin::new(Word::from([serial; 4])),
+            &mut EidosRandomCoin::new(Word::from([serial; 4])),
         )
         .unwrap()
     }

@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use metrics::SeedingMetrics;
+use miden_node_proto::generated as proto;
 use miden_node_store::{BlockWriter, DataDirectory, GenesisState, State, WriterTask};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
@@ -31,6 +32,7 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset, TokenSymbol};
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
     BlockHeader,
     BlockInputs,
@@ -42,8 +44,8 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
-use miden_protocol::crypto::dsa::falcon512_poseidon2::{PublicKey, SecretKey};
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::dsa::falcon512_eidos::{PublicKey, SecretKey};
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, NoteAssets, NoteId, NoteInclusionProof};
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{
@@ -54,10 +56,11 @@ use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    PublicTransactionLogs,
     TransactionHeader,
+    TransactionLogDetails,
     TxAccountUpdate,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::{ACCOUNT_UPDATE_MAX_SIZE, Felt, ONE, Word};
 use miden_standards::account::auth::{Approver, AuthSingleSig};
 use miden_standards::account::faucets::{FungibleFaucet, TokenName};
@@ -390,7 +393,7 @@ async fn generate_blocks(
 
     // share random coin seed and key pair for all accounts to avoid key generation overhead
     let coin_seed: [u64; 4] = rand::rng().random();
-    let rng = Arc::new(Mutex::new(RandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
+    let rng = Arc::new(Mutex::new(EidosRandomCoin::new(coin_seed.map(Felt::new_unchecked).into())));
     let key_pair = SecretKey::with_rng(&mut rand::rng());
 
     let mut prev_block_header = genesis_header;
@@ -611,7 +614,11 @@ async fn apply_block(
     let transaction_count = batches.iter().map(|batch| batch.transactions().as_slice().len()).sum();
     let proposed_block = ProposedBlock::new(block_inputs.clone(), batches).unwrap();
     let (header, body) = proposed_block.clone().into_header_and_body().unwrap();
-    let block_size: usize = header.to_bytes().len() + body.to_bytes().len();
+    let block_size: usize = miden_node_proto::prost::Message::encoded_len(
+        &proto::blockchain::BlockHeader::from(&header),
+    ) + miden_node_proto::prost::Message::encoded_len(
+        &proto::blockchain::BlockBody::from(&body),
+    );
     let signature = signer.sign(header.commitment());
     let signatures = BlockSignatures::new(vec![signature]).unwrap();
     // SAFETY: The header, body, and signature are known to correspond to each other.
@@ -648,7 +655,7 @@ fn create_accounts_and_notes(
     num_accounts: usize,
     account_type: AccountType,
     key_pair: &SecretKey,
-    rng: &Arc<Mutex<RandomCoin>>,
+    rng: &Arc<Mutex<EidosRandomCoin>>,
     asset_faucet_ids: &[AccountId],
     first_account_index: u64,
     storage_map_entries: u32,
@@ -684,7 +691,7 @@ fn create_accounts_and_notes(
 
 /// Creates a public P2ID note containing 10 tokens for each requested fungible asset and sends it
 /// to the specified target account.
-fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut RandomCoin) -> Note {
+fn create_note(faucet_ids: &[AccountId], target_id: AccountId, rng: &mut EidosRandomCoin) -> Note {
     let assets: Vec<Asset> = faucet_ids
         .iter()
         .map(|faucet_id| Asset::from(FungibleAsset::new(*faucet_id, 10).unwrap()))
@@ -772,7 +779,7 @@ fn create_account(
         .account_type(account_type)
         .with_component(AuthSingleSig::new(Approver::new(
             public_key.into(),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .with_component(BasicWallet);
 
@@ -869,7 +876,7 @@ fn create_faucet_with_seed(index: u64) -> Account {
         )
         .with_component(AuthSingleSig::new(Approver::new(
             key_pair.public_key().into(),
-            AuthScheme::Falcon512Poseidon2,
+            AuthScheme::Falcon512Eidos,
         )))
         .build()
         .unwrap()
@@ -883,6 +890,16 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         .collect();
     let input_notes = txs.iter().flat_map(|tx| tx.input_notes().iter().cloned()).collect();
     let output_notes = txs.iter().flat_map(|tx| tx.output_notes().iter().cloned()).collect();
+    let headers =
+        OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect());
+    let entries = txs
+        .iter()
+        .filter_map(|tx| match tx.log_details() {
+            TransactionLogDetails::Public(logs) => Some((tx.id(), logs.clone())),
+            TransactionLogDetails::Private(_) => None,
+        })
+        .collect();
+    let public_logs = PublicTransactionLogs::new(entries, headers.as_slice().iter()).unwrap();
     ProvenBatch::new_unchecked(
         BatchId::from_transactions(txs.iter()),
         block_ref.commitment(),
@@ -891,7 +908,8 @@ fn create_batch(txs: &[ProvenTransaction], block_ref: &BlockHeader) -> ProvenBat
         InputNotes::new(input_notes).unwrap(),
         output_notes,
         BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(txs.iter().map(TransactionHeader::from).collect()),
+        headers,
+        public_logs,
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap()
@@ -968,6 +986,13 @@ fn create_consume_note_tx(
         details,
     )
     .unwrap();
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = if account_update.account_id().is_public() {
+        miden_protocol::transaction::TransactionLogDetails::Public(logs)
+    } else {
+        miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+    };
+
     let transaction = ProvenTransaction::new(
         account_update,
         vec![InputNoteCommitment::from(input_note)],
@@ -976,6 +1001,8 @@ fn create_consume_note_tx(
         block_ref.commitment(),
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap();
 
@@ -1058,18 +1085,25 @@ fn create_emit_note_tx(
         AccountUpdateDetails::Private,
     )
     .unwrap();
-    ProvenTransaction::new(
-        account_update,
-        Vec::<InputNoteCommitment>::new(),
-        output_notes
-            .into_iter()
-            .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
-            .collect::<Vec<OutputNote>>(),
-        block_ref.block_num(),
-        block_ref.commitment(),
-        u32::MAX.into(),
-        miden_protocol::testing::dummy_execution_proof(),
-    )
+    {
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details =
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment());
+        ProvenTransaction::new(
+            account_update,
+            Vec::<InputNoteCommitment>::new(),
+            output_notes
+                .into_iter()
+                .map(|note| OutputNote::Public(PublicOutputNote::new(note).unwrap()))
+                .collect::<Vec<OutputNote>>(),
+            block_ref.block_num(),
+            block_ref.commitment(),
+            u32::MAX.into(),
+            miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            CodePatch::default(),
+        )
+    }
     .unwrap()
 }
 

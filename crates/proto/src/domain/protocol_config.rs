@@ -40,6 +40,8 @@ mod tests {
     use miden_protocol::Word;
     use miden_protocol::asset::AssetId;
     use miden_protocol::block::FeeParameters;
+    use miden_protocol::block::code_tree::CodeTree;
+    use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1;
 
     use super::*;
@@ -57,6 +59,7 @@ mod tests {
             Word::empty(),
             Word::empty(),
             Word::empty(),
+            CodeTree::<Smt>::default().root(),
             Word::empty(),
             Word::empty(),
             other_header.validator_config().clone(),

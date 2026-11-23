@@ -52,7 +52,8 @@ impl NetworkTransactionBuilder {
         chain: ChainState,
         scheduler: Scheduler,
     ) -> Self {
-        let follower = BlockFollower::new(block_stream, chain, config.max_block_count);
+        let follower =
+            BlockFollower::new(block_stream, chain, config.max_block_count, config.note_retention);
         Self { config, db, follower, scheduler }
     }
 

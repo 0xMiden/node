@@ -8,7 +8,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     AccountIdBuilder,
 };
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{PublicTransactionLogs, TransactionId};
 use miden_standards::note::{AccountTargetNetworkNote, NetworkAccountTarget, NoteExecutionHint};
 use miden_standards::testing::note::NoteBuilder;
 use rand_chacha::ChaCha20Rng;
@@ -222,15 +222,9 @@ pub fn mock_block_header(block_num: BlockNumber) -> miden_protocol::block::Block
 /// Like a real genesis block, it carries no signatures.
 pub fn mock_genesis_block() -> miden_protocol::block::SignedBlock {
     use miden_protocol::block::{BlockBody, BlockSignatures, SignedBlock};
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let header = mock_block_header(BlockNumber::GENESIS);
-    let body = BlockBody::new_unchecked(
-        Vec::new(),
-        Vec::new(),
-        Vec::new(),
-        OrderedTransactionHeaders::new_unchecked(Vec::new()),
-    );
+    let body = BlockBody::default();
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     SignedBlock::new_unchecked(header, body, signatures)
 }
@@ -256,7 +250,6 @@ pub fn mock_network_account_update() -> (Account, miden_protocol::account::Accou
 pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::SignedBlock, AccountId)
 {
     use miden_protocol::block::{BlockAccountUpdate, BlockBody, BlockSignatures, SignedBlock};
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let (account, details) = mock_network_account_update();
     let account_id = account.id();
@@ -268,7 +261,8 @@ pub fn mock_genesis_block_with_network_account() -> (miden_protocol::block::Sign
         vec![update],
         Vec::new(),
         Vec::new(),
-        OrderedTransactionHeaders::new_unchecked(Vec::new()),
+        Vec::new(),
+        PublicTransactionLogs::default(),
     );
     let signatures = BlockSignatures::new(Vec::new()).unwrap();
     (SignedBlock::new_unchecked(header, body, signatures), account_id)

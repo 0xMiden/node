@@ -10,8 +10,8 @@ use miden_node_utils::usdcx_p2id::UsdcxP2Id;
 use miden_protocol::account::auth::{AuthScheme, AuthSecretKey};
 use miden_protocol::account::{Account, AccountId, AccountType};
 use miden_protocol::asset::{AssetAmount, AssetId, FungibleAsset, TokenSymbol};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::{Note, NoteType};
 use miden_protocol::{Felt, ONE};
 use miden_standards::account::access::AccessControl;
@@ -25,8 +25,9 @@ use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 use miden_standards::account::policies::{
     BurnPolicy,
     MintPolicy,
+    ReceivePolicy,
+    SendPolicy,
     TokenPolicyManager,
-    TransferPolicy,
 };
 use miden_standards::account::wallets::create_basic_wallet;
 use miden_standards::note::{BurnNote, MintNote, P2idNote};
@@ -53,7 +54,7 @@ pub fn genesis_style_wallet(
 ) -> Result<(Account, SecretKey)> {
     let mut rng = ChaCha20Rng::from_seed(seed);
     let secret_key = SecretKey::with_rng(&mut rng);
-    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Poseidon2);
+    let auth = Approver::new(secret_key.public_key().into(), AuthScheme::Falcon512Eidos);
     let init_seed: [u8; 32] = rng.random();
 
     let mut wallet = create_basic_wallet(init_seed, auth, AccountType::Public)?;
@@ -83,7 +84,8 @@ pub fn test_native_asset() -> NativeAsset {
 fn native_faucet_with_transfer_policy(
     operator: AccountId,
     seed: [u8; 32],
-    transfer_policy: TransferPolicy,
+    send_policy: SendPolicy,
+    receive_policy: ReceivePolicy,
 ) -> Result<Account> {
     let faucet_component = FungibleFaucetComponent::builder()
         .name(TokenName::new("MIDEN").expect("valid token name"))
@@ -94,8 +96,8 @@ fn native_faucet_with_transfer_policy(
     let policies = TokenPolicyManager::builder()
         .active_mint_policy(MintPolicy::owner_only())
         .active_burn_policy(BurnPolicy::allow_all())
-        .active_send_policy(transfer_policy.clone())
-        .active_receive_policy(transfer_policy)
+        .active_send_policy(send_policy)
+        .active_receive_policy(receive_policy)
         .build();
     let fee_policy = BasicConstantFeePolicy::new()
         .with_fees([
@@ -135,24 +137,31 @@ pub struct Fixture {
 impl Fixture {
     /// Builds a chain which charges `base_fee` and holds a funding wallet with `balance`.
     pub fn new(balance: u64, base_fee: u32) -> Result<Self> {
-        Self::with_transfer_policy(balance, base_fee, TransferPolicy::allow_all())
+        Self::with_transfer_policy(
+            balance,
+            base_fee,
+            SendPolicy::allow_all(),
+            ReceivePolicy::allow_all(),
+        )
     }
 
-    /// Builds a funding fixture with the same transfer policy for sending and receiving assets.
+    /// Builds a funding fixture with the specified send and receive policies.
     pub fn with_transfer_policy(
         balance: u64,
         base_fee: u32,
-        policy: TransferPolicy,
+        send_policy: SendPolicy,
+        receive_policy: ReceivePolicy,
     ) -> Result<Self> {
         // The faucet's owner does not matter for these tests, so the wallet built first stands in.
         let (owner, _) = genesis_style_wallet(FungibleAsset::mock_issuer(), 0, [1; 32])?;
-        let faucet = native_faucet_with_transfer_policy(owner.id(), [7; 32], policy)?;
+        let faucet =
+            native_faucet_with_transfer_policy(owner.id(), [7; 32], send_policy, receive_policy)?;
         let fee_faucet_id = faucet.id();
 
         let (funder, secret_key) = genesis_style_wallet(fee_faucet_id, balance, [9; 32])?;
         let wallet = FundingWallet::new(
             funder.clone(),
-            AuthSecretKey::Falcon512Poseidon2(secret_key),
+            AuthSecretKey::Falcon512Eidos(secret_key),
             AssetId::new_fungible(fee_faucet_id),
         );
 
@@ -181,7 +190,7 @@ pub fn build_funding_note(
     fee_asset_id: AssetId,
     target: AccountId,
     amount: u64,
-    rng: &mut RandomCoin,
+    rng: &mut EidosRandomCoin,
 ) -> Result<UsdcxP2Id> {
     let asset = FungibleAsset::new(fee_asset_id.faucet_id(), amount)
         .context("failed to build the funding asset")?;

@@ -4,24 +4,32 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use assert_matches::assert_matches;
+use miden_block_prover::BlockExecutor;
 use miden_node_proto::generated::miden::remote_prover::v1::prove_request::Request;
 use miden_node_proto::generated::miden::remote_prover::v1::prove_response::Proof as ProofVariant;
 use miden_node_proto::generated::miden::remote_prover::v1::prover_service_client::ProverServiceClient;
 use miden_node_proto::generated::miden::remote_prover::v1::{ProveRequest, ProveResponse};
-use miden_node_proto::{BlockProofRequest, BuildUnchecked, DecodeMessage, VerifyWith};
+use miden_node_proto::{
+    BlockProofRequest,
+    BuildUnchecked,
+    DecodeMessage,
+    VerifyWith,
+    generated as proto,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::MIN_PROOF_SECURITY_LEVEL;
 use miden_protocol::account::auth::AuthScheme;
 use miden_protocol::asset::{Asset, FungibleAsset};
 use miden_protocol::batch::{OrderedBatches, ProposedBatch};
-use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
+use miden_protocol::block::{BlockHeader, BlockInputs, BlockKernel, ProposedBlock};
 use miden_protocol::note::NoteType;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
 use miden_protocol::transaction::{ExecutedTransaction, PartialBlockchain, TransactionVerifier};
-use miden_protocol::vm::ExecutionProof;
+use miden_protocol::vm::{ExecutionProof, StackInputs};
 use miden_testing::{Auth, MockChainBuilder};
 use miden_tx::LocalTransactionProver;
 use miden_tx_batch::BatchVerifier;
+use miden_verifier::{ExecutionClaim, Verifier};
 use serial_test::serial;
 
 use crate::server::Server;
@@ -61,7 +69,7 @@ trait ProofRequestExt {
 
 impl ProofRequestExt for ProveRequest {
     fn from_tx(tx: &ExecutedTransaction) -> ProveRequest {
-        let tx_inputs = tx.tx_inputs().clone();
+        let tx_inputs = miden_protocol::transaction::TransactionWitness::from(tx.clone());
 
         ProveRequest {
             request: Some(Request::Transaction(tx_inputs.into())),
@@ -105,9 +113,7 @@ impl ProofRequestExt for ProveRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
 
         let fungible_asset_1: Asset =
@@ -127,7 +133,7 @@ impl ProofRequestExt for ProveRequest {
 
         let tx_context = mock_chain
             .build_transaction(account.id())
-            .authenticated_input_note(note_1.id())
+            .authenticated_input_note(note_1.clone())
             .build()
             .unwrap();
 
@@ -138,9 +144,7 @@ impl ProofRequestExt for ProveRequest {
         // Create a mock transaction to send to the server
         let mut mock_chain_builder = MockChainBuilder::new();
         let account = mock_chain_builder
-            .add_existing_wallet(Auth::BasicAuth {
-                auth_scheme: AuthScheme::Falcon512Poseidon2,
-            })
+            .add_existing_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
             .unwrap();
 
         let fungible_asset_1: Asset =
@@ -160,12 +164,12 @@ impl ProofRequestExt for ProveRequest {
 
         let tx = mock_chain
             .build_transaction(account.id())
-            .authenticated_input_note(note_1.id())
+            .authenticated_input_note(note_1.clone())
             .build()
             .unwrap();
 
         let tx = Box::pin(tx.execute()).await.unwrap();
-        let tx = LocalTransactionProver::default().prove(tx.tx_inputs().clone()).unwrap();
+        let tx = LocalTransactionProver::default().prove(tx.clone()).unwrap();
 
         ProposedBatch::new(
             vec![Arc::new(tx)],
@@ -347,9 +351,7 @@ async fn malformed_transaction_inputs_are_rejected() {
         .expect("server should spawn");
 
     let request = ProveRequest {
-        request: Some(Request::Transaction(
-            miden_node_proto::generated::transaction::TransactionInputs::default(),
-        )),
+        request: Some(Request::Transaction(proto::transaction::TransactionWitness::default())),
     };
     let mut client = Client::connect(port).await;
     let err = client.submit_request(request).await.unwrap_err();
@@ -432,7 +434,7 @@ async fn unsupported_proof_kind_is_rejected() {
 /// The proof is verified and the transaction IDs of request and response must correspond.
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
-async fn transaction_proof_is_correct() {
+async fn transaction_witness_roundtrip_is_provable() {
     let (server, port) = Server::with_arbitrary_port(ProofKind::Transaction)
         .spawn(CancellationToken::new())
         .await
@@ -451,9 +453,29 @@ async fn transaction_proof_is_correct() {
     };
 
     assert_eq!(response.id(), tx.id());
+    assert_eq!(response.ref_block_num(), tx.tx_inputs().ref_block());
+    assert_eq!(response.expiration_block_num(), tx.expiration_block_num());
     let _ = TransactionVerifier::new(MIN_PROOF_SECURITY_LEVEL).verify(&response).unwrap();
 
     server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn transaction_witness_rejects_changed_outputs() {
+    use miden_protocol::transaction::TransactionWitness;
+    let tx = ProveRequest::mock_tx().await;
+    let witness = TransactionWitness::from(tx);
+    let (inputs, account, expiration) = witness.into_parts();
+    let wrong_account = inputs.account().to_header();
+    for witness in [
+        TransactionWitness::new_unchecked(inputs.clone(), wrong_account, expiration),
+        TransactionWitness::new_unchecked(inputs, account, (expiration.as_u32() - 1).into()),
+    ] {
+        let request = ProveRequest {
+            request: Some(Request::Transaction(witness.into())),
+        };
+        assert!(super::prover::Prover::new(ProofKind::Transaction).prove(request).is_err());
+    }
 }
 
 /// Checks that the a batch request results in a correct proof.
@@ -494,6 +516,21 @@ async fn block_proof_is_canonical_execution_proof() {
         .expect("server should spawn");
 
     let request = ProveRequest::for_empty_block();
+    let Some(Request::Block(input)) = request.request.clone() else {
+        unreachable!()
+    };
+    let input: BlockProofRequest = input.decode_fields().unwrap().build_unchecked().unwrap();
+    let proposed = ProposedBlock::new_at(
+        input.block_inputs,
+        input.tx_batches.into_vec(),
+        input.block_header.timestamp(),
+    )
+    .unwrap();
+    let (stack_inputs, _) = BlockKernel::prepare_inputs(&proposed);
+    let executed = BlockExecutor::new().execute(proposed).unwrap();
+    let outputs = executed.block_outputs().clone().into_stack_outputs();
+    let claim =
+        ExecutionClaim::from_program_info(BlockKernel::program_info(), stack_inputs, outputs);
     let mut client = Client::connect(port).await;
     let response = client.submit_request(request).await.unwrap();
     let proof = match response.proof.unwrap() {
@@ -501,7 +538,15 @@ async fn block_proof_is_canonical_execution_proof() {
         other => panic!("expected block proof response, got {other:?}"),
     };
 
-    assert_ne!(proof.to_bytes(), [] as [u8; 0]);
+    let verifier =
+        Verifier::new().with_min_conjectured_security_level_per_stark(MIN_PROOF_SECURITY_LEVEL);
+    assert!(verifier.verify(&claim, &proof).unwrap().is_complete());
+    let wrong_claim = ExecutionClaim::from_program_info(
+        BlockKernel::program_info(),
+        StackInputs::default(),
+        outputs,
+    );
+    assert!(verifier.verify(&wrong_claim, &proof).is_err());
 
     server.abort();
 }

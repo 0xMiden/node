@@ -34,7 +34,11 @@ impl BlockLifecycle {
         let mut created_notes = Vec::new();
         let mut consumed_notes = Vec::new();
 
-        for transaction in body.transactions().as_slice() {
+        for transaction in body
+            .transactions()
+            .iter()
+            .flat_map(miden_protocol::transaction::OrderedTransactionHeaders::as_slice)
+        {
             let transaction_id = transaction.id();
 
             if transaction.initial_state_commitment().is_empty() {
@@ -315,6 +319,7 @@ mod tests {
         StorageSlotPatch,
         StorageValuePatch,
     };
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{BlockAccountUpdate, BlockBody};
     use miden_protocol::note::{
         NoteAttachments,
@@ -335,6 +340,7 @@ mod tests {
         OrderedTransactionHeaders,
         OutputNote,
         PrivateOutputNote,
+        PublicTransactionLogs,
         TransactionHeader,
     };
 
@@ -377,6 +383,8 @@ mod tests {
             word(5),
             input_notes,
             vec![persisted_header, erased_header],
+            miden_protocol::transaction::TransactionLogs::default().commitment(),
+            CodePatch::default().commitment(),
         )
         .expect("test transaction header should be valid");
         let transaction_id = transaction.id();
@@ -387,7 +395,15 @@ mod tests {
             Vec::new(),
             vec![vec![(0, output_note)]],
             Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(vec![transaction]),
+            {
+                let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
+                if group.as_slice().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![group]
+                }
+            },
+            PublicTransactionLogs::default(),
         );
 
         let lifecycle = BlockLifecycle::from_block_body(BlockNumber::from(7), &body);
@@ -436,7 +452,8 @@ mod tests {
             vec![update],
             Vec::new(),
             Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(Vec::new()),
+            Vec::new(),
+            PublicTransactionLogs::default(),
         );
 
         let lifecycle = BlockLifecycle::from_block_body(BlockNumber::from(7), &body);

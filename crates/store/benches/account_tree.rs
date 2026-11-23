@@ -5,13 +5,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use miden_crypto::merkle::smt::{RocksDbConfig, RocksDbStorage};
 use miden_node_store::AccountTreeWithHistory;
-use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
-use miden_protocol::crypto::hash::rpo::Rpo256;
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 use miden_protocol::testing::account_id::AccountIdBuilder;
+use miden_protocol::{Hasher, Word};
 
 /// Counter for creating unique `RocksDB` directories during benchmarking.
 static DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -49,7 +48,7 @@ fn generate_word(seed: &mut [u8; 32]) -> Word {
             break;
         }
     }
-    Rpo256::hash(seed)
+    Hasher::hash(seed)
 }
 
 /// Generates a deterministic `AccountId` from a seed.

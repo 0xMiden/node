@@ -18,6 +18,7 @@ use miden_node_proto::clients::{
     ValidatorClient,
 };
 use miden_node_proto::domain::sequencer::{TransactionCandidate, TransactionInputs};
+use miden_node_proto::generated::miden::node::v1::BlockSubscriptionRequest;
 use miden_node_proto::generated::miden::node::v1::node_service_client::NodeServiceClient as ProtoClient;
 use miden_node_proto::generated::miden::node::v1::node_service_server::NodeService as Api;
 use miden_node_proto::generated::miden::sequencer::v1::sequencer_service_server::SequencerService as SequencerApi;
@@ -25,7 +26,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{
     miden_node_v1_node_service,
     miden_ntx_builder_v1_network_transaction_builder_service,
-    miden_sequencer_v1_sequencer_service,
     miden_validator_v1_validator_service,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
@@ -65,13 +65,16 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{Asset, AssetId, FungibleAsset};
 use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{
+    BlockHeader,
     BlockSignatures,
     FeeParameters,
     ProvenBlock,
     SignedBlock,
     ValidatorConfig,
 };
+use miden_protocol::crypto::merkle::mmr::Mmr;
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
@@ -80,6 +83,8 @@ use miden_protocol::transaction::{
     OutputNote,
     ProvenTransaction,
     PublicOutputNote,
+    PublicTransactionLogs,
+    TransactionLogs,
     TxAccountUpdate,
 };
 use miden_protocol::utils::serde::Deserializable;
@@ -93,9 +98,10 @@ use miden_tx_batch::{BatchExecutor, LocalBatchProver};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::task;
+use tokio::time::timeout;
 use tokio_stream::wrappers::TcpListenerStream;
-use tonic::Request;
 use tonic::metadata::MetadataMap;
+use tonic::{Code, Request};
 use url::Url;
 
 use crate::server::RpcBackend;
@@ -105,6 +111,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 mod allowlist;
 mod error_details;
 mod status;
+mod transaction_logs;
 mod vault;
 
 /// Global registry of temp directories. Held for the lifetime of the test binary so that `RocksDB`
@@ -317,6 +324,9 @@ fn build_test_proven_tx_with_fee(
 
     let output_notes = fee.map(|asset| fee_output_note(account_id, asset));
 
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
+
     ProvenTransaction::new(
         account_update,
         Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
@@ -325,6 +335,8 @@ fn build_test_proven_tx_with_fee(
         genesis,
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -357,6 +369,8 @@ fn build_test_proven_tx_with_id(
         AccountUpdateDetails::Public(patch),
     )
     .unwrap();
+    let logs = miden_protocol::transaction::TransactionLogs::default();
+    let log_details = miden_protocol::transaction::TransactionLogDetails::Public(logs);
 
     ProvenTransaction::new(
         account_update,
@@ -369,6 +383,8 @@ fn build_test_proven_tx_with_id(
         genesis,
         u32::MAX.into(),
         miden_protocol::testing::dummy_execution_proof(),
+        log_details,
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -385,6 +401,8 @@ fn replace_transaction_proof(
         transaction.ref_block_commitment(),
         transaction.expiration_block_num(),
         proof,
+        transaction.log_details().clone(),
+        CodePatch::default(),
     )
     .unwrap()
 }
@@ -401,9 +419,7 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
         .fee_faucet_id(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap())
         .verification_base_fee(1);
     let auth = if include_fee {
-        Auth::BasicAuth {
-            auth_scheme: AuthScheme::Falcon512Poseidon2,
-        }
+        Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos }
     } else {
         Auth::IncrNonce
     };
@@ -431,18 +447,19 @@ async fn build_valid_batch_fixture(include_fee: bool) -> ValidBatchFixture {
 
     let tx_context = mock_chain
         .build_transaction(account.id())
-        .authenticated_input_note(note.id())
+        .authenticated_input_note(note.clone())
         .auth_args(auth_args)
         .add_advice_map_entry(auth_args, advice)
         .build()
         .unwrap();
     let executed_tx = Box::pin(tx_context.execute()).await.unwrap();
-    let tx_inputs = executed_tx.tx_inputs().clone();
-    let proven_tx =
-        spawn_blocking_in_current_span(move || LocalTransactionProver::default().prove(tx_inputs))
-            .await
-            .unwrap()
-            .unwrap();
+    let _tx_inputs = executed_tx.tx_inputs().clone();
+    let proven_tx = spawn_blocking_in_current_span(move || {
+        LocalTransactionProver::default().prove(executed_tx)
+    })
+    .await
+    .unwrap()
+    .unwrap();
 
     if !include_fee {
         assert!(proven_tx.output_notes().is_empty());
@@ -903,6 +920,8 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
             .unwrap();
         assert_eq!(forwarded.id(), fixture.transaction.id());
         assert_eq!(forwarded.proof(), fixture.transaction.proof());
+        assert_eq!(forwarded.log_details(), fixture.transaction.log_details());
+        assert_eq!(forwarded.code_patch(), fixture.transaction.code_patch());
         assert_eq!(
             submissions[0].sealed_transaction_inputs,
             Some(test_sealed_transaction_inputs())
@@ -1741,17 +1760,7 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
 }
 
 #[tokio::test]
-async fn authenticated_batch_defers_validation_to_async_handler() {
-    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
-        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
-        auth_inputs: Vec::new(),
-        batch_proof: None,
-    };
-    let input = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
-        proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
-    )
-    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
-
+async fn authenticated_batch_reports_missing_request_fields() {
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
     let block_producer = BlockProducerApi::new(
@@ -1765,19 +1774,24 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         block_producer,
         account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
-    let error = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::handle(
-        &service,
-        input,
-        &MetadataMap::new(),
-        &Extensions::new(),
-    )
-    .await
-    .expect_err("the async handler should reject the malformed proposed batch");
-
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("failed to decode"), "{error}");
-    assert!(error.message().contains("proposed_batch.reference_block_header:"), "{error}");
-    assert!(error.message().contains("missing"), "{error}");
+    let malformed = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
+        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
+        ..Default::default()
+    };
+    for (batch, missing_field) in [
+        (None, "batch:"),
+        (Some(malformed), "batch.proposed_batch.reference_block_header:"),
+    ] {
+        let error = service
+            .submit_authenticated_tx_batch(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains(missing_field), "{error}");
+        assert!(error.message().contains("missing"), "{error}");
+    }
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
@@ -2359,6 +2373,32 @@ async fn sync_endpoints_preserve_account_verification_context() {
 }
 
 #[tokio::test]
+async fn sync_endpoints_reject_filters_over_the_advertised_limit() {
+    let (mut client, _addr, _store, _server) = start_rpc().await;
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
+    let notes = client
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
+            note_tags: vec![0; QueryParamNoteTagLimit::LIMIT + 1],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(notes.code(), tonic::Code::OutOfRange);
+    assert!(notes.message().contains("note_tag exceeded limit"), "{notes}");
+
+    let nullifiers = client
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+            nullifiers: vec![0; QueryParamNullifierPrefixLimit::LIMIT + 1],
+            prefix_len: 16,
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(nullifiers.code(), tonic::Code::OutOfRange);
+    assert!(nullifiers.message().contains("nullifier_prefix exceeded limit"), "{nullifiers}");
+}
+
+#[tokio::test]
 async fn sync_transactions_rejects_oversized_requests_before_decoding_fields() {
     let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
     let error = rpc_client
@@ -2484,6 +2524,23 @@ fn sync_chain_mmr_block_header_matches_chain_commitment() {
     assert_eq!(client_mmr.peaks().hash_peaks(), server_mmr.peaks().hash_peaks());
 }
 
+#[tokio::test]
+async fn sync_nullifiers_accepts_raw_high_bit_prefixes() {
+    use miden_node_proto::generated::miden::node::v1::{BlockRange, SyncNullifiersRequest};
+
+    let (mut client, _, _store, _server) = start_rpc().await;
+    let response = client
+        .sync_nullifiers(SyncNullifiersRequest {
+            block_range: Some(BlockRange { block_from: 0, block_to: 0 }),
+            prefix_len: 16,
+            nullifiers: vec![0x7fff, 0x8000, 0xffff],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.nullifiers, []);
+}
+
 /// A nullifier prefix that does not fit in the requested 16-bit prefix length must be rejected with
 /// `InvalidArgument`. The store narrows prefixes with `prefix as u16`, so without this check 65536
 /// would be truncated to 0 and silently query a different prefix than the client requested.
@@ -2563,7 +2620,6 @@ async fn next_block_with_protocol_config(
 ) -> SignedBlock {
     use miden_protocol::block::{BlockBody, BlockHeader};
     use miden_protocol::crypto::merkle::mmr::Mmr;
-    use miden_protocol::transaction::OrderedTransactionHeaders;
 
     let view = store.state.view();
     let (parent, _) = view.get_block_header(None, false).await.unwrap();
@@ -2573,9 +2629,8 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
-    let body =
-        BlockBody::new(vec![], vec![], vec![], OrderedTransactionHeaders::new_unchecked(vec![]))
-            .unwrap();
+    let body = BlockBody::new(vec![], vec![], vec![], Vec::new(), PublicTransactionLogs::default())
+        .unwrap();
 
     let header = BlockHeader::new(
         parent.commitment(),
@@ -2583,8 +2638,9 @@ async fn next_block_with_protocol_config(
         mmr.peaks().hash_peaks(),
         parent.account_root(),
         parent.nullifier_root(),
+        parent.code_tree_root(),
         body.compute_block_note_tree().root(),
-        body.transaction_commitment(),
+        body.compute_transactions_commitment(),
         parent.validator_config().clone(),
         parent.fee_parameters().clone(),
         config.to_commitment(),
@@ -2822,4 +2878,169 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .expect_err("sync_transactions should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_transactions");
     assert_eq!(status.details(), &[5]);
+}
+
+fn block_with_many_empty_logs(template: &SignedBlock) -> (SignedBlock, TransactionLogs) {
+    use miden_protocol::block::{BlockBody, BlockHeader};
+    use miden_protocol::testing::account_id::{
+        ACCOUNT_ID_PRIVATE_SENDER,
+        ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    };
+    use miden_protocol::transaction::{
+        InputNotes,
+        LogTopic,
+        OrderedTransactionHeaders,
+        PublicTransactionLogs,
+        TransactionHeader,
+        TransactionLog,
+        TransactionLogs,
+    };
+    let native = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1.try_into().unwrap();
+    let emitter = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
+    let log =
+        TransactionLog::new(emitter, LogTopic::new(3_u32.into(), 4_u32.into()), vec![]).unwrap();
+    let logs = TransactionLogs::new(vec![log; 64]).unwrap();
+    let headers: Vec<_> = (1_u32..=2048)
+        .map(|seed| {
+            TransactionHeader::new(
+                native,
+                Word::from([seed; 4]),
+                Word::from([seed + 1; 4]),
+                InputNotes::default(),
+                vec![],
+                logs.commitment(),
+                CodePatch::default().commitment(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let entries = headers.iter().map(|header| (header.id(), logs.clone())).collect();
+    let public = PublicTransactionLogs::new(entries, headers.iter()).unwrap();
+    let groups = headers
+        .chunks(1024)
+        .map(|chunk| OrderedTransactionHeaders::new_unchecked(chunk.to_vec()))
+        .collect();
+    let body = BlockBody::new(vec![], vec![], vec![], groups, public).unwrap();
+    let t = template.header();
+    let header = BlockHeader::new(
+        t.prev_block_commitment(),
+        t.block_num(),
+        t.chain_commitment(),
+        t.account_root(),
+        t.nullifier_root(),
+        t.code_tree_root(),
+        body.compute_block_note_tree().root(),
+        body.compute_transactions_commitment(),
+        t.validator_config().clone(),
+        t.fee_parameters().clone(),
+        t.protocol_config_commitment(),
+        None,
+        t.timestamp(),
+    );
+    (
+        SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![]).unwrap()),
+        logs,
+    )
+}
+
+async fn append_empty_blocks(store: &mut TestStore, previous: &BlockHeader, mut mmr: Mmr) {
+    use miden_protocol::block::{BlockBody, BlockHeader};
+    use miden_protocol::transaction::PublicTransactionLogs;
+    let empty =
+        BlockBody::new(vec![], vec![], vec![], vec![], PublicTransactionLogs::default()).unwrap();
+    let mut previous = previous.clone();
+    for _ in 0..512 {
+        mmr.add(previous.commitment()).unwrap();
+        let header = BlockHeader::new(
+            previous.commitment(),
+            previous.block_num().child(),
+            mmr.peaks().hash_peaks(),
+            previous.account_root(),
+            previous.nullifier_root(),
+            previous.code_tree_root(),
+            empty.compute_block_note_tree().root(),
+            empty.compute_transactions_commitment(),
+            previous.validator_config().clone(),
+            previous.fee_parameters().clone(),
+            previous.protocol_config_commitment(),
+            None,
+            previous.timestamp() + 1,
+        );
+        let block = SignedBlock::new_unchecked(
+            header.clone(),
+            empty.clone(),
+            BlockSignatures::new(vec![]).unwrap(),
+        );
+        store.writer.apply_block(block, None).await.unwrap();
+        previous = header;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn block_subscription_preserves_public_logs_and_enforces_message_size() {
+    use miden_node_proto::prost::Message;
+    let (client, _, mut store, _server) = start_rpc().await;
+    let (parent, _) = store.state.view().get_block_header(None, false).await.unwrap();
+    let parent = parent.unwrap();
+    let config = store
+        .state
+        .view()
+        .get_protocol_config(parent.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let template = next_block_with_protocol_config(&store, &config).await;
+    let (expected, logs) = block_with_many_empty_logs(&template);
+    let start = expected.header().block_num().as_u32();
+    let mut large_client = client.clone().max_decoding_message_size(16 * 1024 * 1024);
+    let mut live = large_client
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    store.writer.apply_block(expected.clone(), None).await.unwrap();
+    let wire = timeout(Duration::from_secs(5), live.message()).await.unwrap().unwrap().unwrap();
+    let wire_size = wire.encoded_len();
+    assert!(
+        wire_size > 4 * 1024 * 1024,
+        "zero-content log metadata can exceed the default limit"
+    );
+    let actual: SignedBlock =
+        wire.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(actual.body().public_logs().entries()[0].1, logs);
+
+    drop(live);
+    let mut mmr = Mmr::new();
+    mmr.add(parent.commitment()).unwrap();
+    append_empty_blocks(&mut store, expected.header(), mmr).await;
+    let mut at_limit = client.clone().max_decoding_message_size(wire_size);
+    let mut historical = at_limit
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    let wire = historical.message().await.unwrap().unwrap();
+    let actual: SignedBlock =
+        wire.block.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+    assert_eq!(actual, expected);
+    let mut too_small = client.max_decoding_message_size(wire_size - 1);
+    let mut stream = too_small
+        .block_subscription(BlockSubscriptionRequest { block_from: start })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(stream.message().await.unwrap_err().code(), Code::OutOfRange);
+}
+
+#[cfg(test)]
+pub(crate) async fn transaction_log_test_service() -> RpcService {
+    let store = TestStore::start().await;
+    RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(10).unwrap(),
+        None,
+    )
 }

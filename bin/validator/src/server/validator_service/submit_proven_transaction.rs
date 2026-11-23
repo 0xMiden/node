@@ -2,11 +2,10 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
 use miden_node_proto::prost::Message;
-use miden_node_proto::{DecodeMessageExt, generated as grpc};
+use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{Instrument, info_span, instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
-use miden_tx::utils::serde::Deserializable;
 use rand_core_06::OsRng;
 use tonic::Status;
 
@@ -18,6 +17,8 @@ use crate::{PrivateRecordContext, PrivateRecordId};
 impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
     for ValidatorService
 {
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
     type Input = Input;
     type Output = ();
 
@@ -170,7 +171,15 @@ impl ValidatorService {
                 ))
             })?;
 
-        TransactionInputs::read_from_bytes(&plaintext)
+        grpc::transaction::TransactionInputs::decode(plaintext.as_slice())
+            .map_err(|err| Status::invalid_argument(format!("Invalid transaction inputs: {err}")))?
+            // SAFETY: This checks input consistency and note inclusion against the supplied headers.
+            // New transaction IDs pass proof verification and re-execution before storage.
+            // Previously validated IDs use the handler's duplicate-submission shortcut.
+            //
+            // FIXME: Authenticate the supplied headers against the validator's chain state.
+            // Neither unsealing nor re-execution establishes that chain membership.
+            .decode_and_build_unchecked()
             .or_invalid_argument("Invalid transaction inputs")
     }
 }

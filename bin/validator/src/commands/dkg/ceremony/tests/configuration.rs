@@ -71,3 +71,25 @@ async fn config_exchange_rejects_mismatch(
     endpoint_b.close().await;
     Ok(())
 }
+
+#[test]
+fn session_id_is_independent_of_peer_arrival_order() {
+    let keys = [SigningKey::new().public_key(), SigningKey::new().public_key()];
+    let nonces = [
+        CeremonyNonce::decode(&[1; 32]).unwrap(),
+        CeremonyNonce::decode(&[2; 32]).unwrap(),
+    ];
+    let config = CeremonyConfig::new(&keys, 2, StorageKeyEpoch::new([9; 32]));
+    let contributions = vec![(keys[0].clone(), nonces[0]), (keys[1].clone(), nonces[1])];
+    let expected = SessionId::derive(&config, contributions.clone());
+    let mut reversed = contributions.clone();
+    reversed.reverse();
+    let reversed_config =
+        CeremonyConfig::new(&[keys[1].clone(), keys[0].clone()], 2, StorageKeyEpoch::new([9; 32]));
+    assert_eq!(SessionId::derive(&reversed_config, reversed), expected);
+    let mut changed = contributions.clone();
+    changed[0].1 = CeremonyNonce::decode(&[3; 32]).unwrap();
+    assert_ne!(SessionId::derive(&config, changed), expected);
+    let changed_config = CeremonyConfig::new(&keys, 1, StorageKeyEpoch::new([9; 32]));
+    assert_ne!(SessionId::derive(&changed_config, contributions), expected);
+}

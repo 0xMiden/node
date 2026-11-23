@@ -49,6 +49,7 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
+miden-tx-batch         = { workspace = true }
 rand_core_06           = { workspace = true }
 serde                  = { workspace = true }
 tempfile               = { workspace = true }
@@ -70,6 +71,7 @@ itertools        = { workspace = true }
 miden-node-store = { workspace = true }
 miden-node-utils = { features = ["testing-prover"], workspace = true }
 miden-protocol   = { default-features = true, features = ["testing"], workspace = true }
+miden-standards  = { workspace = true }
 miden-testing    = { workspace = true }
 miden-tx         = { features = ["concurrent", "testing"], workspace = true }
 rand             = { workspace = true }

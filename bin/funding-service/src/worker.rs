@@ -17,11 +17,10 @@ use miden_protocol::Word;
 use miden_protocol::account::{Account, AccountId};
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::BlockHeader;
-use miden_protocol::crypto::rand::RandomCoin;
+use miden_protocol::crypto::rand::EidosRandomCoin;
 use miden_protocol::note::Nullifier;
 use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, TransactionId};
-use miden_protocol::utils::serde::Serializable;
 
 use crate::account::FundingWallet;
 use crate::db::{FundingDatabase, TransactionAttempt};
@@ -88,7 +87,7 @@ pub struct Funder {
     node: RpcNodeClient,
     prover: Prover,
     setup: FunderSetup,
-    rng: RandomCoin,
+    rng: EidosRandomCoin,
 }
 
 impl Funder {
@@ -101,7 +100,7 @@ impl Funder {
             node,
             prover,
             setup,
-            rng: RandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
+            rng: EidosRandomCoin::new(Word::from(rand::random::<[u32; 4]>())),
         }
     }
 
@@ -226,7 +225,7 @@ impl Funder {
             transaction.id = executed_tx.id(),
             transaction.expires_at = executed_tx.expiration_block_num()
         );
-        let transaction_inputs = executed_tx.tx_inputs().to_bytes();
+        let transaction_inputs = executed_tx.tx_inputs().clone();
         let transaction = Box::pin(self.prover.prove(executed_tx))
             .await
             .context("failed to prove the funding transaction")?;

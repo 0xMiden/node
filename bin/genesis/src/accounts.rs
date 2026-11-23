@@ -18,11 +18,7 @@ use miden_protocol::{Felt, Word, ZERO};
 use miden_standards::account::auth::AuthSingleSig;
 use miden_standards::account::faucets::{FungibleFaucet, FungibleFaucetError};
 use miden_standards::account::wallets::BasicWallet;
-use miden_usdcx::account::xreserve::{
-    PolicyManagerVersion,
-    XReserveStablecoinBuilder,
-    XReserveStablecoinBuilderError,
-};
+use miden_usdcx::account::xreserve::{XReserveStablecoinBuilder, XReserveStablecoinBuilderError};
 use miden_usdcx::xreserve::encoding::DepositNonce;
 use rand::TryRng;
 use rand::rngs::SysRng;
@@ -82,7 +78,6 @@ pub fn build_faucet(config: &GenesisToolConfig) -> Result<Account> {
         .domain(faucet_config.domain)
         .attesters(faucet_config.attesters.clone())
         .maybe_min_burn_amount(min_burn_amount)
-        .policy_manager(PolicyManagerVersion::V2)
         .build()
         .context("composing the xUSDC faucet builder")?
         .build_genesis_account(faucet_config.seed)

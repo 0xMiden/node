@@ -1,10 +1,11 @@
 use anyhow::Result;
 use miden_node_db::migration::{SchemaHash, SchemaHashes};
+use rusqlite::Connection;
 
 use super::*;
 use crate::db::queries::VALID_FOREVER;
 
-const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
+const EXPECTED_SCHEMA_HASHES: [SchemaHash; 9] = [
     SchemaHash::from_hex("cc92cb332410e6f63036b52cf953acb446c142d5c0fbbdbd6d3b4f466510b210"),
     SchemaHash::from_hex("7c783947d0bb2c9745d28f4bdcf329f84ad970c36aa07ea85441e62718d8bbbb"),
     SchemaHash::from_hex("e026a70464e897ae9a217f45c80d72341b1bfb757200e57e41145348473a9961"),
@@ -12,6 +13,8 @@ const EXPECTED_SCHEMA_HASHES: [SchemaHash; 7] = [
     SchemaHash::from_hex("34bd293251a2647715dd91fa245bcd98d635e8070871b4f8335b3a3db364fc1e"),
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
     SchemaHash::from_hex("cce37dcaef2f20597016e89e8b3e109b486149a66f1590137c5f9b7ccc8e3ad4"),
+    SchemaHash::from_hex("93db886dab52c2175a4572a23823fe3a05138d7f7d08ea55cd5e60ee6d4ec3a8"),
+    SchemaHash::from_hex("baaeabe602a81b84ef7161f781fd571750b7baf4afe028cf85ded57d6ca3b373"),
 ];
 
 #[test]
@@ -31,7 +34,7 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
     let database_filepath = temp_dir.path().join("store.sqlite3");
 
     {
-        let conn = rusqlite::Connection::open(&database_filepath)?;
+        let conn = Connection::open(&database_filepath)?;
         conn.execute_batch(include_str!("../001_initial.sql"))?;
         conn.execute_batch(include_str!("../002_index_optimizations.sql"))?;
         conn.execute_batch(include_str!("../003_block_headers_without_rowid.sql"))?;
@@ -53,9 +56,9 @@ fn migration_004_validity_intervals_backfills_valid_until() -> Result<()> {
         )?;
     }
 
-    migrate_database(&database_filepath)?;
+    migrator()?.open_database(&database_filepath)?.migrate_to(4)?;
 
-    let conn = rusqlite::Connection::open(&database_filepath)?;
+    let conn = Connection::open(&database_filepath)?;
 
     let accounts = conn
         .prepare("SELECT block_num, valid_until FROM accounts ORDER BY block_num ASC")?

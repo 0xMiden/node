@@ -62,7 +62,11 @@ impl CommittedBlockEffects {
         // A transaction against an empty initial state commitment creates its account. The genesis
         // block has no transactions, but it creates every account it contains.
         let is_genesis = header.block_num() == BlockNumber::GENESIS;
-        let new_account_ids = body.transactions().created_account_ids().collect::<HashSet<_>>();
+        let new_account_ids = body
+            .transactions()
+            .iter()
+            .flat_map(miden_protocol::transaction::OrderedTransactionHeaders::created_account_ids)
+            .collect::<HashSet<_>>();
 
         // Public accounts are a superset of network accounts. `NetworkAccountEffect` filters
         // creations by their storage, and `apply_committed_block` filters updates by a DB lookup.
@@ -85,8 +89,8 @@ impl CommittedBlockEffects {
 
         let account_transactions = body
             .transactions()
-            .as_slice()
             .iter()
+            .flat_map(miden_protocol::transaction::OrderedTransactionHeaders::as_slice)
             .map(|tx| (tx.account_id(), tx.id()))
             .collect();
 
@@ -116,8 +120,11 @@ impl CommittedBlockEffects {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::once;
+
     use anyhow::Context;
     use miden_protocol::Word;
+    use miden_protocol::block::code_tree::CodePatch;
     use miden_protocol::block::{
         BlockAccountUpdate,
         BlockBody,
@@ -129,7 +136,9 @@ mod tests {
         InputNotes,
         OrderedTransactionHeaders,
         PublicOutputNote,
+        PublicTransactionLogs,
         TransactionHeader,
+        TransactionLogs,
     };
 
     use super::*;
@@ -156,12 +165,26 @@ mod tests {
             final_state_commitment,
             InputNotes::new_unchecked(Vec::new()),
             Vec::new(),
+            miden_protocol::transaction::TransactionLogs::default().commitment(),
+            CodePatch::default().commitment(),
+        )?;
+        let public_logs = PublicTransactionLogs::new(
+            vec![(transaction.id(), TransactionLogs::default())],
+            once(&transaction),
         )?;
         let body = BlockBody::new_unchecked(
             vec![update],
             Vec::new(),
             Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(vec![transaction]),
+            {
+                let group = OrderedTransactionHeaders::new_unchecked(vec![transaction]);
+                if group.as_slice().is_empty() {
+                    Vec::new()
+                } else {
+                    vec![group]
+                }
+            },
+            public_logs,
         );
         let block = SignedBlock::new_unchecked(
             mock_block_header(BlockNumber::from(1)),
@@ -193,6 +216,62 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn committed_groups_preserve_transaction_order_and_account_discovery() {
+        let (account, details) = mock_network_account_update();
+        let mut state = Word::empty();
+        let transactions: Vec<_> = (1_u32..=3)
+            .map(|value| {
+                let next = if value == 3 {
+                    account.to_commitment()
+                } else {
+                    Word::from([value; 4])
+                };
+                let header = TransactionHeader::new(
+                    account.id(),
+                    state,
+                    next,
+                    InputNotes::default(),
+                    vec![],
+                    miden_protocol::transaction::TransactionLogs::default().commitment(),
+                    CodePatch::default().commitment(),
+                )
+                .unwrap();
+                state = next;
+                header
+            })
+            .collect();
+        let update =
+            BlockAccountUpdate::new(account.id(), account.to_commitment(), details).unwrap();
+        let groups = vec![
+            OrderedTransactionHeaders::new_unchecked(transactions[..2].to_vec()),
+            OrderedTransactionHeaders::new_unchecked(transactions[2..].to_vec()),
+        ];
+        let public_logs = PublicTransactionLogs::new(
+            transactions
+                .iter()
+                .map(|header| (header.id(), TransactionLogs::default()))
+                .collect(),
+            transactions.iter(),
+        )
+        .unwrap();
+        let body = BlockBody::new(vec![update], vec![], vec![], groups, public_logs).unwrap();
+        let block = SignedBlock::new_unchecked(
+            mock_block_header(BlockNumber::ONE),
+            body,
+            BlockSignatures::new(vec![]).unwrap(),
+        );
+        let effects = CommittedBlockEffects::from_signed_block(&block);
+        assert_eq!(
+            effects.account_transactions,
+            transactions.iter().map(|tx| (account.id(), tx.id())).collect::<Vec<_>>()
+        );
+        assert_eq!(effects.latest_tx_per_account()[&account.id()], transactions[2].id());
+        assert!(
+            matches!(effects.network_account_updates.as_slice(), [(id, NetworkAccountEffect::Created(_))] if *id == account.id())
+        );
+    }
+
     /// `FEE_SPONSORSHIP` notes are extracted by script root, everything else keeps going through
     /// the attachment-based network-note classification.
     #[test]
@@ -209,7 +288,8 @@ mod tests {
             Vec::new(),
             vec![batch],
             Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(Vec::new()),
+            Vec::new(),
+            PublicTransactionLogs::default(),
         );
         let block = SignedBlock::new_unchecked(
             mock_block_header(BlockNumber::from(1)),

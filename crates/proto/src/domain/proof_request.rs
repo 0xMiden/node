@@ -5,7 +5,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::batch::OrderedBatches;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::block::nullifier_tree::NullifierWitness;
-use miden_protocol::block::{BlockHeader, BlockInputs, ProposedBlock};
+use miden_protocol::block::{BlockBody, BlockHeader, BlockInputs, ProposedBlock};
 use miden_protocol::note::{NoteId, NoteInclusionProof, Nullifier};
 use miden_protocol::transaction::PartialBlockchain;
 
@@ -74,6 +74,15 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
     /// construction also skips input-note authentication, aggregation, and transaction order. The
     /// caller must complete these checks before accepting the block.
     fn build_unchecked(self) -> Result<Self::Output, Self::Error> {
+        self.build_with_body_unchecked().map(|(request, _)| request)
+    }
+}
+
+impl proto::block_proving::DecodedBlockProofRequest {
+    /// Reconstructs the header and retains the corresponding body for signing.
+    pub(super) fn build_with_body_unchecked(
+        self,
+    ) -> Result<(BlockProofRequest, BlockBody), ConversionError> {
         // SAFETY: This unchecked constructor leaves parent authentication to its caller.
         // ProposedBlock checks the supplied chain and witnesses against that parent below.
         let block_inputs = self.block_inputs.build_unchecked().context("block_inputs")?;
@@ -89,14 +98,17 @@ impl BuildUnchecked for proto::block_proving::DecodedBlockProofRequest {
                 .map_err(ConversionError::new)?
                 .with_next_validator_config(next_validator_config)
                 .with_next_protocol_config(next_protocol_config);
-        let (block_header, _) =
+        let (block_header, body) =
             proposed_block.into_header_and_body().map_err(ConversionError::new)?;
 
-        Ok(BlockProofRequest {
-            tx_batches: OrderedBatches::new(batches),
-            block_header,
-            block_inputs,
-        })
+        Ok((
+            BlockProofRequest {
+                tx_batches: OrderedBatches::new(batches),
+                block_header,
+                block_inputs,
+            },
+            body,
+        ))
     }
 }
 

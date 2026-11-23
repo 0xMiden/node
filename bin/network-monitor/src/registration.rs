@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use miden_node_proto::clients::RpcClient;
 use miden_node_proto::generated::miden::node::v1::RegisterAccountRequest;
 use miden_protocol::account::{Account, AccountId};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 
 /// Fresh accounts and the signing key needed to submit wallet transactions.
 pub struct MonitorAccountPair {

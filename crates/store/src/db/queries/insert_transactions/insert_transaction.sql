@@ -11,6 +11,10 @@ INSERT INTO transactions (
     final_state_commitment,
     input_notes,
     output_notes,
-    size_in_bytes
+    size_in_bytes,
+    logs_commitment,
+    code_patch_commitment,
+    transaction_index,
+    public_log_count
 )
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)

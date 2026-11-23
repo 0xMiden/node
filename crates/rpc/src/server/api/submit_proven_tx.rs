@@ -2,7 +2,7 @@ use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::TransactionCandidate;
-use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as proto};
 use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record, trace};
@@ -23,6 +23,8 @@ mod tests;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
     type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 
@@ -86,27 +88,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
         )
         .map_err(Status::from)?;
 
-        // Rebuild a new ProvenTransaction with decorators removed from output notes
-        let account_update = TxAccountUpdate::new(
-            tx.account_id(),
-            tx.account_update().initial_state_commitment(),
-            tx.account_update().final_state_commitment(),
-            tx.account_update().account_patch_commitment(),
-            tx.account_update().details().clone(),
-        )
-        .map_err(|e| Status::invalid_argument(e.to_string()))?;
-
-        let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
-        let rebuilt_tx = ProvenTransaction::new(
-            account_update,
-            tx.input_notes().iter().cloned(),
-            stripped_outputs,
-            tx.ref_block_num(),
-            tx.ref_block_commitment(),
-            tx.expiration_block_num(),
-            tx.proof().clone(),
-        )
-        .map_err(|e| Status::invalid_argument(e.to_string()))?;
+        let rebuilt_tx = strip_transaction_decorators(&tx)?;
         let request = proto::submission::ProvenTransactionSubmission {
             transaction: Some((&rebuilt_tx).into()),
             sealed_transaction_inputs: Some(input.sealed_transaction_inputs),
@@ -264,4 +246,30 @@ fn strip_output_note_decorators<'a>(
         },
         OutputNote::Private(header) => OutputNote::Private(header.clone()),
     })
+}
+
+/// Removes output-note decorators while preserving the transaction commitments.
+fn strip_transaction_decorators(tx: &ProvenTransaction) -> tonic::Result<ProvenTransaction> {
+    let account_update = TxAccountUpdate::new(
+        tx.account_id(),
+        tx.account_update().initial_state_commitment(),
+        tx.account_update().final_state_commitment(),
+        tx.account_update().account_patch_commitment(),
+        tx.account_update().details().clone(),
+    )
+    .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+    let stripped_outputs = strip_output_note_decorators(tx.output_notes().iter());
+    ProvenTransaction::new(
+        account_update,
+        tx.input_notes().iter().cloned(),
+        stripped_outputs,
+        tx.ref_block_num(),
+        tx.ref_block_commitment(),
+        tx.expiration_block_num(),
+        tx.proof().clone(),
+        tx.log_details().clone(),
+        tx.code_patch().clone(),
+    )
+    .map_err(|e| Status::invalid_argument(e.to_string()))
 }

@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fmt::Write as _;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -16,8 +17,10 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::{AssetId, AssetWitness};
 use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
 use miden_protocol::block::{BlockHeader, BlockNumber};
-use miden_protocol::crypto::dsa::falcon512_poseidon2::SecretKey;
+use miden_protocol::code::ProcedureRoot;
+use miden_protocol::crypto::dsa::falcon512_eidos::SecretKey;
 use miden_protocol::note::{
     Note,
     NoteAssets,
@@ -39,9 +42,8 @@ use miden_protocol::transaction::{
     TransactionArgs,
     TransactionScript,
 };
-use miden_protocol::utils::serde::Serializable;
 use miden_protocol::vm::FutureMaybeSend;
-use miden_protocol::{Felt, Word};
+use miden_protocol::{Felt, MastForest, Word};
 use miden_standards::account::auth::{FeeConversionInfo, commit_fee_conversion_info};
 use miden_standards::account::fees::FeePolicyManager;
 use miden_standards::code_builder::CodeBuilder;
@@ -162,7 +164,7 @@ impl Driver {
         let (auth_args, conversion_info_preimage) = self.fee_conversion_auth_args();
         tx_args = tx_args.with_auth_args(auth_args);
         tx_args.extend_advice_map([(auth_args, conversion_info_preimage)]);
-        tx_args.add_output_note_recipient(Box::new(recipient));
+        tx_args.add_output_note_recipient(recipient);
 
         let mut data_store = DriverDataStore::new(
             self.genesis_header.clone(),
@@ -175,7 +177,7 @@ impl Driver {
         data_store.add_foreign_account(self.counter.clone(), self.counter_witness.clone());
 
         let authenticator =
-            BasicAuthenticator::new(&[AuthSecretKey::Falcon512Poseidon2(self.secret_key.clone())]);
+            BasicAuthenticator::new(&[AuthSecretKey::Falcon512Eidos(self.secret_key.clone())]);
         let executor = TransactionExecutor::new(&data_store).with_authenticator(&authenticator);
 
         let executed = executor
@@ -188,7 +190,7 @@ impl Driver {
             .await
             .context("failed to execute the increment transaction")?;
 
-        let tx_inputs = executed.tx_inputs().to_bytes();
+        let tx_inputs = executed.tx_inputs().clone();
         let patch = executed.account_patch().clone();
 
         let proving_started = Instant::now();
@@ -320,7 +322,7 @@ fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> 
         )
         .expect("writing to a String cannot fail");
     }
-    note_section.push_str("        drop\n");
+    note_section.push_str("        exec.::miden::protocol::output_note::seal\n");
 
     let script_src = format!(
         "@transaction_script
@@ -495,6 +497,22 @@ impl DataStore for DriverDataStore {
                 })
                 .collect::<Result<Vec<_>, _>>()
         }
+    }
+
+    fn get_code_witnesses(
+        &self,
+        _code_tree_root: CodeTreeRoot,
+        _procedure_roots: Vec<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<CodeWitness>, DataStoreError>> {
+        async move { Err(DataStoreError::other("code witnesses are unavailable in this data store")) }
+    }
+
+    /// This store has no code designated for publication in the code registry.
+    fn get_code_to_register(
+        &self,
+        _procedure_roots: BTreeSet<ProcedureRoot>,
+    ) -> impl FutureMaybeSend<Result<Vec<Arc<MastForest>>, DataStoreError>> {
+        async move { Ok(Vec::new()) }
     }
 
     fn get_note_script(

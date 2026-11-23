@@ -2,7 +2,7 @@ use std::fmt;
 
 use anyhow::{Context, ensure};
 use futures::future::try_join_all;
-use miden_protocol::crypto::hash::rpo::Rpo256;
+use miden_protocol::Hasher;
 
 use super::{Ceremony, DkgDealings, DkgParticipants, UnconfirmedDkgDealings};
 use crate::commands::dkg::wire::WireCodec;
@@ -35,7 +35,7 @@ impl DkgDealingsCommitment {
                 transcript.extend_from_slice(&message.transcript_root);
             }
         }
-        Self(Rpo256::hash(&transcript).as_bytes())
+        Self(Hasher::hash(&transcript).as_bytes())
     }
 }
 

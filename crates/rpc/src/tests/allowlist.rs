@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use miden_protocol::batch::ProposedBatch;
+use miden_protocol::block::code_tree::CodePatch;
 use miden_standards::account::auth::NetworkAccount;
 use miden_standards::account::fees::{BasicConstantFeePolicy, FeePolicyManager};
 
@@ -234,14 +235,10 @@ impl TestStore {
             .verification_base_fee(1);
         let accounts = [
             builder
-                .create_new_wallet(Auth::BasicAuth {
-                    auth_scheme: AuthScheme::Falcon512Poseidon2,
-                })
+                .create_new_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
                 .unwrap(),
             builder
-                .create_new_wallet(Auth::BasicAuth {
-                    auth_scheme: AuthScheme::Falcon512Poseidon2,
-                })
+                .create_new_wallet(Auth::BasicAuth { auth_scheme: AuthScheme::Falcon512Eidos })
                 .unwrap(),
         ];
         let notes = accounts.each_ref().map(|account| {
@@ -266,15 +263,14 @@ impl TestStore {
             );
             let context = chain
                 .build_transaction(account)
-                .authenticated_input_note(note.id())
+                .authenticated_input_note(note.clone())
                 .auth_args(auth_args)
                 .add_advice_map_entry(auth_args, advice)
                 .build()
                 .unwrap();
             let executed = Box::pin(context.execute()).await.unwrap();
-            let inputs = executed.tx_inputs().clone();
             let proven = spawn_blocking_in_current_span(move || {
-                LocalTransactionProver::default().prove(inputs)
+                LocalTransactionProver::default().prove(executed)
             })
             .await
             .unwrap()
@@ -311,6 +307,13 @@ impl TestStore {
             details,
         )
         .unwrap();
+        let logs = miden_protocol::transaction::TransactionLogs::default();
+        let log_details = if update.account_id().is_public() {
+            miden_protocol::transaction::TransactionLogDetails::Public(logs)
+        } else {
+            miden_protocol::transaction::TransactionLogDetails::Private(logs.commitment())
+        };
+
         ProvenTransaction::new(
             update,
             Vec::<miden_protocol::transaction::InputNoteCommitment>::new(),
@@ -319,6 +322,8 @@ impl TestStore {
             self.genesis_commitment(),
             u32::MAX.into(),
             miden_protocol::testing::dummy_execution_proof(),
+            log_details,
+            CodePatch::default(),
         )
         .unwrap()
     }

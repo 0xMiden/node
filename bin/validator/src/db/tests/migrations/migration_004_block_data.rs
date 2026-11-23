@@ -121,7 +121,7 @@ async fn migration_preserves_transaction_links_and_replacement_cascades() {
     legacy
         .writer
         .write("seed legacy transaction link", move |tx| {
-            queries::link_block_transactions(tx, 1.into(), &[transaction_id])
+            queries::link_block_transactions(tx, 1.into(), [transaction_id])
         })
         .await
         .unwrap();

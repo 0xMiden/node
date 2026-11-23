@@ -21,8 +21,9 @@ pub(super) fn header_at(base: &BlockHeader, height: u32, config: &ProtocolConfig
         base.chain_commitment(),
         base.account_root(),
         base.nullifier_root(),
+        base.code_tree_root(),
         base.note_root(),
-        base.tx_commitment(),
+        base.transactions_commitment(),
         base.validator_config().clone(),
         base.fee_parameters().clone(),
         config.to_commitment(),
@@ -55,9 +56,15 @@ async fn activations_include_reused_configs_and_survive_reopen() {
     let db = load(path.clone()).await.unwrap();
     let mut parent = genesis;
     for (height, active, supplied) in
-        [(1, &first, true), (2, &second, true), (3, &second, false), (4, &first, false)]
+        [(1, &first, true), (2, &second, true), (3, &second, false), (4, &first, true)]
     {
         let header = header_at(&parent, height, active);
+        if height == 4 {
+            db.upsert_block_header_with_protocol_config(header.clone(), None)
+                .await
+                .expect_err("reactivation requires the config even when previously stored");
+            assert_eq!(db.load_chain_tip().await.unwrap(), Some(parent.clone()));
+        }
         db.upsert_block_header_with_protocol_config(
             header.clone(),
             supplied.then(|| active.clone()),
@@ -93,7 +100,9 @@ async fn repeated_tip_writes_preserve_activation() {
     db.upsert_block_header_with_protocol_config(tip.clone(), Some(second.clone()))
         .await
         .unwrap();
-    db.upsert_block_header_with_protocol_config(tip.clone(), None).await.unwrap();
+    db.upsert_block_header_with_protocol_config(tip.clone(), None)
+        .await
+        .expect_err("a replacement at an activation height must also carry the config");
     let tip = header_with_next_timestamp(&tip);
     db.upsert_block_header_with_protocol_config(tip.clone(), Some(second.clone()))
         .await

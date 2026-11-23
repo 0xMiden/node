@@ -4,6 +4,7 @@ extern crate miden_node_tracing as tracing;
 use clap::Parser;
 use clap::error::ErrorKind;
 use commands::Command;
+use miden_node_utils::shutdown::run_with_shutdown;
 
 miden_node_tracing::declare_targets! {
     default: "miden::process",
@@ -49,10 +50,8 @@ async fn main() -> anyhow::Result<()> {
     // Configure tracing with optional OpenTelemetry exporting support.
     let _otel_guard = miden_node_tracing::setup_tracing(cli.command.open_telemetry())?;
 
-    let result = miden_node_utils::shutdown::run_with_shutdown("miden-node", |shutdown| {
-        cli.command.execute(shutdown)
-    })
-    .await;
+    let result =
+        Box::pin(run_with_shutdown("miden-node", |shutdown| cli.command.execute(shutdown))).await;
 
     // Failures that end the process, such as a store that cannot be loaded at startup, are
     // otherwise only printed to stderr when `main` returns, and never reach the tracing layers.

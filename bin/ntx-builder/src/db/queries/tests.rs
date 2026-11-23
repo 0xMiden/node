@@ -18,7 +18,7 @@ use crate::NoteError;
 use crate::committed_block::CommittedBlockEffects;
 use crate::db::eligibility::{NEVER_ELIGIBLE, backoff_ready_block, hint_floor};
 use crate::db::queries::account_effect::NetworkAccountEffect;
-use crate::db::test_setup;
+use crate::db::{NtxDbWriter, test_setup};
 use crate::sponsorship::SponsorshipNote;
 use crate::test_utils::*;
 
@@ -453,7 +453,7 @@ async fn reset_sponsored_notes_clears_feature_note_backoff() {
         network_account_updates: vec![],
         account_transactions: vec![],
     };
-    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+    db.apply_committed_block(effects, PartialMmr::default(), None).await.unwrap();
 
     assert_eq!(
         db.note_eligibility(feature.as_note().id()).await,
@@ -481,7 +481,7 @@ async fn reset_sponsored_notes_skips_consumed_feature_notes() {
         network_account_updates: vec![],
         account_transactions: vec![],
     };
-    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+    db.apply_committed_block(effects, PartialMmr::default(), None).await.unwrap();
 
     assert_eq!(
         db.note_eligibility(feature.as_note().id()).await,
@@ -525,7 +525,7 @@ async fn stale_eligibility_is_reported_and_corrected() {
         network_account_updates: vec![],
         account_transactions: vec![],
     };
-    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+    db.apply_committed_block(effects, PartialMmr::default(), None).await.unwrap();
     assert_eq!(
         db.ready_accounts(30, sponsorship_block, vec![], vec![], 10).await.unwrap(),
         vec![account_id],
@@ -875,7 +875,7 @@ async fn apply_committed_block_seeds_genesis_network_account() {
     let account_id = effects.network_account_updates[0].0;
 
     // Genesis account updates have no originating transactions. The update must seed the account.
-    db.apply_committed_block(effects, PartialMmr::default()).await.unwrap();
+    db.apply_committed_block(effects, PartialMmr::default(), None).await.unwrap();
 
     assert!(
         db.get_account(account_id).await.unwrap().is_some(),
@@ -897,7 +897,7 @@ async fn apply_committed_block_fails_on_txless_update_after_genesis() {
     let mut effects = genesis_effects();
     effects.header = mock_block_header(BlockNumber::from(1));
 
-    db.apply_committed_block(effects, PartialMmr::default())
+    db.apply_committed_block(effects, PartialMmr::default(), None)
         .await
         .expect_err("a committed account update with no transaction must fail");
 }
@@ -996,4 +996,212 @@ async fn account_and_tracked_mmr_survive_reopen() {
     for index in [0, 2, 4, 6, 7] {
         assert_eq!(restored_mmr.open(index).unwrap(), mmr.open(index).unwrap());
     }
+}
+
+// CONSUMED NOTE PRUNING
+// ================================================================================================
+
+/// Applies a block that touches nothing the ntx-builder tracks, pruning the notes consumed before
+/// `prune_before`.
+async fn apply_empty_block(db: &NtxDbWriter, block_num: u32, prune_before: Option<u32>) {
+    let effects = CommittedBlockEffects {
+        header: mock_block_header(BlockNumber::from(block_num)),
+        network_notes: vec![],
+        sponsorship_notes: vec![],
+        nullifiers: vec![],
+        network_account_updates: vec![],
+        account_transactions: vec![],
+    };
+    db.apply_committed_block(effects, PartialMmr::default(), prune_before.map(BlockNumber::from))
+        .await
+        .unwrap();
+}
+
+/// Pruning removes only the notes consumed before the cutoff. A note consumed at the cutoff, a
+/// pending note and a discarded note all stay reportable.
+#[tokio::test]
+async fn pruning_removes_only_notes_consumed_before_the_cutoff() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let old = mock_single_target_note(account_id, 1);
+    let at_cutoff = mock_single_target_note(account_id, 2);
+    let pending = mock_single_target_note(account_id, 3);
+    let discarded = mock_single_target_note(account_id, 4);
+    db.insert_network_notes(vec![
+        old.clone(),
+        at_cutoff.clone(),
+        pending.clone(),
+        discarded.clone(),
+    ])
+    .await
+    .unwrap();
+
+    db.mark_notes_consumed(vec![old.as_note().nullifier()], BlockNumber::from(9))
+        .await
+        .unwrap();
+    db.mark_notes_consumed(vec![at_cutoff.as_note().nullifier()], BlockNumber::from(10))
+        .await
+        .unwrap();
+    db.discard_notes_with_reason(
+        vec![discarded.as_note().nullifier()],
+        BlockNumber::from(1),
+        30,
+        "too big".to_string(),
+    )
+    .await
+    .unwrap();
+
+    apply_empty_block(&db, 50, Some(10)).await;
+
+    assert!(db.get_note_status(old.as_note().id()).await.unwrap().is_none());
+    for kept in [&at_cutoff, &pending, &discarded] {
+        assert!(db.get_note_status(kept.as_note().id()).await.unwrap().is_some());
+    }
+    assert_eq!(
+        db.available_notes(account_id, BlockNumber::from(50), 30)
+            .await
+            .unwrap()
+            .eligible
+            .len(),
+        1,
+        "the pending note must still be selectable",
+    );
+}
+
+/// Applying a block without a cutoff deletes nothing.
+#[tokio::test]
+async fn applying_a_block_without_a_cutoff_keeps_consumed_notes() {
+    let (db, _dir) = test_setup().await;
+    let note = mock_single_target_note(mock_network_account_id(), 1);
+    db.insert_network_notes(vec![note.clone()]).await.unwrap();
+    db.mark_notes_consumed(vec![note.as_note().nullifier()], BlockNumber::from(1))
+        .await
+        .unwrap();
+
+    apply_empty_block(&db, 1000, None).await;
+
+    assert!(db.get_note_status(note.as_note().id()).await.unwrap().is_some());
+}
+
+/// Pruning removes only the sponsorships consumed before the cutoff. A sponsorship consumed at the
+/// cutoff and an unconsumed sponsorship stay reported with their feature note.
+#[tokio::test]
+async fn pruning_removes_only_sponsorships_consumed_before_the_cutoff() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    let old = sponsorship_for(account_id, feature.as_note().id(), 2);
+    let at_cutoff = sponsorship_for(account_id, feature.as_note().id(), 3);
+    let unspent = sponsorship_for(account_id, feature.as_note().id(), 4);
+
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+    db.insert_sponsorship_notes(vec![old.clone(), at_cutoff.clone(), unspent.clone()])
+        .await
+        .unwrap();
+    db.mark_sponsorships_consumed(vec![old.nullifier()], BlockNumber::from(9))
+        .await
+        .unwrap();
+    db.mark_sponsorships_consumed(vec![at_cutoff.nullifier()], BlockNumber::from(10))
+        .await
+        .unwrap();
+
+    apply_empty_block(&db, 50, Some(10)).await;
+
+    let status = db.get_note_status(feature.as_note().id()).await.unwrap().unwrap();
+    let mut reported: Vec<_> = status
+        .sponsorships
+        .iter()
+        .map(|row| (row.note.id(), row.committed_at))
+        .collect();
+    reported.sort_by_key(|(id, _)| *id);
+    let mut expected = vec![(at_cutoff.id(), Some(BlockNumber::from(10))), (unspent.id(), None)];
+    expected.sort_by_key(|(id, _)| *id);
+    assert_eq!(reported, expected);
+}
+
+/// An unconsumed sponsorship is kept even when its feature note is not tracked, since the feature
+/// note may be created after the sponsorship.
+#[tokio::test]
+async fn pruning_keeps_unconsumed_sponsorships_of_untracked_notes() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let feature = mock_single_target_note(account_id, 1);
+    let sponsorship = sponsorship_for(account_id, feature.as_note().id(), 2);
+    db.insert_sponsorship_notes(vec![sponsorship.clone()]).await.unwrap();
+
+    apply_empty_block(&db, 50, Some(10)).await;
+
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+    let sponsorships = db.sponsorships_for_pending_notes(account_id).await.unwrap();
+    assert_eq!(sponsorships.get(&feature.as_note().id()).map(Vec::len), Some(1));
+}
+
+/// A prune deletes at most the given number of notes and of sponsorships, oldest first, and the
+/// next prune deletes the rest.
+#[tokio::test]
+async fn pruning_deletes_the_oldest_rows_up_to_the_limit() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let notes: Vec<_> = (1..=3).map(|seed| mock_single_target_note(account_id, seed)).collect();
+    let feature = mock_single_target_note(account_id, 4);
+    let sponsorships: Vec<_> = (5..=7)
+        .map(|seed| sponsorship_for(account_id, feature.as_note().id(), seed))
+        .collect();
+    db.insert_network_notes(notes.clone()).await.unwrap();
+    db.insert_network_notes(vec![feature.clone()]).await.unwrap();
+    db.insert_sponsorship_notes(sponsorships.clone()).await.unwrap();
+
+    // The first note and sponsorship are consumed at block 1, the second at block 2, and so on.
+    for (block, (note, sponsorship)) in (1_u32..).zip(notes.iter().zip(&sponsorships)) {
+        db.mark_notes_consumed(vec![note.as_note().nullifier()], block.into())
+            .await
+            .unwrap();
+        db.mark_sponsorships_consumed(vec![sponsorship.nullifier()], block.into())
+            .await
+            .unwrap();
+    }
+
+    db.prune_consumed_notes(BlockNumber::from(10), 2).await.unwrap();
+
+    assert!(db.get_note_status(notes[0].as_note().id()).await.unwrap().is_none());
+    assert!(db.get_note_status(notes[1].as_note().id()).await.unwrap().is_none());
+    assert!(db.get_note_status(notes[2].as_note().id()).await.unwrap().is_some());
+    let status = db.get_note_status(feature.as_note().id()).await.unwrap().unwrap();
+    let reported: Vec<_> = status.sponsorships.iter().map(|row| row.note.id()).collect();
+    assert_eq!(reported, vec![sponsorships[2].id()]);
+
+    db.prune_consumed_notes(BlockNumber::from(10), 2).await.unwrap();
+
+    assert!(db.get_note_status(notes[2].as_note().id()).await.unwrap().is_none());
+    let status = db.get_note_status(feature.as_note().id()).await.unwrap().unwrap();
+    assert!(status.sponsorships.is_empty());
+}
+
+/// A failure reported for a note that was consumed and pruned while its attempt was in flight is
+/// ignored, and the failures reported alongside it are still recorded.
+#[tokio::test]
+async fn notes_failed_ignores_pruned_notes() {
+    let (db, _dir) = test_setup().await;
+    let account_id = mock_network_account_id();
+    let pruned = mock_single_target_note(account_id, 1);
+    let tracked = mock_single_target_note(account_id, 2);
+    db.insert_network_notes(vec![pruned.clone(), tracked.clone()]).await.unwrap();
+    db.mark_notes_consumed(vec![pruned.as_note().nullifier()], BlockNumber::from(5))
+        .await
+        .unwrap();
+    apply_empty_block(&db, 50, Some(10)).await;
+
+    db.notes_failed(
+        vec![
+            (pruned.as_note().nullifier(), test_note_error("nope")),
+            (tracked.as_note().nullifier(), test_note_error("nope")),
+        ],
+        BlockNumber::from(51),
+    )
+    .await
+    .unwrap();
+
+    assert!(db.get_note_status(pruned.as_note().id()).await.unwrap().is_none());
+    let row = db.get_note_status(tracked.as_note().id()).await.unwrap().unwrap();
+    assert_eq!(row.attempt_count, 1);
 }
