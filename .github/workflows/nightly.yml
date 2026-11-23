@@ -12,6 +12,26 @@ permissions:
   contents: read
 
 jobs:
+  docker:
+    name: Docker dry-run (${{ matrix.branch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [next, release/v0.18]
+    permissions:
+      # The reusable workflow declares these permissions for its publication jobs.
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    uses: $/.github/workflows/docker.yml
+    secrets:
+      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
+      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
+    with:
+      mode: dry-run
+      ref: ${{ matrix.branch }}
+
   # Run tests on the beta channel to provide feedback for Rust team.
   beta-test:
     name: test on beta channel
