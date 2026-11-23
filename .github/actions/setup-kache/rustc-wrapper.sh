@@ -1,4 +1,6 @@
-#!/bin/sh
+#!/bin/bash
+
+# Bash preserves Cargo's environment variables with hyphenated binary names.
 
 # These libraries embed MASM packages whose debug info contains absolute source paths.
 # Keying them by path lets kache reuse them on CI runners with the same directory layout.
