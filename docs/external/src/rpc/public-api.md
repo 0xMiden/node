@@ -33,9 +33,9 @@ grpcurl rpc.testnet.miden.io:443 describe miden.node.v2.NodeService
 
 ## Account Registration
 
-The v1 method `RegisterAccount` binds an invitation code to an account ID. Send the original code string in `invitation_code` and the
-target account in `account_id`. Codes are case-sensitive. Send the code exactly as received, without trimming or
-normalization. Registration does not create an account on chain.
+The v1 method `RegisterAccount` binds an invitation code to an account ID. Send the original code string in
+`invitation_code` and the target account in `account_id`. Codes are case-sensitive. Send the code exactly as received,
+without trimming or normalization. Registration does not create an account on chain.
 
 Retrying the same code and account succeeds without changes. An unknown code returns `NOT_FOUND`. A code bound to
 another account, or an account already registered with another entry, returns `ALREADY_EXISTS`. Invalid input returns
