@@ -294,6 +294,9 @@ jobs:
       # Full variable/type debug information makes cached executables exceed
       # 1 GiB each and adds substantial transfer and restore work to this job.
       CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+      # Restoring the large smoke-test binaries can take longer than kache's
+      # default three seconds, while recompiling them takes tens of seconds.
+      KACHE_DEMAND_TIMEOUT_SECS: "20"
     runs-on: >-
       ${{
         (github.event_name != 'pull_request' ||
