@@ -65,4 +65,4 @@ runs:
       if: inputs.prepare-only != 'true' && env.RUSTC_WRAPPER != ''
       shell: bash
       # The runner supplies GITHUB_ACTION_PATH for this action.
-      run: echo "RUSTC_WRAPPER=${GITHUB_ACTION_PATH}/rustc-wrapper.sh" >> "${GITHUB_ENV}" # zizmor: ignore[github-env]
+      run: echo "RUSTC_WRAPPER=${GITHUB_ACTION_PATH}/kache.sh" >> "${GITHUB_ENV}" # zizmor: ignore[github-env]

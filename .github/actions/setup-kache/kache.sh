@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# cc-rs recognizes the kache filename stem and sends native compilations through this wrapper.
 # Bash preserves Cargo's environment variables with hyphenated binary names.
 
 # These libraries embed MASM packages whose debug info contains absolute source paths.
