@@ -56,7 +56,9 @@ runs:
         pr-comment: false
         job-summary: false
 
-    - name: Report cache configuration
+    - name: Configure Rust compiler wrapper
       if: inputs.prepare-only != 'true' && env.RUSTC_WRAPPER != ''
       shell: bash
-      run: kache doctor
+      run: |
+        kache doctor
+        echo "RUSTC_WRAPPER=${GITHUB_ACTION_PATH}/rustc-wrapper.sh" >> "${GITHUB_ENV}"
