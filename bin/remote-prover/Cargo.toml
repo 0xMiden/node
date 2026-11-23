@@ -17,7 +17,6 @@ workspace = true
 [dependencies]
 anyhow                 = { workspace = true }
 clap                   = { features = ["env"], workspace = true }
-humantime              = { workspace = true }
 miden-block-prover     = { workspace = true }
 miden-node-proto       = { workspace = true }
 miden-node-proto-build = { features = ["internal"], workspace = true }

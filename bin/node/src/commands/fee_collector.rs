@@ -1,12 +1,11 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_block_producer::{DEFAULT_VALIDATOR_TIMEOUT, deploy_fee_collector};
 use miden_node_store::{DataDirectory, State};
 use miden_node_tracing::info;
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::auth::AuthSecretKey;
@@ -142,11 +141,10 @@ pub struct DeployCommand {
     #[arg(
         long = "validator.timeout",
         env = "MIDEN_NODE_VALIDATOR_TIMEOUT",
-        default_value = duration_to_human_readable_string(DEFAULT_VALIDATOR_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        default_value_t = DEFAULT_VALIDATOR_TIMEOUT.into(),
         value_name = "DURATION"
     )]
-    validator_timeout: Duration,
+    validator_timeout: HumanDuration,
 
     #[command(flatten)]
     store: StoreOptions,
@@ -177,7 +175,7 @@ impl DeployCommand {
                     &mut proof_writer,
                     account,
                     self.validator_urls,
-                    self.validator_timeout,
+                    self.validator_timeout.into(),
                     self.grpc.max_decoding_message_size.get(),
                 )) => result,
             }

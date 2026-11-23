@@ -22,7 +22,6 @@ anyhow                    = { workspace = true }
 axum                      = { workspace = true }
 clap                      = { features = ["env", "string"], workspace = true }
 fs-err                    = { workspace = true }
-humantime                 = { workspace = true }
 miden-node-block-producer = { workspace = true }
 miden-node-persistence    = { workspace = true }
 miden-node-proto          = { workspace = true }

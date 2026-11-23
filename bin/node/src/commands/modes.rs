@@ -26,7 +26,7 @@ use miden_node_rpc::{
 use miden_node_store::allowlist::AccountAllowlist;
 use miden_node_store::{BlockWriter, DataDirectory, ProofWriter, State, WriterTask};
 use miden_node_tracing::{info, warn};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_node_utils::tasks::Tasks;
@@ -111,12 +111,12 @@ impl SequencerCommand {
             block_writer,
             proof_writer,
             validator_urls: self.external_services.validator_urls.clone(),
-            validator_timeout: self.external_services.validator_timeout,
+            validator_timeout: self.external_services.validator_timeout.into(),
             max_decoding_message_size,
             block_prover_url: self.block_producer.block_prover.url,
             batch_prover_url: self.block_producer.batch_prover.url,
-            batch_interval: self.block_producer.batch.interval,
-            block_interval: self.block_producer.block.interval,
+            batch_interval: self.block_producer.batch.interval.into(),
+            block_interval: self.block_producer.block.interval.into(),
             max_txs_per_batch: self.block_producer.batch.max_txs,
             max_batches_per_block: self.block_producer.block.max_batches,
             max_concurrent_proofs: self.block_producer.block.max_concurrent_proofs,
@@ -226,10 +226,8 @@ impl SequencerCommand {
                 .collect::<Vec<_>>()
                 .join(","),
             ntx_builder.endpoint = format_endpoint(&self.external_services.ntx_builder_url),
-            block.interval =
-                humantime::Duration::from(self.block_producer.block.interval).to_string(),
-            batch.interval =
-                humantime::Duration::from(self.block_producer.batch.interval).to_string(),
+            block.interval = self.block_producer.block.interval.to_string(),
+            batch.interval = self.block_producer.batch.interval.to_string(),
             db.sqlite.connection_pool_size = self.store.sqlite.connection_pool_size.get()
         );
     }
@@ -258,11 +256,10 @@ pub struct SequencerExternalServiceOptions {
     #[arg(
         long = "validator.timeout",
         env = "MIDEN_NODE_VALIDATOR_TIMEOUT",
-        default_value = duration_to_human_readable_string(DEFAULT_VALIDATOR_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        default_value_t = DEFAULT_VALIDATOR_TIMEOUT.into(),
         value_name = "DURATION"
     )]
-    pub validator_timeout: Duration,
+    pub validator_timeout: HumanDuration,
 
     /// The network transaction builder service gRPC URL.
     #[arg(long = "ntx-builder.url", env = "MIDEN_NODE_NTX_BUILDER_URL", value_name = "URL")]
@@ -307,7 +304,7 @@ impl SequencerExternalServiceOptions {
                 Ok(Builder::new(url.clone())
                     .max_decoding_message_size(max_decoding_message_size)
                     .with_tls()?
-                    .with_timeout(self.validator_timeout)
+                    .with_timeout(self.validator_timeout.into())
                     .without_metadata_version()
                     .without_metadata_genesis()
                     .with_otel_context_injection())

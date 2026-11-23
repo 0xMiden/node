@@ -346,7 +346,8 @@ async fn lookup_failures_never_store_notes() {
             Duration::from_secs(2)
         } else {
             Duration::from_millis(200)
-        };
+        }
+        .into();
         let (_dir, server) = server(config);
         let error = SendNoteWithProof::full(&server, Request::new(request.clone()))
             .await
@@ -402,7 +403,7 @@ async fn lookup_timeout_returns_deadline_exceeded_over_grpc() {
     let (request, response) = fixture();
     let (url, upstream) = node_rpc(Ok(response), Duration::from_secs(30)).await;
     let mut config = Config::new(url);
-    config.grpc.request_timeout = Duration::from_millis(100);
+    config.grpc.request_timeout = Duration::from_millis(100).into();
     let (_dir, server) = server(config);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -581,7 +582,7 @@ async fn slow_lookup_retries_replace_connections_within_the_shared_budget() {
     )
     .await;
     let mut config = Config::new(upstream.url);
-    config.grpc.request_timeout = Duration::from_millis(600);
+    config.grpc.request_timeout = Duration::from_millis(600).into();
     let (_dir, server) = server(config);
     let result = tokio::time::timeout(Duration::from_millis(500), server.get_note_root(42.into()))
         .await

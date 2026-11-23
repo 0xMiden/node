@@ -24,7 +24,6 @@ clap                = { features = ["env"], workspace = true }
 fs-err              = { workspace = true }
 futures             = { workspace = true }
 hex                 = { workspace = true }
-humantime           = { workspace = true }
 maud                = { features = ["axum"], version = "0.27" }
 miden-node-proto    = { workspace = true }
 miden-node-tracing  = { workspace = true }

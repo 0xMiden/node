@@ -5,17 +5,13 @@ use std::time::Duration;
 
 use crate::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 
+mod duration;
+pub use duration::HumanDuration;
 mod rocksdb;
 pub use rocksdb::*;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TEST_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-
-// Formats a Duration into a human-readable string for display in clap help text and yields a
-// &'static str by _leaking_ the string deliberately.
-pub fn duration_to_human_readable_string(duration: Duration) -> &'static str {
-    Box::new(humantime::format_duration(duration).to_string()).leak()
-}
 
 /// Maximum encoded size accepted by every gRPC client and server in a process.
 #[derive(clap::Args, Copy, Clone, Debug, PartialEq, Eq)]
@@ -43,17 +39,16 @@ pub struct GrpcOptions {
     /// This may occur if the server is overloaded or due to an internal bug.
     #[arg(
         long = "grpc.timeout",
-        default_value = duration_to_human_readable_string(DEFAULT_REQUEST_TIMEOUT),
-        value_parser = humantime::parse_duration,
+        default_value_t = DEFAULT_REQUEST_TIMEOUT.into(),
         value_name = "DURATION"
     )]
-    pub request_timeout: Duration,
+    pub request_timeout: HumanDuration,
 }
 
 impl Default for GrpcOptions {
     fn default() -> Self {
         Self {
-            request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            request_timeout: DEFAULT_REQUEST_TIMEOUT.into(),
             message_size: GrpcMessageSizeOptions::default(),
         }
     }
@@ -62,7 +57,7 @@ impl Default for GrpcOptions {
 impl GrpcOptions {
     pub fn test() -> Self {
         Self {
-            request_timeout: TEST_REQUEST_TIMEOUT,
+            request_timeout: TEST_REQUEST_TIMEOUT.into(),
             ..Self::default()
         }
     }

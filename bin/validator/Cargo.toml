@@ -39,7 +39,6 @@ golden-ehtdh1          = { workspace = true }
 golden-evrf            = { workspace = true }
 golden-halo2curves     = { workspace = true }
 hex                    = { workspace = true }
-humantime              = { workspace = true }
 iroh                   = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
