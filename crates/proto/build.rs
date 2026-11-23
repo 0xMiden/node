@@ -188,9 +188,7 @@ fn collect_message_names(parent: &str, descriptors: &[DescriptorProto], names: &
     for descriptor in descriptors {
         let name = format!("{parent}.{}", descriptor.name());
         // The derive adds Debug without field redaction. Keep invitation codes out of Debug output.
-        if name == "miden.node.v2.RegisterAccountRequest"
-            || name == "miden.node.v2.IsInvitationCodeValidRequest"
-            || name == "miden.node.v1.RegisterAccountRequest"
+        if name == "miden.node.v1.RegisterAccountRequest"
             || name == "miden.node.v1.IsInvitationCodeValidRequest"
         {
             continue;

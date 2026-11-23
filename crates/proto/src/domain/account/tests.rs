@@ -785,39 +785,3 @@ fn selective_vault_request_rejects_duplicate_ids() {
         }
     }
 }
-
-#[test]
-fn v2_registration_request_debug_hides_invitation_code() {
-    let code = "private invitation code";
-    let account_id = AccountId::dummy(
-        [7; 15],
-        AccountIdVersion::Version1,
-        AccountType::Public,
-        AssetCallbackFlag::Disabled,
-    );
-    let request = proto::miden::node::v2::RegisterAccountRequest {
-        invitation_code: code.to_owned(),
-        account_id: Some(account_id.into()),
-    };
-    let debug = format!("{request:?}");
-    assert!(!debug.contains(code));
-
-    let decoded = request.decode_fields().unwrap();
-    assert!(!format!("{decoded:?}").contains(code));
-    let verified = decoded.verify().unwrap();
-    assert!(!format!("{verified:?}").contains(code));
-    assert_eq!(verified.invitation_code, code);
-    assert_eq!(verified.account_id, account_id);
-}
-
-#[test]
-fn v2_invitation_check_request_debug_hides_invitation_code() {
-    let code = "private invitation code";
-    let request =
-        proto::miden::node::v2::IsInvitationCodeValidRequest { invitation_code: code.to_owned() };
-    assert!(!format!("{request:?}").contains(code));
-
-    let decoded = request.decode_fields().unwrap();
-    assert!(!format!("{decoded:?}").contains(code));
-    assert_eq!(decoded.verify().unwrap(), code);
-}

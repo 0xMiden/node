@@ -3148,17 +3148,8 @@ async fn v2_service_parity() {
     use std::collections::BTreeSet;
 
     use miden_node_proto::generated::miden::node::v1;
-    let (mut legacy, addr, store, _guard) = start_rpc_with_allowlist::<RpcClient>(true).await;
-    let build = |genesis| {
-        Builder::new(Url::parse(&format!("http://{addr}")).unwrap())
-            .without_tls()
-            .with_timeout(REQUEST_TIMEOUT)
-            .without_metadata_version()
-            .with_metadata_genesis(genesis)
-            .without_otel_context_injection()
-            .connect_lazy::<RpcV2Client>()
-    };
-    let mut client = build(store.genesis_commitment());
+    let (mut legacy, addr, _store, _guard) = start_rpc().await;
+    let mut client = connect_rpc::<RpcV2Client>(addr).await;
     let status = client.status(v2::StatusRequest {}).await.unwrap().into_inner();
     let previous = legacy.status(v1::StatusRequest {}).await.unwrap().into_inner();
     assert_eq!(status.chain_tip, previous.chain_tip);
@@ -3183,14 +3174,6 @@ async fn v2_service_parity() {
         limits.endpoints["GetNotesById"].parameters,
         previous.endpoints["GetNotesById"].parameters
     );
-    let account = AccountId::try_from(ACCOUNT_ID_SENDER).unwrap();
-    let register = v2::RegisterAccountRequest {
-        invitation_code: "unissued".into(),
-        account_id: Some(account.into()),
-    };
-    let denied = build(Word::empty()).register_account(register.clone()).await.unwrap_err();
-    assert_eq!(denied.code(), tonic::Code::InvalidArgument);
-    client.register_account(register).await.unwrap();
     let mut blocks = client
         .block_subscription(v2::BlockSubscriptionRequest { block_from: 0 })
         .await

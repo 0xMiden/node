@@ -2,7 +2,6 @@
 syntax = "proto3";
 package miden.node.v2;
 
-import "account.proto";
 import "asset.proto";
 import "block.proto";
 import "primitives.proto";
@@ -31,23 +30,6 @@ service NodeService {
     // NOT_FOUND when the network transaction builder no longer tracks the note or has never tracked
     // it.
     rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
-
-    // Registers an account with the sequencer using an invitation code. Retrying with the same code
-    // and account succeeds. When allowlist enforcement is disabled, any code is accepted, including
-    // an empty one.
-    //
-    // When registration funding is configured, this call waits for the funding note to commit. A
-    // funding failure returns UNAVAILABLE. The account stays registered and retries do not request
-    // funding again.
-    rpc RegisterAccount(RegisterAccountRequest) returns (RegisterAccountResponse) {}
-
-    // Returns true when the account is allowlisted or allowlist enforcement is disabled.
-    rpc IsAccountAllowed(IsAccountAllowedRequest) returns (IsAccountAllowedResponse) {}
-
-    // Checks whether an invitation code is available for registration without consuming it. A used
-    // code identifies its registered account. When allowlist enforcement is disabled, the check
-    // always succeeds with valid set to true.
-    rpc IsInvitationCodeValid(IsInvitationCodeValidRequest) returns (IsInvitationCodeValidResponse) {}
 
     // Returns the signed block at the requested height and, when requested and available, its
     // execution proof.
@@ -139,39 +121,6 @@ message GetNetworkNoteStatusResponse {
     optional fixed32 last_attempt_block_num = 4;
     // FEE_SPONSORSHIP notes bound to this note.
     repeated NetworkNoteSponsorship sponsorships = 5;
-}
-
-message RegisterAccountRequest {
-    // The original, nonempty invitation code. Codes are case-sensitive.
-    // Ignored when allowlist enforcement is disabled.
-    string invitation_code = 1;
-
-    // The account to register. Registration does not create the account on chain.
-    account.AccountId account_id = 2;
-}
-
-message RegisterAccountResponse {}
-
-message IsAccountAllowedRequest {
-    account.AccountId account_id = 1;
-}
-
-message IsAccountAllowedResponse {
-    bool allowed = 1;
-}
-
-message IsInvitationCodeValidRequest {
-    // The original, nonempty invitation code. Codes are case-sensitive.
-    // Ignored when allowlist enforcement is disabled.
-    string invitation_code = 1;
-}
-
-message IsInvitationCodeValidResponse {
-    bool valid = 1;
-
-    // The account registered with this code, if it has already been used. Omitted for unused or
-    // unknown codes and when account allowlist enforcement is disabled.
-    optional account.AccountId account_id = 2;
 }
 
 message GetBlockByNumberRequest {

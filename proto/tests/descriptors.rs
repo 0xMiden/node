@@ -161,9 +161,6 @@ fn node_service_versions_expose_their_sync_contracts() {
                 ("Status", false),
                 ("GetLimits", false),
                 ("GetNetworkNoteStatus", false),
-                ("RegisterAccount", false),
-                ("IsAccountAllowed", false),
-                ("IsInvitationCodeValid", false),
                 ("GetBlockByNumber", false),
                 ("GetBlockHeaderByNumber", false),
                 ("GetNotesById", false),
@@ -180,6 +177,9 @@ fn node_service_versions_expose_their_sync_contracts() {
     );
 
     let v1 = methods("miden.node.v1");
+    for name in ["RegisterAccount", "IsAccountAllowed", "IsInvitationCodeValid"] {
+        assert!(v1.contains(&(name.to_owned(), false)));
+    }
     for (name, streaming) in &v2 {
         match name.as_str() {
             name if name.starts_with("Sync") => assert!(v1.contains(&(name.to_owned(), false))),

@@ -14,12 +14,6 @@ macro_rules! copy_fields {
 
 copy_fields!(v2 => v1, StatusRequest {  });
 copy_fields!(v2 => v1, GetNetworkNoteStatusRequest { note_id });
-copy_fields!(v2 => v1, RegisterAccountRequest { invitation_code, account_id });
-copy_fields!(v1 => v2, RegisterAccountResponse {  });
-copy_fields!(v2 => v1, IsAccountAllowedRequest { account_id });
-copy_fields!(v1 => v2, IsAccountAllowedResponse { allowed });
-copy_fields!(v2 => v1, IsInvitationCodeValidRequest { invitation_code });
-copy_fields!(v1 => v2, IsInvitationCodeValidResponse { valid, account_id });
 copy_fields!(v2 => v1, GetBlockByNumberRequest { block_num, include_proof });
 copy_fields!(v1 => v2, GetBlockByNumberResponse { block, proof });
 copy_fields!(v2 => v1, GetBlockHeaderByNumberRequest { block_num, include_mmr_proof, include_protocol_config });

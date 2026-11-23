@@ -43,29 +43,6 @@ unary!(
     note.id = input
 );
 unary!(
-    RegisterAccount,
-    RegisterAccountRequest,
-    RegisterAccountResponse,
-    "register_account_v2",
-    input,
-    account.id = input.account_id
-);
-unary!(
-    IsAccountAllowed,
-    IsAccountAllowedRequest,
-    IsAccountAllowedResponse,
-    "is_account_allowed_v2",
-    input,
-    account.id = input
-);
-unary!(
-    IsInvitationCodeValid,
-    IsInvitationCodeValidRequest,
-    IsInvitationCodeValidResponse,
-    "is_invitation_code_valid_v2",
-    input
-);
-unary!(
     GetBlockByNumber,
     GetBlockByNumberRequest,
     GetBlockByNumberResponse,
