@@ -8,7 +8,7 @@ workflows:
         - 'actions/configure-pages@v6.0.0'
         - 'actions/deploy-pages@v5.0.1'
         - 'actions/upload-pages-artifact@v5.0.0'
-        - 'taiki-e/install-action@v2.90.3'
+        - 'taiki-e/install-action@v2.90.5'
     '.github/workflows/changelog.yml':
         - 'actions/checkout@v7.0.1'
         - 'kunobi-ninja/kache-action@v1'
@@ -18,7 +18,7 @@ workflows:
         - 'actions/setup-node@v7.1.0'
         - 'actions/upload-artifact@v7.0.2'
         - 'kunobi-ninja/kache-action@v1'
-        - 'taiki-e/install-action@v2.90.3'
+        - 'taiki-e/install-action@v2.90.5'
         - 'zizmorcore/zizmor-action@v0.8.1'
     '.github/workflows/cleanup-workflows.yml':
         - 'actions/checkout@v7.0.1'
@@ -33,7 +33,7 @@ workflows:
         - 'kunobi-ninja/kache-action@v1'
     '.github/workflows/nightly.yml':
         - 'actions/checkout@v7.0.1'
-        - 'taiki-e/install-action@v2.90.3'
+        - 'taiki-e/install-action@v2.90.5'
     '.github/workflows/publish-crates.yml':
         - 'actions/checkout@v7.0.1'
         - 'rust-lang/crates-io-auth-action@v1.0.6'
@@ -125,9 +125,9 @@ dependencies:
         commit: 'sha1-3268eb413133e2960fa4ae0e963ca76380c54cd9'
         owner_id: 5430905
         repo_id: 1008931044
-    'taiki-e/install-action@v2.90.3':
-        ref: 'v2.90.3'
-        commit: 'sha1-cfdb7ed4ccc7c7dce37759eae89dc5674b469b39'
+    'taiki-e/install-action@v2.90.5':
+        ref: 'v2.90.5'
+        commit: 'sha1-ab49d3c64680143e184118bed66a46419fc15519'
         owner_id: 43724913
         repo_id: 442947557
     'warpbuilds/rust-cache@v2.9.1':
