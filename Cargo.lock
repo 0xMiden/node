@@ -2424,9 +2424,9 @@ checksum = "77ce24cb58228fbb8aa041425bb1050850ac19177686ea6e0f41a70416f56fdb"
 
 [[package]]
 name = "form_urlencoded"
-version = "1.2.2"
+version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
+checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
 dependencies = [
  "percent-encoding",
 ]
@@ -4187,7 +4187,7 @@ dependencies = [
 [[package]]
 name = "miden-agglayer"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "alloy-sol-types",
  "fs-err",
@@ -4320,7 +4320,7 @@ dependencies = [
 [[package]]
 name = "miden-block-prover"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -5078,7 +5078,7 @@ dependencies = [
 [[package]]
 name = "miden-objects"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "miden-protobuf",
  "miden-protocol",
@@ -5180,7 +5180,7 @@ dependencies = [
 [[package]]
 name = "miden-protobuf"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "miden-protobuf-derive",
  "proc-macro-crate",
@@ -5193,7 +5193,7 @@ dependencies = [
 [[package]]
 name = "miden-protobuf-derive"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "heck",
  "proc-macro-crate",
@@ -5205,7 +5205,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "bech32",
  "bon",
@@ -5237,7 +5237,7 @@ dependencies = [
 [[package]]
 name = "miden-protocol-build-utils"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "fs-err",
  "miden-assembly",
@@ -5317,7 +5317,7 @@ dependencies = [
 [[package]]
 name = "miden-standards"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "bon",
  "miden-assembly",
@@ -5359,7 +5359,7 @@ dependencies = [
 [[package]]
 name = "miden-testing"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "anyhow",
  "itertools 0.15.0",
@@ -5380,7 +5380,7 @@ dependencies = [
 [[package]]
 name = "miden-tx"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "bon",
  "miden-agglayer",
@@ -5394,7 +5394,7 @@ dependencies = [
 [[package]]
 name = "miden-tx-batch"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "miden-processor",
  "miden-protocol",
@@ -5406,7 +5406,7 @@ dependencies = [
 [[package]]
 name = "miden-usdcx"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/0xMiden/protocol?rev=89568da593e1d77cbd2a7ca95d54f1b9b4413404#89568da593e1d77cbd2a7ca95d54f1b9b4413404"
+source = "git+https://github.com/0xMiden/protocol?rev=28ff7f34cee969c831a15df6f7b6e715df57db7c#28ff7f34cee969c831a15df6f7b6e715df57db7c"
 dependencies = [
  "bon",
  "miden-assembly",
@@ -5500,6 +5500,7 @@ dependencies = [
  "miden-standards",
  "miden-testing",
  "miden-tx",
+ "miden-tx-batch",
  "rand 0.10.3",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
@@ -9493,9 +9494,9 @@ checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "url"
-version = "2.5.8"
+version = "2.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
+checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
 dependencies = [
  "form_urlencoded",
  "idna",

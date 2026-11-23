@@ -8,7 +8,7 @@ use miden_node_proto::BlockProofRequest;
 use miden_node_tracing::{info, instrument};
 use miden_protocol::block::{BlockHeader, BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::TransactionId;
+use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader, TransactionId};
 
 use crate::db::migrations::{bootstrap_database, migrate_database, verify_latest_schema};
 use crate::metrics::InitialMetrics;
@@ -87,6 +87,11 @@ impl ValidatorDbReader {
         self.reader.read("load_chain_tip", queries::load_chain_tip).await
     }
 
+    /// Returns the highest stored block number, or `None` before bootstrap.
+    pub(crate) async fn load_chain_tip_height(&self) -> Result<Option<u32>, DatabaseError> {
+        self.reader.read("load_chain_tip_height", queries::load_chain_tip_height).await
+    }
+
     /// Loads the block header at the given height, or `None` if no block header is stored there.
     pub(crate) async fn load_block_header(
         &self,
@@ -123,13 +128,11 @@ impl ValidatorDbReader {
         self.reader
             .read("load_initial_metrics", |tx| {
                 Ok(InitialMetrics {
-                    chain_tip: queries::load_chain_tip(tx)?
-                        .map_or(0, |header| header.block_num().as_u32()),
+                    chain_tip: queries::load_chain_tip_height(tx)?.unwrap_or(0),
                     validated_transactions: u64::try_from(queries::count_validated_transactions(
                         tx,
                     )?)
                     .unwrap_or(0),
-                    signed_blocks: u64::try_from(queries::count_signed_blocks(tx)?).unwrap_or(0),
                 })
             })
             .await
@@ -255,7 +258,7 @@ impl ValidatorDbWriter {
     /// The write replaces the header row. If the height holds a block, the `ON DELETE CASCADE` on
     /// `block_transactions` deletes the links of that block, and this method does not link the
     /// transactions of the new block. Only tests use this method. Server code uses
-    /// [`Self::insert_signed_block`] and [`Self::replace_signed_block`].
+    /// [`Self::upsert_signed_block`].
     #[cfg(test)]
     #[instrument()]
     pub(crate) async fn upsert_block_header_with_protocol_config(
@@ -272,66 +275,46 @@ impl ValidatorDbWriter {
             .await
     }
 
-    /// Persists a signed block, its proving request, configuration activation, and transaction positions
-    /// in one database transaction.
+    /// Stores a signed block, its proving inputs, configuration activation, and transaction
+    /// positions atomically at the validated height.
     ///
-    /// The height must not already hold a block; use [`Self::replace_signed_block`] to replace
-    /// one.
-    ///
-    /// `proving_inputs` must be the request `block` was built from. It is stored without being
-    /// checked, because rebuilding the block to compare it would repeat the signing path's most
-    /// expensive step; [`ValidatorDbReader::load_block_backup`] checks it when it is read back.
+    /// Deleting any previous block at this height also clears its transaction links by cascade.
+    /// The caller supplies the inputs used to build the block. [`ValidatorDbReader::load_block_backup`]
+    /// checks them against the stored block when reading a backup.
     #[instrument()]
-    pub(crate) async fn insert_signed_block(
+    pub(crate) async fn upsert_signed_block(
         &self,
         block: SignedBlock,
-        protocol_config: ProtocolConfig,
-        transactions: Vec<TransactionId>,
+        protocol_config: Option<ProtocolConfig>,
         proving_inputs: BlockProofRequest,
     ) -> Result<(), DatabaseError> {
         let retention = self.proving_input_retention_blocks;
         self.writer
-            .write("insert_signed_block", move |tx| {
-                persist_signed_block(
-                    tx,
-                    &block,
-                    protocol_config,
-                    &transactions,
-                    Some(&proving_inputs),
-                )?;
+            .write("upsert_signed_block", move |tx| {
+                let height = block.header().block_num();
+                let replaced = queries::delete_block(tx, height)?;
+                if let Some(config) = protocol_config {
+                    queries::insert_protocol_config(tx, &config, height)?;
+                } else if replaced {
+                    // A replacement that inherits its parent's config supersedes any activation
+                    // here.
+                    tx.execute(
+                        "DELETE FROM protocol_configs WHERE block_number = ?1",
+                        &[&height.as_u32()],
+                    )?;
+                }
+                let transactions = block
+                    .body()
+                    .transactions()
+                    .iter()
+                    .flat_map(OrderedTransactionHeaders::as_slice)
+                    .map(TransactionHeader::id);
+                persist_signed_block(tx, &block, transactions, Some(&proving_inputs))?;
                 prune_expired_proving_inputs(tx, retention)
             })
             .await
     }
 
-    /// Replaces the block signed at `block`'s height, in one database transaction: deletes the
-    /// replaced block — unlinking its transactions via the `ON DELETE CASCADE` on
-    /// `block_transactions`, so transactions dropped by the replacement do not keep a stale link —
-    /// then persists the new header, links, and proving request exactly as
-    /// [`Self::insert_signed_block`] does.
-    #[instrument()]
-    pub(crate) async fn replace_signed_block(
-        &self,
-        block: SignedBlock,
-        protocol_config: ProtocolConfig,
-        transactions: Vec<TransactionId>,
-        proving_inputs: BlockProofRequest,
-    ) -> Result<(), DatabaseError> {
-        let retention = self.proving_input_retention_blocks;
-        self.writer
-            .write("replace_signed_block", move |tx| {
-                queries::delete_block(tx, block.header().block_num())?;
-                persist_signed_block(
-                    tx,
-                    &block,
-                    protocol_config,
-                    &transactions,
-                    Some(&proving_inputs),
-                )?;
-                prune_expired_proving_inputs(tx, retention)
-            })
-            .await
-    }
     /// Inserts a signed block without proving inputs to model a legacy backup.
     #[cfg(test)]
     pub(crate) async fn insert_legacy_signed_block(
@@ -342,7 +325,8 @@ impl ValidatorDbWriter {
     ) -> Result<(), DatabaseError> {
         self.writer
             .write("insert_legacy_signed_block", move |tx| {
-                persist_signed_block(tx, &block, protocol_config, &transactions, None)
+                record_protocol_config_activation(tx, block.header(), Some(protocol_config))?;
+                persist_signed_block(tx, &block, transactions, None)
             })
             .await
     }
@@ -358,23 +342,22 @@ impl ValidatorDbWriter {
         self.writer
             .write("replace_legacy_signed_block", move |tx| {
                 queries::delete_block(tx, block.header().block_num())?;
-                persist_signed_block(tx, &block, protocol_config, &transactions, None)
+                record_protocol_config_activation(tx, block.header(), Some(protocol_config))?;
+                persist_signed_block(tx, &block, transactions, None)
             })
             .await
     }
 }
 
-/// Persists a signed block, any proving request, configuration activation, and transaction links
-/// within the caller's database transaction.
+/// Persists a signed block, any proving request, and transaction links within the caller's database
+/// transaction.
 fn persist_signed_block(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     block: &SignedBlock,
-    protocol_config: ProtocolConfig,
-    transactions: &[TransactionId],
+    transactions: impl IntoIterator<Item = TransactionId>,
     proving_inputs: Option<&BlockProofRequest>,
 ) -> Result<(), DatabaseError> {
     let header = block.header();
-    record_protocol_config_activation(tx, header, Some(protocol_config))?;
     queries::insert_block(tx, block, proving_inputs)?;
     queries::link_block_transactions(tx, header.block_num(), transactions)
 }
@@ -394,35 +377,29 @@ fn prune_expired_proving_inputs(
 
 /// Records the configuration activation for a block, within the caller's database transaction.
 ///
-/// An activation is recorded only if the configuration differs from the preceding activation.
-/// A replacement at the current tip therefore retains its active configuration.
-///
-/// If `protocol_config` is absent, the configuration must already be stored, otherwise an error is
-/// returned.
+/// The caller supplies the configuration at genesis and whenever its commitment changes.
 fn record_protocol_config_activation(
     tx: &miden_node_db::sqlite::WriteTx<'_>,
     header: &BlockHeader,
     protocol_config: Option<ProtocolConfig>,
 ) -> Result<(), DatabaseError> {
     let commitment = header.protocol_config_commitment();
-    let config = if let Some(config) = protocol_config {
+    if let Some(config) = &protocol_config {
         let calculated = config.to_commitment();
         if calculated != commitment {
             return Err(invalid_protocol_config(format!(
                 "protocol config commitment mismatch: expected {commitment}, got {calculated}"
             )));
         }
-        config
-    } else {
-        queries::load_protocol_config(tx, commitment)?.ok_or_else(|| {
-            invalid_protocol_config(format!("protocol config {commitment} is not stored"))
-        })?
-    };
-
-    let block_number = header.block_num();
-    let previous = queries::load_protocol_config_commitment_before(tx, block_number)?;
-    if previous != Some(commitment) {
-        queries::insert_protocol_config(tx, &config, block_number)?;
+    }
+    let height = header.block_num();
+    if queries::load_protocol_config_commitment_before(tx, height)? != Some(commitment) {
+        let config = protocol_config.ok_or_else(|| {
+            invalid_protocol_config(format!(
+                "protocol config {commitment} must be supplied at activation"
+            ))
+        })?;
+        queries::insert_protocol_config(tx, &config, height)?;
     }
 
     Ok(())
@@ -435,21 +412,6 @@ fn invalid_protocol_config(message: String) -> DatabaseError {
     )
 }
 
-/// Deletes a stored protocol configuration for a test.
-#[cfg(test)]
-pub(crate) async fn delete_protocol_config_for_test(
-    db: &ValidatorDbWriter,
-    commitment: miden_protocol::Word,
-) -> Result<(), DatabaseError> {
-    db.writer
-        .write("delete_protocol_config_for_test", move |tx| {
-            tx.execute("DELETE FROM protocol_configs WHERE commitment = ?1", &[&commitment])?;
-            Ok::<_, DatabaseError>(())
-        })
-        .await
-}
-
-// LIFECYCLE
 // ================================================================================================
 
 /// Opens a connection pool after verifying that the database is at the latest schema version.
@@ -523,7 +485,8 @@ pub async fn bootstrap(
     let db = setup_with_pool_size(database_filepath, connection_pool_size).await?;
     db.writer
         .write("bootstrap", move |tx| {
-            persist_signed_block(tx, &genesis_block, protocol_config, &[], None)
+            record_protocol_config_activation(tx, genesis_block.header(), Some(protocol_config))?;
+            persist_signed_block(tx, &genesis_block, [], None)
         })
         .await
 }
@@ -722,21 +685,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn known_protocol_config_can_be_omitted() {
+    async fn unchanged_protocol_config_can_be_omitted() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");
         let db = setup(temp_dir.path().join("validator.sqlite3")).await.unwrap();
         let config = test_protocol_config();
         let header = genesis_header(&config);
-        let replacement = header_with_next_timestamp(&header);
+        let child = protocol_config_history::header_at(&header, 1, &config);
 
         db.upsert_block_header_with_protocol_config(header.clone(), Some(config.clone()))
             .await
             .unwrap();
-        db.upsert_block_header_with_protocol_config(replacement.clone(), None)
+        db.upsert_block_header_with_protocol_config(child.clone(), None)
             .await
-            .expect("a stored protocol config should not need to be supplied again");
+            .expect("an unchanged protocol config may be omitted");
 
-        assert_eq!(db.load_block_header(header.block_num()).await.unwrap(), Some(replacement));
+        assert_eq!(db.load_block_header(child.block_num()).await.unwrap(), Some(child));
         assert_eq!(db.load_protocol_config(config.to_commitment()).await.unwrap(), Some(config));
     }
 
@@ -863,7 +826,6 @@ mod tests {
         let metrics = db.load_initial_metrics().await.unwrap();
         assert_eq!(metrics.chain_tip, 0);
         assert_eq!(metrics.validated_transactions, 0);
-        assert_eq!(metrics.signed_blocks, 0);
     }
 
     #[tokio::test]

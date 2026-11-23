@@ -76,7 +76,7 @@ pub enum RpcMode {
     },
     /// Full-node RPC.
     ///
-    /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
+    /// By default it forwards checked submissions to the source RPC (the caller is responsible for
     /// configuring this client with any request metadata the source RPC requires).
     ///
     /// When the pre-authenticated submission clients are set, the full-node will, instead of

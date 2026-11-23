@@ -7,9 +7,8 @@ use miden_protocol::Word;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
-use miden_protocol::errors::ProposedBlockError;
 use miden_protocol::transaction::TransactionId;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::Semaphore;
 
 use crate::db::ValidatorDbWriter;
 use crate::metrics::InitialMetrics;
@@ -35,13 +34,15 @@ mod submit_proven_transaction;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ValidatorError {
+    #[error("Validator clock is before the Unix epoch")]
+    ClockBeforeUnixEpoch(#[source] std::time::SystemTimeError),
+    #[error("block timestamp {timestamp} is too far in the future (maximum {latest_timestamp})")]
+    BlockTimestampTooFarInFuture { timestamp: u32, latest_timestamp: u64 },
     #[error("block contains unvalidated transactions {0:?}")]
     UnvalidatedTransactions(Vec<TransactionId>),
-    #[error("failed to build block")]
-    BlockBuildingFailed(#[source] ProposedBlockError),
     #[error("failed to sign block: {0}")]
     BlockSigningFailed(String),
-    #[error("failed to select transactions")]
+    #[error("validator database read failed")]
     DatabaseError(#[source] DatabaseError),
     #[error("block number mismatch: expected {expected}, got {actual}")]
     BlockNumberMismatch {
@@ -50,6 +51,8 @@ pub enum ValidatorError {
     },
     #[error("previous block commitment does not match chain tip")]
     PrevBlockCommitmentMismatch,
+    #[error("genesis block cannot be replaced")]
+    CannotReplaceGenesis,
     #[error("no previous block header available for chain tip overwrite")]
     NoPrevBlockHeader,
     #[error(
@@ -124,17 +127,20 @@ pub(crate) struct ValidatorService {
     /// are proposed exclusively from already-validated transactions and signing never waits on
     /// validation. Validation is therefore capped below the core count to keep signing headroom.
     tx_validation_semaphore: Semaphore,
-    /// In-memory chain tip, updated after each signed block. Block subscriptions follow this to
-    /// stream live blocks as they are signed.
-    committed_tip: watch::Sender<BlockNumber>,
     /// In-memory count of validated transactions, incremented after each new insert.
     validated_transactions_count: AtomicU64,
-    /// In-memory count of signed blocks, incremented after each signed block that extends the
-    /// chain. A replacement of the tip block does not change it.
-    signed_blocks_count: AtomicU64,
 }
 
 impl ValidatorService {
+    /// Reads the committed height of the bootstrapped validator database.
+    async fn committed_height(&self) -> tonic::Result<u32> {
+        self.db
+            .load_chain_tip_height()
+            .await
+            .or_internal("Failed to load chain tip")?
+            .ok_or_else(|| tonic::Status::internal("Chain tip not found in database"))
+    }
+
     pub(crate) async fn new(
         signer: ValidatorSigner,
         db: ValidatorDbWriter,
@@ -189,9 +195,7 @@ impl ValidatorService {
             db,
             sign_block_semaphore: Semaphore::new(1),
             tx_validation_semaphore: Semaphore::new(max_tx_concurrency()),
-            committed_tip: watch::Sender::new(BlockNumber::from(initial_metrics.chain_tip)),
             validated_transactions_count: AtomicU64::new(initial_metrics.validated_transactions),
-            signed_blocks_count: AtomicU64::new(initial_metrics.signed_blocks),
         })
     }
 }

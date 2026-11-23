@@ -105,21 +105,20 @@ jobs:
         with:
           diagnostics: "true"
 
-  docker:
-    name: Docker dry-run
-    permissions:
-      # Reusable-workflow permission ceiling; dry-run jobs do not receive these writes.
-      attestations: write
-      contents: read
-      id-token: write
-      packages: write
-    uses: $/.github/workflows/docker.yml
-    secrets:
-      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
-      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
-    with:
-      mode: dry-run
-      ref: ${{ github.sha }}
+  docker-compose:
+    name: Docker Compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/publish-compose
+        with:
+          compose-file: docker-compose.yml
+          mode: dry-run
+          package: miden-local-network
+          registry-prefix: ghcr.io/0xmiden
+          tag: dry-run
 
   clippy:
     name: lint - clippy
@@ -170,7 +169,7 @@ jobs:
           expected-patterns: '["next", "release/v*"]'
       - name: Rustup
         run: rustup toolchain install --no-self-update
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: nextest@0.9.122
       - uses: $/.github/actions/setup-kache
@@ -255,7 +254,7 @@ jobs:
         run: rustup toolchain install --no-self-update
       - uses: $/.github/actions/setup-kache
         env: *r2-credentials
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: nextest@0.9.122
       - name: Build
@@ -435,7 +434,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.90.3
+        uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-binstall
       - name: Install cargo-audit
@@ -556,7 +555,7 @@ jobs:
         with:
           node-version: "22.23.4"
           package-manager-cache: false
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: typos@1.42.0
       - name: Install Markdown tools
@@ -595,7 +594,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: taplo-cli@0.10.0
       - run: make toml-check
@@ -608,7 +607,7 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: taiki-e/install-action@v2.90.3
+      - uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-workspace-lints@0.1.4
       - run: make workspace-check
@@ -622,7 +621,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.90.3
+        uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-binstall
       - name: Install workspace inheritance checker
@@ -638,7 +637,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Install cargo-binstall
-        uses: taiki-e/install-action@v2.90.3
+        uses: taiki-e/install-action@v2.90.5
         with:
           tool: cargo-binstall
       - name: Install cargo-shear
