@@ -21,9 +21,7 @@ service NodeService {
     // Returns the node's version, genesis commitment, chain tip, and component status.
     rpc Status(StatusRequest) returns (StatusResponse) {}
 
-    // Returns the configured limits for v2 methods, keyed by method name. Use the parameter limits
-    // to size requests and the SyncAccount entry limit to choose between a single account read and
-    // streaming updates.
+    // Returns request parameter limits for v2 methods.
     rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
 
     // Returns a network note's execution status, failed attempts, and fee sponsorships. Returns
@@ -100,9 +98,7 @@ message StatusResponse {
 message GetLimitsRequest {}
 
 message GetLimitsResponse {
-    // Maps RPC endpoint names to their parameter limits.
-    // Key: endpoint name (e.g., "SyncNullifiers")
-    // Value: map of parameter names to their limit values
+    // Parameter limits keyed by RPC method name.
     map<string, EndpointLimits> endpoints = 1;
 }
 
@@ -294,9 +290,7 @@ message CommittedNote {
 }
 
 message EndpointLimits {
-    // Maps parameter names to their limit values.
-    // Key: parameter name (e.g., "nullifier", "account_id")
-    // Value: limit value
+    // Maximum values keyed by parameter name.
     map<string, uint32> parameters = 1;
 }
 
