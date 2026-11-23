@@ -2,14 +2,12 @@ use std::collections::BTreeMap;
 
 use miden_protocol::account::AccountUpdateDetails;
 use miden_protocol::batch::{BatchAccountUpdate, BatchId, OrderedBatches, ProvenBatch};
-use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::{BlockInputs, ProposedBlock};
 use miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER;
 use miden_protocol::transaction::{
     InputNotes,
     OrderedTransactionHeaders,
     PartialBlockchain,
-    PublicTransactionLogs,
     TransactionHeader,
 };
 
@@ -50,8 +48,6 @@ fn transaction_batch(parent: &BlockHeader, seed: u32) -> (ProvenBatch, Transacti
         state,
         InputNotes::default(),
         vec![],
-        Word::empty(),
-        CodePatch::default().commitment(),
     )
     .unwrap();
     let id = header.id();
@@ -66,7 +62,6 @@ fn transaction_batch(parent: &BlockHeader, seed: u32) -> (ProvenBatch, Transacti
         vec![],
         BlockNumber::MAX,
         OrderedTransactionHeaders::new_unchecked(vec![header]),
-        PublicTransactionLogs::default(),
         miden_protocol::testing::dummy_execution_proof(),
     )
     .unwrap();

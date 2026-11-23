@@ -304,7 +304,11 @@ impl TestValidator {
     ///
     /// Panics if the block is rejected.
     async fn apply_empty_block(&mut self) {
-        let proposed = self.propose_empty_block();
+        self.apply_block(self.propose_empty_block()).await;
+    }
+
+    /// Submits a proposal and advances the local chain state.
+    async fn apply_block(&mut self, proposed: ProposedBlock) {
         self.call_sign_block(&proposed).await.unwrap();
         let (header, _) = proposed.into_header_and_body().unwrap();
         // Advance our local chain state to match what the server now has.
@@ -353,6 +357,22 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
         BTreeMap::new(),
     );
     ProposedBlock::new(block_inputs, vec![]).unwrap()
+}
+
+/// Builds an empty proposal with an explicit timestamp.
+fn empty_block_at(
+    parent: &BlockHeader,
+    chain: &PartialBlockchain,
+    timestamp: u32,
+) -> ProposedBlock {
+    let inputs = BlockInputs::new(
+        parent.clone(),
+        chain.clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    ProposedBlock::new_at(inputs, vec![], timestamp).unwrap()
 }
 
 /// Builds a syntactically valid [`ProvenTransaction`] with a dummy proof.
