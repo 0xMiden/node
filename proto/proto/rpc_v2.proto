@@ -2,6 +2,7 @@
 syntax = "proto3";
 package miden.node.v2;
 
+import "account.proto";
 import "asset.proto";
 import "block.proto";
 import "primitives.proto";
