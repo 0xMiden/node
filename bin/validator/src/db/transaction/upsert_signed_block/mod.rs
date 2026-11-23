@@ -25,12 +25,7 @@ impl WriteTransaction<'_> {
             self.inner
                 .execute(include_str!("delete_protocol_config.sql"), &[&height.as_u32()])?;
         }
-        let transactions = block
-            .body()
-            .transactions()
-            .as_slice()
-            .iter()
-            .map(TransactionHeader::id);
+        let transactions = block.body().transactions().as_slice().iter().map(TransactionHeader::id);
         persist_signed_block(self.inner, block, transactions, Some(proving_inputs))?;
         prune_expired_proving_inputs(self.inner, self.proving_input_retention_blocks)
     }
