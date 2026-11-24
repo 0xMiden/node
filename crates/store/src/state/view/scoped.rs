@@ -1,8 +1,7 @@
 //! Proof-of-validation block-number types issued by [`StateView`](super::StateView).
 //!
-//! Tip-scoped database queries take these types instead of raw block numbers, so a query whose
-//! bound was not validated against a state view's tip is not expressible: the only constructors
-//! live on [`StateView`](super::StateView), which checks the bound against its pinned snapshot.
+//! Tip-scoped database queries take these types instead of raw block numbers, so callers validate the requested height against
+//! the pinned snapshot or, during startup, the committed SQLite tip.
 //!
 //! Chain tips are monotonic, so a value issued by an older view remains valid for any later
 //! state — holding one across view lifetimes is sound, if pointless.
@@ -16,8 +15,8 @@ use miden_protocol::block::BlockNumber;
 pub struct ScopedBlockNum(BlockNumber);
 
 impl ScopedBlockNum {
-    /// Issued by [`StateView`](super::StateView) after validating the bound against its tip.
-    pub(super) fn new(block_num: BlockNumber) -> Self {
+    /// Constructs a bound validated against the snapshot or startup tip.
+    pub(in crate::state) fn new(block_num: BlockNumber) -> Self {
         Self(block_num)
     }
 
@@ -48,7 +47,7 @@ pub struct ScopedBlockRange(RangeInclusive<BlockNumber>);
 
 impl ScopedBlockRange {
     /// Issued by [`StateView`](super::StateView) after validating the range against its tip.
-    pub(super) fn new(range: RangeInclusive<BlockNumber>) -> Self {
+    pub(in crate::state) fn new(range: RangeInclusive<BlockNumber>) -> Self {
         Self(range)
     }
 

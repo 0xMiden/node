@@ -601,7 +601,9 @@ mod tests {
     use miden_node_utils::clap::StorageOptions;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_node_utils::shutdown::CancellationToken;
+    use miden_protocol::Word;
     use miden_protocol::asset::AssetId;
+    use miden_protocol::block::account_tree::AccountTree;
     use miden_protocol::block::{
         BlockBody,
         BlockHeader,
@@ -654,6 +656,22 @@ mod tests {
     }
 
     async fn empty_block(state: &State, protocol_config: &ProtocolConfig) -> SignedBlock {
+        let body = BlockBody::new(
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            OrderedTransactionHeaders::new_unchecked(Vec::new()),
+        )
+        .unwrap();
+        block_with_body(state, protocol_config, body, None).await
+    }
+
+    async fn block_with_body(
+        state: &State,
+        protocol_config: &ProtocolConfig,
+        body: BlockBody,
+        account_root: Option<Word>,
+    ) -> SignedBlock {
         let view = state.view();
         let (parent, _) = view.get_block_header(None, false).await.unwrap();
         let parent = parent.expect("chain should have a parent block");
@@ -662,18 +680,11 @@ mod tests {
             let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
             mmr.add(header.expect("block header should exist").commitment()).unwrap();
         }
-        let body = BlockBody::new(
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            OrderedTransactionHeaders::new_unchecked(Vec::new()),
-        )
-        .unwrap();
         let header = BlockHeader::new(
             parent.commitment(),
             parent.block_num().child(),
             mmr.peaks().hash_peaks(),
-            parent.account_root(),
+            account_root.unwrap_or_else(|| parent.account_root()),
             parent.nullifier_root(),
             body.compute_block_note_tree().root(),
             body.transaction_commitment(),
@@ -888,5 +899,74 @@ mod tests {
             None
         );
         writer.stop(writer_task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_recovers_parent_trees_and_skips_committed_updates() {
+        use miden_protocol::account::{Account, AccountPatch, AccountType, AccountUpdateDetails};
+        use miden_protocol::block::BlockAccountUpdate;
+        use miden_protocol::block::nullifier_tree::NullifierTree;
+        use miden_protocol::crypto::merkle::smt::LargeSmt;
+        use miden_protocol::testing::add_component::AddComponent;
+        use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
+        use miden_protocol::transaction::{InputNotes, TransactionHeader};
+
+        use crate::account_state_forest::AccountStateForest;
+        use crate::state::loader::*;
+        let (_dir, state, mut writer, task, config) = start_store().await;
+        let account = Account::builder([99; 32])
+            .account_type(AccountType::Public)
+            .with_component(NoopAuthComponent)
+            .with_component(AddComponent)
+            .build_existing()
+            .unwrap();
+        let id = account.id();
+        let commitment = account.to_commitment();
+        let patch = AccountPatch::try_from(account).unwrap();
+        let update =
+            BlockAccountUpdate::new(id, commitment, AccountUpdateDetails::Public(patch)).unwrap();
+        let tx =
+            TransactionHeader::new(id, Word::empty(), commitment, InputNotes::default(), vec![])
+                .unwrap();
+        let body = BlockBody::new(
+            vec![update],
+            vec![],
+            vec![],
+            OrderedTransactionHeaders::new_unchecked(vec![tx]),
+        )
+        .unwrap();
+        let mut account_tree: AccountTree = AccountTree::default();
+        account_tree.insert(id, commitment).unwrap();
+        let block = block_with_body(&state, &config, body, Some(account_tree.root())).await;
+        writer.apply_block(block.clone(), None).await.unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let options = miden_node_utils::clap::RocksDbOptions::default();
+        let storage = open_tree_storage(parent.path(), &options, ACCOUNT_TREE_STORAGE_DIR).unwrap();
+        let mut accounts = AccountTree::new(LargeSmt::new(storage).unwrap()).unwrap();
+        let storage =
+            open_tree_storage(parent.path(), &options, NULLIFIER_TREE_STORAGE_DIR).unwrap();
+        let mut nullifiers = NullifierTree::new_unchecked(LargeSmt::new(storage).unwrap());
+        let storage = open_account_state_forest_storage(
+            parent.path(),
+            &options,
+            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+        )
+        .unwrap();
+        let mut forest = AccountStateForest::from_backend(storage).unwrap();
+        for _ in 0..2 {
+            sync_trees_to_tip(
+                &state.db,
+                &state.block_store,
+                block.header(),
+                &mut accounts,
+                &mut nullifiers,
+                &mut forest,
+            )
+            .await
+            .unwrap();
+            assert_eq!(accounts.root(), block.header().account_root());
+            assert!(forest.latest_tree_root(id, None).is_some());
+        }
+        writer.stop(task).await;
     }
 }
