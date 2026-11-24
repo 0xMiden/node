@@ -8,9 +8,9 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
-Both public services share one address. Use `miden.node.v2.NodeService` for historical chain targets. V1 retains the
-paginated sync methods, `GetAccount`, and account registration. Both versions support transaction submission and block
-and proof subscriptions. Write requests require the network genesis commitment.
+Both public services share one address. V1 retains the paginated sync methods, `GetAccount`, and account registration.
+Both versions support transaction submission and block and proof subscriptions. Write requests require the network
+genesis commitment.
 
 The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
 details for stable client-side handling.
