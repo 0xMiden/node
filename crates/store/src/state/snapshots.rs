@@ -2,7 +2,7 @@
 
 use std::collections::VecDeque;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use arc_swap::ArcSwap;
 use miden_protocol::block::BlockNumber;
@@ -74,54 +74,45 @@ impl<T> RecentSnapshots<T> {
     }
 }
 
-/// An evicted tree generation that still has owners outside the retirement buffer.
+/// An evicted tree generation that readers still hold.
 #[derive(Debug, thiserror::Error)]
-#[error("evicted snapshot at block {block_num} still has {references} external references")]
+#[error("evicted snapshot at block {block_num} is still held by {references} references")]
 pub(in crate::state) struct SnapshotStillHeld {
     pub(in crate::state) block_num: BlockNumber,
     pub(in crate::state) references: usize,
 }
 
-/// Evicted generations awaiting release by readers.
+/// Evicted generations observed through weak references until readers release them.
 ///
-/// The block writer owns this buffer and checks it after each publication. Unique snapshots are
-/// dropped immediately; snapshots still shared with readers remain here until a later check.
-/// Their strong references also remain visible to the legacy history-pruning tracker.
-pub(in crate::state) struct RetiredSnapshots<T = StateSnapshot> {
-    generations: VecDeque<(BlockNumber, Arc<T>)>,
+/// The block writer owns this tracker and checks it after each publication. The tracker never
+/// keeps a generation alive: the last reader to release an evicted snapshot frees it, so neither
+/// memory nor history pruning waits for the writer's next check.
+pub(in crate::state) struct EvictedSnapshots<T = StateSnapshot> {
+    generations: VecDeque<(BlockNumber, Weak<T>)>,
 }
 
-impl<T> RetiredSnapshots<T> {
+impl<T> EvictedSnapshots<T> {
     pub(in crate::state) fn new() -> Self {
         Self { generations: VecDeque::new() }
     }
 
-    /// Releases an evicted generation if it is unique, otherwise queues it for a later check.
-    ///
-    /// The pruning tracker holds weak references. `Arc::try_unwrap` permits those references,
-    /// whereas `Arc::get_mut` would reject them even after every reader has released the snapshot.
-    pub(in crate::state) fn push(&mut self, block_num: BlockNumber, snapshot: Arc<T>) {
-        if let Err(snapshot) = Arc::try_unwrap(snapshot) {
-            self.generations.push_back((block_num, snapshot));
-        }
+    /// Tracks an evicted generation without keeping it alive.
+    pub(in crate::state) fn push(&mut self, block_num: BlockNumber, snapshot: &Arc<T>) {
+        self.generations.push_back((block_num, Arc::downgrade(snapshot)));
     }
 
-    /// Releases unique generations and reports every generation that is still held elsewhere.
+    /// Reports every tracked generation that readers still hold and forgets released ones.
     ///
-    /// The reported count excludes this buffer's reference. Readers can release or clone their
-    /// references concurrently, so the count is an observation rather than a stable reader count.
-    pub(in crate::state) fn reclaim(&mut self, mut report: impl FnMut(SnapshotStillHeld)) {
-        for _ in 0..self.generations.len() {
-            let (block_num, snapshot) =
-                self.generations.pop_front().expect("retired generation exists");
-            if let Err(snapshot) = Arc::try_unwrap(snapshot) {
-                report(SnapshotStillHeld {
-                    block_num,
-                    references: Arc::strong_count(&snapshot) - 1,
-                });
-                self.generations.push_back((block_num, snapshot));
+    /// Readers can release or clone their references concurrently, so the count is an observation
+    /// rather than a stable reader count.
+    pub(in crate::state) fn report_held(&mut self, mut report: impl FnMut(SnapshotStillHeld)) {
+        self.generations.retain(|(block_num, snapshot)| {
+            let references = snapshot.strong_count();
+            if references > 0 {
+                report(SnapshotStillHeld { block_num: *block_num, references });
             }
-        }
+            references > 0
+        });
     }
 }
 
@@ -202,42 +193,36 @@ mod tests {
         let snapshot = Arc::new(0);
         let weak = Arc::downgrade(&snapshot);
         let recent = RecentSnapshots::new(0.into(), snapshot);
-        let mut retired = RetiredSnapshots::new();
+        let mut evicted = EvictedSnapshots::new();
         for height in 1..=CAPACITY.get() as u32 {
             if let Some((block_num, snapshot)) = recent.push(height.into(), Arc::new(height)) {
-                retired.push(block_num, snapshot);
+                evicted.push(block_num, &snapshot);
             }
         }
         assert!(weak.upgrade().is_none());
-        let mut reported = Vec::new();
-        retired.reclaim(|error| reported.push((error.block_num, error.references)));
-        assert_eq!(reported, Vec::new());
+        evicted.report_held(|_| panic!("released generations must not be reported"));
     }
 
     #[test]
-    fn held_generations_are_reported_each_time_and_released_after_readers_drop() {
+    fn held_generations_are_reported_each_time_until_readers_drop() {
         let first = Arc::new(0);
-        let first_weak = Arc::downgrade(&first);
         let first_reader = Arc::clone(&first);
         let second = Arc::new(1);
-        let second_weak = Arc::downgrade(&second);
         let second_readers = [Arc::clone(&second), Arc::clone(&second)];
-        let mut retired = RetiredSnapshots::new();
-        retired.push(0.into(), first);
-        retired.push(1.into(), second);
+        let mut evicted = EvictedSnapshots::new();
+        evicted.push(0.into(), &first);
+        evicted.push(1.into(), &second);
+        drop((first, second));
         for _ in 0..2 {
             let mut reported = Vec::new();
-            retired.reclaim(|error| reported.push((error.block_num, error.references)));
+            evicted.report_held(|held| reported.push((held.block_num, held.references)));
             assert_eq!(reported, vec![(BlockNumber::from(0), 1), (BlockNumber::from(1), 2)]);
         }
         drop(first_reader);
         let mut reported = Vec::new();
-        retired.reclaim(|error| reported.push((error.block_num, error.references)));
+        evicted.report_held(|held| reported.push((held.block_num, held.references)));
         assert_eq!(reported, vec![(BlockNumber::from(1), 2)]);
-        assert!(first_weak.upgrade().is_none());
-        assert!(second_weak.upgrade().is_some());
         drop(second_readers);
-        retired.reclaim(|_| panic!("released generations must not be reported"));
-        assert!(second_weak.upgrade().is_none());
+        evicted.report_held(|_| panic!("released generations must not be reported"));
     }
 }

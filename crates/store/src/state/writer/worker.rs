@@ -32,7 +32,7 @@ use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
-use crate::state::snapshots::RetiredSnapshots;
+use crate::state::snapshots::EvictedSnapshots;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
 use crate::state::{BlockCache, BlockNotification, RecentSnapshots};
 
@@ -50,7 +50,7 @@ pub(in crate::state) struct WriteWorker {
     /// Bounded history through which new snapshots are published to readers.
     snapshots: Arc<RecentSnapshots>,
     /// Evicted generations still held by readers, checked after each publication.
-    retired_snapshots: RetiredSnapshots,
+    evicted_snapshots: EvictedSnapshots,
     committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     block_cache: BlockCache,
     rx: mpsc::Receiver<WriteRequest>,
@@ -123,7 +123,7 @@ impl WriteWorker {
             db,
             block_store,
             snapshots,
-            retired_snapshots: RetiredSnapshots::new(),
+            evicted_snapshots: EvictedSnapshots::new(),
             committed_tip_tx,
             block_cache,
             rx,
@@ -294,16 +294,16 @@ impl WriteWorker {
         // snapshots were established before this block. Acquired readers survive history eviction.
         self.published_generations.record(block_num, &snapshot);
         if let Some((height, snapshot)) = self.snapshots.push(block_num, snapshot) {
-            self.retired_snapshots.push(height, snapshot);
+            self.evicted_snapshots.push(height, &snapshot);
         }
         // A reader holding an evicted generation does not affect the applied block, so the report
         // is a warning; an error-level event would mark the `write_block` span as failed.
-        self.retired_snapshots.reclaim(|error| {
+        self.evicted_snapshots.report_held(|held| {
             warn!(
-                &error,
+                &held,
                 "Evicted state snapshot is still held",
-                snapshot.block.number = error.block_num,
-                snapshot.references.count = error.references
+                snapshot.block.number = held.block_num,
+                snapshot.references.count = held.references
             );
         });
 
