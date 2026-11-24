@@ -48,7 +48,7 @@ impl proto::server::miden_node_v2_node_service::SyncAccountVault for RpcService 
         })
     }
 
-    #[instrument(name = "sync_account_vault_v2", err)]
+    #[instrument(name = "sync_account_vault", err)]
     async fn handle(
         &self,
         (account_id, block_range): Self::Input,
