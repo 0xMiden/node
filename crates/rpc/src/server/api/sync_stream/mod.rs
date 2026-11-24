@@ -9,6 +9,19 @@ use tracing::Instrument;
 #[cfg(test)]
 mod tests;
 
+/// A nonempty page of synchronization items.
+pub(super) struct SyncPage<T>(Vec<T>);
+
+impl<T> SyncPage<T> {
+    /// Rejects an empty page so an incomplete scan cannot appear to have finished successfully.
+    pub(super) fn new(items: Vec<T>) -> tonic::Result<Self> {
+        if items.is_empty() {
+            return Err(Status::internal("synchronization paginator returned an empty page"));
+        }
+        Ok(Self(items))
+    }
+}
+
 #[tonic::async_trait]
 pub(super) trait Paginator: Send + 'static {
     type Item: Send + 'static;
@@ -18,7 +31,7 @@ pub(super) trait Paginator: Send + 'static {
     /// Page errors must terminate the response with an error. Clients may preserve staged
     /// progress where the endpoint supports resumption. Do not retain database transactions
     /// or state views after the page is loaded.
-    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>>;
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>>;
 }
 
 pub type SyncResponseStream<T> = ReceiverStream<tonic::Result<T>>;
@@ -45,7 +58,7 @@ impl<P: Paginator> SyncStream<P> {
             .ok_or_else(|| Status::internal("invalid synchronization stream buffer capacity"))?;
 
         // Initial validation errors are RPC statuses, before any stream data is sent.
-        let first_page = checked_page(paginator.load_next_page().await?)?;
+        let first_page = paginator.load_next_page().await?;
         let (tx, rx) = mpsc::channel(capacity);
         if let Some(page) = first_page {
             // Keep one slot available for an error even when the data buffer is full.
@@ -64,9 +77,9 @@ impl<P: Paginator> SyncStream<P> {
     /// Sends bounded pages with backpressure and a deadline for each blocked send.
     ///
     /// Cancels pending page loads on disconnect. Sends later failures through the reserved terminal slot.
-    async fn run(mut self, mut page: Vec<P::Item>) {
+    async fn run(mut self, mut page: SyncPage<P::Item>) {
         loop {
-            for item in page {
+            for item in page.0 {
                 match self.tx.send_timeout(Ok(item), self.send_timeout).await {
                     Ok(()) => {},
                     Err(SendTimeoutError::Closed(_)) => return,
@@ -82,7 +95,7 @@ impl<P: Paginator> SyncStream<P> {
             let next = tokio::select! {
                 biased;
                 () = self.tx.closed() => return,
-                result = self.paginator.load_next_page() => result.and_then(checked_page),
+                result = self.paginator.load_next_page() => result,
             };
             match next {
                 Ok(Some(next)) => page = next,
@@ -99,13 +112,4 @@ impl<P: Paginator> SyncStream<P> {
     fn fail(&mut self, status: Status) {
         self.terminal.take().expect("terminal status is sent once").send(Err(status));
     }
-}
-
-/// Rejects empty pages so a faulty paginator cannot report incomplete data as successful
-/// completion.
-fn checked_page<T>(page: Option<Vec<T>>) -> tonic::Result<Option<Vec<T>>> {
-    if page.as_ref().is_some_and(Vec::is_empty) {
-        return Err(Status::internal("synchronization paginator returned an empty page"));
-    }
-    Ok(page)
 }

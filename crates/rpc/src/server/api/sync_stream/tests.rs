@@ -6,7 +6,7 @@ use std::time::Duration;
 use tokio_stream::StreamExt;
 use tonic::{Code, Status};
 
-use super::{Paginator, SyncStream};
+use super::{Paginator, SyncPage, SyncStream};
 
 struct Pages {
     pages: VecDeque<tonic::Result<Vec<u32>>>,
@@ -28,9 +28,9 @@ impl Paginator for Pages {
 
     /// Returns scripted pages and counts loads so tests can detect unwanted reads after
     /// cancellation.
-    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>> {
         self.loads.fetch_add(1, Ordering::SeqCst);
-        self.pages.pop_front().transpose()
+        self.pages.pop_front().map(|items| items.and_then(SyncPage::new)).transpose()
     }
 }
 
@@ -108,12 +108,27 @@ async fn disconnect_prevents_next_page() {
     assert_eq!(loads.load(Ordering::SeqCst), 1);
 }
 
-/// An invalid empty continuation page must not make an incomplete update appear successful.
+/// An invalid empty first page must fail before any stream data is exposed.
 #[tokio::test]
-async fn empty_page_is_an_error_instead_of_silent_incomplete_success() {
+async fn empty_first_page_is_an_initial_error() {
     let result =
         SyncStream::start(Pages::new([Ok(vec![]), Ok(vec![1])]), 1, Duration::from_secs(1)).await;
     assert_eq!(result.unwrap_err().code(), Code::Internal);
+}
+
+/// An invalid empty continuation page must terminate the stream after any delivered items.
+#[tokio::test]
+async fn empty_continuation_page_is_a_terminal_error() {
+    let mut stream = SyncStream::start(
+        Pages::new([Ok(vec![1]), Ok(vec![]), Ok(vec![2])]),
+        1,
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stream.next().await.unwrap().unwrap(), 1);
+    assert_eq!(stream.next().await.unwrap().unwrap_err().code(), Code::Internal);
+    assert!(stream.next().await.is_none());
 }
 
 struct PendingPage {
@@ -135,10 +150,10 @@ impl Paginator for PendingPage {
     /// Waits indefinitely after notifying the test that page loading has started.
     ///
     /// Lets the test verify that a disconnect cancels a pending page load.
-    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>> {
         if self.first {
             self.first = false;
-            return Ok(Some(vec![1]));
+            return SyncPage::new(vec![1]).map(Some);
         }
         self.started.notify_one();
         std::future::pending().await
