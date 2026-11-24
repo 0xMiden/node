@@ -13,7 +13,7 @@ use tonic::Status;
 use super::error_codes::{SyncNotesV2ErrorCode as ErrorCode, internal_error};
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 use super::sync_notes::note_sync_record_to_proto;
-use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
+use super::sync_stream::{Paginator, SyncPage, SyncResponseStream, SyncStream};
 use super::{RpcService, check, database_error_to_status};
 
 #[tonic::async_trait]
@@ -83,11 +83,12 @@ struct NotePaginator {
 #[tonic::async_trait]
 impl Paginator for NotePaginator {
     type Item = SyncNotesResponse;
-    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>> {
         if self.done {
             return Ok(None);
         }
         let range = self.range.database_range();
+        let is_first_page = self.cursor.is_none();
         let page = self
             .state
             .view()
@@ -117,7 +118,10 @@ impl Paginator for NotePaginator {
                 item: Some(Item::Note(note_sync_record_to_proto(note).into())),
             }));
         }
-        Ok((!frames.is_empty()).then_some(frames))
+        if is_first_page && self.done && frames.is_empty() {
+            return Ok(None);
+        }
+        SyncPage::new(frames).map(Some)
     }
 }
 
