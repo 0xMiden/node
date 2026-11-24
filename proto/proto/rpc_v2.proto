@@ -79,10 +79,11 @@ service NodeService {
     //
     // Use this endpoint to update a local vault after its authenticated account state changes.
     // Repeated changes to a key produce one absolute target value. An absent asset marks deletion.
-    // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
-    // authenticated target fixed per request; interrupted scans may resume at the incomplete block
-    // with the same or a newer authenticated target. Publish only after OK completion and final
-    // vault verification against authenticated account details at the completed target.
+    // Items are ordered by the block in which each vault key was last updated, earliest first.
+    // Multiple items can share a block. Keep the authenticated target fixed per request.
+    // Interrupted scans may resume at the incomplete block with the same or a newer authenticated
+    // target. Publish only after OK completion and final vault verification against authenticated
+    // account details at the completed target.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (stream SyncAccountVaultResponse) {}
 }
 
@@ -113,7 +114,7 @@ message SyncAccountVaultRequest {
     account.AccountId account_id = 2;
 }
 
-// One absolute target vault value, ordered by nondecreasing last_updated_at.
+// One absolute vault value at the requested target.
 //
 // The first item from a later block completes the preceding block's scan. Only OK termination
 // completes the final block and any empty suffix through the requested target.
