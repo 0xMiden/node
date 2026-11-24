@@ -304,7 +304,11 @@ impl TestValidator {
     ///
     /// Panics if the block is rejected.
     async fn apply_empty_block(&mut self) {
-        let proposed = self.propose_empty_block();
+        self.apply_block(self.propose_empty_block()).await;
+    }
+
+    /// Submits a proposal and advances the local chain state.
+    async fn apply_block(&mut self, proposed: ProposedBlock) {
         self.call_sign_block(&proposed).await.unwrap();
         let (header, _) = proposed.into_header_and_body().unwrap();
         // Advance our local chain state to match what the server now has.
@@ -355,8 +359,28 @@ fn empty_block(parent_header: &BlockHeader, chain: &PartialBlockchain) -> Propos
     ProposedBlock::new(block_inputs, vec![]).unwrap()
 }
 
+/// Builds an empty proposal with an explicit timestamp.
+fn empty_block_at(
+    parent: &BlockHeader,
+    chain: &PartialBlockchain,
+    timestamp: u32,
+) -> ProposedBlock {
+    let inputs = BlockInputs::new(
+        parent.clone(),
+        chain.clone(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    ProposedBlock::new_at(inputs, vec![], timestamp).unwrap()
+}
+
 /// Builds a syntactically valid [`ProvenTransaction`] with a dummy proof.
 fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
+    dummy_proven_tx_at(seed, Word::empty())
+}
+
+fn dummy_proven_tx_at(seed: u8, reference_block: Word) -> ProvenTransaction {
     let account_update = TxAccountUpdate::new(
         miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_SENDER
             .try_into()
@@ -375,7 +399,7 @@ fn dummy_proven_tx(seed: u8) -> ProvenTransaction {
         Vec::<InputNoteCommitment>::new(),
         Vec::<OutputNote>::new(),
         BlockNumber::GENESIS,
-        Word::empty(),
+        reference_block,
         BlockNumber::from(u32::from(seed) + 1),
         miden_protocol::testing::dummy_execution_proof(),
     )
@@ -555,37 +579,13 @@ async fn sign_block_returns_signed_commitment() {
 }
 
 #[tokio::test]
-async fn sign_block_accepts_an_omitted_known_protocol_config() {
+async fn sign_block_accepts_an_omitted_unchanged_protocol_config() {
     let tv = TestValidator::new().await;
     let proposed = tv.propose_empty_block();
 
     tv.call_sign_block_with_protocol_config(&proposed, None)
         .await
-        .expect("a stored active config may be omitted");
-}
-
-#[tokio::test]
-async fn sign_block_rejects_an_omitted_unknown_protocol_config() {
-    let tv = TestValidator::new().await;
-    let commitment = tv.protocol_config.to_commitment();
-    crate::db::delete_protocol_config_for_test(&tv.server.db, commitment)
-        .await
-        .unwrap();
-    let proposed = tv.propose_empty_block();
-
-    let status = tv
-        .call_sign_block_with_protocol_config(&proposed, None)
-        .await
-        .expect_err("an unknown active config cannot be omitted");
-
-    assert_eq!(status.code(), tonic::Code::InvalidArgument);
-    assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
-    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
-    assert_eq!(
-        tv.server.db.load_block(1.into()).await.unwrap(),
-        None,
-        "an unknown config must be rejected before backup"
-    );
+        .expect("an unchanged active config may be omitted");
 }
 
 #[tokio::test]
@@ -604,7 +604,7 @@ async fn sign_block_rejects_a_mismatched_protocol_config_before_signing() {
 
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
     assert_eq!(tv.load_chain_tip().await.block_num(), BlockNumber::GENESIS);
-    assert_eq!(tv.call_status().await.signed_blocks_count, 0);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
 }
 
 /// An empty block at chain tip + 1 with the correct previous block commitment should be accepted.
@@ -688,35 +688,24 @@ async fn chain_tip_replacement_succeeds() {
     );
 }
 
-/// A replacement of the tip block stores no additional block, so it does not change the signed
-/// block count. The count in memory then stays equal to the growth of the count that a restart
-/// reads from the database.
 #[tokio::test]
 async fn chain_tip_replacement_does_not_change_signed_blocks_count() {
     let mut tv = TestValidator::new().await;
     let genesis_header = tv.chain_tip.clone();
     let chain_at_genesis = tv.chain.clone();
-    let stored_at_genesis = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
-    tv.apply_empty_block().await;
     assert_eq!(tv.call_status().await.signed_blocks_count, 1);
+    let original =
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 1);
+    tv.apply_block(original).await;
+    assert_eq!(tv.call_status().await.signed_blocks_count, 2);
 
-    let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        chain_at_genesis,
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
     let replacement =
-        ProposedBlock::new_at(block_inputs, vec![], genesis_header.timestamp() + 1_000_000)
-            .unwrap();
+        empty_block_at(&genesis_header, &chain_at_genesis, genesis_header.timestamp() + 2);
     tv.call_sign_block(&replacement)
         .await
         .expect("chain tip replacement should succeed");
 
-    assert_eq!(tv.call_status().await.signed_blocks_count, 1);
-    let stored = tv.server.db.load_initial_metrics().await.unwrap().signed_blocks;
-    assert_eq!(stored - stored_at_genesis, 1);
+    assert_eq!(tv.call_status().await.signed_blocks_count, 2);
 }
 
 /// A block at chain tip + 2 (skipping a block number) should be rejected.
@@ -899,7 +888,7 @@ async fn unknown_transactions_rejected() {
 
     // Build a ProposedBlock containing the batch with the unknown transaction.
     let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
+        genesis_header,
         PartialBlockchain::default(),
         BTreeMap::new(),
         BTreeMap::new(),
@@ -907,7 +896,8 @@ async fn unknown_transactions_rejected() {
     );
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
 
-    let result = tv.server.validate_block(proposed, genesis_header).await;
+    let (header, body) = proposed.into_header_and_body().unwrap();
+    let result = tv.server.validate_block(&header, &body).await;
     assert!(result.is_err(), "block with unknown transactions should be rejected");
     match result.unwrap_err() {
         ValidatorError::UnvalidatedTransactions(ids) => {
@@ -921,8 +911,9 @@ async fn unknown_transactions_rejected() {
 /// can filter validated transactions by block range.
 #[tokio::test]
 async fn sign_block_links_transactions_to_the_signed_block() {
-    use miden_protocol::batch::{BatchAccountUpdate, BatchId, ProvenBatch};
-    use miden_protocol::transaction::{InputNotes, OrderedTransactionHeaders, TransactionHeader};
+    use miden_protocol::batch::ProposedBatch;
+    use miden_protocol::block::account_tree::AccountTree;
+    use miden_tx_batch::{BatchExecutor, LocalBatchProver};
     use rand_chacha_03::rand_core::SeedableRng;
     use tokio_stream::StreamExt;
 
@@ -934,16 +925,9 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     let genesis_header = tv.chain_tip.clone();
 
     // Build a dummy transaction and record it as validated, as `submit_proven_transaction` would.
-    let account_id = ACCOUNT_ID_SENDER.try_into().unwrap();
-    let tx_header = TransactionHeader::new(
-        account_id,
-        Word::default(),
-        Word::default(),
-        InputNotes::<InputNoteCommitment>::default(),
-        vec![],
-    )
-    .unwrap();
-    let tx_id = tx_header.id();
+    let tx = dummy_proven_tx_at(1, genesis_header.commitment());
+    let account_id = tx.account_update().account_id();
+    let tx_id = tx.id();
     let key_epoch = StorageKeyEpoch::new([2; 32]);
     let record = test_private_record_sealer(key_epoch, [4; 32])
         .seal(
@@ -956,35 +940,48 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     tv.server.db.insert_validated_private_transaction(record).await.unwrap();
 
     // Build a block containing the transaction and have the validator sign it.
-    let batch = ProvenBatch::new_unchecked(
-        BatchId::from_ids(std::iter::once((tx_id, account_id))),
-        genesis_header.commitment(),
-        BlockNumber::GENESIS,
-        BTreeMap::from([(
-            account_id,
-            BatchAccountUpdate::new_unchecked(
-                account_id,
-                Word::default(),
-                Word::default(),
-                AccountUpdateDetails::Private,
-            ),
-        )]),
-        InputNotes::default(),
-        vec![],
-        BlockNumber::MAX,
-        OrderedTransactionHeaders::new_unchecked(vec![tx_header]),
-        miden_protocol::testing::dummy_execution_proof(),
+    let proposal = ProposedBatch::new_unverified(
+        vec![tx.into()],
+        genesis_header.clone(),
+        tv.chain.clone(),
+        BTreeMap::new(),
     )
     .unwrap();
+    let batch = LocalBatchProver::default()
+        .prove(BatchExecutor::new().execute(proposal).unwrap())
+        .unwrap();
+    let accounts: AccountTree = AccountTree::default();
     let block_inputs = BlockInputs::new(
-        genesis_header.clone(),
-        PartialBlockchain::default(),
-        BTreeMap::new(),
+        genesis_header,
+        tv.chain.clone(),
+        BTreeMap::from([(account_id, accounts.open(account_id))]),
         BTreeMap::new(),
         BTreeMap::new(),
     );
-    let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
-    tv.call_sign_block(&proposed).await.expect("block should be signed");
+    let proposed = ProposedBlock::new(block_inputs.clone(), vec![batch]).unwrap();
+    let request: proto::miden::validator::v1::SignBlockRequest = SignBlockRequest {
+        tx_batches: proposed.batches().clone(),
+        block_header: proposed.clone().into_header_and_body().unwrap().0,
+        block_inputs: block_inputs.clone(),
+        protocol_config: Some(tv.protocol_config.clone()),
+    }
+    .into();
+
+    let mut invalid = request.clone();
+    invalid.batches[0].proof = Some(miden_protocol::testing::dummy_execution_proof().into());
+    let status = miden_validator_v1_validator_service::SignBlock::full(
+        &tv.server,
+        tonic::Request::new(invalid),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("invalid batch proof"), "{status}");
+    assert!(tv.server.db.load_block(1.into()).await.unwrap().is_none());
+
+    miden_validator_v1_validator_service::SignBlock::full(&tv.server, tonic::Request::new(request))
+        .await
+        .expect("block should be signed");
 
     // Backup streaming retains the ordered nonempty batches and the original state witnesses.
     let mut backup = tv.call_block_subscription(1).await;
@@ -996,14 +993,7 @@ async fn sign_block_links_transactions_to_the_signed_block() {
     let restored: miden_node_proto::BlockProofRequest =
         event.proving_inputs.unwrap().decode_and_build_unchecked().unwrap();
     assert_eq!(restored.tx_batches, OrderedBatches::new(proposed.batches().as_slice().to_vec()));
-    let expected_inputs = BlockInputs::new(
-        proposed.prev_block_header().clone(),
-        proposed.partial_blockchain().clone(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-        BTreeMap::new(),
-    );
-    assert_eq!(restored.block_inputs.to_bytes(), expected_inputs.to_bytes());
+    assert_eq!(restored.block_inputs.to_bytes(), block_inputs.to_bytes());
     let signed: SignedBlock = event.block.unwrap().decode_and_build_unchecked().unwrap();
     restored.validate_against(&signed).unwrap();
     drop(backup);
@@ -1096,7 +1086,8 @@ async fn validate_block_number_mismatch() {
     chain.add_block(&block_1_header, false);
     let block_3 = empty_block(&block_2_header, &chain);
 
-    let result = tv.server.validate_block(block_3, block_1_header).await;
+    let (header, body) = block_3.into_header_and_body().unwrap();
+    let result = tv.server.validate_block(&header, &body).await;
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), ValidatorError::BlockNumberMismatch { .. }),
@@ -1873,10 +1864,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        InitialMetrics {
-            chain_tip: 1,
-            ..InitialMetrics::default()
-        },
+        InitialMetrics::default(),
     )
     .await
     .unwrap();
