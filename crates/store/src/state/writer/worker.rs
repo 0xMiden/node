@@ -987,6 +987,47 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_recovers_parent_trees_and_skips_committed_updates() {
+        use miden_protocol::block::nullifier_tree::NullifierTree;
+        use miden_protocol::crypto::merkle::smt::LargeSmt;
+
+        use crate::account_state_forest::AccountStateForest;
+        use crate::state::loader::*;
+        let (_dir, state, mut writer, task, config) = start_store().await;
+        let (block, id, _) = block_with_account_and_log(&state, &config).await;
+        writer.apply_block(block.clone(), None).await.unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let options = miden_node_utils::clap::RocksDbOptions::default();
+        let storage = open_tree_storage(parent.path(), &options, ACCOUNT_TREE_STORAGE_DIR).unwrap();
+        let mut accounts = AccountTree::new(LargeSmt::new(storage).unwrap()).unwrap();
+        let storage =
+            open_tree_storage(parent.path(), &options, NULLIFIER_TREE_STORAGE_DIR).unwrap();
+        let mut nullifiers = NullifierTree::new_unchecked(LargeSmt::new(storage).unwrap());
+        let storage = open_account_state_forest_storage(
+            parent.path(),
+            &options,
+            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+        )
+        .unwrap();
+        let mut forest = AccountStateForest::from_backend(storage).unwrap();
+        for _ in 0..2 {
+            sync_trees_to_tip(
+                &state.db,
+                &state.block_store,
+                block.header(),
+                &mut accounts,
+                &mut nullifiers,
+                &mut forest,
+            )
+            .await
+            .unwrap();
+            assert_eq!(accounts.root(), block.header().account_root());
+            assert!(forest.latest_tree_root(id, None).is_some());
+        }
+        writer.stop(task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn failed_log_insertion_does_not_publish_a_block_and_can_be_retried() {
         use miden_protocol::Word;
         let (_root, state, mut writer, task, config) = start_store().await;
