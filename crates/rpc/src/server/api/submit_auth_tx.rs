@@ -1,7 +1,7 @@
 use miden_node_block_producer::ensure_transaction_has_fee;
 use miden_node_proto::domain::sequencer::TransactionCandidate;
 use miden_node_proto::generated::server::miden_sequencer_v1_sequencer_service;
-use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as proto};
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
 
@@ -9,6 +9,8 @@ use super::{SequencerInternalService, get_block_header_error_to_status, load_pro
 
 #[tonic::async_trait]
 impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx for SequencerInternalService {
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
     type Input = TransactionCandidate;
     type Output = proto::blockchain::BlockNumber;
 

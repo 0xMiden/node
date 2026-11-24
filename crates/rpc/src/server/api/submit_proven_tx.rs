@@ -2,7 +2,7 @@ use miden_node_block_producer::store::get_tx_inputs;
 use miden_node_block_producer::{MempoolSubmissionError, ensure_transaction_has_fee};
 use miden_node_proto::clients::{SequencerClient, ValidatorClient};
 use miden_node_proto::domain::sequencer::TransactionCandidate;
-use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as proto};
 use miden_node_store::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, debug, instrument, miden_span_record, trace};
@@ -23,6 +23,8 @@ mod tests;
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
     type Input = miden_node_proto::ProvenTransactionSubmission;
     type Output = proto::blockchain::BlockNumber;
 

@@ -14,6 +14,7 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
     fn decode(
         request: proto::miden::node::v1::SyncNullifiersRequest,
     ) -> tonic::Result<Self::Input> {
+        check::<QueryParamNullifierPrefixLimit>(request.nullifiers.len())?;
         request
             .decode_fields()
             .map_err(|err| SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(err))
@@ -50,8 +51,6 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
             prefix_len = request.prefix_len,
             prefixes = nullifiers.as_slice() #[nonstandard]
         );
-
-        check::<QueryParamNullifierPrefixLimit>(nullifiers.len())?;
 
         if request.prefix_len != 16 {
             return Err(SyncNullifiersErrorCode::InvalidPrefixLength.invalid_argument(format!(

@@ -6,6 +6,7 @@ miden_node_tracing::declare_targets! {
 }
 
 pub mod clients;
+mod decode_execution;
 
 pub mod domain;
 pub mod errors;
@@ -16,6 +17,7 @@ pub mod generated;
 // RE-EXPORTS
 // ================================================================================================
 
+pub use decode_execution::DecodeExecution;
 pub use domain::proof_request::BlockProofRequest;
 pub use domain::sign_block_request::SignBlockRequest;
 pub use domain::submission::{ProvenTransactionSubmission, TransactionBatchSubmission};
