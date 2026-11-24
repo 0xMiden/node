@@ -7,11 +7,11 @@ use anyhow::Context;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
+use miden_node_tracing::http::http_trace_layer;
 use miden_node_tracing::info;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
 
 use crate::db::FundingDatabase;
 use crate::status::StatusSnapshot;
@@ -81,13 +81,13 @@ impl FundingServer {
         Router::new()
             .route(STATUS_PATH, get(status::status))
             .route(REQUEST_FUNDS_PATH, post(request_funds::request_funds))
-            .layer(TraceLayer::new_for_http())
             // The server cancels a handler which runs longer than the timeout. The client then
             // receives the status code 408.
             .layer(TimeoutLayer::with_status_code(
                 StatusCode::REQUEST_TIMEOUT,
                 self.request_timeout,
             ))
+            .layer(http_trace_layer())
             .with_state(self.state)
     }
 }
@@ -95,12 +95,15 @@ impl FundingServer {
 #[cfg(test)]
 pub(crate) mod tests {
     use axum::body::Body;
-    use axum::http::Request;
+    use axum::http::{HeaderMap, Request};
+    use miden_node_utils::http::Client;
     use miden_protocol::Word;
     use miden_protocol::asset::{AssetId, FungibleAsset};
+    use opentelemetry::trace::SpanKind;
     use tower::ServiceExt;
 
     use super::*;
+    use crate::test_utils::telemetry::{Telemetry, attribute};
 
     /// Builds handler state backed by a temporary database.
     pub(crate) async fn test_state(max_amount: u64) -> (tempfile::TempDir, FundingState) {
@@ -132,15 +135,63 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn status_is_served_as_json_on_its_route() {
+        let (telemetry, _guard) = Telemetry::capture();
         let (_directory, state) = test_state(500).await;
 
         let response = test_router(state)
-            .oneshot(Request::get(STATUS_PATH).body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get(STATUS_PATH)
+                    .header(
+                        "traceparent",
+                        "00-11111111111111111111111111111111-2222222222222222-01",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers().get("content-type").unwrap(), "application/json");
+        drop(response);
+        let server = telemetry.span("GET /status");
+        assert_eq!(server.span_kind, SpanKind::Server);
+        assert!(!server.parent_span_is_remote);
+        assert_eq!(attribute(&server, "http.response.status_code"), Some(200_i64.into()));
+    }
+
+    #[tokio::test]
+    async fn http_client_records_a_local_span() {
+        let (telemetry, _guard) = Telemetry::capture();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let shutdown = CancellationToken::new();
+        let router = Router::new().route(
+            "/",
+            get(async |headers: HeaderMap| {
+                assert!(!headers.contains_key("traceparent"));
+                StatusCode::NO_CONTENT
+            }),
+        );
+        let server = axum::serve(listener, router)
+            .with_graceful_shutdown(shutdown.clone().cancelled_owned());
+        let task = tokio::spawn(server.into_future());
+        Client::new()
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        shutdown.cancel();
+        task.await.unwrap().unwrap();
+
+        let client = telemetry.span("GET");
+        assert_eq!(client.span_kind, SpanKind::Client);
+        assert_eq!(attribute(&client, "http.response.status_code"), Some(204_i64.into()));
     }
 
     /// A malformed account ID must be rejected before persistence.

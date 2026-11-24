@@ -120,7 +120,6 @@ rand_chacha           = { default-features = false, version = "0.10" }
 rand_chacha_03        = { package = "rand_chacha", version = "0.3" }
 rand_core_06          = { features = ["getrandom"], package = "rand_core", version = "0.6" }
 rayon                 = { version = "1.10" }
-reqwest               = { version = "0.13" }
 rstest                = { version = "0.26" }
 rusqlite              = { features = ["array", "bundled", "fallible_uint"], version = "0.41" }
 serde                 = { features = ["derive"], version = "1" }

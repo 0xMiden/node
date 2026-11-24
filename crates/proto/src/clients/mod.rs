@@ -35,6 +35,7 @@ use std::time::Duration;
 
 use http::header::ACCEPT;
 use miden_node_tracing::grpc::OtelInterceptor;
+use miden_node_tracing::grpc::client::{GrpcClientTrace, trace_grpc_client};
 use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::grpc::DEFAULT_MAX_DECODING_MESSAGE_SIZE;
 use miden_node_utils::retry::RetryableGrpc;
@@ -196,7 +197,7 @@ mod tests {
 // TYPE ALIASES TO AID LEGIBILITY
 // ================================================================================================
 
-type InterceptedChannel = InterceptedService<Channel, Interceptor>;
+type InterceptedChannel = GrpcClientTrace<InterceptedService<Channel, Interceptor>>;
 type GeneratedProvenTransaction = generated::submission::ProvenTransactionSubmission;
 type SealedTransactionInputs = generated::submission::SealedTransactionInputs;
 
@@ -229,7 +230,7 @@ impl ClientConfig {
         self.channel
             .call(self.timeout, |channel| {
                 call(
-                    InterceptedService::new(channel, self.interceptor.clone()),
+                    trace_grpc_client(InterceptedService::new(channel, self.interceptor.clone())),
                     self.max_decoding_message_size,
                 )
             })

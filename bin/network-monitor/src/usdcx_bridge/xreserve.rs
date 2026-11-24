@@ -8,7 +8,7 @@ use std::time::Duration;
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::SolCall;
 use anyhow::{Context, Result};
-use reqwest::Client;
+use miden_node_utils::http::Client;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use url::Url;
@@ -133,9 +133,9 @@ impl XReserveClient {
             .json(&body)
             .send()
             .await
-            .map_err(reqwest::Error::without_url)?;
+            .map_err(miden_node_utils::http::Error::without_url)?;
         let status = response.status();
-        let body = response.text().await.map_err(reqwest::Error::without_url)?;
+        let body = response.text().await.map_err(miden_node_utils::http::Error::without_url)?;
         anyhow::ensure!(status.is_success(), "HTTP {status}: {}", truncate(&body));
 
         let response: JsonRpcResponse = serde_json::from_str(&body)

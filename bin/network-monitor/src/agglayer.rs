@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_tracing::instrument;
-use reqwest::Client;
+use miden_node_utils::http::Client;
 use serde::Deserialize;
 use url::Url;
 
@@ -33,7 +33,7 @@ impl AgglayerService {
     pub fn new(url: Url, interval: Duration, request_timeout: Duration) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: Client::new(),
             interval,
             request_timeout,
         }

@@ -7,6 +7,8 @@ use miden_node_persistence::{PersistenceError, ProtobufValue};
 use miden_protocol::block::{BlockNumber, SignedBlock};
 use miden_protocol::protocol_config::ProtocolConfig;
 
+use crate::http;
+
 /// A validated genesis block and its protocol configuration.
 ///
 /// The block is the chain's trust root. Obtain it from a trusted source.
@@ -132,7 +134,7 @@ pub fn read_genesis_block(path: &Path) -> anyhow::Result<GenesisBlock> {
 /// Downloads a trusted genesis block and its protocol configuration for an official Miden network.
 pub async fn fetch_genesis_block(network: OfficialNetwork) -> anyhow::Result<GenesisBlock> {
     let url = network.genesis_block_url();
-    let response = reqwest::get(url.as_str())
+    let response = http::get(url.as_str())
         .await
         .with_context(|| format!("failed to fetch genesis block from {url}"))?
         .error_for_status()

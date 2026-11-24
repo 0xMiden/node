@@ -45,6 +45,7 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .route("/", get(get_dashboard))
         .route("/fragments/status", get(get_status_fragment))
         .route("/status", get(get_status))
+        .layer(miden_node_tracing::http::http_trace_layer())
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
