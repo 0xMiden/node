@@ -28,6 +28,7 @@ use crate::state::loader::{
     load_nullifier_tree,
     open_account_state_forest_storage,
     open_tree_storage,
+    sync_trees_to_tip,
     verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
@@ -166,11 +167,11 @@ impl State {
 
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
         // consistency check also pins the chain MMR to this header.
-        let latest_block_num = db
+        let latest_header = db
             .select_block_header_by_block_num(None)
             .await?
-            .ok_or(StateInitializationError::GenesisBlockMissing)?
-            .block_num();
+            .ok_or(StateInitializationError::GenesisBlockMissing)?;
+        let latest_block_num = latest_header.block_num();
 
         let apply_block_thread_priority = storage_options.apply_block_thread_priority;
 
@@ -234,24 +235,30 @@ impl State {
                         )
                     }))
                     .await?;
-                    let forest = load_account_state_forest(storage, &db, latest_block_num).await?;
-                    verify_account_state_forest_consistency(&forest, &db).await?;
-                    Ok(forest)
+                    load_account_state_forest(storage, &db, latest_block_num).await
                 }
             }
             .in_current_span(),
         );
-        let (blockchain, account_tree, nullifier_tree, forest) = tokio::try_join!(
+        let (blockchain, mut account_tree, mut nullifier_tree, mut forest) = tokio::try_join!(
             join_load_task(mmr_task),
             join_load_task(account_tree_task),
             join_load_task(nullifier_tree_task),
             join_load_task(forest_task),
         )?;
 
-        // Verify that tree roots match the expected roots from the database. This catches any
-        // divergence between persistent storage and the database caused by corruption or incomplete
-        // shutdown.
-        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &db).await?;
+        sync_trees_to_tip(
+            &db,
+            &block_store,
+            &latest_header,
+            &mut account_tree,
+            &mut nullifier_tree,
+            &mut forest,
+        )
+        .await?;
+
+        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &latest_header)?;
+        verify_account_state_forest_consistency(&forest, &db).await?;
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
