@@ -53,14 +53,8 @@ pub enum ValidatorError {
     PrevBlockCommitmentMismatch,
     #[error("validator configuration change has not been registered")]
     UnapprovedValidatorConfig,
-    #[error(
-        "a replacement block must preserve the validator configuration change signed at this height"
-    )]
-    CannotReplaceValidatorConfigChange,
     #[error("genesis block cannot be replaced")]
     CannotReplaceGenesis,
-    #[error("no previous block header available for chain tip overwrite")]
-    NoPrevBlockHeader,
     #[error(
         "validator signing key {actual:?} is not a member of the validator set authorized to sign this block"
     )]

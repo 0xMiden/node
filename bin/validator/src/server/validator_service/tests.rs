@@ -1902,7 +1902,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
 }
 
 #[tokio::test]
-async fn validator_config_approval_survives_restart_and_is_consumed_by_signing() {
+async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
     let mut tv = TestValidator::new().await;
     let active = tv.chain_tip.validator_config().clone();
     let signer = tv.server.signer.public_key();
@@ -1915,48 +1915,100 @@ async fn validator_config_approval_survives_restart_and_is_consumed_by_signing()
 
     tv.register_validator_config(next.clone()).await;
     tv.apply_empty_block().await;
-    assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
+    let transition = tv.propose_empty_block().with_next_validator_config(next.clone());
+    tv.apply_block(transition.clone()).await;
     drop(tv.server.db);
     tv.server.db = crate::db::load(tv.temp_dir.path().join("validator.sqlite3")).await.unwrap();
 
-    let old = tv.propose_empty_block();
-    let transition = old.clone().with_next_validator_config(next.clone());
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_config()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &active);
+    assert_eq!(chain.pending.unwrap().validator_config(), &next);
+    assert_eq!(pending, Some(next.clone()));
     tv.call_sign_block(&transition).await.unwrap();
-    assert_eq!(tv.load_chain_tip().await.validator_config(), &next);
+
+    let child = tv.propose_empty_block();
+    let mut keys = next.keys().to_vec();
+    keys.push(random_secret_key().public_key());
+    let unregistered =
+        child.clone().with_next_validator_config(ValidatorConfig::new(keys, 3).unwrap());
+    assert_eq!(
+        tv.call_sign_block(&unregistered).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
     let pending = tv
         .server
         .db
-        .read("check pending configuration", |tx| tx.select_pending_validator_config())
+        .read("pending configuration", |tx| tx.select_pending_validator_config())
         .await
         .unwrap();
+    assert_eq!(pending, Some(next.clone()));
+
+    tv.apply_block(child).await;
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_config()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &next);
     assert_eq!(pending, None);
-    tv.call_sign_block(&transition).await.unwrap();
-    assert_eq!(tv.call_sign_block(&old).await.unwrap_err().code(), tonic::Code::InvalidArgument);
 }
 
 #[tokio::test]
-async fn replacing_a_transition_block_preserves_its_validator_config() {
+async fn replacing_a_transition_block_can_restore_the_previous_validator_config() {
     let mut tv = TestValidator::new().await;
-    let mut keys = vec![tv.server.signer.public_key(), random_secret_key().public_key()];
-    let two_validators = ValidatorConfig::new(keys.clone(), 2).unwrap();
-    keys.push(random_secret_key().public_key());
-    let three_validators = ValidatorConfig::new(keys, 3).unwrap();
-
+    let active = tv.chain_tip.validator_config().clone();
+    let next = ValidatorConfig::new(
+        vec![tv.server.signer.public_key(), random_secret_key().public_key()],
+        2,
+    )
+    .unwrap();
     let original = tv.propose_empty_block();
+    let transition = original.clone().with_next_validator_config(next.clone());
+    tv.register_validator_config(next.clone()).await;
+    tv.call_sign_block(&transition).await.unwrap();
     tv.call_sign_block(&original).await.unwrap();
-    tv.register_validator_config(two_validators.clone()).await;
-    let transition = original.clone().with_next_validator_config(two_validators);
-    tv.apply_block(transition.clone()).await;
 
-    tv.register_validator_config(three_validators.clone()).await;
-    let replacement = original.with_next_validator_config(three_validators.clone());
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_config()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &active);
+    assert_eq!(chain.pending.unwrap().validator_config(), &active);
+    assert_eq!(pending, Some(next));
+
+    tv.server
+        .db
+        .write("cancel test configuration", |tx| tx.delete_pending_validator_config())
+        .await
+        .unwrap();
     assert_eq!(
-        tv.call_sign_block(&replacement).await.unwrap_err().code(),
+        tv.call_sign_block(&transition).await.unwrap_err().code(),
         tonic::Code::InvalidArgument
     );
-    tv.call_sign_block(&transition).await.unwrap();
-
-    let child = tv.propose_empty_block().with_next_validator_config(three_validators.clone());
-    tv.apply_block(child).await;
-    assert_eq!(tv.load_chain_tip().await.validator_config(), &three_validators);
+    tv.apply_block(original).await;
+    tv.apply_empty_block().await;
+    assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
 }

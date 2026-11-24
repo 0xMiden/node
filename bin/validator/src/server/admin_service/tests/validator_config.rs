@@ -4,24 +4,30 @@ use std::time::Duration;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
+use miden_protocol::block::{BlockHeader, ValidatorConfig};
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, SigningKey};
+use miden_protocol::protocol_config::ProtocolConfig;
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 use tower::ServiceExt;
 
 use super::{commit, test_database};
+use crate::db::{ValidatorDbWriter, block_with_header};
 use crate::server::admin_service::validator_config::router;
 
 const STATUS: &str = "/admin/v1/validator-config";
 const PENDING: &str = "/admin/v1/validator-config/pending";
 
-async fn setup(signing_lock: Arc<Mutex<()>>) -> (tempfile::TempDir, Router, Value) {
+async fn setup(
+    signing_lock: Arc<Mutex<()>>,
+) -> (tempfile::TempDir, ValidatorDbWriter, Router, Value) {
     let (directory, db, _) = test_database().await;
     commit(&db, 1, &[]).await;
     let header = db.load_chain_tip().await.unwrap().unwrap();
     let signer = header.validator_config().keys()[0].clone();
     let active = json!({"keys": [signer.to_string()], "quorum": 1});
-    (directory, router(&db, signer, signing_lock), active)
+    let app = router(&db, signer, signing_lock);
+    (directory, db, app, active)
 }
 
 fn add_validator(active: &Value) -> Value {
@@ -58,7 +64,7 @@ async fn status(app: &Router) -> Value {
 
 #[tokio::test]
 async fn only_one_of_two_competing_changes_can_be_registered() {
-    let (_directory, app, active) = setup(Arc::default()).await;
+    let (_directory, _db, app, active) = setup(Arc::default()).await;
     let first = add_validator(&active);
     let second = add_validator(&active);
     let responses = tokio::join!(register(&app, &active, &first), register(&app, &active, &second));
@@ -77,7 +83,7 @@ async fn only_one_of_two_competing_changes_can_be_registered() {
 
 #[tokio::test]
 async fn rejected_changes_leave_no_pending_configuration() {
-    let (_directory, app, active) = setup(Arc::default()).await;
+    let (_directory, _db, app, active) = setup(Arc::default()).await;
     let stale = add_validator(&active);
     let other = json!({"keys": [SigningKey::new().public_key().to_string()], "quorum": 1});
     assert_eq!(register(&app, &stale, &add_validator(&stale)).await, StatusCode::CONFLICT);
@@ -94,7 +100,7 @@ async fn rejected_changes_leave_no_pending_configuration() {
 #[tokio::test]
 async fn config_writes_wait_for_signing() {
     let signing_lock = Arc::new(Mutex::new(()));
-    let (_directory, app, active) = setup(Arc::clone(&signing_lock)).await;
+    let (_directory, _db, app, active) = setup(Arc::clone(&signing_lock)).await;
     let pending = add_validator(&active);
 
     let signing = signing_lock.lock().await;
@@ -116,7 +122,7 @@ async fn config_writes_wait_for_signing() {
 
 #[tokio::test]
 async fn cancel_rejects_a_different_or_missing_pending_change() {
-    let (_directory, app, active) = setup(Arc::default()).await;
+    let (_directory, _db, app, active) = setup(Arc::default()).await;
     let pending = add_validator(&active);
     let request = change_request(Method::DELETE, &active, &pending);
     assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::CONFLICT);
@@ -127,4 +133,77 @@ async fn cancel_rejects_a_different_or_missing_pending_change() {
     let missing = Request::delete(PENDING).body(Body::empty()).unwrap();
     assert!(!app.clone().oneshot(missing).await.unwrap().status().is_success());
     assert_eq!(status(&app).await, json!({"active": active, "pending": pending}));
+}
+
+async fn store_config(db: &ValidatorDbWriter, parent: &BlockHeader, config: &Value) {
+    let keys = config["keys"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|key| PublicKey::from_hex(key.as_str().unwrap()).unwrap())
+        .collect();
+    let config =
+        ValidatorConfig::new(keys, config["quorum"].as_u64().unwrap().try_into().unwrap()).unwrap();
+    let header = BlockHeader::new(
+        parent.commitment(),
+        parent.block_num().child(),
+        parent.chain_commitment(),
+        parent.account_root(),
+        parent.nullifier_root(),
+        parent.note_root(),
+        parent.tx_commitment(),
+        config,
+        parent.fee_parameters().clone(),
+        parent.protocol_config_commitment(),
+        parent.next_protocol_config().cloned(),
+        parent.timestamp(),
+    );
+    db.replace_legacy_signed_block(block_with_header(header), ProtocolConfig::mock(), vec![])
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn signed_change_blocks_cancellation_until_replaced() {
+    let (directory, db, app, active) = setup(Arc::default()).await;
+    let parent = db.load_chain_tip().await.unwrap().unwrap();
+    let pending = add_validator(&active);
+    assert_eq!(register(&app, &active, &pending).await, StatusCode::NO_CONTENT);
+    store_config(&db, &parent, &pending).await;
+    assert_eq!(status(&app).await, json!({"active": active, "pending": pending}));
+    assert_eq!(register(&app, &active, &pending).await, StatusCode::NO_CONTENT);
+    assert_eq!(register(&app, &active, &add_validator(&pending)).await, StatusCode::CONFLICT);
+    assert_eq!(register(&app, &pending, &add_validator(&pending)).await, StatusCode::CONFLICT);
+
+    let restarted = crate::db::load(directory.path().join("validator.sqlite3")).await.unwrap();
+    let app = router(&restarted, parent.validator_config().keys()[0].clone(), Arc::default());
+    assert_eq!(status(&app).await, json!({"active": active, "pending": pending}));
+    let request = change_request(Method::DELETE, &active, &pending);
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let message = to_bytes(response.into_body(), 65536).await.unwrap();
+    assert!(std::str::from_utf8(&message).unwrap().contains("already signed"));
+
+    store_config(&db, &parent, &active).await;
+    let request = change_request(Method::DELETE, &active, &pending);
+    assert_eq!(app.clone().oneshot(request).await.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(status(&app).await, json!({"active": active, "pending": null}));
+}
+
+#[tokio::test]
+async fn confirmed_change_is_already_active_when_cancelled() {
+    let (_directory, db, app, active) = setup(Arc::default()).await;
+    let parent = db.load_chain_tip().await.unwrap().unwrap();
+    let pending = add_validator(&active);
+    store_config(&db, &parent, &pending).await;
+    let transition = db.load_chain_tip().await.unwrap().unwrap();
+    // A restored signed transition can exist without a local registration.
+    assert_eq!(register(&app, &active, &add_validator(&pending)).await, StatusCode::CONFLICT);
+    store_config(&db, &transition, &pending).await;
+    assert_eq!(status(&app).await, json!({"active": pending, "pending": null}));
+    let request = change_request(Method::DELETE, &active, &pending);
+    let response = app.oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let message = to_bytes(response.into_body(), 65536).await.unwrap();
+    assert!(std::str::from_utf8(&message).unwrap().contains("already active"));
 }

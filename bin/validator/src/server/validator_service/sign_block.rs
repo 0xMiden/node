@@ -71,7 +71,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .await;
 
         let header = &proving_inputs.block_header;
-        let changes_validator_config = self
+        let confirms_validator_config = self
             .validate_block(header, &body)
             .await
             .map_err(ValidatorError::into_validation_status)?;
@@ -104,7 +104,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .db
             .write("upsert_signed_block", move |tx| {
                 tx.upsert_signed_block(&signed_block, protocol_config.as_ref(), &proving_inputs)?;
-                if changes_validator_config {
+                if confirms_validator_config {
                     tx.delete_pending_validator_config()?;
                 }
                 // SQLite can finish the write after the RPC is cancelled. Returning the guard keeps

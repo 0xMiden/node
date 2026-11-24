@@ -6,6 +6,7 @@ use std::ops::Deref;
 use miden_node_db::sqlite::{ReadTx, WriteTx};
 
 mod pending_validator_config;
+mod select_chain_state;
 mod select_chain_tip;
 mod select_chain_tip_height;
 mod upsert_signed_block;

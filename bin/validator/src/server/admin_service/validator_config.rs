@@ -14,7 +14,8 @@ use tokio::sync::Mutex;
 use super::error::ApiError;
 use crate::db::ValidatorDbWriter;
 
-const ACTIVE_MISMATCH: &str = "`active` does not match the configuration at the chain tip";
+const ACTIVE_MISMATCH: &str =
+    "`active` does not match the configuration at the confirmed chain tip";
 const DIFFERENT_PENDING: &str = "a different validator configuration is pending";
 
 #[derive(Clone)]
@@ -96,10 +97,10 @@ async fn status(State(admin): State<ConfigService>) -> Result<Json<Status>, ApiE
     admin
         .db
         .read("validator_config_status", |tx| {
-            let tip = tx.select_chain_tip()?.ok_or_else(missing_chain_tip)?;
+            let chain = tx.select_chain_state()?.ok_or_else(missing_chain_tip)?;
             let pending = tx.select_pending_validator_config()?;
             Ok(Json(Status {
-                active: tip.validator_config().into(),
+                active: chain.tip.validator_config().into(),
                 pending: pending.as_ref().map(Into::into),
             }))
         })
@@ -123,9 +124,16 @@ async fn register(
     let _guard_until_commit = admin
         .db
         .write("register_validator_config", move |tx| {
-            let tip = tx.select_chain_tip()?.ok_or_else(missing_chain_tip)?;
-            if tip.validator_config() != &active {
+            let chain = tx.select_chain_state()?.ok_or_else(missing_chain_tip)?;
+            if chain.tip.validator_config() != &active {
                 return Err(ApiError::conflict(ACTIVE_MISMATCH));
+            }
+            if chain.pending.as_ref().is_some_and(|header| {
+                header.validator_config() != &active && header.validator_config() != &pending
+            }) {
+                return Err(ApiError::conflict(
+                    "a different signed validator configuration change is awaiting confirmation",
+                ));
             }
             match tx.select_pending_validator_config()? {
                 Some(config) if config != pending => {
@@ -149,12 +157,21 @@ async fn cancel(
     let _guard_until_commit = admin
         .db
         .write("cancel_validator_config", move |tx| {
-            let tip = tx.select_chain_tip()?.ok_or_else(missing_chain_tip)?;
-            if tip.validator_config() == &pending {
+            let chain = tx.select_chain_state()?.ok_or_else(missing_chain_tip)?;
+            if chain.tip.validator_config() == &pending {
                 return Err(ApiError::conflict("the requested configuration is already active"));
             }
-            if tip.validator_config() != &active {
+            if chain.tip.validator_config() != &active {
                 return Err(ApiError::conflict(ACTIVE_MISMATCH));
+            }
+            if chain
+                .pending
+                .as_ref()
+                .is_some_and(|header| header.validator_config() == &pending)
+            {
+                return Err(ApiError::conflict(
+                    "the validator has already signed the change and is awaiting confirmation",
+                ));
             }
             match tx.select_pending_validator_config()? {
                 Some(config) if config == pending => tx.delete_pending_validator_config()?,

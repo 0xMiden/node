@@ -72,8 +72,9 @@ A successful registration survives a restart. Your validator will continue signi
 If registration returns a conflict, run `status` again. The active configuration may have changed, or a different change
 may be pending.
 
-After your validator signs the transition block, `status` shows the new configuration under `active` and `null` under
-`pending`. Check with the sequencer to confirm the block was committed.
+The latest signed block can be replaced. While it contains the transition, `status` keeps the previous configuration
+under `active` and the registered change under `pending`. Signing a valid child confirms the transition, moves its
+configuration to `active`, and clears `pending`. Check with the sequencer to confirm the transition block was committed.
 
 ### Cancel a pending change
 
@@ -83,8 +84,12 @@ On each validator where you registered the change, cancel it with the same file.
 miden-validator validator-config cancel change.json
 ```
 
-Success confirms that the validator cancelled the change in the file. If the configuration is already active, `cancel`
-reports that directly. For other conflicts, run `status` to see which change, if any, is pending.
+Success confirms that the validator cancelled the change in the file. If the validator has already signed the
+transition, cancellation returns a conflict. The sequencer can replace that block with one retaining the previous
+configuration, after which you can retry cancellation. If the validator has signed a child of the transition, `cancel`
+reports that the configuration is already active.
+
+For other conflicts, run `status` to see which change, if any, is pending.
 
 ## Storage Key Setup
 
@@ -200,15 +205,15 @@ authentication and authorization externally, and prevent direct access to this l
 network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
 access.
 
-| Method   | Path                                              | Request                                                | Result                                                                                          |
-| -------- | ------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
-| `GET`    | `/admin/v1/validator-config`                      | None                                                   | The active and pending validator configurations.                                                |
-| `PUT`    | `/admin/v1/validator-config/pending`              | JSON object with `active` and `pending` configurations | `204` on registration, `409` if `active` differs from the tip or a different change is pending. |
-| `DELETE` | `/admin/v1/validator-config/pending`              | Same JSON object used for registration                 | `204` when the matching change is cancelled, `409` on a conflict.                               |
-| `GET`    | `/admin/v1/transactions`                          | Query parameters                                       | One page of committed transactions and a `pagination` object.                                   |
-| `GET`    | `/admin/v1/transactions/{transaction_id}`         | None                                                   | The stored record of one validated transaction, or `404` if this validator did not validate it. |
-| `POST`   | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}`  | `{"decryption_share":"<hex>"}`                                                                  |
-| `POST`   | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                      | `{"plaintext":"<hex>"}`                                                                         |
+| Method   | Path                                              | Request                                                | Result                                                                                                    |
+| -------- | ------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| `GET`    | `/admin/v1/validator-config`                      | None                                                   | The active and pending validator configurations.                                                          |
+| `PUT`    | `/admin/v1/validator-config/pending`              | JSON object with `active` and `pending` configurations | `204` on registration, `409` if `active` differs from the confirmed tip or a different change is pending. |
+| `DELETE` | `/admin/v1/validator-config/pending`              | Same JSON object used for registration                 | `204` when the matching change is cancelled, `409` on a conflict.                                         |
+| `GET`    | `/admin/v1/transactions`                          | Query parameters                                       | One page of committed transactions and a `pagination` object.                                             |
+| `GET`    | `/admin/v1/transactions/{transaction_id}`         | None                                                   | The stored record of one validated transaction, or `404` if this validator did not validate it.           |
+| `POST`   | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}`  | `{"decryption_share":"<hex>"}`                                                                            |
+| `POST`   | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                      | `{"plaintext":"<hex>"}`                                                                                   |
 
 Byte values in transaction and decryption requests are hexadecimal strings without a `0x` prefix. Errors from request
 handlers have the form `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return

@@ -45,6 +45,15 @@ pub struct BlockBackup {
     pub proving_inputs: Option<BlockProofRequest>,
 }
 
+/// The confirmed tip and its replaceable signed child.
+///
+/// Genesis is confirmed at bootstrap. Signing and persisting a child confirms its parent and
+/// makes the child pending.
+pub(crate) struct ChainState {
+    pub tip: BlockHeader,
+    pub pending: Option<BlockHeader>,
+}
+
 impl ValidatorDbReader {
     /// Runs the caller's queries against one read-only snapshot.
     pub(crate) async fn read<R, E>(
