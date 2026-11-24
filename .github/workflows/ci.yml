@@ -105,21 +105,20 @@ jobs:
         with:
           diagnostics: "true"
 
-  docker:
-    name: Docker dry-run
-    permissions:
-      # Reusable-workflow permission ceiling; dry-run jobs do not receive these writes.
-      attestations: write
-      contents: read
-      id-token: write
-      packages: write
-    uses: $/.github/workflows/docker.yml
-    secrets:
-      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
-      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
-    with:
-      mode: dry-run
-      ref: ${{ github.sha }}
+  docker-compose:
+    name: Docker Compose
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: $/.github/actions/publish-compose
+        with:
+          compose-file: docker-compose.yml
+          mode: dry-run
+          package: miden-local-network
+          registry-prefix: ghcr.io/0xmiden
+          tag: dry-run
 
   clippy:
     name: lint - clippy

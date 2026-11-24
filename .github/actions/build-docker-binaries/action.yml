@@ -4,6 +4,9 @@ inputs:
   architecture:
     description: Native Docker architecture
     required: true
+  report-tag:
+    description: Image tag identifying this build's compiler cache report
+    required: true
 
 outputs:
   context:
@@ -35,7 +38,7 @@ runs:
       if: always()
       uses: actions/upload-artifact@v7.0.2
       with:
-        name: kache-report-${{ inputs.architecture }}
+        name: kache-report-${{ inputs.report-tag }}-${{ inputs.architecture }}
         path: |
           ${{ runner.temp }}/docker-binaries/report.md
           ${{ runner.temp }}/docker-binaries/report.json
