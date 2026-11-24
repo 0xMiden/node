@@ -128,6 +128,15 @@ pub enum DatabaseError {
 
 #[derive(Error, Debug)]
 pub enum StateInitializationError {
+    #[error(
+        "missing forest tree for account {account_id}, slot {slot:?}. Delete the account state forest directory and restart to rebuild from SQLite."
+    )]
+    MissingForestTree {
+        account_id: AccountId,
+        slot: Option<String>,
+    },
+    #[error("failed to recover committed block: {0}")]
+    BlockRecovery(String),
     #[error("account tree IO error: {0}")]
     AccountTreeIoError(String),
     #[error("nullifier tree IO error: {0}")]
