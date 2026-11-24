@@ -1,5 +1,5 @@
 -- Returns the block header of the chain tip.
-SELECT block_header, commitment
+SELECT block_header
 FROM block_headers
 ORDER BY block_num DESC
 LIMIT 1

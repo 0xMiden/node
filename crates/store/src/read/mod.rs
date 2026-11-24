@@ -7,7 +7,6 @@ mod transaction;
 pub use snapshot::StateSnapshot;
 pub use transaction::ReadTransaction;
 pub(crate) use transaction::{
-    block_header_from_row,
     select_block_header,
     select_block_headers,
     select_note_inclusion_proofs,

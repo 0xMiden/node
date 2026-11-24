@@ -1,7 +1,5 @@
 use miden_node_db::sqlite::ReadTx;
 
-mod block_header_row;
-pub(crate) use block_header_row::block_header_from_row;
 mod select_block_header;
 pub(crate) use select_block_header::select_block_header;
 mod select_block_headers;

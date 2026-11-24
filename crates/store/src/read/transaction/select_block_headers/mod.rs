@@ -3,7 +3,6 @@ use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 
 use super::ReadTransaction;
-use super::block_header_row::block_header_from_row;
 use crate::errors::DatabaseError;
 
 const SQL: &str = include_str!("query.sql");
@@ -36,7 +35,7 @@ pub(crate) fn select_block_headers(
 
     let blocks = InList::from_values(blocks);
 
-    Ok(tx.query(SQL, &[&blocks], block_header_from_row)?)
+    Ok(tx.query(SQL, &[&blocks], |row| row.get(0))?)
 }
 
 #[cfg(test)]
