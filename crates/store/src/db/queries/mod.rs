@@ -73,9 +73,6 @@ pub(crate) use insert_block_header::insert_block_header;
 mod select_all_block_header_commitments;
 pub(crate) use select_all_block_header_commitments::select_all_block_header_commitments;
 
-mod select_block_header_and_signatures_by_block_num;
-pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
-
 mod select_chain_tip;
 pub(crate) use select_chain_tip::select_chain_tip;
 
@@ -89,9 +86,6 @@ pub(crate) use insert_protocol_config::insert_protocol_config;
 
 mod select_protocol_config_by_commitment;
 pub(crate) use select_protocol_config_by_commitment::select_protocol_config_by_commitment;
-
-mod select_protocol_config_commitment_at;
-pub(crate) use select_protocol_config_commitment_at::select_protocol_config_commitment_at;
 
 // NOTE QUERIES
 // =================================================================================================

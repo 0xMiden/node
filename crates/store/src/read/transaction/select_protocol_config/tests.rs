@@ -38,7 +38,9 @@ fn select_protocol_config_commitment_at(
     db: &TestDb,
     block_number: BlockNumber,
 ) -> Result<Option<Word>, DatabaseError> {
-    db.read(move |tx| queries::select_protocol_config_commitment_at(tx, block_number))
+    db.read(move |tx| {
+        super::ReadTransaction::new(tx).select_protocol_config_commitment_at(block_number)
+    })
 }
 
 #[test]
