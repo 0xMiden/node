@@ -159,6 +159,8 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          # Include the base parent of a PR merge commit for the tracing path check.
+          fetch-depth: 2
       - uses: $/.github/actions/cleanup-runner
         if: env.USE_WARP != 'true'
       - name: Verify protected branch ruleset target
@@ -177,7 +179,23 @@ jobs:
       - name: Build tests
         run: cargo nextest run --all-features --workspace --no-run
       - name: Run tests
-        run: cargo nextest run --all-features --workspace
+        run: cargo nextest run --all-features --workspace -E 'not package(=miden-node-tracing)'
+      - name: Check for tracing changes
+        uses: dorny/paths-filter@v4.0.3
+        id: paths
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          # Compare commits locally, including the full diff of large pull requests.
+          token: ''
+          # On pushes, using the pushed branch as the base compares against its previous tip.
+          base: ${{ github.event.ref }}
+          filters: |
+            tracing:
+              - 'crates/tracing/**'
+              - 'crates/tracing-macro/**'
+      - name: Run tracing tests
+        if: github.event_name == 'workflow_dispatch' || steps.paths.outputs.tracing == 'true'
+        run: cargo nextest run --all-features --workspace -E 'package(=miden-node-tracing)'
       - name: Doc tests
         run: cargo test --doc --workspace --all-features
       - uses: $/.github/actions/report-kache
