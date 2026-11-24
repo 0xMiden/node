@@ -9,7 +9,7 @@ use miden_protocol::account::AccountId;
 
 use super::error_codes::SyncAccountStorageMapsV2ErrorCode as ErrorCode;
 use super::stream_settings::{DB_PAGE_SIZE, SEND_TIMEOUT, STREAM_BUFFER_SIZE};
-use super::sync_stream::{Paginator, SyncResponseStream, SyncStream};
+use super::sync_stream::{Paginator, SyncPage, SyncResponseStream, SyncStream};
 use super::{RpcService, database_error_to_status};
 
 type RequestInput = (AccountId, SyncRange);
@@ -96,13 +96,14 @@ struct StorageMapPaginator {
 impl Paginator for StorageMapPaginator {
     type Item = StorageMapValue;
 
-    async fn load_next_page(&mut self) -> tonic::Result<Option<Vec<Self::Item>>> {
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>> {
         if self.done {
             return Ok(None);
         }
         // Even an empty delta must validate its target and retention horizon. Query one bounded
         // target row to reuse the same snapshot validation, then discard it.
         let range = self.block_range.database_range();
+        let is_first_page = self.cursor.is_none();
         let page = self
             .state
             .view()
@@ -130,7 +131,10 @@ impl Paginator for StorageMapPaginator {
         }
         self.done = page.next_cursor.is_none();
         self.cursor = page.next_cursor;
-        Ok((!page.values.is_empty()).then_some(page.values))
+        if is_first_page && self.done && page.values.is_empty() {
+            return Ok(None);
+        }
+        SyncPage::new(page.values).map(Some)
     }
 }
 
