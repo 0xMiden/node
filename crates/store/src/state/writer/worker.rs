@@ -3,15 +3,7 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
-use miden_node_tracing::{
-    ErrorReport,
-    Instrument,
-    debug,
-    error,
-    instrument,
-    miden_span_record,
-    warn,
-};
+use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -304,8 +296,10 @@ impl WriteWorker {
         if let Some((height, snapshot)) = self.snapshots.push(block_num, snapshot) {
             self.retired_snapshots.push(height, snapshot);
         }
+        // A reader holding an evicted generation does not affect the applied block, so the report
+        // is a warning; an error-level event would mark the `write_block` span as failed.
         self.retired_snapshots.reclaim(|error| {
-            error!(
+            warn!(
                 &error,
                 "Evicted state snapshot is still held",
                 snapshot.block.number = error.block_num,
