@@ -6,7 +6,11 @@ mod transaction;
 
 pub use snapshot::StateSnapshot;
 pub use transaction::ReadTransaction;
-pub(crate) use transaction::select_block_header;
+pub(crate) use transaction::{
+    select_block_header,
+    select_block_headers,
+    select_note_inclusion_proofs,
+};
 
 /// A read-only database transaction and tree snapshot at the same committed block.
 ///
