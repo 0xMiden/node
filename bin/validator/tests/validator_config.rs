@@ -71,14 +71,10 @@ async fn register_inspect_and_cancel_a_change() -> anyhow::Result<()> {
     let url = format!("http://{}/", listener.local_addr()?);
     let signer = SigningKey::new();
     let other = SigningKey::new().public_key();
-    let stale = json!({"keys": [signer.public_key().to_string()], "quorum": 1});
+    let stale = json!(3);
     let validator_config = ValidatorConfig::new(vec![signer.public_key(), other], 2)?;
-    let keys = validator_config.keys().iter().map(ToString::to_string).collect::<Vec<_>>();
-    let active = json!({"keys": keys, "quorum": 2});
-    let mut next_keys = keys;
-    next_keys.push(SigningKey::new().public_key().to_string());
-    next_keys.sort();
-    let pending = json!({"keys": next_keys, "quorum": 3});
+    let active = json!(2);
+    let pending = json!(1);
     let server = admin_server(
         &directory.path().join("validator.sqlite3"),
         signer,

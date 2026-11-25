@@ -17,9 +17,9 @@ pub struct ValidatorConfigOptions {
 
 #[derive(clap::Subcommand)]
 enum ConfigCommand {
-    /// Print the active and pending validator configurations as JSON.
+    /// Print the active and pending validator quorums as JSON.
     Status,
-    /// Register a pending validator configuration change.
+    /// Register a pending validator quorum change.
     Register(ChangeFile),
     /// Cancel the change registered with this file.
     Cancel(ChangeFile),
@@ -27,7 +27,7 @@ enum ConfigCommand {
 
 #[derive(clap::Args)]
 struct ChangeFile {
-    /// JSON file containing the active and pending configurations.
+    /// JSON file containing the active and pending quorum values.
     file: PathBuf,
 }
 
@@ -69,11 +69,11 @@ impl ValidatorConfigOptions {
             },
             ConfigCommand::Register(change) => {
                 change.send(client.put(url)).await?;
-                println!("Registered the pending validator configuration.");
+                println!("Registered the pending validator quorum.");
             },
             ConfigCommand::Cancel(change) => {
                 change.send(client.delete(url)).await?;
-                println!("Cancelled the pending validator configuration change.");
+                println!("Cancelled the pending validator quorum change.");
             },
         }
         Ok(())

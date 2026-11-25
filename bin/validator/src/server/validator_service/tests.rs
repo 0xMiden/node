@@ -138,12 +138,10 @@ impl TestValidator {
         empty_block(&self.chain_tip, &self.chain)
     }
 
-    async fn register_validator_config(&self, config: ValidatorConfig) {
+    async fn register_pending_quorum(&self, quorum: u16) {
         self.server
             .db
-            .write("register test configuration", move |tx| {
-                tx.insert_pending_validator_config(&config)
-            })
+            .write("register test quorum", move |tx| tx.insert_pending_validator_quorum(quorum))
             .await
             .unwrap();
     }
@@ -1902,7 +1900,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
 }
 
 #[tokio::test]
-async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
+async fn restored_validator_config_is_confirmed_by_a_child_and_survives_restart() {
     let mut tv = TestValidator::new().await;
     let active = tv.chain_tip.validator_config().clone();
     let signer = tv.server.signer.public_key();
@@ -1913,10 +1911,21 @@ async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
         tonic::Code::InvalidArgument
     );
 
-    tv.register_validator_config(next.clone()).await;
+    tv.register_pending_quorum(next.quorum()).await;
     tv.apply_empty_block().await;
     let transition = tv.propose_empty_block().with_next_validator_config(next.clone());
-    tv.apply_block(transition.clone()).await;
+    let (header, _) = transition.clone().into_header_and_body().unwrap();
+    tv.server
+        .db
+        .insert_legacy_signed_block(
+            crate::db::block_with_header(header.clone()),
+            tv.protocol_config.clone(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    tv.chain.add_block(&tv.chain_tip, false);
+    tv.chain_tip = header;
     drop(tv.server.db);
     tv.server.db = crate::db::load(tv.temp_dir.path().join("validator.sqlite3")).await.unwrap();
 
@@ -1926,16 +1935,14 @@ async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
         .read("configuration status", |tx| {
             Ok::<_, miden_node_db::DatabaseError>((
                 tx.select_chain_state()?.unwrap(),
-                tx.select_pending_validator_config()?,
+                tx.select_pending_validator_quorum()?,
             ))
         })
         .await
         .unwrap();
     assert_eq!(chain.tip.validator_config(), &active);
     assert_eq!(chain.pending.unwrap().validator_config(), &next);
-    assert_eq!(pending, Some(next.clone()));
-    tv.call_sign_block(&transition).await.unwrap();
-
+    assert_eq!(pending, Some(next.quorum()));
     let child = tv.propose_empty_block();
     let mut keys = next.keys().to_vec();
     keys.push(random_secret_key().public_key());
@@ -1948,10 +1955,10 @@ async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
     let pending = tv
         .server
         .db
-        .read("pending configuration", |tx| tx.select_pending_validator_config())
+        .read("pending configuration", |tx| tx.select_pending_validator_quorum())
         .await
         .unwrap();
-    assert_eq!(pending, Some(next.clone()));
+    assert_eq!(pending, Some(next.quorum()));
 
     tv.apply_block(child).await;
     let (chain, pending) = tv
@@ -1960,7 +1967,7 @@ async fn validator_config_is_confirmed_by_a_child_and_survives_restart() {
         .read("configuration status", |tx| {
             Ok::<_, miden_node_db::DatabaseError>((
                 tx.select_chain_state()?.unwrap(),
-                tx.select_pending_validator_config()?,
+                tx.select_pending_validator_quorum()?,
             ))
         })
         .await
@@ -1980,8 +1987,17 @@ async fn replacing_a_transition_block_can_restore_the_previous_validator_config(
     .unwrap();
     let original = tv.propose_empty_block();
     let transition = original.clone().with_next_validator_config(next.clone());
-    tv.register_validator_config(next.clone()).await;
-    tv.call_sign_block(&transition).await.unwrap();
+    tv.register_pending_quorum(next.quorum()).await;
+    let (header, _) = transition.clone().into_header_and_body().unwrap();
+    tv.server
+        .db
+        .insert_legacy_signed_block(
+            crate::db::block_with_header(header),
+            tv.protocol_config.clone(),
+            vec![],
+        )
+        .await
+        .unwrap();
     tv.call_sign_block(&original).await.unwrap();
 
     let (chain, pending) = tv
@@ -1990,18 +2006,18 @@ async fn replacing_a_transition_block_can_restore_the_previous_validator_config(
         .read("configuration status", |tx| {
             Ok::<_, miden_node_db::DatabaseError>((
                 tx.select_chain_state()?.unwrap(),
-                tx.select_pending_validator_config()?,
+                tx.select_pending_validator_quorum()?,
             ))
         })
         .await
         .unwrap();
     assert_eq!(chain.tip.validator_config(), &active);
     assert_eq!(chain.pending.unwrap().validator_config(), &active);
-    assert_eq!(pending, Some(next));
+    assert_eq!(pending, Some(next.quorum()));
 
     tv.server
         .db
-        .write("cancel test configuration", |tx| tx.delete_pending_validator_config())
+        .write("cancel test quorum", |tx| tx.delete_pending_validator_quorum())
         .await
         .unwrap();
     assert_eq!(
@@ -2011,4 +2027,19 @@ async fn replacing_a_transition_block_can_restore_the_previous_validator_config(
     tv.apply_block(original).await;
     tv.apply_empty_block().await;
     assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
+}
+
+#[tokio::test]
+async fn changing_validator_keys_is_rejected_even_with_a_registered_quorum() {
+    let tv = TestValidator::new().await;
+    let config = ValidatorConfig::new(
+        vec![tv.server.signer.public_key(), random_secret_key().public_key()],
+        2,
+    )
+    .unwrap();
+    tv.register_pending_quorum(config.quorum()).await;
+    let block = tv.propose_empty_block().with_next_validator_config(config);
+    let error = tv.call_sign_block(&block).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("changing the validator key set is unsupported"));
 }

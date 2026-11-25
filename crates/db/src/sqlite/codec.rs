@@ -377,7 +377,6 @@ impl_raw_blob_codec!(
 );
 
 impl_protobuf_codec!(
-    miden_protocol::block::ValidatorConfig,
     miden_protocol::block::BlockHeader,
     miden_protocol::block::SignedBlock,
     miden_protocol::block::BlockSignatures,

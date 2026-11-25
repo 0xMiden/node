@@ -12,7 +12,7 @@ const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 impl ValidatorService {
     /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
     /// against local state, and checks that the parent authorizes the signing key. Returns whether
-    /// accepting this block confirms a validator configuration change in its parent.
+    /// accepting this block confirms a validator quorum change in its parent.
     #[instrument(err)]
     pub(super) async fn validate_block(
         &self,
@@ -87,14 +87,18 @@ impl ValidatorService {
             return Err(ValidatorError::PrevBlockCommitmentMismatch);
         }
 
-        if proposed_header.validator_config() != prev.validator_config() {
+        if proposed_header.validator_config().keys() != prev.validator_config().keys() {
+            return Err(ValidatorError::ValidatorKeySetChange);
+        }
+
+        if proposed_header.validator_config().quorum() != prev.validator_config().quorum() {
             let pending = self
                 .db
-                .read("pending_validator_config", |tx| tx.select_pending_validator_config())
+                .read("pending_validator_quorum", |tx| tx.select_pending_validator_quorum())
                 .await
                 .map_err(ValidatorError::DatabaseError)?;
-            if pending.as_ref() != Some(proposed_header.validator_config()) {
-                return Err(ValidatorError::UnapprovedValidatorConfig);
+            if pending != Some(proposed_header.validator_config().quorum()) {
+                return Err(ValidatorError::UnregisteredValidatorQuorum);
             }
         }
 
@@ -108,7 +112,7 @@ impl ValidatorService {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
-        Ok(prev.validator_config() != chain.tip.validator_config())
+        Ok(prev.validator_config().quorum() != chain.tip.validator_config().quorum())
     }
 }
 
@@ -119,7 +123,8 @@ impl ValidatorError {
             Self::UnvalidatedTransactions(_)
             | Self::BlockTimestampTooFarInFuture { .. }
             | Self::BlockNumberMismatch { .. }
-            | Self::UnapprovedValidatorConfig
+            | Self::UnregisteredValidatorQuorum
+            | Self::ValidatorKeySetChange
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),

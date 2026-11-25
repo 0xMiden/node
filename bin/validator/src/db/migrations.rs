@@ -58,7 +58,7 @@ mod tests {
         SchemaHash::from_hex("0cd30601af887ad6baf71ad793fa5a08bdaeb34ea5113e6bc5d506530d486047"),
         SchemaHash::from_hex("027a6c42055bc813284d2a710e972fe240ec5f50cfc9fc21d498b8109d9dfe65"),
         SchemaHash::from_hex("51523df2f2017f137b96becb9111673798594b2af214a8d447c2ae97f69e5873"),
-        SchemaHash::from_hex("a9e38e4c235b9a9a76b57bef77e09a468cea680c214f8e8aa4c905a2049afcd8"),
+        SchemaHash::from_hex("9ffe4ff90d1c7bfb26ea0d8472e06534c8ea4079e1ef66da85dc069ecfa40c0a"),
     ];
 
     #[test]

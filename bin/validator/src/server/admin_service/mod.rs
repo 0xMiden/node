@@ -42,11 +42,8 @@ impl ValidatorAdminServer {
         operator_key: GoldenOperatorKey,
         validator: &ValidatorServer,
     ) -> Self {
-        let router = router(operator_key, validator.db.reader()).merge(validator_config::router(
-            &validator.db,
-            validator.signer.public_key(),
-            Arc::clone(&validator.signing_lock),
-        ));
+        let router = router(operator_key, validator.db.reader())
+            .merge(validator_config::router(&validator.db, Arc::clone(&validator.signing_lock)));
         Self { address, router }
     }
 

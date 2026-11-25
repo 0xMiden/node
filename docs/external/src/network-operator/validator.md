@@ -38,28 +38,24 @@ directory alone is not sufficient to restart the validator.
 For storage compatibility and migration procedures, see
 [Upgrades and Migrations](/network-operator/upgrades-and-migrations).
 
-## Changing the chain's validator configuration
+## Changing the chain's validator quorum
 
-You can add validator signing keys, change the quorum, or do both in one block. Operators can register the change at
-different times. The block needs enough signatures to satisfy the quorum in its parent header.
+You can change how many validator signatures are required per block. Operators can register the change at different
+times. The transition block needs enough signatures to satisfy the quorum in its parent header.
 
 Set `VALIDATOR_ADMIN_URL` to your running validator's [private admin URL](#administration-api), or pass `--admin-url` to
-the command. Save its configuration to `change.json`.
+the command. Save its quorum settings to `change.json`.
 
 ```bash
 export VALIDATOR_ADMIN_URL=http://127.0.0.1:50102
 miden-validator validator-config status > change.json
 ```
 
-Review `active` and any existing `pending` change. In `pending.keys`, include every active key and any keys you want to
-add. Set `pending.quorum` to the number of signatures required per block. This example adds a third validator and
-requires signatures from any two of the three.
+Review the active quorum and any existing pending change. Set `pending` to the agreed quorum, between one and the number
+of validators. This example changes the quorum from three to two.
 
 ```json
-{
-  "active": { "keys": ["<key-1>", "<key-2>"], "quorum": 2 },
-  "pending": { "keys": ["<key-1>", "<key-2>", "<key-3>"], "quorum": 2 }
-}
+{ "active": 3, "pending": 2 }
 ```
 
 Each participating operator should review the same file and register it on their validator.
@@ -69,12 +65,12 @@ miden-validator validator-config register change.json
 ```
 
 A successful registration survives a restart. Your validator will continue signing blocks with the active configuration.
-If registration returns a conflict, run `status` again. The active configuration may have changed, or a different change
-may be pending.
+If registration returns a conflict, run `status` again. The active quorum may have changed, or a different change may be
+pending.
 
-The latest signed block can be replaced. While it contains the transition, `status` keeps the previous configuration
-under `active` and the registered change under `pending`. Signing a valid child confirms the transition, moves its
-configuration to `active`, and clears `pending`. Check with the sequencer to confirm the transition block was committed.
+The latest signed block can be replaced. While it contains the transition, `status` keeps the previous quorum under
+`active` and the registered change under `pending`. Signing a valid child confirms the transition, moves its quorum to
+`active`, and clears `pending`. Check with the sequencer to confirm the transition block was committed.
 
 ### Cancel a pending change
 
@@ -86,8 +82,8 @@ miden-validator validator-config cancel change.json
 
 Success confirms that the validator cancelled the change in the file. If the validator has already signed the
 transition, cancellation returns a conflict. The sequencer can replace that block with one retaining the previous
-configuration, after which you can retry cancellation. If the validator has signed a child of the transition, `cancel`
-reports that the configuration is already active.
+quorum, after which you can retry cancellation. If the validator has signed a child of the transition, `cancel` reports
+that the quorum is already active.
 
 For other conflicts, run `status` to see which change, if any, is pending.
 
@@ -193,8 +189,8 @@ Use `miden-validator start --help` for the complete current option list.
 
 ## Administration API
 
-Use the private JSON API to [register a pending validator configuration](#changing-the-chains-validator-configuration),
-inspect stored transactions, and request decryption shares. The listener is disabled by default. Enable it with:
+Use the private JSON API to [register a pending quorum change](#changing-the-chains-validator-quorum), inspect stored
+transactions, and request decryption shares. The listener is disabled by default. Enable it with:
 
 ```bash
 --admin.listen 127.0.0.1:50102
@@ -205,15 +201,15 @@ authentication and authorization externally, and prevent direct access to this l
 network behind an authenticated proxy or gateway. The listener serves HTTP; terminate TLS at the proxy for remote
 access.
 
-| Method   | Path                                              | Request                                                | Result                                                                                                    |
-| -------- | ------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/admin/v1/validator-config`                      | None                                                   | The active and pending validator configurations.                                                          |
-| `PUT`    | `/admin/v1/validator-config/pending`              | JSON object with `active` and `pending` configurations | `204` on registration, `409` if `active` differs from the confirmed tip or a different change is pending. |
-| `DELETE` | `/admin/v1/validator-config/pending`              | Same JSON object used for registration                 | `204` when the matching change is cancelled, `409` on a conflict.                                         |
-| `GET`    | `/admin/v1/transactions`                          | Query parameters                                       | One page of committed transactions and a `pagination` object.                                             |
-| `GET`    | `/admin/v1/transactions/{transaction_id}`         | None                                                   | The stored record of one validated transaction, or `404` if this validator did not validate it.           |
-| `POST`   | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}`  | `{"decryption_share":"<hex>"}`                                                                            |
-| `POST`   | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                      | `{"plaintext":"<hex>"}`                                                                                   |
+| Method   | Path                                              | Request                                               | Result                                                                                                       |
+| -------- | ------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/admin/v1/validator-config`                      | None                                                  | The active and pending validator quorums.                                                                    |
+| `PUT`    | `/admin/v1/validator-config/pending`              | JSON object with `active` and `pending` quorum values | `204` on registration, `409` if `active` differs from the confirmed quorum or a different change is pending. |
+| `DELETE` | `/admin/v1/validator-config/pending`              | Same JSON object used for registration                | `204` when the matching change is cancelled, `409` on a conflict.                                            |
+| `GET`    | `/admin/v1/transactions`                          | Query parameters                                      | One page of committed transactions and a `pagination` object.                                                |
+| `GET`    | `/admin/v1/transactions/{transaction_id}`         | None                                                  | The stored record of one validated transaction, or `404` if this validator did not validate it.              |
+| `POST`   | `/admin/v1/decryption-share`                      | `{"ciphertext":"<hex>","decryption_context":"<hex>"}` | `{"decryption_share":"<hex>"}`                                                                               |
+| `POST`   | `/admin/v1/transactions/{transaction_id}/decrypt` | `{"decryption_shares":["<hex>"]}`                     | `{"plaintext":"<hex>"}`                                                                                      |
 
 Byte values in transaction and decryption requests are hexadecimal strings without a `0x` prefix. Errors from request
 handlers have the form `{"error":"<message>"}`: invalid parameter values return `400`, and internal failures return

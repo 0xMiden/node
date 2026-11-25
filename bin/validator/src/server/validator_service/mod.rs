@@ -51,8 +51,10 @@ pub enum ValidatorError {
     },
     #[error("previous block commitment does not match chain tip")]
     PrevBlockCommitmentMismatch,
-    #[error("validator configuration change has not been registered")]
-    UnapprovedValidatorConfig,
+    #[error("validator quorum change has not been registered")]
+    UnregisteredValidatorQuorum,
+    #[error("changing the validator key set is unsupported")]
+    ValidatorKeySetChange,
     #[error("genesis block cannot be replaced")]
     CannotReplaceGenesis,
     #[error(
