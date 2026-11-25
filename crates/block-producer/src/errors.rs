@@ -41,7 +41,7 @@ pub enum ProofSchedulerError {
 pub enum MempoolSubmissionError {
     #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreStateReadFailed(#[source] DatabaseError),
+    StoreStateReadFailed(#[from] DatabaseError),
 
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
