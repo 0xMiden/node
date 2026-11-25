@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
-use miden_node_store::{DatabaseError, queries};
+use miden_node_store::DatabaseError;
 use miden_node_tracing::{instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_protocol::Word;
@@ -77,13 +77,13 @@ impl proto::server::miden_node_v2_node_service::GetAccountInfos for RpcService {
 
         let accounts = self
             .state
-            .view()
-            .read(target..=target, move |tx, range| {
-                queries::check_account_history_target(tx, target)?;
+            .read(move |view| {
+                let range = view.snapshot.scope_range(target..=target)?;
+                view.tx.check_account_history_target(range.scoped_end())?;
                 accounts
                     .into_iter()
                     .map(|(id, known)| {
-                        let result = match queries::account_headers(tx, id, range.scoped_end()) {
+                        let result = match view.tx.account_headers(id, range.scoped_end()) {
                             Ok((header, _)) if Some(header.to_commitment()) == known => {
                                 Info::Unchanged(())
                             },
@@ -102,7 +102,6 @@ impl proto::server::miden_node_v2_node_service::GetAccountInfos for RpcService {
                     .collect::<Result<Vec<_>, DatabaseError>>()
             })
             .await
-            .and_then(|result| result)
             .map_err(|err| database_error_to_status(&err))?;
 
         Ok(v2::GetAccountInfosResponse { block_num: target.as_u32(), accounts })

@@ -1,5 +1,6 @@
 use miden_node_db::sqlite::ReadTx;
 
+mod account;
 mod account_storage_map_updates;
 mod account_vault_updates;
 mod note_sync_page;
