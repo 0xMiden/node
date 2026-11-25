@@ -240,6 +240,7 @@ async fn v2_account_witnesses() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_entry_witnesses() {
+    use miden_protocol::account::{StorageMapPatch, StorageMapPatchEntries, StorageSlotPatch};
     for count in [1, 65] {
         let (account, empty_map, value_slot) = entry_witness_account(count);
         let (mut store, genesis, config) = fixture(&account).await;
@@ -247,7 +248,13 @@ async fn v2_entry_witnesses() {
         let mut updated = account.clone();
         let patch = AccountPatch::new(
             account.id(),
-            AccountStoragePatch::default(),
+            AccountStoragePatch::from_entries([(
+                StorageSlotName::mock(0),
+                StorageSlotPatch::Map(StorageMapPatch::Update {
+                    entries: StorageMapPatchEntries::from_raw(BTreeMap::from([(key(0), word(99))])),
+                }),
+            )])
+            .unwrap(),
             AccountVaultPatch::new(BTreeMap::from([(asset.id(), Word::empty())])).unwrap(),
             AccountCodePatch::default(),
             Some(account.nonce() + Felt::ONE),

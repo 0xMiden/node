@@ -1,15 +1,8 @@
 use std::collections::HashSet;
 
-use miden_node_proto::domain::account::{
-    AccountDetailRequest,
-    AccountStorageRequest,
-    AccountVaultRequest,
-    GetAccountRequest,
-    SlotData,
-    StorageMapEntries,
-    StorageMapRequest,
-};
+use miden_node_proto::domain::account::StorageMapEntries;
 use miden_node_proto::{DecodeMessage, generated as proto};
+use miden_node_store::GetAccountError;
 use miden_node_tracing::{instrument, miden_span_record};
 use miden_node_utils::limiter::{QueryParamStorageMapKeyTotalLimit, QueryParamStorageMapSlotLimit};
 use miden_protocol::account::{AccountId, StorageMapKey, StorageSlotName};
@@ -23,7 +16,7 @@ use super::{RpcService, check};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v2_node_service::GetAccountStorageWitnesses for RpcService {
-    type Input = (AccountId, BlockNumber, Vec<StorageMapRequest>);
+    type Input = (AccountId, BlockNumber, Vec<(StorageSlotName, Vec<StorageMapKey>)>);
     type Output = v2::GetAccountStorageWitnessesResponse;
 
     fn decode(request: v2::GetAccountStorageWitnessesRequest) -> tonic::Result<Self::Input> {
@@ -55,10 +48,7 @@ impl proto::server::miden_node_v2_node_service::GetAccountStorageWitnesses for R
                             .map_err(|err| Status::invalid_argument(err.to_string()))
                     })
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(StorageMapRequest {
-                    slot_name,
-                    slot_data: SlotData::MapKeys(keys),
-                })
+                Ok((slot_name, keys))
             })
             .collect::<Result<Vec<_>, Status>>()?;
 
@@ -77,44 +67,41 @@ impl proto::server::miden_node_v2_node_service::GetAccountStorageWitnesses for R
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         if miden_node_tracing::enabled!(tracing::Level::INFO) {
-            let keys = entries.iter().flat_map(|map| match &map.slot_data {
-                SlotData::MapKeys(keys) => keys.as_slice(),
-                SlotData::All => &[],
-            });
+            let keys = entries.iter().flat_map(|(_, keys)| keys);
             miden_span_record!(
                 block.number = target,
                 account.id = account,
                 account.storage.slot.count = entries.len(),
-                account.storage.slots = super::trace_sample(&entries)
-                    .iter()
-                    .map(|map| &map.slot_name)
-                    .collect::<Vec<_>>(),
+                account.storage.slots =
+                    super::trace_sample(&entries).iter().map(|(slot, _)| slot).collect::<Vec<_>>(),
                 account.storage.map.keys = keys.take(super::TRACE_SAMPLE_SIZE).collect::<Vec<_>>(),
             );
         }
 
         let details = self
             .state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: account,
-                block_num: Some(target),
-                details: Some(AccountDetailRequest {
-                    code_commitment: None,
-                    vault_request: AccountVaultRequest::None,
-                    storage_request: AccountStorageRequest::Explicit(entries),
-                }),
+            .read(move |view| {
+                let (block, storage) =
+                    super::get_account_witnesses::witness_headers(&view, account, target)?;
+                miden_node_store::read::validate_storage_map_slots(
+                    account,
+                    block,
+                    entries.iter().map(|(slot, _)| slot),
+                    &storage,
+                )?;
+                entries
+                    .into_iter()
+                    .map(|(slot, keys)| {
+                        view.snapshot
+                            .storage_map_witness(account, block, &slot, keys)
+                            .map_err(GetAccountError::from)
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             })
             .await
-            .map_err(get_account_error_to_status)?
-            .details
-            .ok_or_else(|| {
-                super::error_codes::internal_error("missing requested account details")
-            })?;
+            .map_err(get_account_error_to_status)?;
 
         let maps = details
-            .storage_details
-            .map_details
             .into_iter()
             .map(|slot| {
                 let StorageMapEntries::PartialMap { partial_smt, .. } = slot.entries else {

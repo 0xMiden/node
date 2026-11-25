@@ -2,6 +2,8 @@
 
 pub(crate) mod acquire;
 mod snapshot;
+mod validate_storage_map_slots;
+pub use validate_storage_map_slots::validate_storage_map_slots;
 mod transaction;
 
 pub use snapshot::StateSnapshot;
