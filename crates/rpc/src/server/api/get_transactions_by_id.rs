@@ -93,15 +93,19 @@ impl Paginator for LookupPaginator {
             return Ok(None);
         }
         let is_first_page = self.cursor.is_none();
+        let ids = self.ids.clone();
+        let target = self.target;
+        let cursor = self.cursor;
         let page = self
             .state
-            .view()
-            .get_transactions_by_id_page(
-                self.ids.clone(),
-                self.target,
-                self.cursor,
-                TRANSACTION_DB_PAGE_BYTES,
-            )
+            .read(move |view| {
+                let target =
+                    view.snapshot.scope_block(target).ok_or(miden_node_store::RangeBeyondTip {
+                        chain_tip: view.snapshot.block_num,
+                        block_to: target,
+                    })?;
+                view.tx.transactions_by_id_page(ids, target, cursor, TRANSACTION_DB_PAGE_BYTES)
+            })
             .await
             .map_err(|err| match err {
                 DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
