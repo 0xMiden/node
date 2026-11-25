@@ -15,22 +15,16 @@ use crate::status::{AgglayerDirectionDetails, AgglayerStatusDetails, Status};
 pub(in crate::view) fn render_agglayer(details: &AgglayerStatusDetails) -> Markup {
     html! {
         div class="service-details" {
-            div class="detail-item" {
-                strong { "URL: " }
-                (copyable_value(&details.url, "URL"))
-            }
-            div class="detail-item" {
-                strong { "Runner: " }
-                (or_dash(Some(details.runner_status.as_str())))
-            }
-            div class="detail-item" {
-                strong { "Heartbeat: " }
-                (format_timestamp(details.heartbeat_at))
-            }
-            @if let Some(reason) = &details.reason_code {
-                div class="detail-item" {
-                    strong { "Reason: " }
-                    (reason)
+            div class="nested-status" {
+                strong { "Endpoint" }
+                div class="metric-row" {
+                    span class="metric-label" { "URL:" }
+                    span class="metric-value" { (copyable_value(&details.url, "URL")) }
+                }
+                (metric_row("Runner:", or_dash(Some(details.runner_status.as_str()))))
+                (metric_row("Heartbeat:", &format_timestamp(details.heartbeat_at)))
+                @if let Some(reason) = &details.reason_code {
+                    (metric_row("Reason:", reason))
                 }
             }
             (render_direction("L1 → Miden:", &details.inbound))

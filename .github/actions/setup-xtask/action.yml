@@ -1,44 +1,31 @@
 name: "Setup xtask"
 description: "Restore or build xtask on Linux and add it to PATH"
 
-inputs:
-  save-cache:
-    description: "Save the binary after a cache miss"
-    required: false
-    default: "false"
-
 runs:
   using: "composite"
   steps:
-    - name: Identify runner image
-      id: image
+    - name: Compute xtask cache key
+      id: cache-key
       shell: bash
       run: |
-        source /etc/os-release
-        echo "id=${ID}-${VERSION_ID}" >> "${GITHUB_OUTPUT}"
+        digest="$(git ls-tree HEAD -- xtask rust-toolchain.toml .cargo/config.toml .config/clippy.toml \
+          .github/actions/setup-xtask | sha256sum | cut -d' ' -f1)"
+        echo "key=xtask-${ImageOS}-${RUNNER_ARCH}-${digest}" >> "${GITHUB_OUTPUT}"
 
-    # Forks build xtask locally without reading or writing the shared binary cache.
     - name: Restore xtask
-      if: >-
-        ${{
-          github.event_name != 'pull_request' ||
-            github.event.pull_request.head.repo.full_name == github.repository
-        }}
       id: cache
-      uses: actions/cache/restore@v5.0.3
+      uses: actions/cache/restore@v6.1.0
       with:
-        path: ${{ runner.temp }}/xtask-bin
-        # Accept only an exact match because the binary runs without a Cargo build check.
-        key: >-
-          ${{ format('xtask-v3-{0}-{1}-{2}-{3}',
-            runner.os, runner.arch, steps.image.outputs.id,
-            hashFiles('xtask/**', '!xtask/target/**', 'rust-toolchain.toml',
-              '.cargo/config.toml', '.config/clippy.toml', '.github/actions/setup-xtask/action.yml')) }}
+        key: ${{ steps.cache-key.outputs.key }}
+        path: ${{ runner.temp }}/xtask-bin/xtask
 
     - name: Rustup
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: rustup toolchain install --no-self-update
+
+    - uses: $/.github/actions/setup-kache
+      if: steps.cache.outputs.cache-hit != 'true'
 
     - name: Test, lint, and build xtask
       if: steps.cache.outputs.cache-hit != 'true'
@@ -52,14 +39,11 @@ runs:
         install -D xtask/target/debug/xtask "${RUNNER_TEMP}/xtask-bin/xtask"
 
     - name: Save xtask
-      if: >-
-        (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
-        inputs.save-cache == 'true' &&
-        steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5.0.3
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6.1.0
       with:
-        path: ${{ runner.temp }}/xtask-bin
-        key: ${{ steps.cache.outputs.cache-primary-key }}
+        key: ${{ steps.cache-key.outputs.key }}
+        path: ${{ runner.temp }}/xtask-bin/xtask
 
     - name: Add xtask to PATH
       shell: bash

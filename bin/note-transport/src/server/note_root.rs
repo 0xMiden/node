@@ -50,7 +50,7 @@ impl Server {
         const MAX_ATTEMPTS: u32 = 3;
 
         // All attempts and backoff share one budget. Reserve the rest for validation and storage.
-        let budget = self.config.grpc.request_timeout / 2;
+        let budget = Duration::from(self.config.grpc.request_timeout) / 2;
         let attempt_timeout = (budget / MAX_ATTEMPTS).max(Duration::from_nanos(1));
         let backoff = Duration::from_millis(100).min(budget / 50);
         tokio::time::timeout(budget, async {

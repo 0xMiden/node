@@ -62,20 +62,20 @@ miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.18.3
 miden-node-utils            = { path = "crates/utils", version = "0.18.3" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-protobuf     = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-tx           = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-tx-batch     = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
-miden-usdcx        = { git = "https://github.com/0xMiden/protocol", rev = "44079e2ed39305e9ce10db7270663d568065b28a" }
+miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-protobuf     = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-tx           = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-tx-batch     = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-usdcx        = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
-miden-crypto    = { version = "=1.0.0-rc.0" }
-miden-processor = { version = "=1.0.0-rc.0" }
-miden-verifier  = { version = "=1.0.0-rc.0" }
+miden-crypto    = { version = "=1.0.0-rc.1" }
+miden-processor = { version = "=1.0.0-rc.1" }
+miden-verifier  = { version = "=1.0.0-rc.1" }
 
 # External dependencies
 anyhow             = { version = "1.0" }
@@ -98,7 +98,6 @@ golden-halo2curves = { features = ["halo2curves-secp256k1"], version = "0.4.0" }
 h2                 = { version = "0.4" }
 hex                = { version = "0.4" }
 http               = { version = "1.3" }
-humantime          = { version = "2.2" }
 indexmap           = { version = "2.12" }
 iroh               = { version = "=1.0.3" }
 itertools          = { version = "0.14" }
@@ -121,7 +120,6 @@ rand_chacha           = { default-features = false, version = "0.10" }
 rand_chacha_03        = { package = "rand_chacha", version = "0.3" }
 rand_core_06          = { features = ["getrandom"], package = "rand_core", version = "0.6" }
 rayon                 = { version = "1.10" }
-reqwest               = { version = "0.13" }
 rstest                = { version = "0.26" }
 rusqlite              = { features = ["array", "bundled", "fallible_uint"], version = "0.41" }
 serde                 = { features = ["derive"], version = "1" }

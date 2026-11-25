@@ -1,31 +1,51 @@
-use miden_node_tracing::spawn::spawn_blocking_in_current_span;
-use miden_node_tracing::{instrument, miden_span_record};
-use miden_protocol::block::{BlockHeader, BlockSignatures, ProposedBlock, SignedBlock};
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
-use miden_protocol::transaction::TransactionHeader;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use miden_node_tracing::{ErrorReport, instrument, miden_span_record};
+use miden_protocol::block::{BlockBody, BlockHeader};
+use miden_protocol::transaction::{OrderedTransactionHeaders, TransactionHeader};
 
 use super::{ValidatorError, ValidatorService};
 
+/// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
+const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
+
 impl ValidatorService {
-    /// Validates a proposed block by checking:
-    /// 1. All transactions have been previously validated by this validator.
-    /// 2. The block header can be successfully built from the proposed block.
-    /// 3. The block is either: a. The valid next block in the chain (sequential block number, matching
-    ///    previous block commitment), or b. A replacement block at the same height as the current chain
-    ///    tip, validated against the previous block header.
-    ///
-    /// On success, returns the signature and validated signed block for persistence.
+    /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
+    /// against local state, and checks that the parent authorizes the signing key.
     #[instrument(err)]
-    pub async fn validate_block(
+    pub(super) async fn validate_block(
         &self,
-        proposed_block: ProposedBlock,
-        chain_tip: BlockHeader,
-    ) -> Result<(Signature, SignedBlock), ValidatorError> {
+        proposed_header: &BlockHeader,
+        proposed_body: &BlockBody,
+    ) -> Result<(), ValidatorError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(ValidatorError::ClockBeforeUnixEpoch)?
+            .as_secs();
+        let timestamp = proposed_header.timestamp();
+        let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
+        if u64::from(timestamp) > latest_timestamp {
+            return Err(ValidatorError::BlockTimestampTooFarInFuture {
+                timestamp,
+                latest_timestamp,
+            });
+        }
+
+        let chain_tip = self
+            .db
+            .load_chain_tip()
+            .await
+            .map_err(ValidatorError::DatabaseError)?
+            .ok_or(ValidatorError::NoChainTip)?;
         miden_span_record!(tip.number = chain_tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
-        let proposed_tx_ids =
-            proposed_block.transactions().map(TransactionHeader::id).collect::<Vec<_>>();
+        let proposed_tx_ids = proposed_body
+            .transactions()
+            .iter()
+            .flat_map(OrderedTransactionHeaders::as_slice)
+            .map(TransactionHeader::id)
+            .collect::<Vec<_>>();
         let unvalidated_txs = self
             .db
             .find_unvalidated_transactions(proposed_tx_ids)
@@ -36,26 +56,17 @@ impl ValidatorService {
         if !unvalidated_txs.is_empty() {
             return Err(ValidatorError::UnvalidatedTransactions(unvalidated_txs));
         }
-        // Build the block header. This computes the account, nullifier and note tree roots plus the
-        // chain and transaction commitments — hashing proportional to block contents — so it runs
-        // on a blocking thread rather than pinning an async worker.
-        let (proposed_header, proposed_body) =
-            spawn_blocking_in_current_span(move || proposed_block.into_header_and_body())
-                .await
-                .unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic()))
-                .map_err(ValidatorError::BlockBuildingFailed)?;
 
         miden_span_record!(
             block.number = proposed_header.block_num(),
             block.commitment = proposed_header.commitment()
         );
 
-        // If the proposed block has the same block number as the current chain tip, this is a
-        // replacement block. Validate it against the previous block header.
         let prev = if proposed_header.block_num() == chain_tip.block_num() {
-            // The genesis block cannot be replaced (genesis block has no parent).
+            // Replacements are rare, so load the tip's parent on demand. An ordinary extension
+            // needs only the tip header.
             let prev_block_num =
-                chain_tip.block_num().parent().ok_or(ValidatorError::NoPrevBlockHeader)?;
+                chain_tip.block_num().parent().ok_or(ValidatorError::CannotReplaceGenesis)?;
             self.db
                 .load_block_header(prev_block_num)
                 .await
@@ -90,33 +101,21 @@ impl ValidatorService {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
-        let signature = self.sign_header(&proposed_header).await?;
-
-        // Prepare the signed block for persistence.
-        //
-        // Note that the backup only carries this validator's own signature: the complete,
-        // positionally ordered signature set exists only at the block producer once it has
-        // aggregated the responses of all validators. Consumers of the backup stream must not
-        // expect to verify the full signature set from these blocks.
-        let own_signature = BlockSignatures::new(vec![signature.clone()])
-            .expect("a single signature is within the signature set bounds");
-        let signed_block =
-            SignedBlock::new_unchecked(proposed_header, proposed_body, own_signature);
-        Ok((signature, signed_block))
+        Ok(())
     }
+}
 
-    /// Signs a block header using the validator's signer.
-    #[instrument(
-        name = "sign_block",
-        err,
-        fields(
-            block.number = header.block_num(),
-        ),
-    )]
-    async fn sign_header(&self, header: &BlockHeader) -> Result<Signature, ValidatorError> {
-        self.signer
-            .sign_commitment(header.commitment())
-            .await
-            .map_err(|err| ValidatorError::BlockSigningFailed(err.to_string()))
+impl ValidatorError {
+    pub(super) fn into_validation_status(self) -> tonic::Status {
+        let message = self.as_report_context("Failed to validate block");
+        match self {
+            Self::UnvalidatedTransactions(_)
+            | Self::BlockTimestampTooFarInFuture { .. }
+            | Self::BlockNumberMismatch { .. }
+            | Self::CannotReplaceGenesis
+            | Self::PrevBlockCommitmentMismatch
+            | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),
+            _ => tonic::Status::internal(message),
+        }
     }
 }

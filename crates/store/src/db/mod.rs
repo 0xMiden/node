@@ -50,6 +50,7 @@ pub use crate::db::queries::{
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
+use crate::read::ReadTransaction;
 use crate::state::ScopedBlockNum;
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
@@ -273,6 +274,11 @@ impl Db {
         Ok(Self { writer, reader })
     }
 
+    /// Reader pool used to acquire one transaction for a caller-composed read.
+    pub(crate) fn reader(&self) -> &DbReader {
+        &self.reader
+    }
+
     /// The write handle, for tests that need to seed or corrupt rows no production method writes.
     #[cfg(test)]
     pub(crate) fn writer(&self) -> &DbWriter {
@@ -313,7 +319,7 @@ impl Db {
     ) -> Result<Option<Word>> {
         self.reader
             .read("protocol config commitment at block", move |tx| {
-                queries::select_protocol_config_commitment_at(tx, *block_number)
+                ReadTransaction::new(tx).select_protocol_config_commitment_at(*block_number)
             })
             .await
     }
@@ -369,29 +375,29 @@ impl Db {
         })
     }
 
-    /// Search for a [`BlockHeader`] from the database by its `block_num`.
-    ///
-    /// When `block_number` is [None], the latest block header is returned.
+    /// Returns the header stored at the given block number.
     #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn select_block_header_by_block_num(
+    pub async fn select_block_header(
         &self,
-        maybe_block_number: Option<ScopedBlockNum>,
+        block_number: ScopedBlockNum,
     ) -> Result<Option<BlockHeader>> {
         self.reader
-            .read("block headers by block number", move |tx| {
-                queries::select_block_header_by_block_num(
-                    tx,
-                    maybe_block_number.map(|block_number| *block_number),
-                )
+            .read("block header by block number", move |tx| {
+                queries::select_block_header(tx, *block_number)
             })
             .await
+    }
+
+    /// Returns the latest stored block header for acquisition, startup, and writer validation.
+    pub(crate) async fn select_chain_tip(&self) -> Result<Option<BlockHeader>> {
+        self.reader.read("chain tip", queries::select_chain_tip).await
     }
 
     /// Selects the genesis block header for state initialization.
     pub(crate) async fn select_genesis_block_header(&self) -> Result<Option<BlockHeader>> {
         self.reader
             .read("genesis block header", |tx| {
-                queries::select_block_header_by_block_num(tx, Some(BlockNumber::GENESIS))
+                queries::select_block_header(tx, BlockNumber::GENESIS)
             })
             .await
     }
@@ -405,7 +411,7 @@ impl Db {
     ) -> Result<Option<(BlockHeader, BlockSignatures)>> {
         self.reader
             .read("block headers and signatures by block number", move |tx| {
-                queries::select_block_header_and_signatures_by_block_num(tx, *block_number)
+                ReadTransaction::new(tx).select_block_header_and_signatures(*block_number)
             })
             .await
     }
@@ -499,20 +505,6 @@ impl Db {
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.reader
             .read("note by id", move |tx| queries::select_notes_by_id(tx, note_ids.as_slice()))
-            .await
-    }
-
-    /// Returns the requested note IDs that the database contains at or before `up_to_block`.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn select_existing_note_ids(
-        &self,
-        note_ids: Vec<NoteId>,
-        up_to_block: ScopedBlockNum,
-    ) -> Result<HashSet<NoteId>> {
-        self.reader
-            .read("existing note IDs", move |tx| {
-                queries::select_existing_note_ids(tx, note_ids.as_slice(), *up_to_block)
-            })
             .await
     }
 

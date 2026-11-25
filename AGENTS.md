@@ -18,6 +18,8 @@ the behavior remains correct.
 Do not write tests that merely repeat the implementation logic or assert the
 structure of the source code.
 
+Prefer `rstest` for parameterized tests.
+
 ## Code Comment Style
 
 Use this format for code comments and documentation comments:

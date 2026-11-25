@@ -102,7 +102,7 @@ impl ValidatorServer {
         grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc_trace_layer())
-            .timeout(self.grpc_options.request_timeout)
+            .timeout(self.grpc_options.request_timeout.into())
             .add_service(
                 miden_validator_v1_validator_service::service(service).max_decoding_message_size(
                     self.grpc_options.message_size.max_decoding_message_size.get(),

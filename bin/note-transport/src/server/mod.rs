@@ -1,4 +1,5 @@
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::time::Duration;
 
 use miden_node_db::sqlite::{DbReader, DbWriter};
 use miden_node_proto::Verify;
@@ -68,7 +69,10 @@ impl Server {
             "max-note-size must be between 1 and {} bytes",
             db::FETCH_NOTES_MAX_BYTES
         );
-        anyhow::ensure!(!config.grpc.request_timeout.is_zero(), "grpc.timeout must be positive");
+        anyhow::ensure!(
+            !Duration::from(config.grpc.request_timeout).is_zero(),
+            "grpc.timeout must be positive"
+        );
         parse_rpc_url(config.rpc_url.as_str()).map_err(anyhow::Error::msg)?;
         let rpc = Builder::new(config.rpc_url.clone())
             .max_decoding_message_size(config.grpc.message_size.max_decoding_message_size.get())
@@ -129,7 +133,7 @@ impl Server {
             )
             .layer(tonic_web::GrpcWebLayer::new())
             .layer(GlobalConcurrencyLimitLayer::new(self.config.max_connections.get()))
-            .timeout(self.config.grpc.request_timeout)
+            .timeout(self.config.grpc.request_timeout.into())
             .add_service(health_service.max_decoding_message_size(max_decoding_message_size))
             .add_service(reflection.max_decoding_message_size(max_decoding_message_size))
             .add_service(

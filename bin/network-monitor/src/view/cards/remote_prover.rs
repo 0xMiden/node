@@ -22,19 +22,16 @@ pub(in crate::view) fn render_remote_prover(details: &RemoteProverDetails) -> Ma
             data-grpc-url=(proxy.url)
             data-grpc-path="/miden.remote_prover.v1.ProxyStatusService/Status"
         {
-            div class="detail-item" {
-                strong { "URL: " }
-                (copyable_value(&proxy.url, "URL"))
+            div class="nested-status" {
+                strong { "Endpoint" }
+                div class="metric-row" {
+                    span class="metric-label" { "URL:" }
+                    span class="metric-value" { (copyable_value(&proxy.url, "URL")) }
+                }
+                (metric_row("Version:", &proxy.version))
+                (metric_row("Proof Type:", proof_type_label(&proxy.supported_proof_type)))
+                (probe_section_placeholder())
             }
-            div class="detail-item" {
-                strong { "Version: " }
-                (proxy.version)
-            }
-            div class="detail-item" {
-                strong { "Proof Type: " }
-                (proof_type_label(&proxy.supported_proof_type))
-            }
-            (probe_section_placeholder())
             @if !proxy.workers.is_empty() {
                 (render_workers(&proxy.workers))
             }
@@ -58,7 +55,9 @@ fn render_workers(workers: &[WorkerStatusDetails]) -> Markup {
                 div class="worker-status" {
                     span class="worker-name" {
                         @if worker.name.len() > 20 {
-                            (truncate(&worker.name, 20)) "..."
+                            span class="value-text" title=(worker.name) {
+                                (truncate(&worker.name, 20)) "..."
+                            }
                             (copy_button(&worker.name, "worker name"))
                         } @else {
                             (worker.name)

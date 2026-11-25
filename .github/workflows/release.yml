@@ -188,6 +188,9 @@ jobs:
       id-token: write
       packages: write
     uses: $/.github/workflows/docker.yml
+    secrets:
+      KACHE_R2_ACCESS_KEY_ID: ${{ secrets.KACHE_R2_ACCESS_KEY_ID }}
+      KACHE_R2_SECRET_ACCESS_KEY: ${{ secrets.KACHE_R2_SECRET_ACCESS_KEY }}
     with:
       mode: stage
       ref: ${{ needs.preflight.outputs.tag }}
@@ -225,8 +228,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Rustup
-        run: rustup toolchain install --no-self-update
+      # Releases can use fallback notes when xtask setup or rendering fails.
+      - uses: $/.github/actions/setup-xtask
+        continue-on-error: true
 
       - name: Re-check GitHub release absence
         env:
@@ -255,7 +259,7 @@ jobs:
             prerelease_flag=(--prerelease)
           fi
 
-          if ! cargo xtask changelog render \
+          if ! xtask changelog render \
             --release-tag "${TAG}" \
             > "${RUNNER_TEMP}/release-notes.md"; then
             echo "::warning title=Release notes generation failed::Using fallback release notes."

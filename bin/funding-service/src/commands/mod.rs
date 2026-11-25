@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::num::{NonZeroU16, NonZeroUsize};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{ArgGroup, Parser};
@@ -18,7 +17,7 @@ use miden_funding_service::{
     lifecycle,
 };
 use miden_node_tracing::{OpenTelemetry, info};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
 use miden_node_utils::shutdown::CancellationToken;
@@ -100,11 +99,10 @@ pub enum FundingServiceCommand {
         #[arg(
             long = "http.timeout",
             env = ENV_HTTP_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_HTTP_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_HTTP_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        http_timeout: Duration,
+        http_timeout: HumanDuration,
 
         /// The node RPC service gRPC url.
         #[arg(long = "rpc.url", env = ENV_RPC_URL, value_name = "URL")]
@@ -114,11 +112,10 @@ pub enum FundingServiceCommand {
         #[arg(
             long = "rpc.timeout",
             env = ENV_RPC_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_RPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_RPC_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        rpc_timeout: Duration,
+        rpc_timeout: HumanDuration,
 
         /// The remote transaction prover's gRPC url.
         #[arg(long = "tx-prover.url", env = ENV_TX_PROVER_URL, value_name = "URL")]
@@ -128,11 +125,10 @@ pub enum FundingServiceCommand {
         #[arg(
             long = "tx-prover.timeout",
             env = ENV_TX_PROVER_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_TX_PROVER_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_TX_PROVER_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        tx_prover_timeout: Duration,
+        tx_prover_timeout: HumanDuration,
 
         /// Path to the serialized funding account signing key.
         #[arg(long = "signing-key-file", env = ENV_SIGNING_KEY_FILE, value_name = "PATH")]
@@ -178,11 +174,10 @@ pub enum FundingServiceCommand {
         #[arg(
             long = "poll-interval",
             env = ENV_POLL_INTERVAL,
-            default_value = duration_to_human_readable_string(DEFAULT_POLL_INTERVAL),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_POLL_INTERVAL.into(),
             value_name = "DURATION"
         )]
-        poll_interval: Duration,
+        poll_interval: HumanDuration,
 
         /// `0x`-prefixed hex validator signing public key trusted to attest the transaction
         /// encryption key.
@@ -260,9 +255,9 @@ impl FundingServiceCommand {
             service.name = "miden-funding-service",
             service.version = env!("CARGO_PKG_VERSION"),
             funding_service.listen = listen.to_string(),
-            http.timeout = humantime::Duration::from(http_timeout).to_string(),
+            http.timeout = http_timeout.to_string(),
             rpc.endpoint = format_endpoint(&rpc_url),
-            rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
+            rpc.timeout = rpc_timeout.to_string(),
             tx_prover.endpoint =
                 tx_prover_url.as_ref().map_or_else(|| "local".to_owned(), format_endpoint),
             path = signing_key_file.as_path(),
@@ -271,7 +266,7 @@ impl FundingServiceCommand {
             funding_service.max_notes_per_tx = max_notes_per_tx.get(),
             funding_service.max_deposits_per_tx = max_deposits_per_tx.get(),
             funding_service.tx_expiration_delta = tx_expiration_delta.get(),
-            funding_service.poll_interval = humantime::Duration::from(poll_interval).to_string()
+            funding_service.poll_interval = poll_interval.to_string()
         );
 
         let service = FundingServiceConfig::new(
@@ -282,14 +277,14 @@ impl FundingServiceCommand {
         )
         .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
         .with_tx_prover_url(tx_prover_url)
-        .with_http_timeout(http_timeout)
-        .with_rpc_timeout(rpc_timeout)
-        .with_tx_prover_timeout(tx_prover_timeout)
+        .with_http_timeout(http_timeout.into())
+        .with_rpc_timeout(rpc_timeout.into())
+        .with_tx_prover_timeout(tx_prover_timeout.into())
         .with_max_amount(max_amount)
         .with_max_notes_per_tx(max_notes_per_tx)
         .with_max_deposits_per_tx(max_deposits_per_tx)
         .with_tx_expiration_delta(tx_expiration_delta)
-        .with_poll_interval(poll_interval)
+        .with_poll_interval(poll_interval.into())
         .build()
         .await
         .context("failed to initialize the funding service")?;

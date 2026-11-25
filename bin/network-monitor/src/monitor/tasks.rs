@@ -55,9 +55,9 @@ impl Tasks {
     pub fn spawn_rpc_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
         let svc = RpcService::new(
             config.rpc_url.clone(),
-            config.status_check_interval,
-            config.request_timeout,
-            config.stale_chain_tip_threshold,
+            config.status_check_interval.into(),
+            config.request_timeout.into(),
+            config.stale_chain_tip_threshold.into(),
             config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
@@ -68,8 +68,8 @@ impl Tasks {
         let explorer_url = config.explorer_url.clone().expect("Explorer URL exists");
         let svc = ExplorerService::new(
             explorer_url,
-            config.status_check_interval,
-            config.request_timeout,
+            config.status_check_interval.into(),
+            config.request_timeout.into(),
         );
         self.spawn_service(svc)
     }
@@ -83,8 +83,8 @@ impl Tasks {
             config.note_transport_url.clone().expect("Note transport URL exists");
         let svc = NoteTransportService::new(
             note_transport_url,
-            config.status_check_interval,
-            config.request_timeout,
+            config.status_check_interval.into(),
+            config.request_timeout.into(),
             config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
@@ -105,8 +105,8 @@ impl Tasks {
                 self.spawn_service(ValidatorService::new(
                     name,
                     url.clone(),
-                    config.status_check_interval,
-                    config.request_timeout,
+                    config.status_check_interval.into(),
+                    config.request_timeout.into(),
                     config.grpc.max_decoding_message_size.get(),
                 ))
             })
@@ -117,8 +117,8 @@ impl Tasks {
     pub fn spawn_funding_checker(&mut self, config: &MonitorConfig) -> Receiver<ServiceStatus> {
         let svc = FundingService::new(
             config.funding_service_url.clone().expect("Funding service URL exists"),
-            config.status_check_interval,
-            config.request_timeout,
+            config.status_check_interval.into(),
+            config.request_timeout.into(),
         );
         self.spawn_service(svc)
     }
@@ -129,8 +129,8 @@ impl Tasks {
             config.agglayer_monitor_url.clone().expect("Agglayer monitor URL exists");
         let svc = AgglayerService::new(
             agglayer_monitor_url,
-            config.status_check_interval,
-            config.request_timeout,
+            config.status_check_interval.into(),
+            config.request_timeout.into(),
         );
         self.spawn_service(svc)
     }
@@ -147,8 +147,8 @@ impl Tasks {
             xreserve_rpc_url,
             xreserve_address,
             config.xreserve_local_token,
-            config.usdcx_bridge_check_interval,
-            config.request_timeout,
+            config.usdcx_bridge_check_interval.into(),
+            config.request_timeout.into(),
             config.grpc.max_decoding_message_size.get(),
         );
         self.spawn_service(svc)
@@ -168,7 +168,7 @@ impl Tasks {
             let name = format!("Remote Prover ({})", i + 1);
             let test_client = build_tls_client::<RemoteProverClient>(
                 prover_url.clone(),
-                config.request_timeout,
+                config.request_timeout.into(),
                 config.grpc.max_decoding_message_size.get(),
             );
 
@@ -177,9 +177,9 @@ impl Tasks {
                 prover_url.clone(),
                 config.rpc_url.clone(),
                 funding.clone(),
-                config.status_check_interval,
-                config.request_timeout,
-                config.remote_prover_test_interval,
+                config.status_check_interval.into(),
+                config.request_timeout.into(),
+                config.remote_prover_test_interval.into(),
                 test_client,
                 config.grpc.max_decoding_message_size.get(),
             );
@@ -193,8 +193,8 @@ impl Tasks {
         let faucet_url = config.faucet_url.clone().expect("faucet URL exists");
         let svc = FaucetService::new(
             faucet_url,
-            config.faucet_test_interval,
-            config.request_timeout,
+            config.faucet_test_interval.into(),
+            config.request_timeout.into(),
             config.faucet_mint_amount,
         );
         self.spawn_service(svc)
@@ -370,7 +370,7 @@ async fn bootstrap_ntx(
     let trusted_validator_signing_keys = config.trusted_validator_signing_keys()?;
     let submission_client = TransactionSubmissionClient::connect(
         &config.rpc_url,
-        config.request_timeout,
+        config.request_timeout.into(),
         trusted_validator_signing_keys,
         config.grpc.max_decoding_message_size.get(),
     )

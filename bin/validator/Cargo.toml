@@ -39,7 +39,6 @@ golden-ehtdh1          = { workspace = true }
 golden-evrf            = { workspace = true }
 golden-halo2curves     = { workspace = true }
 hex                    = { workspace = true }
-humantime              = { workspace = true }
 iroh                   = { workspace = true }
 miden-node-db          = { workspace = true }
 miden-node-persistence = { workspace = true }
@@ -49,6 +48,7 @@ miden-node-tracing     = { workspace = true }
 miden-node-utils       = { features = ["testing"], workspace = true }
 miden-protocol         = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
+miden-tx-batch         = { workspace = true }
 rand_core_06           = { workspace = true }
 serde                  = { workspace = true }
 tempfile               = { workspace = true }

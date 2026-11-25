@@ -256,15 +256,6 @@ fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord
     db.read(move |tx| queries::select_notes_by_id(tx, &note_ids))
 }
 
-fn select_existing_note_ids(
-    db: &TestDb,
-    note_ids: &[NoteId],
-    up_to_block: BlockNumber,
-) -> Result<HashSet<NoteId>> {
-    let note_ids = note_ids.to_vec();
-    db.read(move |tx| queries::select_existing_note_ids(tx, &note_ids, up_to_block))
-}
-
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
     db.read(move |tx| queries::select_note_script_by_root(tx, root))
 }
@@ -284,18 +275,12 @@ fn get_note_sync_multi(
     db.read(move |tx| query.page(tx, &block_from))
 }
 
-fn select_block_header_by_block_num(
-    db: &TestDb,
-    maybe_block_num: Option<BlockNumber>,
-) -> Result<Option<BlockHeader>> {
-    db.read(move |tx| queries::select_block_header_by_block_num(tx, maybe_block_num))
+fn select_block_header(db: &TestDb, block_num: BlockNumber) -> Result<Option<BlockHeader>> {
+    db.read(move |tx| queries::select_block_header(tx, block_num))
 }
 
-fn select_block_header_and_signatures_by_block_num(
-    db: &TestDb,
-    block_num: BlockNumber,
-) -> Result<Option<(BlockHeader, BlockSignatures)>> {
-    db.read(move |tx| queries::select_block_header_and_signatures_by_block_num(tx, block_num))
+fn select_chain_tip(db: &TestDb) -> Result<Option<BlockHeader>> {
+    db.read(queries::select_chain_tip)
 }
 
 fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
@@ -1032,10 +1017,10 @@ fn db_block_header() {
     let db = &TestDb::new();
     // test querying empty table
     let block_number = 1;
-    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
+    let res = select_block_header(db, block_number.into()).unwrap();
     assert!(res.is_none());
 
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert!(res.is_none());
 
     let block_header = BlockHeader::new(
@@ -1058,19 +1043,18 @@ fn db_block_header() {
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
-    let first_signature = dummy_signature;
 
     // test fetch unknown block header
     let block_number = 1;
-    let res = select_block_header_by_block_num(db, Some(block_number.into())).unwrap();
+    let res = select_block_header(db, block_number.into()).unwrap();
     assert!(res.is_none());
 
     // test fetch block header by block number
-    let res = select_block_header_by_block_num(db, Some(block_header.block_num())).unwrap();
+    let res = select_block_header(db, block_header.block_num()).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     // test fetch latest block header
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert_eq!(res.unwrap(), block_header);
 
     let block_header2 = BlockHeader::new(
@@ -1093,7 +1077,7 @@ fn db_block_header() {
         BlockSignatures::new(vec![SigningKey::new().sign(block_header2.commitment())]).unwrap();
     insert_block_header(db, &block_header2, &dummy_signature).unwrap();
 
-    let res = select_block_header_by_block_num(db, None).unwrap();
+    let res = select_chain_tip(db).unwrap();
     assert_eq!(res.unwrap(), block_header2);
 
     let res = select_block_headers(db, vec![block_header.block_num(), block_header2.block_num()])
@@ -1109,14 +1093,6 @@ fn db_block_header() {
             BlockHeaderCommitment::new(&block_header2),
         ]
     );
-
-    // test fetch block header with its signatures
-    let stored =
-        select_block_header_and_signatures_by_block_num(db, block_header.block_num()).unwrap();
-    assert_eq!(stored, Some((block_header, first_signature)));
-
-    let missing = select_block_header_and_signatures_by_block_num(db, 1.into()).unwrap();
-    assert!(missing.is_none());
 }
 
 #[test]
@@ -1229,44 +1205,6 @@ fn notes() {
     let note_1 = res[1].clone();
     assert_eq!(note_0.details, note.details);
     assert_eq!(note_1.details, None);
-}
-
-#[test]
-fn existing_note_ids_respect_requested_ids_and_block_limit() {
-    let db = &TestDb::new();
-    let notes = [
-        Note::mock_noop(Word::from([1u32, 0, 0, 0])),
-        Note::mock_noop(Word::from([2u32, 0, 0, 0])),
-        Note::mock_noop(Word::from([3u32, 0, 0, 0])),
-    ];
-    let note_ids = notes.each_ref().map(Note::id);
-
-    for (note, block_num) in notes.into_iter().zip([1u32, 2, 3]) {
-        let block_num = BlockNumber::from(block_num);
-        create_block(db, block_num);
-        let record = NoteRecord {
-            block_num,
-            note_index: BlockNoteIndex::new(0, 0).unwrap(),
-            note_id: note.id().as_word(),
-            metadata: *note.metadata(),
-            details: None,
-            attachments: note.attachments().clone(),
-            inclusion_path: SparseMerklePath::default(),
-        };
-        insert_notes(db, &[(record, None)]).unwrap();
-    }
-
-    let missing_id = NoteId::from_raw(Word::from([4u32, 0, 0, 0]));
-    let requested_ids = [note_ids[1], note_ids[2], missing_id, note_ids[1]];
-    for (block_num, expected) in [
-        (1u32, HashSet::new()),
-        (2, HashSet::from([note_ids[1]])),
-        (3, HashSet::from([note_ids[1], note_ids[2]])),
-    ] {
-        let found = select_existing_note_ids(db, &requested_ids, block_num.into()).unwrap();
-        assert_eq!(found, expected);
-    }
-    assert!(select_existing_note_ids(db, &[], 3.into()).unwrap().is_empty());
 }
 
 /// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
@@ -2952,7 +2890,7 @@ fn db_roundtrip_block_header() {
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
 
     // Retrieve
-    let retrieved = select_block_header_by_block_num(db, Some(block_header.block_num()))
+    let retrieved = select_block_header(db, block_header.block_num())
         .unwrap()
         .expect("Block header should exist");
 

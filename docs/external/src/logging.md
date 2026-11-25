@@ -5,13 +5,13 @@ sidebar_position: 6
 
 # Logging
 
-All Miden node services write compact, structured logs to standard output. Long-running services can also export
-OpenTelemetry traces. The stdout and OpenTelemetry outputs have independent filters, so operators can keep local logs
-concise while retaining more detail in a tracing backend.
+All Miden node services write compact, structured logs to stderr. To capture logs in a file, use `2>node.log`.
+Long-running services can also export OpenTelemetry traces. Local logs and exported traces have independent filters.
 
-## Stdout filter
+## Local log filter
 
-The stdout filter is selected from the first non-empty value in this order:
+The `MIDEN_STDOUT_FILTER` setting and the `/admin/tracing/stdout-filter` endpoint control logs written to stderr. At
+startup, the service uses the first non-empty filter in this order:
 
 1. `MIDEN_STDOUT_FILTER`
 2. `RUST_LOG`
@@ -77,14 +77,14 @@ For systemd, set the same value in the service unit or an environment file, then
 Environment="MIDEN_STDOUT_FILTER=warn,user=info,miden::storage=info,miden::rpc::server=debug"
 ```
 
-`RUST_LOG` is a compatibility fallback. Prefer `MIDEN_STDOUT_FILTER` when configuring stdout independently from
+`RUST_LOG` is a compatibility fallback. Prefer `MIDEN_STDOUT_FILTER` when configuring stderr independently from
 OpenTelemetry.
 
 ## User-facing targets
 
-The default stdout filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
+The default stderr filter enables `debug` events for `user::*`, `miden::storage`, `miden::rpc::server`,
 `miden::production`, `miden::mempool`, `miden::proving`, `miden::sync`, `miden::validation`, `miden::privacy`,
-`miden::admin`, `miden::funding`, `miden::monitor`, and `miden::http::server`. The compact stdout format does not print
+`miden::admin`, `miden::funding`, `miden::monitor`, and `miden::http::server`. The compact stderr format does not print
 the target name, but the filter still matches it.
 
 `info` is intended for production use, such as on the sequencer of a Miden network, where detailed per-call or
@@ -116,7 +116,8 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::admin`                    | Private administration API diagnostics                            |
 | `miden::funding`                  | Funding requests, transaction construction, and delivery          |
 | `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup         |
-| `miden::http::server`             | HTTP dashboard requests and listener readiness                    |
+| `miden::http::client`             | Outgoing HTTP requests                                            |
+| `miden::http::server`             | Funding and dashboard HTTP requests, dashboard listener readiness |
 | `miden::cache`                    | In-memory cache lock spans                                        |
 
 Network monitor startup and configuration messages use the `miden::process` target.
@@ -139,6 +140,9 @@ A `miden-node` process contains multiple components. For example, a sequencer ca
 
 ## Select a span
 
+For HTTP and gRPC requests, filter by OpenTelemetry span kind to see time spent by the caller (`client`) or the
+recipient (`server`). For gRPC calls with context propagation enabled, the server span appears under its client span.
+
 Span names describe operations such as `build_block`; targets identify activities such as `miden::production::blocks`.
 Combine both to enable diagnostics within a particular operation:
 
@@ -159,7 +163,7 @@ non-empty value. Its filter is selected independently from the first non-empty v
 2. `RUST_LOG`
 3. `info` (default; node targets at `info`, dependencies at `warn`)
 
-For example, retain debug-level user-facing, storage, and RPC events in the tracing backend while keeping stdout
+For example, retain debug-level user-facing, storage, and RPC events in the tracing backend while keeping stderr
 quieter:
 
 ```bash
@@ -225,10 +229,10 @@ curl --fail-with-body "${ADMIN_URL}/admin/tracing/otel-filter" --output otel-fil
 ```
 
 Check that each request succeeds before proceeding. The saved JSON contains the active filter in the form
-`{"filter":"<expression>"}` and can be sent back unchanged to restore it. If you only need stdout logs, skip the
+`{"filter":"<expression>"}` and can be sent back unchanged to restore it. If you only need stderr logs, skip the
 OpenTelemetry request; it fails if exporting was disabled when the service started.
 
-Replace the stdout filter with a complete expression:
+Replace the stderr filter with a complete expression:
 
 ```bash
 curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/stdout-filter" \
@@ -244,7 +248,7 @@ curl --fail-with-body -X PUT "${ADMIN_URL}/admin/tracing/otel-filter" \
   --data '{"filter":"info,miden::storage=debug"}'
 ```
 
-A successful update returns `204 No Content`. Check stdout or your tracing backend for the expected detail from new
+A successful update returns `204 No Content`. Check stderr or your tracing backend for the expected detail from new
 activity. Increasing verbosity does not recover earlier logs or traces. Updating the OpenTelemetry filter does not
 enable exporting or change where traces are sent.
 

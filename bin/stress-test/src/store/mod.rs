@@ -6,11 +6,13 @@ use futures::{StreamExt, stream};
 use miden_node_proto::DecodeMessageExt;
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
 use miden_node_proto::generated::{self as proto};
+use miden_node_store::DatabaseError;
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::Forest;
 use miden_protocol::note::NoteTag;
 use rand::RngExt;
 use rand::seq::SliceRandom;
@@ -642,12 +644,19 @@ pub async fn bench_sync_chain_mmr(data_directory: PathBuf, iterations: usize, co
 async fn sync_chain_mmr(state: &Arc<State>, current_client_block_height: u32) -> SyncChainMmrRun {
     let start = Instant::now();
     state
-        .with_view(async |view| {
-            view.sync_chain_mmr(BlockNumber::from(current_client_block_height)..=*view.tip())
-                .await
-                .unwrap();
+        .read(move |view| {
+            let block_from = BlockNumber::from(current_client_block_height);
+            let block_to = view.snapshot.block_num;
+            view.tx.select_block_header_and_signatures(block_to)?;
+            if block_from < block_to {
+                let from_forest = Forest::new((block_from + 1).as_usize()).unwrap();
+                let to_forest = Forest::new(block_to.as_usize()).unwrap();
+                view.snapshot.blockchain.as_mmr().get_delta(from_forest, to_forest).unwrap();
+            }
+            Ok::<_, DatabaseError>(())
         })
-        .await;
+        .await
+        .unwrap();
     let elapsed = start.elapsed();
     SyncChainMmrRun { duration: elapsed }
 }

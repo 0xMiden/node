@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_store::allowlist::InvitationCode;
+use miden_node_utils::http::{Client, RequestBuilder};
 use miden_protocol::account::AccountId;
-use reqwest::{Client, RequestBuilder};
 use url::Url;
 
 pub(crate) struct AdminClient {
@@ -16,7 +16,7 @@ impl AdminClient {
         let http = Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(180))
-            .redirect(reqwest::redirect::Policy::none())
+            .without_redirects()
             .build()
             .context("failed to create admin client")?;
         Ok(Self { http, url })

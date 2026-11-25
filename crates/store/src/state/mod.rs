@@ -9,6 +9,7 @@ mod disk_monitor;
 mod lifecycle;
 mod loader;
 mod replica;
+mod snapshots;
 mod tip;
 mod view;
 mod writer;
@@ -16,13 +17,13 @@ mod writer;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 pub use lifecycle::LoadedState;
 use miden_protocol::block::BlockNumber;
 pub use replica::{BlockCache, BlockNotification, ProofCache, ProofNotification};
+pub(crate) use snapshots::RecentSnapshots;
 use tokio::sync::watch;
-use view::StateSnapshot;
-pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses, TransactionInputs};
+pub(crate) use view::StateSnapshot;
+pub use view::{ScopedBlockNum, ScopedBlockRange, StateView, StateWitnesses};
 pub use writer::{BlockWriter, ProofWriter, WriterTask};
 
 use crate::blocks::BlockStore;
@@ -37,9 +38,9 @@ use crate::proven_tip::ProvenTipWriter;
 /// Mutations go through the [`BlockWriter`] and [`ProofWriter`] capabilities returned by
 /// [`LoadedState::start`]; every holder of this type can only query and subscribe.
 ///
-/// All tree and database reads go through a request-scoped [`StateView`] obtained from
-/// [`State::view`]; this type itself only exposes chain-tip queries, subscriptions, and
-/// block-store access.
+/// Caller-composed reads use [`State::read`] to acquire matching database and tree snapshots.
+/// Endpoints awaiting migration use [`State::view`]. This type also exposes chain-tip queries,
+/// subscriptions, and block-store access.
 pub struct State {
     /// Root directory containing the store's on-disk data.
     data_directory: PathBuf,
@@ -51,12 +52,11 @@ pub struct State {
     /// The block store which stores full block contents for all blocks.
     block_store: Arc<BlockStore>,
 
-    /// Atomically swappable pointer to the latest in-memory state snapshot.
+    /// Recent immutable tree generations, shared with the block writer.
     ///
-    /// Readers load the snapshot wait-free via [`ArcSwap::load_full`]; the
-    /// [`WriteWorker`](writer::WriteWorker) task atomically replaces the pointer after each
-    /// committed block. Readers holding an old snapshot are unaffected by the swap.
-    latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+    /// Readers look up the generation matching their SQLite transaction's tip. Legacy views load
+    /// the latest generation; acquired readers keep their generation alive after cache eviction.
+    snapshots: Arc<RecentSnapshots>,
 
     /// The latest proven-in-sequence block number, updated by the proof scheduler or `apply_proof`.
     proven_tip: ProvenTipWriter,
@@ -72,4 +72,28 @@ pub struct State {
     /// FIFO cache of recent block proofs for replica subscriptions. When a subscriber needs a proof
     /// that has been evicted, it falls back to loading from the block store.
     pub(crate) proof_cache: ProofCache,
+}
+
+impl State {
+    /// Runs caller-owned read logic against matching database and tree snapshots.
+    ///
+    /// The closure runs on a blocking worker and releases its read resources before this method
+    /// returns. If SQLite is ahead of the trees, the read releases the connection and waits up to
+    /// 500 ms for the next tree publication before retrying. Once started, the closure
+    /// runs to completion.
+    pub async fn read<R, E, F>(&self, read: F) -> Result<R, E>
+    where
+        F: FnOnce(crate::read::ReadView<'_>) -> Result<R, E> + Send + 'static,
+        R: Send + 'static,
+        E: From<crate::DatabaseError> + Send + 'static,
+    {
+        let snapshots = Arc::clone(&self.snapshots);
+        crate::read::acquire::read(
+            self.db.reader(),
+            move |block_num| snapshots.get(block_num).unwrap_or_else(|| snapshots.latest()),
+            self.subscribe_committed_tip(),
+            read,
+        )
+        .await
+    }
 }

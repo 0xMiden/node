@@ -26,7 +26,6 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_proto::server::{
     miden_node_v1_node_service,
     miden_ntx_builder_v1_network_transaction_builder_service,
-    miden_sequencer_v1_sequencer_service,
     miden_validator_v1_validator_service,
 };
 use miden_node_proto::{BuildUnchecked, DecodeMessage, Verify};
@@ -604,7 +603,7 @@ async fn rpc_server_has_web_support() {
     let (_, rpc_addr, _store, _server) = start_rpc().await;
 
     // Send a status request
-    let client = reqwest::Client::new();
+    let client = miden_node_utils::http::Client::new();
 
     let mut headers = HeaderMap::new();
     let accept_header = concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION"));
@@ -1761,17 +1760,7 @@ async fn sequencer_authenticated_rpc_accepts_user_batch_without_fee_notes() {
 }
 
 #[tokio::test]
-async fn authenticated_batch_defers_validation_to_async_handler() {
-    let request = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
-        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
-        auth_inputs: Vec::new(),
-        batch_proof: None,
-    };
-    let input = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::decode(
-        proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch: Some(request) },
-    )
-    .expect("wire decoding should defer proof-bearing batch conversion to the async handler");
-
+async fn authenticated_batch_reports_missing_request_fields() {
     let store = TestStore::start().await;
     let shutdown = CancellationToken::new();
     let block_producer = BlockProducerApi::new(
@@ -1785,19 +1774,24 @@ async fn authenticated_batch_defers_validation_to_async_handler() {
         block_producer,
         account_admission: AccountAdmission::enabled(store.bootstrap_allowlist()),
     };
-    let error = <SequencerInternalService as miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTxBatch>::handle(
-        &service,
-        input,
-        &MetadataMap::new(),
-        &Extensions::new(),
-    )
-    .await
-    .expect_err("the async handler should reject the malformed proposed batch");
-
-    assert_eq!(error.code(), tonic::Code::InvalidArgument);
-    assert!(error.message().contains("failed to decode"), "{error}");
-    assert!(error.message().contains("proposed_batch.reference_block_header:"), "{error}");
-    assert!(error.message().contains("missing"), "{error}");
+    let malformed = proto::miden::sequencer::v1::AuthenticatedTransactionBatch {
+        proposed_batch: Some(proto::transaction::ProposedBatch::default()),
+        ..Default::default()
+    };
+    for (batch, missing_field) in [
+        (None, "batch:"),
+        (Some(malformed), "batch.proposed_batch.reference_block_header:"),
+    ] {
+        let error = service
+            .submit_authenticated_tx_batch(Request::new(
+                proto::miden::sequencer::v1::SubmitAuthenticatedTxBatchRequest { batch },
+            ))
+            .await
+            .unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert!(error.message().contains(missing_field), "{error}");
+        assert!(error.message().contains("missing"), "{error}");
+    }
 }
 
 // Batch-path coverage for the network-account gate is provided manually. The query layer is covered
@@ -2376,6 +2370,32 @@ async fn sync_endpoints_preserve_account_verification_context() {
         assert!(error.message().starts_with(field), "{error}");
         assert!(error.message().contains("not a known account ID version"), "{error}");
     }
+}
+
+#[tokio::test]
+async fn sync_endpoints_reject_filters_over_the_advertised_limit() {
+    let (mut client, _addr, _store, _server) = start_rpc().await;
+    let block_range = Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 });
+    let notes = client
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
+            note_tags: vec![0; QueryParamNoteTagLimit::LIMIT + 1],
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(notes.code(), tonic::Code::OutOfRange);
+    assert!(notes.message().contains("note_tag exceeded limit"), "{notes}");
+
+    let nullifiers = client
+        .sync_nullifiers(proto::miden::node::v1::SyncNullifiersRequest {
+            nullifiers: vec![0; QueryParamNullifierPrefixLimit::LIMIT + 1],
+            prefix_len: 16,
+            block_range,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(nullifiers.code(), tonic::Code::OutOfRange);
+    assert!(nullifiers.message().contains("nullifier_prefix exceeded limit"), "{nullifiers}");
 }
 
 #[tokio::test]
@@ -3023,4 +3043,48 @@ pub(crate) async fn transaction_log_test_service() -> RpcService {
         NonZeroUsize::new(10).unwrap(),
         None,
     )
+}
+
+#[tokio::test]
+async fn block_header_reads_latest_and_explicit_with_optional_proof() {
+    use miden_protocol::block::BlockNumber;
+
+    let (mut client, _, _store, _server) = start_rpc().await;
+    for block_num in [None, Some(0)] {
+        for include_mmr_proof in [None, Some(false), Some(true)] {
+            let response = client
+                .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
+                    block_num,
+                    include_mmr_proof,
+                    include_protocol_config: None,
+                })
+                .await
+                .unwrap()
+                .into_inner();
+            let header = response
+                .block_header
+                .unwrap()
+                .decode_fields()
+                .unwrap()
+                .build_unchecked()
+                .unwrap();
+            assert_eq!(header.block_num(), BlockNumber::GENESIS);
+            assert_eq!(response.mmr_path.is_some(), include_mmr_proof == Some(true));
+            assert_eq!(response.chain_length, (include_mmr_proof == Some(true)).then_some(1));
+            assert!(response.protocol_config.is_none());
+        }
+    }
+    let response = client
+        .get_block_header_by_number(proto::miden::node::v1::GetBlockHeaderByNumberRequest {
+            block_num: Some(1),
+            include_mmr_proof: Some(true),
+            include_protocol_config: Some(true),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.block_header.is_none());
+    assert!(response.mmr_path.is_none());
+    assert!(response.chain_length.is_none());
+    assert!(response.protocol_config.is_none());
 }

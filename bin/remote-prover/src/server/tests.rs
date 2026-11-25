@@ -195,7 +195,7 @@ impl Server {
             grpc: miden_node_utils::clap::GrpcMessageSizeOptions::default(),
             port: 0,
             kind,
-            timeout: Duration::from_mins(1),
+            timeout: Duration::from_mins(1).into(),
             capacity: NonZeroUsize::new(10).unwrap(),
         }
     }
@@ -212,7 +212,7 @@ impl Server {
 
     /// Overrides the timeout of the server.
     fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = timeout.into();
         self
     }
 }

@@ -321,12 +321,12 @@ async fn grpc_web_request(
     address: std::net::SocketAddr,
     method: &str,
     request: impl prost::Message,
-) -> reqwest::Response {
+) -> miden_node_utils::http::Response {
     let request = request.encode_to_vec();
     let mut frame = vec![0];
     frame.extend_from_slice(&u32::try_from(request.len()).unwrap().to_be_bytes());
     frame.extend_from_slice(&request);
-    reqwest::Client::new()
+    miden_node_utils::http::Client::new()
         .post(format!(
             "http://{address}/miden.note_transport.v1.NoteTransportService/{method}"
         ))
@@ -485,7 +485,7 @@ async fn check_grpc_web(
     response: FetchNotesResponse,
 ) {
     let web = grpc_web_request(address, "SendNoteWithProof", request).await;
-    assert_eq!(web.status(), reqwest::StatusCode::OK);
+    assert_eq!(web.status(), miden_node_utils::http::StatusCode::OK);
     let frame = web.bytes().await.unwrap();
     assert_eq!(frame[0], 0);
     let length = u32::from_be_bytes(frame[1..5].try_into().unwrap()) as usize;
@@ -504,7 +504,7 @@ async fn check_grpc_web(
         },
     )
     .await;
-    assert_eq!(web.status(), reqwest::StatusCode::OK);
+    assert_eq!(web.status(), miden_node_utils::http::StatusCode::OK);
     assert_eq!(web.headers()["access-control-allow-origin"], "*");
     let frame = web.bytes().await.unwrap();
     assert_eq!(frame[0], 0);

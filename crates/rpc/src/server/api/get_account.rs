@@ -2,10 +2,12 @@ use std::collections::HashSet;
 
 use miden_node_proto::domain::account::{
     AccountStorageRequest,
-    AccountVaultRequest,
     GetAccountRequest,
     GetAccountResponse,
-    SlotData,
+};
+use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
+use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
+    StorageRequest, VaultRequest, storage_map_detail_request::SlotData,
 };
 use miden_node_proto::{DecodeMessageExt, generated as proto};
 use miden_node_store::GetAccountError;
@@ -26,6 +28,9 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
     type Output = GetAccountResponse;
 
     fn decode(request: proto::miden::node::v1::GetAccountRequest) -> tonic::Result<Self::Input> {
+        if let Some(details) = &request.details {
+            check_request_limits(details)?;
+        }
         request
             .decode_and_verify()
             .map_err(|err| GetAccountErrorCode::DeserializationFailed.invalid_argument(err))
@@ -49,13 +54,9 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
             block.number = request.block_num
         );
 
-        // Bound requested proofs before forwarding to the store.
         if let Some(details) = &request.details {
             let _span = info_span!("validate_account_details").entered();
-            validate_storage_request(&details.storage_request)?;
-            if let AccountVaultRequest::Assets(ids) = &details.vault_request {
-                check::<QueryParamVaultAssetLimit>(ids.len())?;
-            }
+            check_duplicate_slots(&details.storage_request)?;
         }
 
         let account_data = self
@@ -71,24 +72,31 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
 // HELPERS
 // ================================================================================================
 
-/// Validates the storage map request limits before forwarding it to the store.
-///
-/// Only the [`AccountStorageRequest::Explicit`] variant carries a user-controlled list of
-/// slots. [`AccountStorageRequest::AllStorageMaps`] is expanded by the store from the account's
-/// actual storage layout (and bounded by a response budget), so it needs no validation here.
-fn validate_storage_request(storage_request: &AccountStorageRequest) -> Result<(), Status> {
+/// Bounds the requested proofs before converting individual asset IDs, slots, and map keys.
+fn check_request_limits(details: &AccountDetailRequest) -> Result<(), Status> {
+    if let Some(VaultRequest::AssetIds(ids)) = &details.vault_request {
+        check::<QueryParamVaultAssetLimit>(ids.asset_ids.len())?;
+    }
+    if let Some(StorageRequest::StorageMaps(maps)) = &details.storage_request {
+        check::<QueryParamStorageMapSlotLimit>(maps.storage_maps.len())?;
+        let total_keys = maps
+            .storage_maps
+            .iter()
+            .map(|slot| match &slot.slot_data {
+                Some(SlotData::MapKeys(keys)) => keys.map_keys.len(),
+                _ => 0,
+            })
+            .sum();
+        check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
+    }
+    Ok(())
+}
+
+/// Rejects repeated slot names before querying the store.
+fn check_duplicate_slots(storage_request: &AccountStorageRequest) -> Result<(), Status> {
     let AccountStorageRequest::Explicit(requests) = storage_request else {
         return Ok(());
     };
-
-    // Bound the number of requested slots. `all-entries` requests are not counted by the per-key
-    // limit below, so without this an unbounded (or duplicated) list of `all-entries` slots could
-    // force the store into arbitrarily many forest lookups and database reconstructions, a
-    // denial-of-service vector.
-    check::<QueryParamStorageMapSlotLimit>(requests.len())?;
-
-    // Reject duplicate slots: requesting the same slot more than once is redundant and would
-    // otherwise multiply the store-side work for that slot.
     let mut seen = HashSet::with_capacity(requests.len());
     for request in requests {
         if !seen.insert(&request.slot_name) {
@@ -98,15 +106,6 @@ fn validate_storage_request(storage_request: &AccountStorageRequest) -> Result<(
             )));
         }
     }
-
-    let total_keys: usize = requests
-        .iter()
-        .filter_map(|request| match &request.slot_data {
-            SlotData::All => None,
-            SlotData::MapKeys(items) => Some(items.len()),
-        })
-        .sum();
-    check::<QueryParamStorageMapKeyTotalLimit>(total_keys)?;
 
     Ok(())
 }
@@ -144,9 +143,15 @@ fn get_account_error_to_status(err: GetAccountError) -> Status {
 
 #[cfg(test)]
 mod tests {
-    use miden_node_proto::domain::account::StorageMapRequest;
+    use proto::asset::AssetId;
+    use proto::primitives::Word;
+    use miden_node_proto::domain::account::{StorageMapRequest, SlotData as DomainSlotData};
+    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
+        StorageMapDetailRequest, StorageMapDetailRequests, VaultAssetIds, storage_map_detail_request::MapKeys,
+    };
+    use proto::server::miden_node_v1_node_service::GetAccount as _;
     use miden_node_utils::limiter::QueryParamLimiter;
-    use miden_protocol::account::{AccountId, StorageMapKey, StorageSlotName};
+    use miden_protocol::account::{AccountId, StorageSlotName};
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
     use tonic::Code;
 
@@ -181,62 +186,71 @@ mod tests {
         assert_eq!(status.details(), &[7]);
     }
 
-    fn slot_request(name: &str, slot_data: SlotData) -> StorageMapRequest {
-        StorageMapRequest {
-            slot_name: StorageSlotName::new(name).unwrap(),
-            slot_data,
+    fn storage_details(storage_maps: Vec<StorageMapDetailRequest>) -> AccountDetailRequest {
+        AccountDetailRequest {
+            storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
+                storage_maps,
+            })),
+            ..Default::default()
         }
     }
 
     #[test]
-    fn none_and_all_storage_maps_requests_are_always_valid() {
-        validate_storage_request(&AccountStorageRequest::None).unwrap();
-        validate_storage_request(&AccountStorageRequest::AllStorageMaps).unwrap();
+    fn request_limits_allow_full_and_explicit_selections() {
+        for storage_request in [None, Some(StorageRequest::AllStorageMaps(true))] {
+            check_request_limits(&AccountDetailRequest { storage_request, ..Default::default() })
+                .unwrap();
+        }
+
+        let mut slots =
+            vec![StorageMapDetailRequest::default(); QueryParamStorageMapSlotLimit::LIMIT];
+        slots[0].slot_data = Some(SlotData::MapKeys(MapKeys {
+            map_keys: vec![Word::default(); QueryParamStorageMapKeyTotalLimit::LIMIT],
+        }));
+        let mut details = storage_details(slots);
+        details.vault_request = Some(VaultRequest::AssetIds(VaultAssetIds {
+            asset_ids: vec![AssetId::default(); QueryParamVaultAssetLimit::LIMIT],
+        }));
+        check_request_limits(&details).unwrap();
     }
 
     #[test]
-    fn explicit_request_within_limits_is_valid() {
-        let requests = vec![
-            slot_request("a::0", SlotData::All),
-            slot_request("a::1", SlotData::MapKeys(vec![StorageMapKey::from_index(1)])),
-        ];
-
-        validate_storage_request(&AccountStorageRequest::Explicit(requests)).unwrap();
-    }
-
-    #[test]
-    fn too_many_all_entries_slots_are_rejected() {
-        // `all-entries` requests are not counted by the per-key limit, so this must be caught by
-        // the per-slot limit.
-        let requests = (0..=QueryParamStorageMapSlotLimit::LIMIT)
-            .map(|index| slot_request(&format!("a::{index}"), SlotData::All))
-            .collect();
-
-        let status = validate_storage_request(&AccountStorageRequest::Explicit(requests))
-            .expect_err("request exceeding the slot limit must be rejected");
-        assert_eq!(status.code(), Code::OutOfRange);
+    fn excessive_proof_counts_take_precedence_over_malformed_fields() {
+        let keys = |n| StorageMapDetailRequest {
+            slot_data: Some(SlotData::MapKeys(MapKeys { map_keys: vec![Word::default(); n] })),
+            ..Default::default()
+        };
+        for details in [
+            storage_details(vec![
+                StorageMapDetailRequest::default();
+                QueryParamStorageMapSlotLimit::LIMIT + 1
+            ]),
+            storage_details(vec![keys(QueryParamStorageMapKeyTotalLimit::LIMIT), keys(1)]),
+            AccountDetailRequest {
+                vault_request: Some(VaultRequest::AssetIds(VaultAssetIds {
+                    asset_ids: vec![AssetId::default(); QueryParamVaultAssetLimit::LIMIT + 1],
+                })),
+                ..Default::default()
+            },
+        ] {
+            let request = proto::miden::node::v1::GetAccountRequest {
+                details: Some(details),
+                ..Default::default()
+            };
+            assert_eq!(RpcService::decode(request).unwrap_err().code(), Code::OutOfRange);
+        }
     }
 
     #[test]
     fn duplicate_slots_are_rejected() {
-        let requests =
-            vec![slot_request("a::0", SlotData::All), slot_request("a::0", SlotData::All)];
-
-        let status = validate_storage_request(&AccountStorageRequest::Explicit(requests))
-            .expect_err("duplicate slot must be rejected");
+        let slot = StorageMapRequest {
+            slot_name: StorageSlotName::new("a::0").unwrap(),
+            slot_data: DomainSlotData::All,
+        };
+        let status =
+            check_duplicate_slots(&AccountStorageRequest::Explicit(vec![slot.clone(), slot]))
+                .unwrap_err();
         assert_eq!(status.code(), Code::InvalidArgument);
         assert_eq!(status.details(), &[1]);
-    }
-
-    #[test]
-    fn too_many_map_keys_are_rejected() {
-        let keys: Vec<_> = (0..=QueryParamStorageMapKeyTotalLimit::LIMIT)
-            .map(|index| StorageMapKey::from_index(index as u32))
-            .collect();
-        let requests = vec![slot_request("a::0", SlotData::MapKeys(keys))];
-
-        let status = validate_storage_request(&AccountStorageRequest::Explicit(requests))
-            .expect_err("request exceeding the key limit must be rejected");
-        assert_eq!(status.code(), Code::OutOfRange);
     }
 }

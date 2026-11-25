@@ -3,6 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use anyhow::Context;
+use miden_node_store::DatabaseError;
 use miden_node_store::state::{BlockWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Span, debug, instrument, miden_span_record};
@@ -20,6 +21,7 @@ use tokio::time::Duration;
 
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
+use crate::store::read_chain_inputs;
 use crate::validator::BlockProducerValidatorClient;
 
 // BLOCK BUILDER
@@ -216,41 +218,34 @@ impl BlockBuilder {
 
         let account_ids = account_ids_iter.collect::<Vec<_>>();
         let created_nullifiers = created_nullifiers_iter.collect::<Vec<_>>();
-        let mut block_numbers: BTreeSet<_> = block_references_iter.collect();
-        let note_ids = unauthenticated_notes_iter.collect();
-        let view = state.view();
-        let reference_block = *view.tip();
+        let block_numbers: BTreeSet<_> = block_references_iter.collect();
+        let note_ids: BTreeSet<_> = unauthenticated_notes_iter.collect();
 
-        // The reference block must be the chain tip. Its account and nullifier roots must match the
-        // witnesses from this view.
-        let note_inclusion_proofs = view
-            .get_note_inclusion_proofs(reference_block, note_ids)
+        // The reference block is the chain tip, so its account and nullifier roots match the
+        // witnesses read from the same view.
+        let inputs = state
+            .read(move |view| {
+                let reference_block = view.snapshot.block_num;
+                let chain = read_chain_inputs(&view, reference_block, block_numbers, &note_ids)?;
+                let account_witnesses = account_ids
+                    .into_iter()
+                    .map(|id| (id, view.snapshot.account_tree.open_latest(id)))
+                    .collect();
+                // Block proposal checks whether each nullifier is spent.
+                let nullifier_witnesses = created_nullifiers
+                    .into_iter()
+                    .map(|nullifier| (nullifier, view.snapshot.nullifier_tree.open(&nullifier)))
+                    .collect();
+                Ok::<_, StoreError>(BlockInputs::new(
+                    chain.reference_block_header,
+                    chain.partial_blockchain,
+                    account_witnesses,
+                    nullifier_witnesses,
+                    chain.note_inclusion_proofs,
+                ))
+            })
             .await
-            .map_err(StoreError::GetNoteInclusionProofsFailed)
             .map_err(BuildBlockError::FetchBlockInputsFailed)?;
-        block_numbers
-            .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
-        let partial_blockchain = view
-            .get_block_inclusion_proofs(reference_block, block_numbers)
-            .await
-            .map_err(StoreError::GetBlockInclusionProofsFailed)
-            .map_err(BuildBlockError::FetchBlockInputsFailed)?;
-        let reference_block_header = view
-            .get_block_header(Some(reference_block), false)
-            .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBlockError::FetchBlockInputsFailed)?
-            .0
-            .expect("reference block header should exist");
-        let state_witnesses = view.get_state_witnesses(&account_ids, &created_nullifiers);
-
-        let inputs = BlockInputs::new(
-            reference_block_header,
-            partial_blockchain,
-            state_witnesses.account_witnesses,
-            state_witnesses.nullifier_witnesses,
-            note_inclusion_proofs,
-        );
 
         // Check that the latest committed block in the store matches our expectations.
         //
@@ -304,10 +299,9 @@ impl BlockBuilder {
             .map_err(BuildBlockError::ProposeBlockFailed)?;
         let commitment = header.protocol_config_commitment();
         let protocol_config = state
-            .view()
-            .get_protocol_config(commitment)
+            .read(move |view| view.tx.select_protocol_config(commitment))
             .await
-            .map_err(|err| BuildBlockError::other(err.to_string()))?
+            .map_err(|err: DatabaseError| BuildBlockError::other(err.to_string()))?
             .ok_or_else(|| {
                 BuildBlockError::other(format!("protocol config {commitment} is missing"))
             })?;

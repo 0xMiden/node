@@ -2,7 +2,7 @@ use std::sync::atomic::Ordering;
 
 use miden_node_proto::domain::encryption::transaction_inputs_associated_data;
 use miden_node_proto::prost::Message;
-use miden_node_proto::{DecodeMessageExt, generated as grpc};
+use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as grpc};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{Instrument, info_span, instrument, miden_span_record};
 use miden_protocol::transaction::{ProvenTransaction, TransactionId, TransactionInputs};
@@ -17,6 +17,8 @@ use crate::{PrivateRecordContext, PrivateRecordId};
 impl grpc::server::miden_validator_v1_validator_service::SubmitProvenTransaction
     for ValidatorService
 {
+    const DECODE_EXECUTION: DecodeExecution = DecodeExecution::Blocking;
+
     type Input = Input;
     type Output = ();
 

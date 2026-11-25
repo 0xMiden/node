@@ -451,7 +451,7 @@ impl<B: BackendReader> AccountStateForest<B> {
                 Some(lineage) => roots.get(lineage).copied().ok_or(
                     AccountStateForestUpdateError::MissingComputedRoot { lineage: *lineage },
                 )?,
-                None => self.get_latest_vault_root(account_id),
+                None => self.latest_tree_root(account_id, None).unwrap_or_else(empty_smt_root),
             };
             let mut storage_map_roots = BTreeMap::new();
             if let Some(account_lineages) = lineages.storage.get(&account_id) {
@@ -768,21 +768,17 @@ impl<B: BackendReader> AccountStateForest<B> {
         )))
     }
 
-    /// Retrieves the most recent vault SMT root for an account. If no vault root is found for the
-    /// account, returns an empty SMT root.
-    pub(crate) fn get_latest_vault_root(&self, account_id: AccountId) -> Word {
-        let lineage = Self::vault_lineage_id(account_id);
-        self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
-    }
-
-    /// Retrieves the most recent storage map SMT root for an account slot.
-    pub(crate) fn get_latest_storage_map_root(
+    /// Returns the latest root of a vault or storage map, including an empty tree.
+    pub(crate) fn latest_tree_root(
         &self,
-        account_id: AccountId,
-        slot_name: &StorageSlotName,
-    ) -> Word {
-        let lineage = Self::storage_lineage_id(account_id, slot_name);
-        self.forest.latest_root(lineage).unwrap_or_else(empty_smt_root)
+        account: AccountId,
+        slot: Option<&StorageSlotName>,
+    ) -> Option<Word> {
+        let lineage = slot.map_or_else(
+            || Self::vault_lineage_id(account),
+            |slot| Self::storage_lineage_id(account, slot),
+        );
+        self.forest.latest_root(lineage)
     }
 }
 

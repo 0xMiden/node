@@ -3,7 +3,6 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
-use arc_swap::ArcSwap;
 use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
@@ -33,8 +32,9 @@ use crate::db::{Db, NoteRecord};
 use crate::errors::{ApplyBlockError, InvalidBlockError};
 use crate::state::block_lifecycle::{BlockLifecycle, lifecycle_events_enabled};
 use crate::state::loader::TreeStorage;
+use crate::state::snapshots::EvictedSnapshots;
 use crate::state::view::{PublishedGenerations, StateSnapshot};
-use crate::state::{BlockCache, BlockNotification};
+use crate::state::{BlockCache, BlockNotification, RecentSnapshots};
 
 // WRITE WORKER
 // ================================================================================================
@@ -47,8 +47,10 @@ use crate::state::{BlockCache, BlockNotification};
 pub(in crate::state) struct WriteWorker {
     db: Arc<Db>,
     block_store: Arc<BlockStore>,
-    /// Atomically swappable pointer through which new snapshots are published.
-    latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+    /// Bounded history through which new snapshots are published to readers.
+    snapshots: Arc<RecentSnapshots>,
+    /// Evicted generations still held by readers, checked after each publication.
+    evicted_snapshots: EvictedSnapshots,
     committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
     block_cache: BlockCache,
     rx: mpsc::Receiver<WriteRequest>,
@@ -93,7 +95,7 @@ impl WriteWorker {
     pub(in crate::state) fn new(
         db: Arc<Db>,
         block_store: Arc<BlockStore>,
-        latest_snapshot: Arc<ArcSwap<StateSnapshot>>,
+        snapshots: Arc<RecentSnapshots>,
         committed_tip_tx: Arc<watch::Sender<BlockNumber>>,
         block_cache: BlockCache,
         rx: mpsc::Receiver<WriteRequest>,
@@ -106,7 +108,7 @@ impl WriteWorker {
         // Seed the generation log with the initial snapshot so its readers hold back pruning
         // exactly like readers of any later generation.
         let mut published_generations = PublishedGenerations::new();
-        let initial_snapshot = latest_snapshot.load_full();
+        let initial_snapshot = snapshots.latest();
         published_generations.record(initial_snapshot.latest_block_num(), &initial_snapshot);
 
         let mut pool_builder =
@@ -120,7 +122,8 @@ impl WriteWorker {
         Self {
             db,
             block_store,
-            latest_snapshot,
+            snapshots,
+            evicted_snapshots: EvictedSnapshots::new(),
             committed_tip_tx,
             block_cache,
             rx,
@@ -287,10 +290,22 @@ impl WriteWorker {
             account_forest_update,
         );
 
-        // Atomically publish the new state. Readers that call `snapshot()` after this point will
-        // see the updated state. Readers that hold the old snapshot are not affected.
+        // Publish the new generation while retaining recent predecessors for readers whose SQL
+        // snapshots were established before this block. Acquired readers survive history eviction.
         self.published_generations.record(block_num, &snapshot);
-        self.latest_snapshot.swap(snapshot);
+        if let Some((height, snapshot)) = self.snapshots.push(block_num, snapshot) {
+            self.evicted_snapshots.push(height, &snapshot);
+        }
+        // A reader holding an evicted generation does not affect the applied block, so the report
+        // is a warning; an error-level event would mark the `write_block` span as failed.
+        self.evicted_snapshots.report_held(|held| {
+            warn!(
+                &held,
+                "Evicted state snapshot is still held",
+                snapshot.block.number = held.block_num,
+                snapshot.references.count = held.references
+            );
+        });
 
         miden_span_record!(snapshots.live = self.published_generations.live());
 
@@ -444,11 +459,8 @@ impl WriteWorker {
         let block_num = header.block_num();
 
         // Validate that the applied block is the next block in sequence.
-        let prev_block = self
-            .db
-            .select_block_header_by_block_num(None)
-            .await?
-            .ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
+        let prev_block =
+            self.db.select_chain_tip().await?.ok_or(ApplyBlockError::DbBlockHeaderEmpty)?;
         let expected_block_num = prev_block.block_num().child();
         if block_num != expected_block_num {
             return Err(InvalidBlockError::NewBlockInvalidBlockNum {
@@ -911,9 +923,7 @@ mod tests {
         assert_eq!(
             state
                 .db
-                .select_block_header_by_block_num(Some(
-                    crate::state::ScopedBlockNum::new_unchecked(1.into()),
-                ))
+                .select_block_header(crate::state::ScopedBlockNum::new_unchecked(1.into()))
                 .await
                 .unwrap(),
             None
@@ -984,6 +994,47 @@ mod tests {
         wire.body = Some(body.into());
         let block: SignedBlock = wire.decode_and_build_unchecked().unwrap();
         (block, id, commitment)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replay_recovers_parent_trees_and_skips_committed_updates() {
+        use miden_protocol::block::nullifier_tree::NullifierTree;
+        use miden_protocol::crypto::merkle::smt::LargeSmt;
+
+        use crate::account_state_forest::AccountStateForest;
+        use crate::state::loader::*;
+        let (_dir, state, mut writer, task, config) = start_store().await;
+        let (block, id, _) = block_with_account_and_log(&state, &config).await;
+        writer.apply_block(block.clone(), None).await.unwrap();
+        let parent = tempfile::tempdir().unwrap();
+        let options = miden_node_utils::clap::RocksDbOptions::default();
+        let storage = open_tree_storage(parent.path(), &options, ACCOUNT_TREE_STORAGE_DIR).unwrap();
+        let mut accounts = AccountTree::new(LargeSmt::new(storage).unwrap()).unwrap();
+        let storage =
+            open_tree_storage(parent.path(), &options, NULLIFIER_TREE_STORAGE_DIR).unwrap();
+        let mut nullifiers = NullifierTree::new_unchecked(LargeSmt::new(storage).unwrap());
+        let storage = open_account_state_forest_storage(
+            parent.path(),
+            &options,
+            ACCOUNT_STATE_FOREST_STORAGE_DIR,
+        )
+        .unwrap();
+        let mut forest = AccountStateForest::from_backend(storage).unwrap();
+        for _ in 0..2 {
+            sync_trees_to_tip(
+                &state.db,
+                &state.block_store,
+                block.header(),
+                &mut accounts,
+                &mut nullifiers,
+                &mut forest,
+            )
+            .await
+            .unwrap();
+            assert_eq!(accounts.root(), block.header().account_root());
+            assert!(forest.latest_tree_root(id, None).is_some());
+        }
+        writer.stop(task).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

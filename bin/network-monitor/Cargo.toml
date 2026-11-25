@@ -24,7 +24,6 @@ clap                = { features = ["env"], workspace = true }
 fs-err              = { workspace = true }
 futures             = { workspace = true }
 hex                 = { workspace = true }
-humantime           = { workspace = true }
 maud                = { features = ["axum"], version = "0.27" }
 miden-node-proto    = { workspace = true }
 miden-node-tracing  = { workspace = true }
@@ -35,7 +34,6 @@ miden-tx            = { features = ["concurrent", "std"], workspace = true }
 miden-usdcx         = { workspace = true }
 rand                = { workspace = true }
 rand_chacha         = { workspace = true }
-reqwest             = { features = ["json", "query"], workspace = true }
 serde               = { workspace = true }
 serde_json          = { workspace = true }
 serde_path_to_error = { version = "0.1" }

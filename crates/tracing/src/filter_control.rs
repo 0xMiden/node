@@ -14,14 +14,14 @@ pub(crate) type SharedFilterControl = Arc<dyn FilterControl>;
 /// Identifies the tracing output owned by a filter control.
 #[derive(Clone, Copy)]
 pub(crate) enum FilterOutput {
-    Stdout,
+    Stderr,
     OpenTelemetry,
 }
 
 impl FilterOutput {
     const fn as_str(self) -> &'static str {
         match self {
-            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
             Self::OpenTelemetry => "otel",
         }
     }

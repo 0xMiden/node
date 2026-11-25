@@ -25,7 +25,7 @@ use crate::{ErrorSpanExt, error};
 /// pending spans before the program terminates.
 static TRACER_PROVIDER: OnceLock<SdkTracerProvider> = OnceLock::new();
 
-/// Stdout defaults for node operator diagnostics.
+/// Default filter for node operator diagnostics on stderr.
 const DEFAULT_STDOUT_FILTER: &str = concat!(
     "info,user=debug,miden::storage=debug,miden::rpc::server=debug,",
     "miden::production=debug,miden::mempool=debug,miden::proving=debug,miden::sync=debug,",
@@ -169,9 +169,9 @@ impl Drop for OtelGuard {
     }
 }
 
-/// Initializes tracing to stdout and optionally an open-telemetry exporter.
+/// Initializes tracing to stderr and optionally an open-telemetry exporter.
 ///
-/// Stdout trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
+/// Local trace filtering is configured with `MIDEN_STDOUT_FILTER`, then `RUST_LOG`, then the
 /// built-in defaults for operator, storage, and RPC server diagnostics.
 /// OpenTelemetry export filtering is configured with `MIDEN_OTEL_FILTER`, then `RUST_LOG`, then
 /// `info`. Bare levels select node verbosity; dependencies default to `warn` for both outputs.
@@ -187,7 +187,7 @@ pub fn setup_tracing(otel: OpenTelemetry) -> anyhow::Result<Option<OtelGuard>> {
     setup_tracing_with_config(TracingConfig::from_env(otel))
 }
 
-/// Initializes tracing from explicit stdout and OpenTelemetry filter configuration.
+/// Initializes tracing from explicit stderr and OpenTelemetry filter configuration.
 ///
 /// Returns an [`OtelGuard`] if open-telemetry is enabled, otherwise `None`. When this guard is
 /// dropped, the tracer provider is shutdown.
@@ -225,11 +225,11 @@ pub fn setup_tracing_with_config(config: TracingConfig) -> anyhow::Result<Option
         OpenTelemetryLayer::new(provider.tracer("tracing-otel-subscriber")).boxed()
     });
 
-    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter, FilterOutput::Stdout)?;
+    let (stdout_filter, stdout_reload) = reloadable_filter(&stdout_filter, FilterOutput::Stderr)?;
     let (otel_filter, otel_reload) = reloadable_filter(&otel_filter, FilterOutput::OpenTelemetry)?;
 
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(stdout_filter))
+        .with(stderr_layer().with_filter(stdout_filter))
         .with(otel_layer.with_filter(otel_filter));
     tracing::subscriber::set_global_default(subscriber).map_err(Into::<anyhow::Error>::into)?;
 
@@ -356,14 +356,14 @@ pub fn setup_test_tracing() -> anyhow::Result<(
     let otel_layer =
         OpenTelemetryLayer::new(tracer_provider.tracer("tracing-otel-subscriber")).boxed();
     let subscriber = Registry::default()
-        .with(stdout_layer().with_filter(filter_from_string("debug")?))
+        .with(stderr_layer().with_filter(filter_from_string("debug")?))
         .with(otel_layer.with_filter(filter_from_string("info,axum::rejection=trace")?));
     tracing::subscriber::set_global_default(subscriber)?;
     Ok((rx_export, rx_shutdown))
 }
 
 #[cfg(not(feature = "tracing-forest"))]
-fn stdout_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+fn stderr_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber,
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
@@ -374,16 +374,18 @@ where
         .with_file(false)
         .with_line_number(false)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .boxed()
 }
 
 #[cfg(feature = "tracing-forest")]
-fn stdout_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
+fn stderr_layer<S>() -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber,
     for<'a> S: tracing_subscriber::registry::LookupSpan<'a>,
 {
-    tracing_forest::ForestLayer::default().boxed()
+    let printer = tracing_forest::PrettyPrinter::new().writer(std::io::stderr);
+    tracing_forest::ForestLayer::from(printer).boxed()
 }
 
 #[cfg(test)]
@@ -407,7 +409,7 @@ mod tests {
         }
     }
 
-    fn default_stdout_events(emit: impl FnOnce()) -> Vec<(&'static str, tracing::Level)> {
+    fn default_stderr_events(emit: impl FnOnce()) -> Vec<(&'static str, tracing::Level)> {
         let events = Arc::new(Mutex::new(Vec::new()));
         let subscriber = tracing_subscriber::registry()
             .with(RecordedTargets(Arc::clone(&events)).with_filter(
@@ -418,8 +420,8 @@ mod tests {
     }
 
     #[test]
-    fn default_stdout_preserves_storage_and_operator_debug_events() {
-        let events = default_stdout_events(|| {
+    fn default_stderr_preserves_storage_and_operator_debug_events() {
+        let events = default_stderr_events(|| {
             tracing::info!(target: "miden::process", "process info");
             tracing::debug!(target: "miden::process", "process debug");
             tracing::debug!(target: "user::application", "user debug");

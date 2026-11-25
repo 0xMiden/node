@@ -33,6 +33,12 @@ pub enum SchemaVerificationError {
 pub enum DatabaseError {
     #[error("SQLite pool interaction failed: {0}")]
     InteractError(String),
+    #[error("SQLite read task failed for {operation}")]
+    ReadTask {
+        operation: String,
+        #[source]
+        source: tokio::task::JoinError,
+    },
     #[error("setup deadpool connection pool failed")]
     ConnectionPoolObtainError(#[from] Box<dyn std::error::Error + Send + Sync + 'static>),
     #[error("conversion from SQL to rust type {to} failed")]

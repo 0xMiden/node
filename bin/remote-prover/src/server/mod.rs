@@ -8,6 +8,7 @@ use miden_node_proto::server::{
 use miden_node_tracing::grpc::grpc_trace_layer;
 use miden_node_tracing::panic::catch_panic_layer_fn;
 use miden_node_tracing::{OpenTelemetry, info};
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::cors::cors_for_grpc_web_layer;
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
@@ -42,8 +43,8 @@ pub struct Server {
     #[arg(long, value_enum, env = "MIDEN_PROVER_KIND")]
     kind: ProofKind,
     /// Maximum time allowed for a proof request to complete. Once exceeded, the request is aborted.
-    #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT", value_parser = humantime::parse_duration)]
-    timeout: std::time::Duration,
+    #[arg(long, default_value = "60s", env = "MIDEN_PROVER_TIMEOUT")]
+    timeout: HumanDuration,
     /// Maximum number of concurrent proof requests that the prover will allow.
     ///
     /// Note that the prover only proves one request at a time; the rest are queued. This capacity
@@ -79,7 +80,7 @@ impl Server {
             "Remote prover ready",
             service.name = "miden-remote-prover",
             service.version = env!("CARGO_PKG_VERSION"),
-            prover.timeout = humantime::Duration::from(self.timeout).to_string(),
+            prover.timeout = self.timeout.to_string(),
             prover.capacity = self.capacity.get(),
             prover.kind = self.kind,
             prover.port = port
@@ -111,7 +112,7 @@ impl Server {
         let max_decoding_message_size = self.grpc.max_decoding_message_size.get();
         let server = grpc::server_builder()
             .accept_http1(true)
-            .timeout(self.timeout)
+            .timeout(self.timeout.into())
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc_trace_layer())
             .layer(cors_for_grpc_web_layer())

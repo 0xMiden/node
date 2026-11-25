@@ -4,6 +4,7 @@
 use std::time::Duration;
 
 use miden_node_proto::clients::RecoveringChannel;
+use miden_node_tracing::grpc::client::trace_grpc_client;
 use miden_node_tracing::instrument;
 use tonic::transport::{Channel, ClientTlsConfig};
 use tonic_health::pb::health_check_response::ServingStatus;
@@ -63,7 +64,7 @@ impl Service for NoteTransportService {
         let details = NoteTransportStatusDetails { url: self.url.to_string() };
         let max_decoding_message_size = self.max_decoding_message_size;
         let health = self.channel.call(self.timeout, |channel| async move {
-            HealthClient::new(channel).max_decoding_message_size(max_decoding_message_size)
+            HealthClient::new(trace_grpc_client(channel)).max_decoding_message_size(max_decoding_message_size)
                 .check(HealthCheckRequest {
                     service: miden_node_proto::server::miden_note_transport_v1_note_transport_service::service_name().to_string(),
                 }).await

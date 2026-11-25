@@ -27,10 +27,7 @@ async fn acknowledged_block_retains_inputs_after_restart() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        InitialMetrics {
-            chain_tip: expected.block_num().as_u32(),
-            ..InitialMetrics::default()
-        },
+        InitialMetrics::default(),
     )
     .await
     .unwrap();
@@ -55,12 +52,12 @@ async fn failed_input_commit_does_not_acknowledge_or_publish_tip() {
     // A failed proving input write leaves both the stored and advertised chain tips unchanged.
     let tv = TestValidator::new().await;
     let before = tv.call_status().await;
-    let tip = *tv.server.committed_tip.borrow();
     crate::db::reject_proving_input_writes_for_test(&tv.server.db).await.unwrap();
     let error = tv.call_sign_block(&tv.propose_empty_block()).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
-    assert_eq!(*tv.server.committed_tip.borrow(), tip);
-    assert_eq!(tv.call_status().await.signed_blocks_count, before.signed_blocks_count);
+    let after = tv.call_status().await;
+    assert_eq!(after.chain_tip, before.chain_tip);
+    assert_eq!(after.signed_blocks_count, before.signed_blocks_count);
     assert!(tv.server.db.load_block_backup(1.into()).await.unwrap().is_none());
 }
 
@@ -69,7 +66,8 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
     // A replacement block retains its own proving inputs, and corrupt inputs cause backup reads to
     // fail.
     let tv = TestValidator::new().await;
-    let proposal = tv.propose_empty_block();
+    let parent_timestamp = tv.chain_tip.timestamp();
+    let proposal = empty_block_at(&tv.chain_tip, &tv.chain, parent_timestamp + 1);
     tv.call_sign_block(&proposal).await.unwrap();
     let original = tv.server.db.load_block(1.into()).await.unwrap().unwrap();
     let inputs = tv
@@ -83,8 +81,7 @@ async fn replacement_retains_only_matching_inputs_and_corruption_rejects_backup(
         .unwrap();
     let original_inputs = miden_node_persistence::encode(&inputs);
     let replacement =
-        ProposedBlock::new_at(inputs.block_inputs, vec![], original.header().timestamp() + 1)
-            .unwrap();
+        ProposedBlock::new_at(inputs.block_inputs, vec![], parent_timestamp + 2).unwrap();
     tv.call_sign_block(&replacement).await.unwrap();
     let backup = tv.server.db.load_block_backup(1.into()).await.unwrap().unwrap();
     let inputs = backup.proving_inputs.unwrap();
@@ -222,10 +219,7 @@ async fn restart_with_retention(tv: TestValidator, retention: u32) -> TestValida
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
-        InitialMetrics {
-            chain_tip: chain_tip.block_num().as_u32(),
-            ..InitialMetrics::default()
-        },
+        InitialMetrics::default(),
     )
     .await
     .unwrap();
@@ -287,14 +281,14 @@ async fn pruning_failure_does_not_acknowledge_or_publish_a_new_tip() {
     let mut tv = restart_with_retention(TestValidator::new().await, 1).await;
     tv.apply_empty_block().await;
     let before = tv.call_status().await;
-    let tip = *tv.server.committed_tip.borrow();
     let connection =
         miden_node_db::Connection::open(tv.temp_dir.path().join("validator.sqlite3")).unwrap();
     connection.execute("CREATE TRIGGER reject_pruning BEFORE UPDATE OF proving_inputs ON blocks WHEN OLD.proving_inputs IS NOT NULL AND NEW.proving_inputs IS NULL BEGIN SELECT RAISE(ABORT, 'pruning rejected'); END", []).unwrap();
     let error = tv.call_sign_block(&tv.propose_empty_block()).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::Internal);
-    assert_eq!(*tv.server.committed_tip.borrow(), tip);
-    assert_eq!(tv.call_status().await.signed_blocks_count, before.signed_blocks_count);
+    let after = tv.call_status().await;
+    assert_eq!(after.chain_tip, before.chain_tip);
+    assert_eq!(after.signed_blocks_count, before.signed_blocks_count);
     assert!(
         tv.server
             .db

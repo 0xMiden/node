@@ -29,8 +29,8 @@ backon                 = { workspace = true }
 clap                   = { features = ["env"], workspace = true }
 fs-err                 = { workspace = true }
 http                   = { workspace = true }
-humantime              = { workspace = true }
 itertools              = { workspace = true }
+jiff                   = { default-features = false, features = ["std"], version = "0.2.42" }
 lru                    = { workspace = true }
 miden-node-persistence = { workspace = true }
 miden-node-tracing     = { workspace = true }
@@ -39,7 +39,8 @@ miden-protocol         = { workspace = true }
 miden-standards        = { workspace = true }
 miden-testing          = { optional = true, workspace = true }
 miden-tx               = { optional = true, workspace = true }
-reqwest                = { workspace = true }
+reqwest                = { features = ["json"], version = "0.13" }
+serde                  = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt", "signal", "time"], workspace = true }
 tokio-util             = { workspace = true }
@@ -52,4 +53,5 @@ miden-crypto = { features = ["rocksdb"], workspace = true }
 
 [dev-dependencies]
 miden-protocol = { features = ["testing"], workspace = true }
+rstest         = { workspace = true }
 tempfile       = { workspace = true }

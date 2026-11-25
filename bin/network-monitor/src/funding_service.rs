@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use miden_node_tracing::instrument;
-use reqwest::Client;
+use miden_node_utils::http::Client;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

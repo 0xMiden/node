@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use anyhow::Context;
 use miden_node_tracing::instrument;
+use miden_node_utils::http::Client;
 use miden_protocol::account::AccountId;
-use reqwest::Client;
 use serde::Serialize;
 use url::Url;
 

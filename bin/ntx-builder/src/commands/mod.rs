@@ -7,7 +7,7 @@ use anyhow::Context;
 use clap::{ArgGroup, Parser};
 use miden_node_store::genesis::GenesisBlock;
 use miden_node_tracing::{OpenTelemetry, info};
-use miden_node_utils::clap::duration_to_human_readable_string;
+use miden_node_utils::clap::HumanDuration;
 use miden_node_utils::formatting::format_endpoint;
 use miden_node_utils::fs::ensure_empty_directory;
 use miden_node_utils::genesis::{OfficialNetwork, fetch_genesis_block, read_genesis_block};
@@ -59,11 +59,10 @@ pub enum NtxBuilderCommand {
         #[arg(
             long = "grpc.timeout",
             env = ENV_GRPC_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_GRPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_GRPC_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        grpc_timeout: Duration,
+        grpc_timeout: HumanDuration,
 
         /// The node RPC service gRPC url.
         #[arg(long = "rpc.url", alias = "store.url", env = ENV_RPC_URL, value_name = "URL")]
@@ -73,11 +72,10 @@ pub enum NtxBuilderCommand {
         #[arg(
             long = "rpc.timeout",
             env = ENV_RPC_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_RPC_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_RPC_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        rpc_timeout: Duration,
+        rpc_timeout: HumanDuration,
 
         /// Optional value for the fixed `x-miden-network-tx-auth` metadata header.
         #[arg(
@@ -95,11 +93,10 @@ pub enum NtxBuilderCommand {
         #[arg(
             long = "tx-prover.timeout",
             env = ENV_TX_PROVER_TIMEOUT,
-            default_value = duration_to_human_readable_string(DEFAULT_TX_PROVER_TIMEOUT),
-            value_parser = humantime::parse_duration,
+            default_value_t = DEFAULT_TX_PROVER_TIMEOUT.into(),
             value_name = "DURATION"
         )]
-        tx_prover_timeout: Duration,
+        tx_prover_timeout: HumanDuration,
 
         /// Number of note scripts to cache locally.
         ///
@@ -303,12 +300,12 @@ impl NtxBuilderCommand {
             service.name = "miden-ntx-builder",
             service.version = env!("CARGO_PKG_VERSION"),
             ntx_builder.listen = listen.to_string(),
-            grpc.timeout = humantime::Duration::from(grpc_timeout).to_string(),
+            grpc.timeout = grpc_timeout.to_string(),
             data.directory = data_directory.as_path(),
             rpc.endpoint = format_endpoint(&rpc_url),
-            rpc.timeout = humantime::Duration::from(rpc_timeout).to_string(),
+            rpc.timeout = rpc_timeout.to_string(),
             tx_prover.endpoint = format_endpoint(&tx_prover_url),
-            tx_prover.timeout = humantime::Duration::from(tx_prover_timeout).to_string(),
+            tx_prover.timeout = tx_prover_timeout.to_string(),
             rpc.authentication.configured = rpc_auth_header_value.is_some(),
             ntx_builder.max_concurrent_txs = max_concurrent_txs,
             account.ids.count = priority_accounts.len(),
@@ -326,10 +323,10 @@ impl NtxBuilderCommand {
 
         let config =
             miden_ntx_builder::NtxBuilderConfig::new(rpc_url, tx_prover_url, database_filepath)
-                .with_grpc_timeout(grpc_timeout)
+                .with_grpc_timeout(grpc_timeout.into())
                 .with_max_decoding_message_size(grpc_message_size.max_decoding_message_size.get())
-                .with_rpc_timeout(rpc_timeout)
-                .with_tx_prover_timeout(tx_prover_timeout)
+                .with_rpc_timeout(rpc_timeout.into())
+                .with_tx_prover_timeout(tx_prover_timeout.into())
                 .with_script_cache_size(script_cache_size)
                 .with_max_concurrent_txs(max_concurrent_txs)
                 .with_priority_accounts(priority_accounts)

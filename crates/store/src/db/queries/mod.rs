@@ -61,8 +61,6 @@ struct InvalidNetworkAccountType(i64);
 // BLOCK QUERIES
 // =================================================================================================
 
-mod block_header_row;
-
 mod select_transaction_logs;
 pub(crate) use select_transaction_logs::select_transaction_logs;
 
@@ -75,14 +73,10 @@ pub(crate) use insert_block_header::insert_block_header;
 mod select_all_block_header_commitments;
 pub(crate) use select_all_block_header_commitments::select_all_block_header_commitments;
 
-mod select_block_header_and_signatures_by_block_num;
-pub(crate) use select_block_header_and_signatures_by_block_num::select_block_header_and_signatures_by_block_num;
+mod select_chain_tip;
+pub(crate) use select_chain_tip::select_chain_tip;
 
-mod select_block_header_by_block_num;
-pub(crate) use select_block_header_by_block_num::select_block_header_by_block_num;
-
-mod select_block_headers;
-pub(crate) use select_block_headers::select_block_headers;
+pub(crate) use crate::read::{select_block_header, select_block_headers};
 
 // PROTOCOL CONFIG QUERIES
 // =================================================================================================
@@ -92,9 +86,6 @@ pub(crate) use insert_protocol_config::insert_protocol_config;
 
 mod select_protocol_config_by_commitment;
 pub(crate) use select_protocol_config_by_commitment::select_protocol_config_by_commitment;
-
-mod select_protocol_config_commitment_at;
-pub(crate) use select_protocol_config_commitment_at::select_protocol_config_commitment_at;
 
 // NOTE QUERIES
 // =================================================================================================
@@ -121,14 +112,10 @@ pub(crate) use select_notes_by_id::select_notes_by_id;
 mod select_notes_since_block_by_tag;
 pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 
-mod select_existing_note_ids;
-pub(crate) use select_existing_note_ids::select_existing_note_ids;
-
 mod select_note_ids_by_nullifier;
 pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
 
-mod select_note_inclusion_proofs;
-pub(crate) use select_note_inclusion_proofs::select_note_inclusion_proofs;
+pub(crate) use crate::read::select_note_inclusion_proofs;
 
 mod select_note_sync_records;
 pub(crate) use select_note_sync_records::select_note_sync_records;

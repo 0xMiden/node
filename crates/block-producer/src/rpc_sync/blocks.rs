@@ -50,8 +50,14 @@ impl BlockSync {
     #[instrument(err)]
     pub(super) async fn sync(&mut self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let local_tip = self.state.committed_tip();
-        let (parent, _) = self.state.view().get_block_header(Some(local_tip), false).await?;
-        let mut parent = parent.context("local chain tip header not found")?;
+        let mut parent = self
+            .state
+            .read(move |view| {
+                view.tx
+                    .select_block_header(local_tip)?
+                    .context("local chain tip header not found")
+            })
+            .await?;
         let mut client = self.source_rpc.clone();
         let upstream_tip = BlockNumber::from(
             client

@@ -4,7 +4,6 @@ use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 
-use arc_swap::ArcSwap;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorReport, instrument};
 use miden_node_utils::clap::StorageOptions;
@@ -28,11 +27,20 @@ use crate::state::loader::{
     load_nullifier_tree,
     open_account_state_forest_storage,
     open_tree_storage,
+    sync_trees_to_tip,
     verify_account_state_forest_consistency,
     verify_tree_consistency,
 };
 use crate::state::writer::{WriteRequest, WriteWorker, WriterTask};
-use crate::state::{BlockCache, BlockWriter, ProofCache, ProofWriter, State, StateSnapshot};
+use crate::state::{
+    BlockCache,
+    BlockWriter,
+    ProofCache,
+    ProofWriter,
+    RecentSnapshots,
+    State,
+    StateSnapshot,
+};
 use crate::{DataDirectory, DatabaseOptions};
 
 /// Awaits a spawned load task, forwarding its result.
@@ -166,11 +174,11 @@ impl State {
 
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
         // consistency check also pins the chain MMR to this header.
-        let latest_block_num = db
-            .select_block_header_by_block_num(None)
+        let latest_header = db
+            .select_chain_tip()
             .await?
-            .ok_or(StateInitializationError::GenesisBlockMissing)?
-            .block_num();
+            .ok_or(StateInitializationError::GenesisBlockMissing)?;
+        let latest_block_num = latest_header.block_num();
 
         let apply_block_thread_priority = storage_options.apply_block_thread_priority;
 
@@ -234,24 +242,30 @@ impl State {
                         )
                     }))
                     .await?;
-                    let forest = load_account_state_forest(storage, &db, latest_block_num).await?;
-                    verify_account_state_forest_consistency(&forest, &db).await?;
-                    Ok(forest)
+                    load_account_state_forest(storage, &db, latest_block_num).await
                 }
             }
             .in_current_span(),
         );
-        let (blockchain, account_tree, nullifier_tree, forest) = tokio::try_join!(
+        let (blockchain, mut account_tree, mut nullifier_tree, mut forest) = tokio::try_join!(
             join_load_task(mmr_task),
             join_load_task(account_tree_task),
             join_load_task(nullifier_tree_task),
             join_load_task(forest_task),
         )?;
 
-        // Verify that tree roots match the expected roots from the database. This catches any
-        // divergence between persistent storage and the database caused by corruption or incomplete
-        // shutdown.
-        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &db).await?;
+        sync_trees_to_tip(
+            &db,
+            &block_store,
+            &latest_header,
+            &mut account_tree,
+            &mut nullifier_tree,
+            &mut forest,
+        )
+        .await?;
+
+        verify_tree_consistency(account_tree.root(), nullifier_tree.root(), &latest_header)?;
+        verify_account_state_forest_consistency(&forest, &db).await?;
 
         let account_tree = AccountTreeWithHistory::new(account_tree, latest_block_num);
 
@@ -279,7 +293,7 @@ impl State {
                 .reader()
                 .map_err(|e| StateInitializationError::AccountStateForestIoError(e.as_report()))?,
         ));
-        let latest_snapshot = Arc::new(ArcSwap::from(initial_snapshot));
+        let snapshots = Arc::new(RecentSnapshots::new(latest_block_num, initial_snapshot));
 
         // Assemble the write worker. It owns the writable trees and processes write requests
         // serially, publishing a new snapshot after each committed block. The caller runs it; it
@@ -289,7 +303,7 @@ impl State {
         let block_writer = WriteWorker::new(
             Arc::clone(&db),
             Arc::clone(&block_store),
-            Arc::clone(&latest_snapshot),
+            Arc::clone(&snapshots),
             Arc::clone(&committed_tip_tx),
             block_cache.clone(),
             write_rx,
@@ -303,7 +317,7 @@ impl State {
             data_directory: data_path.to_path_buf(),
             db,
             block_store,
-            latest_snapshot,
+            snapshots,
             proven_tip,
             committed_tip_tx,
             block_cache,
@@ -420,6 +434,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_times_out_waiting_for_an_unpublished_tree_snapshot() {
+        use std::time::Duration;
+
+        let (directory, state, _writer) = crate::read::tests::state().await;
+        let block = crate::read::tests::next_block(&state).await;
+        // Advance the SQL tip while the published trees stay at genesis.
+        database_writer(directory.path())
+            .write("insert block header", move |tx| {
+                crate::db::queries::insert_block_header(tx, block.header(), block.signatures())
+            })
+            .await
+            .unwrap();
+
+        tokio::time::pause();
+        let start = tokio::time::Instant::now();
+        let read = state.read(|_| -> Result<(), DatabaseError> {
+            panic!("a read requires matching database and tree snapshots")
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), read).await.unwrap();
+        assert!(matches!(result, Err(DatabaseError::ReadSnapshotUnavailable)));
+        assert!(start.elapsed() >= Duration::from_millis(500));
+    }
+
+    #[tokio::test]
     async fn state_view_returns_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path()).await;
@@ -428,5 +466,111 @@ mod tests {
         let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();
 
         assert_eq!(protocol_config, Some(test_protocol_config()));
+    }
+}
+
+#[cfg(test)]
+mod read_acquisition_tests {
+    use std::time::Duration;
+
+    use miden_protocol::block::BlockNumber;
+
+    use crate::DatabaseError;
+
+    #[tokio::test]
+    async fn cancelling_a_read_during_snapshot_acquisition_skips_the_caller() {
+        use tokio::sync::{mpsc, oneshot};
+
+        let (_directory, state, _writer) = crate::read::tests::state().await;
+        let (request_snapshot, mut requests) = mpsc::unbounded_channel();
+        let (called, invocation) = oneshot::channel();
+        let mut read = Box::pin(crate::read::acquire::read(
+            state.db.reader(),
+            move |_| {
+                let (publish, snapshot) = oneshot::channel();
+                request_snapshot.send(publish).unwrap();
+                snapshot.blocking_recv().unwrap()
+            },
+            state.subscribe_committed_tip(),
+            move |_| {
+                called.send(()).unwrap();
+                Ok::<_, DatabaseError>(())
+            },
+        ));
+
+        // The worker owns the SQLite transaction while it waits for the matching tree snapshot.
+        let publish = tokio::select! {
+            request = requests.recv() => request.unwrap(),
+            result = &mut read => panic!("read finished before acquiring its snapshot: {result:?}"),
+        };
+        drop(read);
+        assert!(publish.send(state.snapshots.latest()).is_ok());
+        assert!(invocation.await.is_err(), "cancelled read invoked its caller");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_waits_for_tree_publication_and_invokes_the_caller_once() {
+        let (_directory, mut state, mut writer) = crate::read::tests::state().await;
+        let old = state.snapshots.latest();
+        let block = crate::read::tests::next_block(&state).await;
+        writer.apply_block(block, None).await.unwrap();
+        // Recreate the commit/publication gap while retaining both real tree generations.
+        let published = state.snapshots.latest();
+        std::sync::Arc::get_mut(&mut state).unwrap().snapshots =
+            std::sync::Arc::new(crate::state::RecentSnapshots::new(BlockNumber::GENESIS, old));
+        state.committed_tip_tx.send_replace(BlockNumber::GENESIS);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_calls = std::sync::Arc::clone(&calls);
+        let read = state.read(move |view| -> Result<(), DatabaseError> {
+            observed_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(view.snapshot.block_num, BlockNumber::from(1));
+            let header = view.tx.select_block_header(view.snapshot.block_num)?.unwrap();
+            assert_eq!(view.snapshot.blockchain.as_mmr().get(1).unwrap(), header.commitment());
+            Ok(())
+        });
+        tokio::pin!(read);
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut read).await.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(state.snapshots.push(1.into(), published).is_none());
+        state.committed_tip_tx.send_replace(1.into());
+        tokio::time::timeout(Duration::from_secs(5), read).await.unwrap().unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(test)]
+mod retained_snapshot_tests {
+    use miden_protocol::block::BlockNumber;
+
+    use crate::DatabaseError;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_uses_a_retained_generation_when_newer_trees_are_published() {
+        let (_directory, state, mut writer) = crate::read::tests::state().await;
+        let block = crate::read::tests::next_block(&state).await;
+        writer.apply_block(block, None).await.unwrap();
+        assert_eq!(state.snapshots.latest().latest_block_num(), BlockNumber::from(1));
+        // Model an SQL view that predates the latest tree publication. The empty block has no
+        // dependent rows, so removing its header leaves the visible tip at genesis.
+        state
+            .db
+            .writer()
+            .write("restore older SQL view", |tx| -> Result<(), DatabaseError> {
+                tx.execute("DELETE FROM block_headers WHERE block_num = 1", &[])?;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        state
+            .read(|view| -> Result<(), DatabaseError> {
+                assert_eq!(view.snapshot.block_num, BlockNumber::GENESIS);
+                assert_eq!(view.snapshot.blockchain.chain_tip(), Some(BlockNumber::GENESIS));
+                let header = view.tx.select_block_header(BlockNumber::GENESIS)?.unwrap();
+                assert_eq!(view.snapshot.blockchain.as_mmr().get(0).unwrap(), header.commitment());
+                assert_eq!(view.tx.select_block_header(1.into())?, None);
+                Ok(())
+            })
+            .await
+            .unwrap();
     }
 }

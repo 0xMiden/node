@@ -11,30 +11,29 @@ case "${RUNNER_ARCH}/${ARCHITECTURE}" in
 esac
 output="${RUNNER_TEMP}/docker-binaries"
 mkdir -p "${output}/app/bin"
+# kache scans artifacts for the checkout path as a byte string. A distinctive
+# mount avoids matching ordinary source names such as /apply_block.rs.
+checkout=/miden-node-checkout
 args=(
     --rm
-    --mount "type=bind,src=${GITHUB_WORKSPACE},dst=/app,readonly"
+    --workdir "${checkout}"
+    --mount "type=bind,src=${GITHUB_WORKSPACE},dst=${checkout},readonly"
     --mount "type=bind,src=${output},dst=/output"
     --mount "type=bind,src=${ACTION_PATH}/compile.sh,dst=/run/compile.sh,readonly"
     -e CARGO_TARGET_DIR=/tmp/target
     -e OUTPUT_DIR=/output/app/bin
 )
-if [[ "${CACHE_ENABLED}" == true ]]; then
+if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
     args+=(
-        --mount "type=bind,src=${CACHE_BINARY},dst=/usr/local/bin/kache,readonly"
-        --mount "type=bind,src=${CACHE_BINARY%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
-        --mount "type=bind,src=${CACHE_CONFIG},dst=/run/remote.toml,readonly"
-        -e CACHE_WRITABLE -e KACHE_CI_BUNDLES
+        --mount "type=bind,src=${RUSTC_WRAPPER},dst=/usr/local/bin/kache,readonly"
+        --mount "type=bind,src=${RUSTC_WRAPPER%/*}/kache-engine,dst=/usr/local/bin/kache-engine,readonly"
+        -e CACHE_WRITABLE -e KACHE_R2_ENDPOINT -e KACHE_S3_ACCESS_KEY -e KACHE_S3_SECRET_KEY
+        -e KACHE_PULL_REQUEST_PREFIX
         -e GITHUB_ACTIONS -e GITHUB_EVENT_NAME -e GITHUB_REF_TYPE -e GITHUB_REF_PROTECTED
+        -e KACHE_GITHUB_SCHEDULE_WRITES="${CACHE_WRITABLE}"
         -e KACHE_MANIFEST_KEY="node-docker-${ARCHITECTURE}"
         -e KACHE_NAMESPACE="node-docker-${ARCHITECTURE}"
     )
-    if [[ "${CACHE_WRITABLE}" == true ]]; then
-        args+=(
-            -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN
-            -e AWS_REGION -e AWS_DEFAULT_REGION
-        )
-    fi
 fi
 docker run "${args[@]}" node-ci-build-env bash /run/compile.sh
 echo "context=${output}" >> "${GITHUB_OUTPUT}"

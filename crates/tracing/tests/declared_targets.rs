@@ -28,7 +28,9 @@ fn declarations_are_available_without_executing_callsites() {
             "inventory::shared",
             "inventory::unexecuted",
             "miden::admin",
+            "miden::http::server",
             "miden::process",
+            "miden::rpc::client",
             "miden::rpc::server"
         ],
     );

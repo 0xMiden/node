@@ -54,9 +54,8 @@ message SignBlockRequest {
     blockchain.ValidatorConfig next_validator_config = 4;
     // The optional next protocol configuration included in the proposed block header.
     optional blockchain.NextProtocolConfig next_protocol_config = 5;
-    // The active configuration for signing. The block producer always supplies this field.
-    // Other callers may omit this field if the validator already stores the configuration.
-    // The validator returns INVALID_ARGUMENT if the field is omitted and the configuration is not stored.
+    // Required whenever the active configuration commitment differs from the parent's, including
+    // reactivation of a previously used configuration. If supplied, it must match the new header.
     optional protocol_config.ProtocolConfig protocol_config = 6;
 }
 

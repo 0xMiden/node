@@ -76,7 +76,7 @@ pub enum RpcMode {
     },
     /// Full-node RPC.
     ///
-    /// By default it forwards submissions verbatim to the source RPC (the caller is responsible for
+    /// By default it forwards checked submissions to the source RPC (the caller is responsible for
     /// configuring this client with any request metadata the source RPC requires).
     ///
     /// When the pre-authenticated submission clients are set, the full-node will, instead of
@@ -337,7 +337,7 @@ impl Rpc {
 
         let rpc = grpc::server_builder()
             .accept_http1(true)
-            .timeout(self.grpc_options.request_timeout)
+            .timeout(self.grpc_options.request_timeout.into())
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc_trace_layer())
             .layer(HealthCheckLayer)
@@ -475,7 +475,7 @@ impl SequencerInternal {
         grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc_trace_layer())
-            .timeout(self.grpc_options.request_timeout)
+            .timeout(self.grpc_options.request_timeout.into())
             .add_service(
                 miden_sequencer_v1_sequencer_service::service(service).max_decoding_message_size(
                     self.grpc_options.message_size.max_decoding_message_size.get(),

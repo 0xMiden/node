@@ -13,6 +13,7 @@ use deadpool::Runtime;
 use deadpool::managed::{Manager, Metrics, Object, Pool, RecycleError, RecycleResult};
 use deadpool_sync::SyncWrapper;
 use miden_node_tracing::Instrument;
+use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use rusqlite::{Connection, OpenFlags, TransactionBehavior};
 
 use crate::sqlite::tx::{ReadTx, WriteTx};
@@ -181,11 +182,12 @@ impl DbReader {
         R: Send + 'static,
         E: From<DatabaseError> + Send + 'static,
     {
-        let conn = self.checkout_reader().await.map_err(E::from)?;
+        let checkout = self.checkout_reader().await?;
         let msg = msg.to_string();
-        let span = miden_node_tracing::Span::current();
-        conn.interact(move |conn| {
-            let _guard = span.enter();
+        // The blocking task owns the checkout until the transaction has rolled back, even if the
+        // caller stops waiting for its result.
+        spawn_blocking_in_current_span(move || {
+            let mut conn = checkout.lock().expect("checked-out reader connection is not poisoned");
             let tx = conn
                 .transaction_with_behavior(TransactionBehavior::Deferred)
                 .map_err(|err| E::from(DatabaseError::from(err)))?;
@@ -193,7 +195,7 @@ impl DbReader {
             // `tx` is dropped here without a commit, rolling back any writes.
         })
         .await
-        .map_err(|err| E::from(DatabaseError::interact(&msg, &err)))?
+        .map_err(|source| DatabaseError::ReadTask { operation: msg, source })?
     }
 
     /// Begins a read-only (`DEFERRED`) transaction on a reader connection and returns a handle held
@@ -496,6 +498,49 @@ mod tests {
 
         tx.commit().await.unwrap();
         assert_eq!(count_items(&reader).await, 2);
+    }
+
+    #[tokio::test]
+    async fn read_task_failure_preserves_the_operation_and_source() {
+        use std::error::Error;
+
+        let temp = TempDb::new("read-task-error");
+        let (_writer, reader) = open_db(&temp);
+        let error = reader
+            .read("count items", |_| -> Result<(), DatabaseError> { panic!("query panicked") })
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("count items"));
+        let source = error.source().unwrap().downcast_ref::<tokio::task::JoinError>().unwrap();
+        assert!(source.is_panic());
+    }
+
+    #[tokio::test]
+    async fn cancelled_read_keeps_its_checkout_until_the_query_finishes() {
+        let temp = TempDb::new("cancelled-read");
+        let (_writer, reader) = open_with_pool_size(temp.path(), NonZeroUsize::MIN).unwrap();
+        let (started, running) = tokio::sync::oneshot::channel();
+        let (finish, release) = std::sync::mpsc::channel();
+        let task = tokio::spawn({
+            let reader = reader.clone();
+            async move {
+                reader
+                    .read("hold reader", move |_| -> Result<(), DatabaseError> {
+                        started.send(()).unwrap();
+                        release.recv_timeout(std::time::Duration::from_secs(30)).unwrap();
+                        Ok(())
+                    })
+                    .await
+            }
+        });
+        running.await.unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(reader.readers.status().available, 0);
+
+        finish.send(()).unwrap();
+        assert_eq!(count_items(&reader).await, 0);
     }
 
     #[tokio::test]

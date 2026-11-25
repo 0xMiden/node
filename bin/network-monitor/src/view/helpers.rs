@@ -100,6 +100,50 @@ pub(super) fn proof_type_label(proof_type: &ProofType) -> &'static str {
     }
 }
 
+/// Counts completed and pending service checks for a group of monitored services.
+#[derive(Default)]
+pub(super) struct HealthCounts {
+    pub healthy: usize,
+    pub unhealthy: usize,
+    pub unknown: usize,
+}
+
+impl HealthCounts {
+    pub fn from_statuses<'a>(statuses: impl Iterator<Item = &'a Status>) -> Self {
+        let mut counts = Self::default();
+        for status in statuses {
+            match status {
+                Status::Healthy => counts.healthy += 1,
+                Status::Unknown => counts.unknown += 1,
+                Status::Unhealthy => counts.unhealthy += 1,
+            }
+        }
+        counts
+    }
+
+    pub fn total(&self) -> usize {
+        self.healthy + self.unhealthy + self.unknown
+    }
+
+    pub fn status(&self) -> Status {
+        if self.unhealthy > 0 {
+            Status::Unhealthy
+        } else if self.unknown > 0 || self.healthy == 0 {
+            Status::Unknown
+        } else {
+            Status::Healthy
+        }
+    }
+}
+
+pub(super) fn status_class(status: &Status) -> &'static str {
+    match status {
+        Status::Healthy => "healthy",
+        Status::Unhealthy => "unhealthy",
+        Status::Unknown => "unknown",
+    }
+}
+
 pub(super) fn status_label(status: &Status) -> &'static str {
     match status {
         Status::Healthy => "Healthy",

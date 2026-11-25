@@ -2,9 +2,9 @@
 //!
 //! Routes:
 //! - `GET /` — full dashboard rendered with [`maud`].
-//! - `GET /fragments/status` — card grid only, swapped into `#status-container` by htmx every 10s.
+//! - `GET /fragments/status` — status fragment only, swapped into `#status-container` by htmx every 10s.
 //! - `GET /status` — JSON snapshot, kept for external consumers.
-//! - Static assets (CSS, htmx bundle, probes.js, favicon) embedded at compile time via
+//! - Static assets (CSS, htmx bundle, probes.js, favicon, logo) embedded at compile time via
 //!   `include_str!` / `include_bytes!`.
 
 use axum::Router;
@@ -41,9 +41,11 @@ pub async fn serve(server_state: ServerState, config: MonitorConfig) {
         .route("/assets/htmx.min.js", get(serve_htmx))
         .route("/assets/probes.js", get(serve_probes_js))
         .route("/assets/favicon.ico", get(serve_favicon))
+        .route("/assets/logo.png", get(serve_logo))
         .route("/", get(get_dashboard))
         .route("/fragments/status", get(get_status_fragment))
         .route("/status", get(get_status))
+        .layer(miden_node_tracing::http::http_trace_layer())
         .with_state(server_state);
 
     let bind_address = format!("0.0.0.0:{}", config.port);
@@ -113,6 +115,14 @@ async fn serve_favicon() -> Response {
     (
         [(header::CONTENT_TYPE, header::HeaderValue::from_static("image/x-icon"))],
         include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/favicon.ico")),
+    )
+        .into_response()
+}
+
+async fn serve_logo() -> Response {
+    (
+        [(header::CONTENT_TYPE, header::HeaderValue::from_static("image/png"))],
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/logo.png")),
     )
         .into_response()
 }

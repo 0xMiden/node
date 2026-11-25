@@ -113,6 +113,8 @@ pub enum DatabaseError {
     TransactionPageExceedsPayloadLimit { block_num: BlockNumber },
     #[error("block {block_num} holds more rows than one page can return")]
     BlockExceedsPageLimit { block_num: BlockNumber },
+    #[error("a matching database and tree snapshot is unavailable")]
+    ReadSnapshotUnavailable,
     #[error("data corrupted: {0}")]
     DataCorrupted(String),
     #[error("storage root not found for account {account_id}, slot {slot_name}, block {block_num}")]
@@ -128,6 +130,15 @@ pub enum DatabaseError {
 
 #[derive(Error, Debug)]
 pub enum StateInitializationError {
+    #[error(
+        "missing forest tree for account {account_id}, slot {slot:?}. Delete the account state forest directory and restart to rebuild from SQLite."
+    )]
+    MissingForestTree {
+        account_id: AccountId,
+        slot: Option<String>,
+    },
+    #[error("failed to recover committed block: {0}")]
+    BlockRecovery(String),
     #[error("account tree IO error: {0}")]
     AccountTreeIoError(String),
     #[error("nullifier tree IO error: {0}")]

@@ -23,7 +23,7 @@ use miden_node_utils::clap::RocksDbOptions;
 use miden_protocol::account::{AccountId, AccountStorageHeader, StorageSlotType};
 use miden_protocol::block::account_tree::{AccountIdKey, AccountTree};
 use miden_protocol::block::nullifier_tree::NullifierTree;
-use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain};
+use miden_protocol::block::{BlockHeader, BlockNumber, Blockchain, SignedBlock};
 use miden_protocol::crypto::merkle::smt::{LargeSmt, LargeSmtError, SmtStorage};
 use miden_protocol::{Felt, Word};
 
@@ -257,7 +257,7 @@ pub fn load_smt<S: SmtStorage>(storage: S) -> Result<LargeSmt<S>, StateInitializ
 /// Loads the blockchain MMR from all block headers in the database.
 #[instrument(target = "miden::storage")]
 pub async fn load_mmr(db: &Db) -> Result<Blockchain, StateInitializationError> {
-    let latest_header = db.select_block_header_by_block_num(None).await?;
+    let latest_header = db.select_chain_tip().await?;
     let block_commitments = db.select_all_block_header_commitments().await?;
 
     // SAFETY: We assume the loaded MMR is valid and does not have more than u32::MAX entries.
@@ -340,50 +340,209 @@ pub async fn rebuild_account_state_forest(
 // CONSISTENCY VERIFICATION
 // ================================================================================================
 
-/// Verifies that tree roots match the expected roots from the latest block header.
-///
-/// This detects divergence between `RocksDB` and SQLite caused by corruption or incomplete shutdown.
-///
-/// # Arguments
-/// * `account_tree_root` - Root of the loaded account tree
-/// * `nullifier_tree_root` - Root of the loaded nullifier tree
-/// * `db` - Database connection to fetch the latest block header
-///
-/// # Errors
-/// Returns `StateInitializationError::TreeStorageDiverged` if any root doesn't match.
+/// Checks the loaded account and nullifier tree roots against the committed tip.
 #[instrument]
-pub async fn verify_tree_consistency(
+pub(super) fn verify_tree_consistency(
     account_tree_root: Word,
     nullifier_tree_root: Word,
-    db: &Db,
+    header: &BlockHeader,
 ) -> Result<(), StateInitializationError> {
-    // Fetch the latest block header to get the expected roots
-    let latest_header = db.select_block_header_by_block_num(None).await?;
-
-    let (block_num, expected_account_root, expected_nullifier_root) = latest_header
-        .map(|header| (header.block_num(), header.account_root(), header.nullifier_root()))
-        .unwrap_or_default();
-
-    // Verify account tree root
-    if account_tree_root != expected_account_root {
+    let block_num = header.block_num();
+    if account_tree_root != header.account_root() {
         return Err(StateInitializationError::TreeStorageDiverged {
             tree_name: "Account",
             block_num,
             tree_root: account_tree_root,
-            block_root: expected_account_root,
+            block_root: header.account_root(),
         });
     }
 
-    // Verify nullifier tree root
-    if nullifier_tree_root != expected_nullifier_root {
+    if nullifier_tree_root != header.nullifier_root() {
         return Err(StateInitializationError::TreeStorageDiverged {
             tree_name: "Nullifier",
             block_num,
             tree_root: nullifier_tree_root,
-            block_root: expected_nullifier_root,
+            block_root: header.nullifier_root(),
         });
     }
 
+    Ok(())
+}
+
+/// Brings the persisted trees up to the SQLite tip by replaying the latest block where needed.
+///
+/// The writer commits each block to SQLite before updating the trees. It finishes those updates
+/// before starting the next block, so an interrupted write can leave a tree one block behind.
+#[instrument(fields(block.number = header.block_num()))]
+pub(super) async fn sync_trees_to_tip(
+    db: &Db,
+    blocks: &crate::blocks::BlockStore,
+    header: &BlockHeader,
+    accounts: &mut AccountTree<LargeSmt<RocksDbStorage>>,
+    nullifiers: &mut NullifierTree<LargeSmt<RocksDbStorage>>,
+    forest: &mut AccountStateForest<ForestPersistentBackend>,
+) -> Result<(), StateInitializationError> {
+    let block = load_committed_block(blocks, header).await?;
+    if accounts.root() != header.account_root() {
+        replay_account_tree(accounts, &block)?;
+    }
+    if nullifiers.root() != header.nullifier_root() {
+        replay_nullifier_tree(nullifiers, &block)?;
+    }
+    recover_forest(forest, db, &block).await
+}
+
+/// Loads the block body for the tip identified by SQLite.
+async fn load_committed_block(
+    blocks: &crate::blocks::BlockStore,
+    header: &BlockHeader,
+) -> Result<SignedBlock, StateInitializationError> {
+    use StateInitializationError::BlockRecovery;
+    let height = header.block_num();
+    let bytes = blocks
+        .load_block(height)
+        .await
+        .map_err(StateInitializationError::BlockStoreLoadError)?
+        .ok_or_else(|| BlockRecovery(format!("missing block {height}")))?;
+    let block: SignedBlock =
+        miden_node_persistence::decode(&bytes).map_err(|e| BlockRecovery(e.to_string()))?;
+    if block.header().commitment() != header.commitment() {
+        return Err(BlockRecovery(format!("block {height} differs from SQLite")));
+    }
+    block.validate(None).map_err(|e| BlockRecovery(e.to_string()))?;
+    Ok(block)
+}
+
+/// Applies the account commitments once their computed root matches the block header.
+#[instrument(fields(block.number = block.header().block_num()))]
+fn replay_account_tree(
+    accounts: &mut AccountTree<LargeSmt<RocksDbStorage>>,
+    block: &SignedBlock,
+) -> Result<(), StateInitializationError> {
+    use StateInitializationError::BlockRecovery;
+    let header = block.header();
+    let height = header.block_num();
+    let body = block.body();
+    let update = accounts
+        .compute_mutations(
+            body.updated_accounts()
+                .iter()
+                .map(|a| (a.account_id(), a.final_state_commitment())),
+        )
+        .map_err(|e| BlockRecovery(e.to_string()))?;
+    if update.as_mutation_set().root() != header.account_root() {
+        return Err(BlockRecovery(format!("account root differs after replaying block {height}")));
+    }
+    accounts.apply_mutations(update).map_err(|e| BlockRecovery(e.to_string()))?;
+    Ok(())
+}
+
+/// Applies the block's nullifiers after checking their computed root.
+#[instrument(fields(block.number = block.header().block_num()))]
+fn replay_nullifier_tree(
+    nullifiers: &mut NullifierTree<LargeSmt<RocksDbStorage>>,
+    block: &SignedBlock,
+) -> Result<(), StateInitializationError> {
+    use StateInitializationError::BlockRecovery;
+    let header = block.header();
+    let height = header.block_num();
+    let body = block.body();
+    let update =
+        nullifiers.compute_mutations(body.created_nullifiers().iter().map(|n| (*n, height)))?;
+    if update.as_mutation_set().root() != header.nullifier_root() {
+        return Err(BlockRecovery(format!(
+            "nullifier root differs after replaying block {height}"
+        )));
+    }
+    nullifiers.apply_mutations(update)?;
+    Ok(())
+}
+
+/// Replays the forest batch if a public account touched by the block is missing its expected state.
+///
+/// The forest writes all changes for a block atomically and has no last-applied block marker.
+/// A public account update can leave its vault and storage maps unchanged, so a match for one
+/// account is inconclusive. On the first missing tree or root mismatch, recovery assumes the
+/// whole batch was missed and checks its replayed roots against SQLite before writing it.
+async fn recover_forest(
+    forest: &mut AccountStateForest<ForestPersistentBackend>,
+    db: &Db,
+    block: &SignedBlock,
+) -> Result<(), StateInitializationError> {
+    use StateInitializationError::BlockRecovery;
+    let height = block.header().block_num();
+    let body = block.body();
+    for update in body.updated_accounts() {
+        if let miden_protocol::account::AccountUpdateDetails::Public(_) = update.details() {
+            let id = update.account_id();
+            let (account, storage) = db
+                .select_account_header_with_storage_header_at_block(
+                    id,
+                    super::ScopedBlockNum::new(height),
+                )
+                .await?
+                .ok_or_else(|| BlockRecovery(format!("missing account {id} at block {height}")))?;
+            if verify_account_state_forest_record(forest, id, account.vault_root(), &storage)
+                .is_err()
+            {
+                return replay_forest(forest, db, block).await;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Computes the tip block's forest update and verifies it before writing.
+///
+/// The block header has no single root for the account state forest. SQLite records each public
+/// account's vault and storage-map roots, so replay checks the computed roots against those values.
+#[instrument(fields(block.number = block.header().block_num()))]
+async fn replay_forest(
+    forest: &mut AccountStateForest<ForestPersistentBackend>,
+    db: &Db,
+    block: &miden_protocol::block::SignedBlock,
+) -> Result<(), StateInitializationError> {
+    use StateInitializationError::BlockRecovery;
+    use miden_protocol::account::AccountUpdateDetails;
+    let height = block.header().block_num();
+    let body = block.body();
+    let patches = body.updated_accounts().iter().filter_map(|a| match a.details() {
+        AccountUpdateDetails::Public(patch) => Some(patch.clone()),
+        AccountUpdateDetails::Private => None,
+    });
+    let created = body
+        .transactions()
+        .iter()
+        .flat_map(miden_protocol::transaction::OrderedTransactionHeaders::created_account_ids)
+        .collect();
+    let update = forest
+        .compute_block_update_mutations(height, patches, &created)
+        .map_err(|e| BlockRecovery(e.to_string()))?;
+    for (&id, roots) in &update.account_states {
+        let (account, storage) = db
+            .select_account_header_with_storage_header_at_block(
+                id,
+                super::ScopedBlockNum::new(height),
+            )
+            .await?
+            .ok_or_else(|| BlockRecovery(format!("missing account {id} at block {height}")))?;
+        if roots.vault_root != account.vault_root()
+            || roots.storage_map_roots.iter().any(|(name, root)| {
+                storage
+                    .find_slot_header_by_name(name)
+                    .filter(|slot| slot.slot_type() == StorageSlotType::Map)
+                    .map(miden_protocol::account::StorageSlotHeader::value)
+                    != Some(*root)
+            })
+        {
+            return Err(BlockRecovery(format!(
+                "replayed roots for account {id} differ from SQLite at block {height}"
+            )));
+        }
+    }
+    forest
+        .apply_precomputed_block_update(height, update)
+        .map_err(|e| BlockRecovery(e.to_string()))?;
     Ok(())
 }
 
@@ -423,7 +582,9 @@ fn verify_account_state_forest_record(
     vault_root: Word,
     storage_header: &AccountStorageHeader,
 ) -> Result<(), StateInitializationError> {
-    let forest_vault_root = forest.get_latest_vault_root(account_id);
+    let forest_vault_root = forest
+        .latest_tree_root(account_id, None)
+        .ok_or(StateInitializationError::MissingForestTree { account_id, slot: None })?;
     if forest_vault_root != vault_root {
         return Err(StateInitializationError::AccountStateForestStorageDiverged {
             account_id,
@@ -438,7 +599,13 @@ fn verify_account_state_forest_record(
             continue;
         }
 
-        let forest_root = forest.get_latest_storage_map_root(account_id, slot.name());
+        let forest_root =
+            forest.latest_tree_root(account_id, Some(slot.name())).ok_or_else(|| {
+                StateInitializationError::MissingForestTree {
+                    account_id,
+                    slot: Some(slot.name().to_string()),
+                }
+            })?;
         let database_root = slot.value();
         if forest_root != database_root {
             return Err(StateInitializationError::AccountStateForestStorageDiverged {
@@ -458,7 +625,6 @@ mod tests {
     use miden_crypto::merkle::smt::BackendReader;
     use miden_protocol::account::{
         Account,
-        AccountId,
         AccountStorageHeader,
         StorageSlotHeader,
         StorageSlotName,
@@ -565,10 +731,16 @@ mod tests {
 
     #[test]
     fn account_state_forest_consistency_detects_storage_map_root_mismatch() {
-        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
-            .expect("test account ID should be valid");
-        let slot_name =
-            StorageSlotName::new("account::balances").expect("slot name should be valid");
+        let account = forest_accounts().remove(0);
+        let account_id = account.id();
+        let mut forest = AccountStateForest::new();
+        forest
+            .apply_rebuild_updates(
+                BlockNumber::GENESIS,
+                [miden_protocol::account::AccountPatch::try_from(account.clone()).unwrap()],
+            )
+            .unwrap();
+        let slot_name = StorageSlotName::mock(0);
         let expected_storage_root = Word::from([1, 0, 0, 0u32]);
         let storage_header = AccountStorageHeader::new(vec![StorageSlotHeader::new(
             slot_name.clone(),
@@ -576,12 +748,11 @@ mod tests {
             expected_storage_root,
         )])
         .expect("storage header should be valid");
-        let forest = AccountStateForest::new();
 
         let error = verify_account_state_forest_record(
             &forest,
             account_id,
-            AccountStateForest::empty_smt_root(),
+            account.vault().root(),
             &storage_header,
         )
         .expect_err("storage map root mismatch should be detected");
@@ -595,19 +766,25 @@ mod tests {
                 database_root,
             } if actual_account_id == account_id
                 && actual_slot_name == slot_name.to_string()
-                && forest_root == AccountStateForest::empty_smt_root()
+                && Some(forest_root) == forest.latest_tree_root(account_id, Some(&slot_name))
                 && database_root == expected_storage_root
         );
     }
 
     #[test]
     fn account_state_forest_consistency_detects_vault_root_mismatch() {
-        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
-            .expect("test account ID should be valid");
+        let account = forest_accounts().remove(0);
+        let account_id = account.id();
+        let mut forest = AccountStateForest::new();
+        forest
+            .apply_rebuild_updates(
+                BlockNumber::GENESIS,
+                [miden_protocol::account::AccountPatch::try_from(account.clone()).unwrap()],
+            )
+            .unwrap();
         let expected_vault_root = Word::from([2, 0, 0, 0u32]);
         let storage_header =
             AccountStorageHeader::new(Vec::new()).expect("storage header should be valid");
-        let forest = AccountStateForest::new();
 
         let error = verify_account_state_forest_record(
             &forest,
@@ -625,7 +802,7 @@ mod tests {
                 forest_root,
                 database_root,
             } if actual_account_id == account_id
-                && forest_root == AccountStateForest::empty_smt_root()
+                && forest_root == account.vault().root()
                 && database_root == expected_vault_root
         );
     }

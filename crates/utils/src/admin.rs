@@ -147,9 +147,10 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let shutdown = CancellationToken::new();
         let service = async {
-            let response =
-                reqwest::get(format!("http://{address}/admin/tracing/targets")).await.unwrap();
-            assert_eq!(response.status(), reqwest::StatusCode::OK);
+            let response = crate::http::get(format!("http://{address}/admin/tracing/targets"))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), http::StatusCode::OK);
             assert!(response.text().await.unwrap().contains("\"targets\""));
             shutdown.cancel();
             Ok(())

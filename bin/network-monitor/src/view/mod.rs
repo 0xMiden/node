@@ -1,13 +1,13 @@
 //! Server-side HTML rendering for the network monitor dashboard.
 //!
-//! [`page`] returns the full HTML document; [`status_fragment`] returns just the cards grid that
-//! htmx swaps into `#status-container` on each poll.
+//! [`page`] renders the full dashboard. [`status_fragment`] refreshes the dashboard and footer
+//! from the same snapshot on each poll.
 
 mod cards;
 mod helpers;
 
-use helpers::format_timestamp;
-use maud::{DOCTYPE, Markup, html};
+use helpers::{HealthCounts, format_timestamp, status_class, status_label};
+use maud::{DOCTYPE, Markup, PreEscaped, html};
 
 use crate::frontend::ServerState;
 use crate::status::{
@@ -18,11 +18,18 @@ use crate::status::{
     current_unix_timestamp_secs,
 };
 
+/// Applies the saved theme before the first paint, so a dark page does not flash light on load.
+const THEME_INIT_JS: &str = r#"try{if(localStorage.getItem("theme")==="dark")document.documentElement.dataset.theme="dark"}catch(e){}"#;
+
+const NETWORK_ICON_SVG: &str = r#"<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.2" stroke="currentColor" fill="none" stroke-width="1.4"/><path d="M1.8 8h12.4M8 1.8c1.8 1.9 2.6 4 2.6 6.2S9.8 12.3 8 14.2M8 1.8C6.2 3.7 5.4 5.8 5.4 8s.8 4.3 2.6 6.2" stroke="currentColor" fill="none" stroke-width="1.2"/></svg>"#;
+
+const THEME_ICON_SVG: &str = r#"<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7" stroke="currentColor" stroke-width="1.6" fill="none"/><path d="M9 2a7 7 0 0 1 0 14z" fill="currentColor"/></svg>"#;
+
 // PUBLIC ENTRYPOINTS
 // ================================================================================================
 
-/// Full dashboard page. The `#status-container` is pre-filled with the initial card grid so the
-/// page renders without a flash of empty content while htmx fires its first poll.
+/// Full dashboard page. The `#status-container` is pre-filled with the initial status fragment so
+/// the page renders without a flash of empty content while htmx fires its first poll.
 pub fn page(state: &ServerState) -> Markup {
     let snapshot = snapshot(state);
     html! {
@@ -32,41 +39,48 @@ pub fn page(state: &ServerState) -> Markup {
                 meta charset="UTF-8";
                 meta name="viewport" content="width=device-width, initial-scale=1.0";
                 title { "Miden Network Monitor" }
+                link rel="preconnect" href="https://fonts.googleapis.com";
+                link rel="stylesheet"
+                    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap";
                 link rel="stylesheet" href="/assets/index.css";
                 link rel="icon" href="/assets/favicon.ico" type="image/x-icon";
+                script { (PreEscaped(THEME_INIT_JS)) }
                 script src="/assets/htmx.min.js" {}
                 script src="/assets/probes.js" defer {}
             }
             body {
-                div class="container" {
-                    div class="header" {
-                        div class="logo" {
-                            div class="logo-icon" {}
-                            div class="logo-text" {
-                                "Miden "
-                                span class="highlight" { (snapshot.network_name) }
-                            }
-                        }
+                header class="header" {
+                    div class="logo" {
+                        img src="/assets/logo.png" alt="Miden" width="123" height="38";
                     }
-                    div class="main-content" {
-                        div class="form-title" { "Network Status Dashboard" }
-                        div id="status-container"
-                            hx-get="/fragments/status"
-                            hx-trigger="every 10s"
-                            hx-swap="innerHTML"
+                    div class="header-actions" {
+                        div class="network-pill" {
+                            (PreEscaped(NETWORK_ICON_SVG))
+                            (snapshot.network_name)
+                        }
+                        @if !snapshot.monitor_version.is_empty() {
+                            div class="version-chip" { "Monitor v" (snapshot.monitor_version) }
+                        }
+                        button class="theme-toggle" id="theme-toggle" type="button"
+                            aria-label="Toggle dark theme"
                         {
-                            (status_fragment(&snapshot))
+                            (PreEscaped(THEME_ICON_SVG))
                         }
                     }
                 }
-                (footer(&snapshot))
+                div id="status-container"
+                    hx-get="/fragments/status"
+                    hx-trigger="every 10s"
+                    hx-swap="innerHTML"
+                {
+                    (status_fragment(&snapshot))
+                }
             }
         }
     }
 }
 
-/// Card grid + last-updated line. Returned from `/fragments/status` for htmx to swap into
-/// `#status-container`.
+/// Renders all dashboard content that depends on the current snapshot.
 pub fn status_fragment(snapshot: &NetworkStatus) -> Markup {
     let rpc_chain_tip = find_rpc_chain_tip(&snapshot.services);
     let validators: Vec<_> = snapshot
@@ -80,35 +94,56 @@ pub fn status_fragment(snapshot: &NetworkStatus) -> Markup {
             }
         })
         .collect();
-    let first_validator = snapshot
-        .services
-        .iter()
-        .position(|service| matches!(service.details, ServiceDetails::ValidatorStatus(_)));
+    let counts = HealthCounts::from_statuses(snapshot.services.iter().map(|s| &s.status));
+    let total = counts.total();
+    let service_count = if total == 1 {
+        "1 Service".to_owned()
+    } else {
+        format!("{total} Services")
+    };
+    let status = counts.status();
+    let class = status_class(&status);
+    let overall = match status {
+        Status::Healthy => "All Systems Operational".to_owned(),
+        Status::Unhealthy => format!("{} unhealthy", counts.unhealthy),
+        Status::Unknown if total == 0 => "No services configured".to_owned(),
+        Status::Unknown => format!("{} unknown", counts.unknown),
+    };
     html! {
-        @for (index, service) in snapshot.services.iter().enumerate() {
-            @if matches!(service.details, ServiceDetails::ValidatorStatus(_)) {
-                @if Some(index) == first_validator {
-                    (cards::render_validators(&validators))
+        main class="dashboard" {
+            div class="title" {
+                h1 class="form-title" { "Network Status Dashboard" }
+                p class={"overall-status " (class)} {
+                    span class="pulse" {}
+                    (overall)
+                    @if total > 0 { " · " (service_count) }
                 }
-            } @else {
-                (service_card(service, rpc_chain_tip))
             }
-        }
-        div class="refresh-button-container" {
-            button class="button"
+            div class="status-grid" {
+                @for service in &snapshot.services {
+                    @if !matches!(service.details, ServiceDetails::ValidatorStatus(_)) {
+                        (service_card(service, rpc_chain_tip))
+                    }
+                }
+            }
+            @if !validators.is_empty() {
+                (cards::render_validators(&validators))
+            }
+            button class="button" type="button"
                 hx-get="/fragments/status"
                 hx-target="#status-container"
                 hx-swap="innerHTML"
             {
-                svg class="button-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" {
-                    path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15" {}
+                svg class="button-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" {
+                    path d="M13.5 8A5.5 5.5 0 1 1 11.9 4.1M13.5 2v3h-3" {}
                 }
-                " Refresh Status"
+                "Refresh Status"
+            }
+            div class="note" {
+                "Last updated: " (format_timestamp(snapshot.last_updated))
             }
         }
-        div class="note" {
-            "Last updated: " (format_timestamp(snapshot.last_updated))
-        }
+        (footer(&snapshot.monitor_version, &service_count, class, &overall))
     }
 }
 
@@ -131,24 +166,13 @@ pub fn snapshot(state: &ServerState) -> NetworkStatus {
 /// Wraps any service in the uniform card chrome (header with status badge, body via
 /// [`render_details`], timestamp footer).
 fn service_card(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup {
-    let healthy = matches!(service.status, Status::Healthy);
-    let card_class = if healthy {
-        "service-card healthy"
-    } else {
-        "service-card unhealthy"
-    };
-    let (status_icon, status_text) = match service.status {
-        Status::Healthy => ("✓", "HEALTHY"),
-        Status::Unhealthy => ("✗", "UNHEALTHY"),
-        Status::Unknown => ("?", "UNKNOWN"),
-    };
-
+    let class = status_class(&service.status);
     html! {
-        div class=(card_class) {
+        div class="service-card" {
             div class="service-header" {
                 div class="service-name" { (service.name) }
-                div class={"service-status " (status_text.to_lowercase())} {
-                    (status_icon) " " (status_text)
+                div class={"service-status " (class)} {
+                    (status_label(&service.status))
                 }
             }
             div class="service-content" {
@@ -189,38 +213,24 @@ fn render_details(service: &ServiceStatus, rpc_chain_tip: Option<u32>) -> Markup
 // FOOTER
 // ================================================================================================
 
-fn footer(snapshot: &NetworkStatus) -> Markup {
-    let total = snapshot.services.len();
-    let healthy = snapshot.services.iter().filter(|s| s.status == Status::Healthy).count();
-    let all_healthy = total > 0 && healthy == total;
-    let overall = if all_healthy {
-        "All Systems Operational".to_string()
-    } else {
-        format!("{healthy}/{total} Services Healthy")
-    };
-    let overall_class = if all_healthy {
-        "footer-value healthy"
-    } else {
-        "footer-value unhealthy"
-    };
-
+fn footer(version: &str, service_count: &str, class: &str, overall: &str) -> Markup {
     html! {
-        div class="footer" {
+        footer class="footer" {
             div class="footer-content" {
                 div class="footer-section" {
                     div class="footer-label" { "Network Status" }
-                    div class=(overall_class) { (overall) }
+                    div class={"footer-value " (class)} { (overall) }
                 }
                 div class="footer-section footer-center" {
                     div class="footer-value" {
-                        @if !snapshot.monitor_version.is_empty() {
-                            "Monitor v" (snapshot.monitor_version)
+                        @if !version.is_empty() {
+                            "Monitor v" (version)
                         }
                     }
                 }
                 div class="footer-section tokens-section" {
                     div class="footer-label" { "Services" }
-                    div class="footer-value" { (total) " Services" }
+                    div class="footer-value" { (service_count) }
                 }
             }
             div class="footer-line" {}
@@ -563,8 +573,8 @@ mod tests {
         assert!(html.contains("View error for Gateway"));
         assert!(!html.contains("View error for Miden"));
         assert!(html.contains("connection refused"));
-        assert!(html.contains("✓ HEALTHY"));
-        assert!(html.contains("✗ UNHEALTHY"));
+        assert!(html.contains(">Healthy<"));
+        assert!(html.contains(">Unhealthy<"));
         assert!(!html.contains("https://miden.example"));
         assert!(!html.contains("https://gateway.example"));
     }
@@ -583,15 +593,15 @@ mod tests {
         ];
         let html = render(services.clone());
         assert!(html.contains("1/2 healthy · 1 unknown"));
-        assert!(html.contains("? UNKNOWN"));
-        assert!(!html.contains("✗ UNHEALTHY"));
-        assert!(html.contains("validator-summary unknown"));
+        assert!(html.contains(">Unknown<"));
+        assert!(!html.contains(">Unhealthy<"));
+        assert!(html.contains("1 unknown · 2 Services"));
 
         let mut services = services;
         services[1].status = Status::Healthy;
         let html = render(services);
         assert!(html.contains("2/2 healthy"));
-        assert!(html.contains("validator-summary healthy"));
+        assert!(html.contains("All Systems Operational"));
     }
 
     #[test]
@@ -804,8 +814,24 @@ mod tests {
             details: ServiceDetails::Error,
         }]);
         assert!(html.contains("broken"));
-        assert!(html.contains("UNHEALTHY"));
+        assert!(html.contains("Unhealthy"));
         assert!(html.contains("boom"));
+    }
+
+    #[test]
+    fn refreshed_dashboard_reports_failures_even_with_checks_pending() {
+        let html = render(vec![
+            ServiceStatus::unknown("pending", ServiceDetails::Error),
+            ServiceStatus::unhealthy("failed", "connection refused", ServiceDetails::Error),
+        ]);
+        let (dashboard, footer) = html.split_once("<footer").expect("refreshed footer");
+        assert!(dashboard.contains("1 unhealthy · 2 Services"));
+        assert!(footer.contains("1 unhealthy"));
+    }
+
+    #[test]
+    fn empty_dashboard_explains_why_health_is_unknown() {
+        assert!(render(vec![]).contains("No services configured"));
     }
 
     #[test]

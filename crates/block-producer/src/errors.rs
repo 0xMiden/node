@@ -3,13 +3,7 @@ use core::error::Error as CoreError;
 use miden_node_persistence::PersistenceError;
 use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
-use miden_node_store::{
-    ApplyBlockWithProvingInputsError,
-    DatabaseError,
-    GetBlockHeaderError,
-    GetBlockInclusionProofsError,
-    GetNoteInclusionProofsError,
-};
+use miden_node_store::{ApplyBlockWithProvingInputsError, DatabaseError, GetBlockHeaderError};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -41,7 +35,7 @@ pub enum ProofSchedulerError {
 pub enum MempoolSubmissionError {
     #[error("failed to read state from the store")]
     #[grpc(internal)]
-    StoreStateReadFailed(#[source] DatabaseError),
+    StoreStateReadFailed(#[from] DatabaseError),
 
     #[error("transaction input data from block {input_block} exceeds the chain tip {chain_tip}")]
     #[grpc(internal)]
@@ -234,14 +228,22 @@ impl BuildBlockError {
 /// Errors returned by the store state.
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("failed to get block inclusion proofs from store")]
-    GetBlockInclusionProofsFailed(#[source] GetBlockInclusionProofsError),
+    #[error("failed to read from store")]
+    ReadFailed(#[from] DatabaseError),
+    #[error("reference block {reference_block} is after the store's chain tip {chain_tip}")]
+    ReferenceBlockAfterTip {
+        reference_block: BlockNumber,
+        chain_tip: BlockNumber,
+    },
+    #[error("block {block_num} is after the reference block {reference_block}")]
+    BlockAfterReferenceBlock {
+        block_num: BlockNumber,
+        reference_block: BlockNumber,
+    },
     #[error("failed to get block header from store")]
     GetBlockHeaderFailed(#[source] GetBlockHeaderError),
     #[error("failed to get protocol configuration from store")]
     GetProtocolConfigFailed(#[source] DatabaseError),
-    #[error("failed to get note inclusion proofs from store")]
-    GetNoteInclusionProofsFailed(#[source] GetNoteInclusionProofsError),
     #[error("failed to apply block to store")]
     ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
 }

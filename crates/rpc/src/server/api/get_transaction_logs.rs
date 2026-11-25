@@ -77,41 +77,56 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn admission_rejects_excess_requests_and_recovers_after_error_and_cancellation() {
-        let service = transaction_log_test_service().await;
-        let held = service
-            .transaction_log_requests
-            .acquire_many(MAX_ACTIVE_REQUESTS as u32)
-            .await
+    #[test]
+    fn admission_rejects_excess_requests_and_recovers_after_error_and_cancellation() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
             .unwrap();
-        let error = service
-            .handle(request(), &MetadataMap::new(), &Extensions::new())
-            .await
-            .unwrap_err();
-        assert_eq!(error.code(), Code::ResourceExhausted);
-        drop(held);
-        let held = service
-            .transaction_log_requests
-            .acquire_many((MAX_ACTIVE_REQUESTS - 1) as u32)
-            .await
-            .unwrap();
-        for _ in 0..2 {
+        runtime.block_on(async {
+            let service = transaction_log_test_service().await;
+            let held = service
+                .transaction_log_requests
+                .acquire_many(MAX_ACTIVE_REQUESTS as u32)
+                .await
+                .unwrap();
             let error = service
                 .handle(request(), &MetadataMap::new(), &Extensions::new())
                 .await
                 .unwrap_err();
+            assert_eq!(error.code(), Code::ResourceExhausted);
+            drop(held);
+            let held = service
+                .transaction_log_requests
+                .acquire_many((MAX_ACTIVE_REQUESTS - 1) as u32)
+                .await
+                .unwrap();
+            for _ in 0..2 {
+                let error = service
+                    .handle(request(), &MetadataMap::new(), &Extensions::new())
+                    .await
+                    .unwrap_err();
+                assert_eq!(error.code(), Code::NotFound);
+            }
+            // Occupy the only blocking worker so the SQLite lookup holds its admission permit until
+            // the test cancels the request.
+            let (release, wait) = tokio::sync::oneshot::channel::<()>();
+            let blocker = miden_node_tracing::spawn::spawn_blocking_in_current_span(move || {
+                wait.blocking_recv()
+            });
+            let metadata = MetadataMap::new();
+            let extensions = Extensions::new();
+            let mut pending = Box::pin(service.handle(request(), &metadata, &extensions));
+            assert!(poll!(&mut pending).is_pending());
+            let error = service.handle(request(), &metadata, &extensions).await.unwrap_err();
+            assert_eq!(error.code(), Code::ResourceExhausted);
+            drop(pending);
+            release.send(()).unwrap();
+            blocker.await.unwrap().unwrap();
+            let error = service.handle(request(), &metadata, &extensions).await.unwrap_err();
             assert_eq!(error.code(), Code::NotFound);
-        }
-        let metadata = MetadataMap::new();
-        let extensions = Extensions::new();
-        let mut pending = Box::pin(service.handle(request(), &metadata, &extensions));
-        assert!(poll!(&mut pending).is_pending());
-        let error = service.handle(request(), &metadata, &extensions).await.unwrap_err();
-        assert_eq!(error.code(), Code::ResourceExhausted);
-        drop(pending);
-        let error = service.handle(request(), &metadata, &extensions).await.unwrap_err();
-        assert_eq!(error.code(), Code::NotFound);
-        drop(held);
+            drop(held);
+        });
     }
 }

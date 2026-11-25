@@ -447,7 +447,7 @@ impl Service for IncrementService {
     }
 
     fn interval(&self) -> Duration {
-        self.config.counter_increment_interval
+        self.config.counter_increment_interval.into()
     }
 
     fn initial_status(&self) -> ServiceStatus {
@@ -537,7 +537,7 @@ impl CounterTrackingService {
     ) -> Result<Self> {
         let (mut rpc_client, _) = create_genesis_aware_rpc_client(
             &config.rpc_url,
-            config.request_timeout,
+            config.request_timeout.into(),
             config.grpc.max_decoding_message_size.get(),
         )
         .await?;
@@ -640,12 +640,12 @@ impl CounterTrackingService {
             }
         } else if let Some(started) = pending_started {
             if Instant::now().saturating_duration_since(started)
-                >= self.config.counter_latency_timeout
+                >= Duration::from(self.config.counter_latency_timeout)
             {
                 warn!(
                     "Latency measurement timed out",
                     counter.latency.timeout_ms =
-                        self.config.counter_latency_timeout.as_millis() as u64,
+                        Duration::from(self.config.counter_latency_timeout).as_millis() as u64,
                     counter.value.target = pending.target_value
                 );
                 let mut guard = self.latency_state.lock().await;
@@ -654,7 +654,7 @@ impl CounterTrackingService {
                     guard.pending_started = None;
                 }
                 *last_error = Some(format!(
-                    "Timed out after {:?} waiting for counter to reach {}",
+                    "Timed out after {} waiting for counter to reach {}",
                     self.config.counter_latency_timeout, pending.target_value
                 ));
             }
@@ -670,7 +670,7 @@ impl Service for CounterTrackingService {
     fn interval(&self) -> Duration {
         // Tracking polls twice per increment cadence so it catches freshly-incremented values soon
         // after submission.
-        self.config.counter_increment_interval / 2
+        Duration::from(self.config.counter_increment_interval) / 2
     }
 
     fn initial_status(&self) -> ServiceStatus {
@@ -1016,7 +1016,7 @@ fn create_increment_tx_script(network_note: &Note) -> Result<TransactionScript> 
         )
         .expect("writing to a String cannot fail");
     }
-    note_section.push_str("        drop\n");
+    note_section.push_str("        exec.::miden::protocol::output_note::seal\n");
 
     let script_src = format!(
         "@transaction_script
@@ -1120,8 +1120,9 @@ mod tests {
     use miden_standards::account::policies::{
         BurnPolicy,
         MintPolicy,
+        ReceivePolicy,
+        SendPolicy,
         TokenPolicyManager,
-        TransferPolicy,
     };
     use miden_standards::note::{BurnNote, MintNote, P2idNote};
     use miden_testing::MockChain;
@@ -1278,8 +1279,8 @@ mod tests {
         let policies = TokenPolicyManager::builder()
             .active_mint_policy(MintPolicy::owner_only())
             .active_burn_policy(BurnPolicy::allow_all())
-            .active_send_policy(TransferPolicy::allow_all())
-            .active_receive_policy(TransferPolicy::allow_all())
+            .active_send_policy(SendPolicy::allow_all())
+            .active_receive_policy(ReceivePolicy::allow_all())
             .build();
         let fee_policy = BasicConstantFeePolicy::new()
             .with_fees([

@@ -9,8 +9,8 @@ use anyhow::Context;
 use hex;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{debug, info, instrument, trace, warn};
+use miden_node_utils::http::{Client, Response};
 use miden_protocol::note::NoteId;
-use reqwest::Client;
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -285,7 +285,7 @@ pub(crate) async fn request_tokens(
 /// Reads the response body, failing with the HTTP status code and body when the request was not
 /// successful, so server-side errors (e.g. 429 or 500) surface directly on the card instead of as a
 /// deserialization failure.
-async fn read_success_body(response: reqwest::Response) -> anyhow::Result<String> {
+async fn read_success_body(response: Response) -> anyhow::Result<String> {
     let status = response.status();
     let body = response.text().await?;
     anyhow::ensure!(status.is_success(), "HTTP {status}: {body}");
