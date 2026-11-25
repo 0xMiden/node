@@ -78,17 +78,19 @@ impl State {
     /// Runs caller-owned read logic against matching database and tree snapshots.
     ///
     /// The closure runs on a blocking worker and releases its read resources before this method
-    /// returns. Acquisition retries mismatched generations for up to 500 milliseconds.
-    /// Other asynchronous work belongs outside the closure.
+    /// returns. If SQLite is ahead of the trees, the read releases the connection and waits up to
+    /// 500 ms for the next tree publication before retrying. Once started, the closure
+    /// runs to completion.
     pub async fn read<R, E, F>(&self, read: F) -> Result<R, E>
     where
         F: FnOnce(crate::read::ReadView<'_>) -> Result<R, E> + Send + 'static,
         R: Send + 'static,
         E: From<crate::DatabaseError> + Send + 'static,
     {
+        let snapshots = Arc::clone(&self.latest_snapshot);
         crate::read::acquire::read(
             self.db.reader(),
-            Arc::clone(&self.latest_snapshot),
+            move || snapshots.load_full(),
             self.subscribe_committed_tip(),
             read,
         )

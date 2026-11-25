@@ -126,6 +126,37 @@ async fn held_read_stays_consistent_while_a_block_commits() {
 }
 
 #[tokio::test]
+async fn pool_wait_and_running_read_can_exceed_the_tree_publication_timeout() {
+    use std::time::Duration;
+
+    let (_directory, state, _writer) = state_with_pool_size(1).await;
+    tokio::time::pause();
+
+    let (started, running) = tokio::sync::oneshot::channel();
+    let (finish, release) = std::sync::mpsc::channel();
+    let first = state.read(move |view| -> Result<_, DatabaseError> {
+        started.send(()).unwrap();
+        release.recv().unwrap();
+        Ok(view.snapshot.block_num)
+    });
+    tokio::pin!(first);
+    tokio::select! {
+        started = running => started.unwrap(),
+        result = &mut first => panic!("first read finished before release: {result:?}"),
+    }
+
+    let second = state.read(|view| Ok::<_, DatabaseError>(view.snapshot.block_num));
+    tokio::pin!(second);
+    assert!(futures::poll!(&mut second).is_pending());
+
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(futures::poll!(&mut second).is_pending());
+    finish.send(()).unwrap();
+    assert_eq!(first.await.unwrap(), BlockNumber::GENESIS);
+    assert_eq!(second.await.unwrap(), BlockNumber::GENESIS);
+}
+
+#[tokio::test]
 async fn caller_error_releases_the_read() {
     let (_directory, state, _writer) = state_with_pool_size(1).await;
     let error = state

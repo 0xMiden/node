@@ -1,24 +1,30 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arc_swap::ArcSwap;
-use miden_node_db::sqlite::{DbReader, ReadTransaction as SqlReadTransaction};
-use miden_node_tracing::{Instrument, info_span, instrument, miden_span_record};
+use miden_node_db::sqlite::DbReader;
+use miden_node_tracing::{Instrument, Span, field, info_span};
+use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::block::BlockNumber;
 use tokio::sync::watch;
+use tokio::time::timeout;
 
 use super::{ReadTransaction, ReadView, StateSnapshot};
 use crate::DatabaseError;
 
-/// Maximum time spent waiting for a matching database and tree snapshot.
+/// How long a reader waits for the next tree publication before retrying.
 ///
 /// A block write commits its SQLite changes first, then applies the `RocksDB` tree updates and
 /// publishes the corresponding tree snapshot. These writes span separate storage engines and
 /// cannot be committed atomically, so a reader can briefly observe different chain tips. In that
-/// case, acquisition waits for the tree snapshot to catch up to the committed block. The 500 ms
-/// budget allows a short delay, including connection-pool and scheduling waits, while bounding
-/// request latency if a matching pair remains unavailable.
-const ACQUISITION_TIMEOUT: Duration = Duration::from_millis(500);
+/// case, acquisition releases the connection and waits for tree publication.
+const TREE_PUBLICATION_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// The result of one snapshot acquisition attempt. A retry returns the unused caller closure.
+enum Attempt<R, F> {
+    Complete(R),
+    Retry(F),
+    WaitForPublication(F, Span),
+}
 
 /// Runs a read operation with a SQLite transaction and tree snapshot at the same block.
 ///
@@ -27,116 +33,83 @@ const ACQUISITION_TIMEOUT: Duration = Duration::from_millis(500);
 /// operation runs once, after a matching pair is acquired.
 pub(crate) async fn read<R, E, F>(
     reader: &DbReader,
-    snapshots: Arc<ArcSwap<crate::state::StateSnapshot>>,
+    load_snapshot: impl Fn() -> Arc<crate::state::StateSnapshot> + Clone + Send + 'static,
     mut committed: watch::Receiver<BlockNumber>,
-    read: F,
+    mut read: F,
 ) -> Result<R, E>
 where
     F: FnOnce(ReadView<'_>) -> Result<R, E> + Send + 'static,
     R: Send + 'static,
     E: From<DatabaseError> + Send + 'static,
 {
-    let deadline = tokio::time::Instant::now() + ACQUISITION_TIMEOUT;
-    // Retry with a fresh SQL transaction until its tip matches the published tree generation.
-    //
-    // SQL can be ahead while tree updates are being applied. Trees can also advance after a
-    // SQL snapshot is established, leaving that transaction behind. Neither mismatch can be
-    // resolved by reusing the same pair.
-    let AcquiredRead { snapshot, transaction } = loop {
-        let acquired =
-            tokio::time::timeout_at(deadline, acquire(reader, &snapshots, &mut committed))
-                .await
-                .map_err(|_| E::from(DatabaseError::ReadSnapshotUnavailable))?
-                .map_err(E::from)?;
-        if let Some(acquired) = acquired {
-            break acquired;
-        }
-    };
-    let block_num = snapshot.latest_block_num();
+    let caller = CancellationToken::new();
+    let _cancel_on_drop = caller.drop_guard_ref();
 
-    let result = transaction
-        .run("store read", move |tx| {
-            Ok::<_, DatabaseError>(read(ReadView {
-                tx: ReadTransaction::new(tx),
-                snapshot: StateSnapshot {
-                    block_num,
-                    blockchain: &snapshot.blockchain,
-                },
-            }))
-        })
-        .instrument(info_span!("store.read.action", snapshot.block.number = block_num.as_u32(),))
-        .await;
+    loop {
+        // Mark earlier publications as seen so an update during this attempt wakes the retry.
+        committed.borrow_and_update();
+        let load_snapshot = load_snapshot.clone();
+        let acquisition = info_span!(
+            "store.read.acquire",
+            block.number = field::Empty,
+            snapshot.block.number = field::Empty,
+        );
+        let caller = caller.clone();
+        let attempt = reader
+            .read("store read", move |tx| -> Result<_, DatabaseError> {
+                let acquisition = acquisition.entered();
+                // The first query establishes the SQLite snapshot used by the caller.
+                let header = crate::db::queries::select_chain_tip(tx)?.ok_or_else(|| {
+                    DatabaseError::DataCorrupted("block headers table is empty".into())
+                })?;
+                let block_num = header.block_num();
+                let snapshot = load_snapshot();
+                let tree_block_num = snapshot.latest_block_num();
+                acquisition.record("block.number", block_num.as_u32());
+                acquisition.record("snapshot.block.number", tree_block_num.as_u32());
+                if block_num > tree_block_num {
+                    return Ok(Attempt::WaitForPublication(read, acquisition.exit()));
+                }
+                if block_num < tree_block_num {
+                    return Ok(Attempt::Retry(read));
+                }
+                if snapshot.blockchain.as_mmr().get(block_num.as_usize()).ok()
+                    != Some(header.commitment())
+                {
+                    return Err(DatabaseError::DataCorrupted(
+                        "database tip does not match the published blockchain".into(),
+                    ));
+                }
+                drop(acquisition);
 
-    // End the transaction on both success and failure, preserving the caller's error if cleanup
-    // also fails.
-    let closed = transaction.close().await.map_err(DatabaseError::from);
-    let value = result.map_err(E::from)??;
-    closed.map_err(E::from)?;
-    Ok(value)
-}
-
-/// A database transaction and immutable tree snapshot at the same committed block.
-struct AcquiredRead {
-    snapshot: Arc<crate::state::StateSnapshot>,
-    transaction: SqlReadTransaction,
-}
-
-/// Attempts to acquire matching snapshots, returning `None` when acquisition must be retried.
-///
-/// Each attempt has its own span so its observed SQL and tree heights remain available even if
-/// later attempts observe newer blocks. Waiting for tree publication is part of the attempt.
-#[instrument(name = "store.read.acquire")]
-async fn acquire(
-    reader: &DbReader,
-    snapshots: &Arc<ArcSwap<crate::state::StateSnapshot>>,
-    committed: &mut watch::Receiver<BlockNumber>,
-) -> Result<Option<AcquiredRead>, DatabaseError> {
-    // Mark earlier publications as seen before examining SQL and the trees.
-    //
-    // A publication during this attempt must remain unseen so that `changed()` below
-    // returns immediately. Marking it seen after the checks could miss the notification
-    // that resolves the mismatch and make acquisition wait for another block.
-    committed.borrow_and_update();
-    let transaction = reader.begin_read().await.map_err(DatabaseError::from)?;
-    let snapshots = Arc::clone(snapshots);
-    // The first query establishes SQLite's snapshot; BEGIN DEFERRED alone does not. Reading the tip
-    // here fixes the height that the tree snapshot must match.
-    let (header, snapshot) = transaction
-        .run("store read tip", move |tx| {
-            let header = crate::db::queries::select_chain_tip(tx)?.ok_or_else(|| {
-                DatabaseError::DataCorrupted("block headers table is empty".into())
-            })?;
-            Ok::<_, DatabaseError>((header, snapshots.load_full()))
-        })
-        .await?;
-    let block_num = header.block_num();
-    miden_span_record!(
-        block.number = block_num,
-        snapshot.block.number = snapshot.latest_block_num(),
-    );
-    if block_num == snapshot.latest_block_num() {
-        // This is a cheap sanity check that matching heights identify the same block. Both
-        // commitments are available in memory; no disk reads or hashing are needed.
-        if snapshot.blockchain.as_mmr().get(block_num.as_usize()).ok() != Some(header.commitment())
-        {
-            return Err(DatabaseError::DataCorrupted(
-                "database tip does not match the published blockchain".into(),
-            ));
-        }
-        return Ok(Some(AcquiredRead { snapshot, transaction }));
+                if caller.is_cancelled() {
+                    return Err(DatabaseError::ReadSnapshotUnavailable);
+                }
+                let _action =
+                    info_span!("store.read.action", snapshot.block.number = block_num.as_u32())
+                        .entered();
+                Ok(Attempt::Complete(read(ReadView {
+                    tx: ReadTransaction::new(tx),
+                    snapshot: StateSnapshot {
+                        block_num,
+                        blockchain: &snapshot.blockchain,
+                    },
+                })))
+            })
+            .await?;
+        read = match attempt {
+            Attempt::Complete(result) => return result,
+            Attempt::Retry(read) => read,
+            Attempt::WaitForPublication(read, span) => {
+                // The writer may need this reader connection before it can publish the trees. The
+                // blocking job has released both snapshots before we wait.
+                let published =
+                    timeout(TREE_PUBLICATION_TIMEOUT, committed.changed()).instrument(span).await;
+                if !matches!(published, Ok(Ok(()))) {
+                    return Err(DatabaseError::ReadSnapshotUnavailable.into());
+                }
+                read
+            },
+        };
     }
-    // Release both snapshots before retrying. If trees are ahead, a fresh SQL transaction can see
-    // their block. If SQL is ahead, wait for tree publication before opening another transaction.
-    //
-    // After committing SQL, the writer may use the same reader pool to resolve consumed-note IDs
-    // before publishing the trees. Holding transactions while waiting could exhaust that pool and
-    // prevent the writer from making progress. Releasing them avoids this circular wait, at the
-    // cost of potentially observing a newer SQL tip on the next attempt.
-    let wait_for_publication = block_num > snapshot.latest_block_num();
-    drop(snapshot);
-    transaction.close().await.map_err(DatabaseError::from)?;
-    if wait_for_publication {
-        committed.changed().await.map_err(|_| DatabaseError::ReadSnapshotUnavailable)?;
-    }
-    Ok(None)
 }

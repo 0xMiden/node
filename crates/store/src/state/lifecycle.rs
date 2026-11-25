@@ -427,6 +427,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_times_out_waiting_for_an_unpublished_tree_snapshot() {
+        use std::time::Duration;
+
+        let (directory, state, _writer) = crate::read::tests::state().await;
+        let block = crate::read::tests::next_block(&state).await;
+        // Advance the SQL tip while the published trees stay at genesis.
+        database_writer(directory.path())
+            .write("insert block header", move |tx| {
+                crate::db::queries::insert_block_header(tx, block.header(), block.signatures())
+            })
+            .await
+            .unwrap();
+
+        tokio::time::pause();
+        let start = tokio::time::Instant::now();
+        let read = state.read(|_| -> Result<(), DatabaseError> {
+            panic!("a read requires matching database and tree snapshots")
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), read).await.unwrap();
+        assert!(matches!(result, Err(DatabaseError::ReadSnapshotUnavailable)));
+        assert!(start.elapsed() >= Duration::from_millis(500));
+    }
+
+    #[tokio::test]
     async fn state_view_returns_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path()).await;
@@ -445,6 +469,37 @@ mod read_acquisition_tests {
     use miden_protocol::block::BlockNumber;
 
     use crate::DatabaseError;
+
+    #[tokio::test]
+    async fn cancelling_a_read_during_snapshot_acquisition_skips_the_caller() {
+        use tokio::sync::{mpsc, oneshot};
+
+        let (_directory, state, _writer) = crate::read::tests::state().await;
+        let (request_snapshot, mut requests) = mpsc::unbounded_channel();
+        let (called, invocation) = oneshot::channel();
+        let mut read = Box::pin(crate::read::acquire::read(
+            state.db.reader(),
+            move || {
+                let (publish, snapshot) = oneshot::channel();
+                request_snapshot.send(publish).unwrap();
+                snapshot.blocking_recv().unwrap()
+            },
+            state.subscribe_committed_tip(),
+            move |_| {
+                called.send(()).unwrap();
+                Ok::<_, DatabaseError>(())
+            },
+        ));
+
+        // The worker owns the SQLite transaction while it waits for the matching tree snapshot.
+        let publish = tokio::select! {
+            request = requests.recv() => request.unwrap(),
+            result = &mut read => panic!("read finished before acquiring its snapshot: {result:?}"),
+        };
+        drop(read);
+        assert!(publish.send(state.latest_snapshot.load_full()).is_ok());
+        assert!(invocation.await.is_err(), "cancelled read invoked its caller");
+    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn read_waits_for_tree_publication_and_invokes_the_caller_once() {
