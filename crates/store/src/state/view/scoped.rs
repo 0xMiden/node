@@ -16,7 +16,7 @@ pub struct ScopedBlockNum(BlockNumber);
 
 impl ScopedBlockNum {
     /// Constructs a bound validated against the snapshot or startup tip.
-    pub(in crate::state) fn new(block_num: BlockNumber) -> Self {
+    pub(crate) fn new(block_num: BlockNumber) -> Self {
         Self(block_num)
     }
 
@@ -47,7 +47,7 @@ pub struct ScopedBlockRange(RangeInclusive<BlockNumber>);
 
 impl ScopedBlockRange {
     /// Issued by [`StateView`](super::StateView) after validating the range against its tip.
-    pub(in crate::state) fn new(range: RangeInclusive<BlockNumber>) -> Self {
+    pub(crate) fn new(range: RangeInclusive<BlockNumber>) -> Self {
         Self(range)
     }
 

@@ -3280,6 +3280,64 @@ async fn v2_sync_account_vault_rejects_invalid_ranges_and_future_empty_targets()
     }
 }
 
+/// A backpressured vault stream releases the store's only database reader between pages.
+#[tokio::test]
+async fn v2_sync_account_vault_releases_reader_under_backpressure() {
+    use miden_node_proto::domain::block::SyncRange;
+    use miden_node_proto::generated::server::miden_node_v2_node_service::SyncAccountVault;
+
+    let directory = new_tempdir();
+    TestStore::bootstrap(&directory).await;
+    let (state, _writer, _proof_writer, _task) = State::load_with_database_options(
+        &directory,
+        miden_node_utils::clap::StorageOptions::default(),
+        miden_node_store::DatabaseOptions { connection_pool_size: NonZeroUsize::MIN },
+    )
+    .await
+    .unwrap()
+    .start(CancellationToken::new());
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &directory.join("miden-store.sqlite3"),
+        account,
+        BlockNumber::GENESIS,
+        &vault_stream_values(300),
+    )
+    .await;
+    let service = RpcService::new(
+        Arc::clone(&state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let stream = SyncAccountVault::handle(
+        &service,
+        (
+            account,
+            SyncRange {
+                from_exclusive: None,
+                target: BlockNumber::GENESIS,
+            },
+        ),
+        &MetadataMap::new(),
+        &Extensions::new(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while stream.as_ref().capacity() != 0 {
+            tokio::task::yield_now().await;
+        }
+        state.read(|view| view.tx.select_block_header(BlockNumber::GENESIS)).await
+    })
+    .await
+    .expect("a full stream must leave the reader available")
+    .unwrap()
+    .expect("genesis header");
+    drop(stream);
+}
+
 /// Concurrent vault streams must return complete results without a client or global limit.
 #[tokio::test]
 async fn v2_sync_account_vault_accepts_many_concurrent_streams() {

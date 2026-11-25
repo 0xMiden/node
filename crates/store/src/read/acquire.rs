@@ -90,7 +90,7 @@ where
                         .entered();
                 Ok(Attempt::Complete(read(ReadView {
                     tx: ReadTransaction::new(tx),
-                    snapshot: StateSnapshot {
+                    snapshot: &StateSnapshot {
                         block_num,
                         blockchain: &snapshot.blockchain,
                         account_tree: &snapshot.account_tree,
