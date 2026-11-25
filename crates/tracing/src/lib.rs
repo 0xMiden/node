@@ -6,13 +6,16 @@ crate::declare_targets! {
     default: "miden::process",
     "miden_node_tracing::admin" => "miden::admin",
     "miden_node_tracing::filter_control" => "miden::admin",
+    "miden_node_tracing::http" => "miden::http::server",
     "miden_node_tracing::grpc" => "miden::rpc::server",
+    "miden_node_tracing::grpc::client" => "miden::rpc::client",
 }
 
 pub mod admin;
 mod attribute;
 mod filter_control;
 pub mod grpc;
+pub mod http;
 mod instrument;
 mod logging;
 pub mod panic;

@@ -39,7 +39,8 @@ miden-protocol         = { workspace = true }
 miden-standards        = { workspace = true }
 miden-testing          = { optional = true, workspace = true }
 miden-tx               = { optional = true, workspace = true }
-reqwest                = { workspace = true }
+reqwest                = { features = ["json"], version = "0.13" }
+serde                  = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt", "signal", "time"], workspace = true }
 tokio-util             = { workspace = true }

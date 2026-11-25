@@ -4,6 +4,7 @@ extern crate miden_node_tracing as tracing;
 miden_node_tracing::declare_targets! {
     default: "miden::process",
     "miden_node_utils::admin" => "miden::admin",
+    "miden_node_utils::http" => "miden::http::client",
     "miden_node_utils::lru_cache" => "miden::cache",
 }
 
@@ -17,6 +18,7 @@ pub mod formatting;
 pub mod fs;
 pub mod genesis;
 pub mod grpc;
+pub mod http;
 pub mod limiter;
 pub mod lru_cache;
 pub mod retry;

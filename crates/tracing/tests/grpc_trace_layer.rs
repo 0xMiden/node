@@ -2,12 +2,16 @@ use std::convert::Infallible;
 
 use http::HeaderMap;
 use http_body_util::{BodyExt as _, Empty};
-use miden_node_tracing::grpc::{GrpcTraceLayer, grpc_trace_layer};
-use opentelemetry::trace::{Event, Status, TracerProvider as _};
+use miden_node_tracing::grpc::client::trace_grpc_client;
+use miden_node_tracing::grpc::{GrpcTraceLayer, OtelInterceptor, grpc_trace_layer};
+use opentelemetry::trace::{Event, SpanKind, Status, TracerProvider as _};
 use opentelemetry::{KeyValue, Value};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider, SpanData};
+use tonic::service::interceptor::InterceptedService;
 use tower::{Layer as _, ServiceExt as _, service_fn};
-use tracing_subscriber::layer::SubscriberExt as _;
+use tracing::Instrument as _;
+use tracing_subscriber::layer::{Layer as _, SubscriberExt as _};
 
 /// Where the server puts the response's gRPC status.
 #[derive(Clone, Copy, Debug)]
@@ -55,6 +59,7 @@ fn request_span(layer: &GrpcTraceLayer, status: &tonic::Status, status_in: Statu
     provider.force_flush().unwrap();
     let mut spans = exporter.get_finished_spans().unwrap();
     assert_eq!(spans.len(), 1, "{spans:?}");
+    assert_eq!(spans[0].span_kind, SpanKind::Server);
     spans.remove(0)
 }
 
@@ -151,5 +156,64 @@ fn server_errors_are_logged_as_errors() {
         let event = failure_event(&span).expect("failure is logged");
         assert_eq!(event_attribute(event, "level").as_deref(), Some("ERROR"), "{code:?}");
         assert_eq!(span.status, Status::error(""), "{code:?}");
+    }
+}
+
+#[tokio::test]
+async fn server_spans_use_the_exported_client_or_caller_as_remote_parent() {
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+    for export_client in [true, false] {
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder().with_simple_exporter(exporter.clone()).build();
+        let filter = if export_client {
+            "info"
+        } else {
+            "info,miden::rpc::client=off"
+        };
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_writer(std::io::sink))
+            .with(
+                tracing_opentelemetry::layer()
+                    .with_tracer(provider.tracer("test"))
+                    .with_filter(tracing_subscriber::EnvFilter::new(filter)),
+            );
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let server =
+            grpc_trace_layer().layer(service_fn(|_: http::Request<tonic::body::Body>| async {
+                let mut trailers = HeaderMap::new();
+                tonic::Status::not_found("account").add_header(&mut trailers).unwrap();
+                let body = Empty::<bytes::Bytes>::new()
+                    .with_trailers(std::future::ready(Some(Ok(trailers))));
+                Ok::<_, Infallible>(http::Response::new(body))
+            }));
+        let client = trace_grpc_client(InterceptedService::new(server, OtelInterceptor));
+        let request = http::Request::post("/rpc.Api/GetAccount")
+            .body(tonic::body::Body::empty())
+            .unwrap();
+        let response =
+            client.oneshot(request).instrument(tracing::info_span!("caller")).await.unwrap();
+        assert!(
+            !exporter
+                .get_finished_spans()
+                .unwrap()
+                .iter()
+                .any(|span| span.span_kind == SpanKind::Client)
+        );
+        response.into_body().collect().await.unwrap();
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let caller = spans.iter().find(|span| span.name == "caller").unwrap();
+        let client = spans.iter().find(|span| span.span_kind == SpanKind::Client);
+        let server = spans.iter().find(|span| span.span_kind == SpanKind::Server).unwrap();
+        assert_eq!(client.is_some(), export_client);
+        if let Some(client) = client {
+            assert_eq!(client.name, "rpc.Api/GetAccount");
+            assert!(matches!(client.status, Status::Error { .. }));
+            assert_eq!(client.parent_span_id, caller.span_context.span_id());
+        }
+        assert!(server.parent_span_is_remote);
+        assert_eq!(server.span_context.trace_id(), caller.span_context.trace_id());
+        assert_eq!(server.parent_span_id, client.unwrap_or(caller).span_context.span_id());
     }
 }

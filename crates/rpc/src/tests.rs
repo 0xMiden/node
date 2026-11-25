@@ -603,7 +603,7 @@ async fn rpc_server_has_web_support() {
     let (_, rpc_addr, _store, _server) = start_rpc().await;
 
     // Send a status request
-    let client = reqwest::Client::new();
+    let client = miden_node_utils::http::Client::new();
 
     let mut headers = HeaderMap::new();
     let accept_header = concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION"));

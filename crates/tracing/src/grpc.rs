@@ -18,6 +18,8 @@ use tower_http::trace::{
 };
 use tracing::{Level, field};
 
+pub mod client;
+
 /// The [`TraceLayer`] returned by [`grpc_trace_layer`].
 pub type GrpcTraceLayer = TraceLayer<
     GrpcMakeClassifier,
@@ -175,6 +177,7 @@ pub fn grpc_trace_fn<T>(request: &http::Request<T>) -> tracing::Span {
     // initialized as empty since otherwise the assignment will have no effect.
     let span = crate::info_span!(
         "rpc",
+        otel.kind = "server",
         otel.name = field::Empty,
         rpc.service = service,
         rpc.method = method,
@@ -272,10 +275,17 @@ impl tonic::service::Interceptor for OtelInterceptor {
         &mut self,
         mut request: tonic::Request<()>,
     ) -> Result<tonic::Request<()>, tonic::Status> {
+        use opentelemetry::trace::TraceContextExt as _;
         use tracing_opentelemetry::OpenTelemetrySpanExt;
         let ctx = tracing::Span::current().context();
         opentelemetry::global::get_text_map_propagator(|propagator| {
-            propagator.inject_context(&ctx, &mut MetadataInjector(request.metadata_mut()));
+            let mut injector = MetadataInjector(request.metadata_mut());
+            if ctx.has_active_span() {
+                propagator.inject_context(&ctx, &mut injector);
+            } else {
+                // A stderr-only client span can sit inside an exported application span.
+                propagator.inject(&mut injector);
+            }
         });
 
         Ok(request)

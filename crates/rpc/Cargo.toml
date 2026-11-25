@@ -33,7 +33,6 @@ miden-protocol            = { default-features = true, workspace = true }
 miden-standards           = { workspace = true }
 miden-tx-batch            = { workspace = true }
 rand                      = { workspace = true }
-reqwest                   = { features = ["json"], workspace = true }
 serde                     = { features = ["derive"], workspace = true }
 thiserror                 = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread", "time"], workspace = true }

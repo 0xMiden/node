@@ -116,7 +116,8 @@ use the `debug` level, even when they are user-visible. Shared RPC client diagno
 | `miden::admin`                    | Private administration API diagnostics                            |
 | `miden::funding`                  | Funding requests, transaction construction, and delivery          |
 | `miden::monitor`                  | Network health checks, end-to-end probes, and probe setup         |
-| `miden::http::server`             | HTTP dashboard requests and listener readiness                    |
+| `miden::http::client`             | Outgoing HTTP requests                                            |
+| `miden::http::server`             | Funding and dashboard HTTP requests, dashboard listener readiness |
 | `miden::cache`                    | In-memory cache lock spans                                        |
 
 Network monitor startup and configuration messages use the `miden::process` target.
@@ -138,6 +139,9 @@ A `miden-node` process contains multiple components. For example, a sequencer ca
 `miden::rpc::server`, `miden::production`, `miden::mempool`, `miden::proving`, and `miden::storage` events.
 
 ## Select a span
+
+For HTTP and gRPC requests, filter by OpenTelemetry span kind to see time spent by the caller (`client`) or the
+recipient (`server`). For gRPC calls with context propagation enabled, the server span appears under its client span.
 
 Span names describe operations such as `build_block`; targets identify activities such as `miden::production::blocks`.
 Combine both to enable diagnostics within a particular operation:

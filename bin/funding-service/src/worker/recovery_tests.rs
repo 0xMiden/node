@@ -5,7 +5,7 @@ use miden_protocol::asset::FungibleAsset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteType, Nullifier};
 use miden_standards::note::P2idNote;
-use opentelemetry::trace::Status;
+use opentelemetry::trace::{SpanKind, Status};
 use tokio::time::Instant;
 
 use super::*;
@@ -401,8 +401,12 @@ async fn accepted_and_uncertain_submissions_wait_for_commitment_or_expiration() 
             assert!(funder.setup.database.active_attempt().await.unwrap().is_none());
 
             let span = telemetry.span("resolve_attempt");
+            let rpc = telemetry.span("miden.node.v1.NodeService/SyncTransactions");
+            assert_eq!(rpc.span_kind, SpanKind::Client);
+            assert_eq!(rpc.parent_span_id, span.span_context.span_id());
+            assert_eq!(rpc.span_context.trace_id(), span.span_context.trace_id());
             let traceparent =
-                format!("00-{}-{}-01", span.span_context.trace_id(), span.span_context.span_id());
+                format!("00-{}-{}-01", rpc.span_context.trace_id(), rpc.span_context.span_id());
             assert!(
                 server
                     .chain
