@@ -5,6 +5,7 @@ mod account_vault_updates;
 mod note_sync_page;
 mod nullifier_updates_page;
 mod select_block_header;
+mod transaction_records_page;
 pub(crate) use select_block_header::select_block_header;
 mod select_block_header_and_signatures;
 mod select_block_headers;
