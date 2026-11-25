@@ -33,7 +33,7 @@ enum Attempt<R, F> {
 /// operation runs once, after a matching pair is acquired.
 pub(crate) async fn read<R, E, F>(
     reader: &DbReader,
-    load_snapshot: impl Fn() -> Arc<crate::state::StateSnapshot> + Clone + Send + 'static,
+    load_snapshot: impl Fn(BlockNumber) -> Arc<crate::state::StateSnapshot> + Clone + Send + 'static,
     mut committed: watch::Receiver<BlockNumber>,
     mut read: F,
 ) -> Result<R, E>
@@ -63,7 +63,7 @@ where
                     DatabaseError::DataCorrupted("block headers table is empty".into())
                 })?;
                 let block_num = header.block_num();
-                let snapshot = load_snapshot();
+                let snapshot = load_snapshot(block_num);
                 let tree_block_num = snapshot.latest_block_num();
                 acquisition.record("block.number", block_num.as_u32());
                 acquisition.record("snapshot.block.number", tree_block_num.as_u32());
