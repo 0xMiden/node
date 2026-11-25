@@ -50,6 +50,7 @@ pub use crate::db::queries::{
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
+use crate::read::ReadTransaction;
 use crate::state::ScopedBlockNum;
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
@@ -316,7 +317,7 @@ impl Db {
     ) -> Result<Option<Word>> {
         self.reader
             .read("protocol config commitment at block", move |tx| {
-                queries::select_protocol_config_commitment_at(tx, *block_number)
+                ReadTransaction::new(tx).select_protocol_config_commitment_at(*block_number)
             })
             .await
     }
@@ -408,7 +409,7 @@ impl Db {
     ) -> Result<Option<(BlockHeader, BlockSignatures)>> {
         self.reader
             .read("block headers and signatures by block number", move |tx| {
-                queries::select_block_header_and_signatures_by_block_num(tx, *block_number)
+                ReadTransaction::new(tx).select_block_header_and_signatures(*block_number)
             })
             .await
     }

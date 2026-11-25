@@ -282,13 +282,6 @@ fn select_chain_tip(db: &TestDb) -> Result<Option<BlockHeader>> {
     db.read(queries::select_chain_tip)
 }
 
-fn select_block_header_and_signatures_by_block_num(
-    db: &TestDb,
-    block_num: BlockNumber,
-) -> Result<Option<(BlockHeader, BlockSignatures)>> {
-    db.read(move |tx| queries::select_block_header_and_signatures_by_block_num(tx, block_num))
-}
-
 fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
     db.read(move |tx| queries::select_block_headers(tx, blocks.into_iter()))
 }
@@ -1049,7 +1042,6 @@ fn db_block_header() {
     let dummy_signature =
         BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
-    let first_signature = dummy_signature;
 
     // test fetch unknown block header
     let block_number = 1;
@@ -1100,14 +1092,6 @@ fn db_block_header() {
             BlockHeaderCommitment::new(&block_header2),
         ]
     );
-
-    // test fetch block header with its signatures
-    let stored =
-        select_block_header_and_signatures_by_block_num(db, block_header.block_num()).unwrap();
-    assert_eq!(stored, Some((block_header, first_signature)));
-
-    let missing = select_block_header_and_signatures_by_block_num(db, 1.into()).unwrap();
-    assert!(missing.is_none());
 }
 
 #[test]

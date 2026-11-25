@@ -72,7 +72,8 @@ pub async fn deploy_fee_collector(
     let (executed, header, blockchain, genesis) = state
         .with_view(async |view| {
             let tip = *view.tip();
-            let (_, header, _) = view.sync_chain_mmr(tip..=tip).await?;
+            let (header, _) = view.get_block_header(Some(tip), false).await?;
+            let header = header.context("chain tip header is missing")?;
             let config = view
                 .get_protocol_config(header.protocol_config_commitment())
                 .await?

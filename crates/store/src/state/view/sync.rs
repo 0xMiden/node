@@ -3,8 +3,8 @@ use std::ops::RangeInclusive;
 use miden_node_tracing::instrument;
 use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::account::AccountId;
-use miden_protocol::block::{BlockHeader, BlockNumber, BlockSignatures};
-use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrProof};
+use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::merkle::mmr::MmrProof;
 
 use super::StateView;
 use crate::db::queries::{
@@ -21,7 +21,7 @@ use crate::db::{
     NullifierInfo,
     default_storage_map_entries_limit,
 };
-use crate::errors::{DatabaseError, NoteSyncError, StateSyncError};
+use crate::errors::{DatabaseError, NoteSyncError};
 
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
@@ -41,64 +41,6 @@ impl StateView {
         let query = TransactionsRecords::new(account_ids, block_range.scoped_end());
         let page = self.db.page(query, block_range.start()).await?;
         Ok((page.last_block_included(block_range.end()), page.items))
-    }
-
-    /// Returns the chain MMR delta and the block header at the range's end for the specified
-    /// block range.
-    ///
-    /// Returns [`RangeBeyondTip`](crate::errors::RangeBeyondTip) if the range extends beyond this
-    /// view's chain tip.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn sync_chain_mmr(
-        &self,
-        block_range: RangeInclusive<BlockNumber>,
-    ) -> Result<(MmrDelta, BlockHeader, BlockSignatures), StateSyncError> {
-        let block_range = self.scope_range(block_range)?;
-
-        let block_from = block_range.start();
-        let block_to = block_range.end();
-
-        // The scoped range's end is committed (at or below this view's tip), so its header must
-        // exist in the database.
-        let (block_header, signatures) = self
-            .db
-            .select_block_header_and_signatures_by_block_num(block_range.scoped_end())
-            .await?
-            .expect("the range-end header should exist in the database");
-
-        if block_from == block_to {
-            return Ok((
-                MmrDelta {
-                    forest: Forest::new(block_from.as_usize()).expect("block index fits in u32"),
-                    data: vec![],
-                },
-                block_header,
-                signatures,
-            ));
-        }
-
-        // Important notes about the boundary conditions:
-        //
-        // - The Mmr forest is 1-indexed whereas the block number is 0-indexed. The Mmr root
-        //   contained in the block header always lag behind by one block, this is because the Mmr
-        //   leaves are hashes of block headers, and we can't have self-referential hashes. These
-        //   two points cancel out and don't require adjusting.
-        // - Mmr::get_delta is inclusive, whereas the sync request block_from is defined to be the
-        //   last block already present in the caller's MMR. The delta should therefore start at the
-        //   next block, so the from_forest has to be adjusted with a +1.
-        let from_forest = (block_from + 1).as_usize();
-        let to_forest = block_to.as_usize();
-
-        let mmr_delta = self
-            .blockchain()
-            .as_mmr()
-            .get_delta(
-                Forest::new(from_forest).expect("from_forest fits in u32"),
-                Forest::new(to_forest).expect("to_forest fits in u32"),
-            )
-            .map_err(StateSyncError::FailedToBuildMmrDelta)?;
-
-        Ok((mmr_delta, block_header, signatures))
     }
 
     /// Loads data to synchronize a client's notes.
@@ -211,7 +153,13 @@ impl StateView {
 mod tests {
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
     use miden_protocol::block::code_tree::CodeTree;
-    use miden_protocol::block::{BlockBody, SignedBlock, ValidatorConfig};
+    use miden_protocol::block::{
+        BlockBody,
+        BlockHeader,
+        BlockSignatures,
+        SignedBlock,
+        ValidatorConfig,
+    };
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::crypto::merkle::smt::Smt;
     use miden_protocol::testing::account_id::ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET;
