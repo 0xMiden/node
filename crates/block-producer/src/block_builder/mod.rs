@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use miden_node_store::state::{BlockWriter, State};
+use miden_node_store::validator_config::ValidatorConfigGuard;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Span, debug, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
@@ -14,6 +15,7 @@ use miden_protocol::block::{
     BlockSignatures,
     ProposedBlock,
     SignedBlock,
+    ValidatorConfig,
 };
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
@@ -21,6 +23,10 @@ use tokio::time::Duration;
 use crate::errors::{BuildBlockError, StoreError};
 use crate::mempool::SharedMempool;
 use crate::validator::BlockProducerValidatorClient;
+use crate::validator_config::{PendingValidatorQuorum, ValidatorConfigState};
+
+#[cfg(test)]
+mod tests;
 
 // BLOCK BUILDER
 // =================================================================================================
@@ -37,6 +43,8 @@ pub struct BlockBuilder {
 
     /// The validator RPC client for validating blocks.
     pub validator: BlockProducerValidatorClient,
+
+    pub(crate) validator_config: ValidatorConfigState,
 }
 
 impl BlockBuilder {
@@ -50,11 +58,13 @@ impl BlockBuilder {
         validator: BlockProducerValidatorClient,
         block_interval: Duration,
     ) -> Self {
+        let validator_config = ValidatorConfigState::new(Arc::clone(&state));
         Self {
             block_interval,
             state,
             block_writer,
             validator,
+            validator_config,
         }
     }
     /// Starts the [`BlockBuilder`], infinitely producing blocks at the configured interval.
@@ -109,11 +119,14 @@ impl BlockBuilder {
     async fn build_block(&mut self, mempool: &SharedMempool) -> Result<(), BuildBlockError> {
         use futures::TryFutureExt;
 
+        let validator_config_guard = Arc::clone(&self.validator_config.pending).lock_owned().await;
+        let pending = *validator_config_guard;
         let selected = Self::select_block(mempool)?;
         let block_num = selected.block_number;
         async {
-            let block = Self::prepare_block(&self.state, &self.validator, selected).await?;
-            self.commit_block(mempool, block).await
+            let block =
+                Self::prepare_block(&self.state, &self.validator, selected, pending).await?;
+            self.commit_block(mempool, block, validator_config_guard).await
         }
         .inspect_err(|err| Span::current().set_error(err))
         .or_else(|err| async {
@@ -129,6 +142,7 @@ impl BlockBuilder {
         state: &State,
         validator: &BlockProducerValidatorClient,
         selected: SelectedBlock,
+        pending_quorum: Option<PendingValidatorQuorum>,
     ) -> Result<BlockCommit, BuildBlockError> {
         use futures::TryFutureExt;
 
@@ -148,7 +162,7 @@ impl BlockBuilder {
                     block.erased_note_proof.count = telemetry.erased_note_proofs_count
                 );
             })
-            .and_then(Self::propose_block)
+            .and_then(|inputs| Self::propose_block(inputs, pending_quorum))
             .inspect_ok(|proposed_block| {
                 let telemetry = proposed_block_telemetry(&proposed_block.proposed_block);
                 miden_span_record!(
@@ -273,13 +287,24 @@ impl BlockBuilder {
     #[instrument(name = "propose_block", err)]
     async fn propose_block(
         batches_inputs: BlockBatchesAndInputs,
+        pending_quorum: Option<PendingValidatorQuorum>,
     ) -> Result<ProposedBlockAndInputs, BuildBlockError> {
         let BlockBatchesAndInputs { batches, inputs } = batches_inputs;
         let block_inputs = inputs.clone();
         let batches = batches.into_iter().map(Arc::unwrap_or_clone).collect();
 
-        let proposed_block =
+        let mut proposed_block =
             ProposedBlock::new(inputs, batches).map_err(BuildBlockError::ProposeBlockFailed)?;
+        let block_num = proposed_block.block_num();
+        if let Some(pending) =
+            pending_quorum.filter(|pending| pending.activation_height.parent() == Some(block_num))
+        {
+            let keys = block_inputs.prev_block_header().validator_config().keys().to_vec();
+            let config = ValidatorConfig::new(keys, pending.quorum).map_err(|err| {
+                BuildBlockError::other(format!("invalid pending validator quorum: {err}"))
+            })?;
+            proposed_block = proposed_block.with_next_validator_config(config);
+        }
 
         Ok(ProposedBlockAndInputs { proposed_block, block_inputs })
     }
@@ -372,6 +397,7 @@ impl BlockBuilder {
         &mut self,
         mempool: &SharedMempool,
         block_commit: BlockCommit,
+        validator_config_guard: ValidatorConfigGuard,
     ) -> Result<(), BuildBlockError> {
         let BlockCommit {
             ordered_batches,
@@ -392,7 +418,12 @@ impl BlockBuilder {
         }
 
         self.block_writer
-            .apply_block_with_proving_inputs(ordered_batches, block_inputs, signed_block)
+            .apply_sequencer_block(
+                ordered_batches,
+                block_inputs,
+                signed_block,
+                validator_config_guard,
+            )
             .await
             .map_err(StoreError::ApplyBlockFailed)
             .map_err(BuildBlockError::StoreApplyBlockFailed)?;

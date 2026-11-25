@@ -187,3 +187,37 @@ fn sequencer_batch_prover_is_optional_and_independent_of_the_block_prover() {
         Cli::try_parse_from(base.into_iter().chain(["--batch-prover.url", "not-a-url"])).is_err()
     );
 }
+
+#[tokio::test]
+async fn occupied_admin_port_prevents_sequencer_startup() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    let directory = tempfile::tempdir().unwrap();
+    let data_directory = directory.path().join("not-initialized");
+    let cli = Cli::try_parse_from([
+        "miden-node",
+        "sequencer",
+        "--data-directory",
+        data_directory.to_str().unwrap(),
+        "--rpc.listen",
+        "127.0.0.1:0",
+        "--admin.listen",
+        &address,
+        "--validator.url",
+        "http://localhost:50051",
+        "--ntx-builder.url",
+        "http://localhost:50052",
+        "--batch.builder.wallet-account-id",
+        "0xcc0000000000dd010000ee000000ff",
+    ])
+    .unwrap();
+    let Command::Sequencer(command) = cli.command else {
+        panic!("expected sequencer")
+    };
+    let error = command
+        .handle(miden_node_utils::shutdown::CancellationToken::new())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("failed to bind admin listener"), "{error:#}");
+    assert!(!data_directory.exists());
+}

@@ -10,6 +10,9 @@ use url::Url;
 
 use crate::admin::AdminClient;
 
+mod validator_config;
+use validator_config::ValidatorConfigCommand;
+
 #[cfg(test)]
 mod tests;
 
@@ -27,6 +30,8 @@ pub struct AdminCommand {
 
 #[derive(clap::Subcommand, Debug)]
 enum AdminAction {
+    /// Read, register, or cancel a validator quorum change on the sequencer.
+    ValidatorConfig(ValidatorConfigCommand),
     /// Create invitation codes and write the original codes to a new CSV file.
     CreateInvites(CreateInvitesCommand),
     /// Allowlist an account without an invitation code.
@@ -41,6 +46,7 @@ impl AdminCommand {
     pub async fn handle(self) -> anyhow::Result<()> {
         let client = AdminClient::new(self.url)?;
         match self.action {
+            AdminAction::ValidatorConfig(command) => command.handle(&client).await,
             AdminAction::CreateInvites(command) => command.handle(&client).await,
             AdminAction::AllowlistAccount { account_id } => {
                 client.allowlist_account(account_id).await?;

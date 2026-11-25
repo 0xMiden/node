@@ -25,6 +25,7 @@ pub(in crate::state) use worker::WriteWorker;
 
 use crate::blocks::BlockStore;
 use crate::errors::ApplyBlockError;
+use crate::validator_config::ValidatorConfigGuard;
 
 // WRITE CAPABILITIES
 // ================================================================================================
@@ -90,6 +91,7 @@ impl Future for WriterTask {
 pub(super) struct WriteRequest {
     signed_block: SignedBlock,
     protocol_config: Option<ProtocolConfig>,
+    validator_config_guard: Option<ValidatorConfigGuard>,
     result_tx: oneshot::Sender<Result<(), ApplyBlockError>>,
     /// Span of the `apply_block` caller. The worker runs the write under it, keeping the write path
     /// in the caller's trace across the channel hop.
@@ -137,11 +139,21 @@ impl BlockWriter {
         signed_block: SignedBlock,
         protocol_config: Option<ProtocolConfig>,
     ) -> Result<(), ApplyBlockError> {
+        self.apply_block_with_guard(signed_block, protocol_config, None).await
+    }
+
+    async fn apply_block_with_guard(
+        &mut self,
+        signed_block: SignedBlock,
+        protocol_config: Option<ProtocolConfig>,
+        validator_config_guard: Option<ValidatorConfigGuard>,
+    ) -> Result<(), ApplyBlockError> {
         let (result_tx, result_rx) = oneshot::channel();
         self.write_tx
             .send(WriteRequest {
                 signed_block,
                 protocol_config,
+                validator_config_guard,
                 result_tx,
                 span: miden_node_tracing::Span::current(),
             })
