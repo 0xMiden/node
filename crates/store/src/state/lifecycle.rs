@@ -168,7 +168,7 @@ impl State {
         // The chain tip drives forest loading and the account tree history below; `load_mmr`'s
         // consistency check also pins the chain MMR to this header.
         let latest_header = db
-            .select_block_header_by_block_num(None)
+            .select_chain_tip()
             .await?
             .ok_or(StateInitializationError::GenesisBlockMissing)?;
         let latest_block_num = latest_header.block_num();
@@ -427,6 +427,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_times_out_waiting_for_an_unpublished_tree_snapshot() {
+        use std::time::Duration;
+
+        let (directory, state, _writer) = crate::read::tests::state().await;
+        let block = crate::read::tests::next_block(&state).await;
+        // Advance the SQL tip while the published trees stay at genesis.
+        database_writer(directory.path())
+            .write("insert block header", move |tx| {
+                crate::db::queries::insert_block_header(tx, block.header(), block.signatures())
+            })
+            .await
+            .unwrap();
+
+        tokio::time::pause();
+        let start = tokio::time::Instant::now();
+        let read = state.read(|_| -> Result<(), DatabaseError> {
+            panic!("a read requires matching database and tree snapshots")
+        });
+        let result = tokio::time::timeout(Duration::from_secs(2), read).await.unwrap();
+        assert!(matches!(result, Err(DatabaseError::ReadSnapshotUnavailable)));
+        assert!(start.elapsed() >= Duration::from_millis(500));
+    }
+
+    #[tokio::test]
     async fn state_view_returns_genesis_protocol_config() {
         let temp_dir = tempfile::tempdir().unwrap();
         let commitment = bootstrap_store(temp_dir.path()).await;
@@ -435,5 +459,72 @@ mod tests {
         let protocol_config = loaded.state.view().get_protocol_config(commitment).await.unwrap();
 
         assert_eq!(protocol_config, Some(test_protocol_config()));
+    }
+}
+
+#[cfg(test)]
+mod read_acquisition_tests {
+    use std::time::Duration;
+
+    use miden_protocol::block::BlockNumber;
+
+    use crate::DatabaseError;
+
+    #[tokio::test]
+    async fn cancelling_a_read_during_snapshot_acquisition_skips_the_caller() {
+        use tokio::sync::{mpsc, oneshot};
+
+        let (_directory, state, _writer) = crate::read::tests::state().await;
+        let (request_snapshot, mut requests) = mpsc::unbounded_channel();
+        let (called, invocation) = oneshot::channel();
+        let mut read = Box::pin(crate::read::acquire::read(
+            state.db.reader(),
+            move || {
+                let (publish, snapshot) = oneshot::channel();
+                request_snapshot.send(publish).unwrap();
+                snapshot.blocking_recv().unwrap()
+            },
+            state.subscribe_committed_tip(),
+            move |_| {
+                called.send(()).unwrap();
+                Ok::<_, DatabaseError>(())
+            },
+        ));
+
+        // The worker owns the SQLite transaction while it waits for the matching tree snapshot.
+        let publish = tokio::select! {
+            request = requests.recv() => request.unwrap(),
+            result = &mut read => panic!("read finished before acquiring its snapshot: {result:?}"),
+        };
+        drop(read);
+        assert!(publish.send(state.latest_snapshot.load_full()).is_ok());
+        assert!(invocation.await.is_err(), "cancelled read invoked its caller");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn read_waits_for_tree_publication_and_invokes_the_caller_once() {
+        let (_directory, state, mut writer) = crate::read::tests::state().await;
+        let old = state.latest_snapshot.load_full();
+        let block = crate::read::tests::next_block(&state).await;
+        writer.apply_block(block, None).await.unwrap();
+        // Recreate the commit/publication gap while retaining both real tree generations.
+        let published = state.latest_snapshot.swap(old);
+        state.committed_tip_tx.send_replace(BlockNumber::GENESIS);
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_calls = std::sync::Arc::clone(&calls);
+        let read = state.read(move |view| -> Result<(), DatabaseError> {
+            observed_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(view.snapshot.block_num, BlockNumber::from(1));
+            let header = view.tx.select_block_header(view.snapshot.block_num)?.unwrap();
+            assert_eq!(view.snapshot.blockchain.as_mmr().get(1).unwrap(), header.commitment());
+            Ok(())
+        });
+        tokio::pin!(read);
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut read).await.is_err());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        state.latest_snapshot.store(published);
+        state.committed_tip_tx.send_replace(1.into());
+        tokio::time::timeout(Duration::from_secs(5), read).await.unwrap().unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

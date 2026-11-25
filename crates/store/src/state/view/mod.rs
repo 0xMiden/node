@@ -1,17 +1,10 @@
 //! Request-scoped, consistent read view of the store.
 //!
-//! All store reads go through [`StateView`]: it pins one state snapshot for its whole lifetime,
-//! and every block-scoped database query it exposes is bounded by that snapshot's height (via the
-//! [`scoped`] proof types). This makes it impossible to implement a read whose tree and database
-//! halves observe different chain tips — mid-apply, the database may already contain rows for a
-//! block the snapshot cannot prove yet. The only deliberately unscoped reads are the
-//! content-addressed note and protocol-configuration lookups and the network-account
-//! classification.
+//! Endpoints that have not migrated to [`State::read`] use [`StateView`]. It pins one tree
+//! snapshot, and block-scoped queries are bounded by its height through the [`scoped`] proof types.
+//! Each database query opens its own transaction. Caller-composed reads use [`State::read`] to pair
+//! the tree snapshot with a single SQLite transaction.
 //!
-//! The submodules hold the read endpoints, all `impl StateView`; the snapshot internals
-//! ([`StateSnapshot`]) are only visible within this module tree, so no other part of the store
-//! can reach the trees directly.
-
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
@@ -27,7 +20,8 @@ mod scoped;
 pub use scoped::{ScopedBlockNum, ScopedBlockRange};
 
 mod snapshot;
-pub(in crate::state) use snapshot::{PublishedGenerations, StateSnapshot};
+pub(in crate::state) use snapshot::PublishedGenerations;
+pub(crate) use snapshot::StateSnapshot;
 
 mod account;
 mod block;
