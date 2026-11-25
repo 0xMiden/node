@@ -1,11 +1,6 @@
-use miden_node_proto::domain::account::{
-    AccountDetailRequest,
-    AccountStorageRequest,
-    AccountVaultDetails,
-    AccountVaultRequest,
-    GetAccountRequest,
-};
+use miden_node_proto::domain::account::AccountVaultDetails;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
+use miden_node_store::GetAccountError;
 use miden_node_tracing::{instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamVaultAssetLimit;
 use miden_protocol::account::AccountId;
@@ -63,23 +58,16 @@ impl proto::server::miden_node_v2_node_service::GetAccountVaultWitnesses for Rpc
 
         let details = self
             .state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: account,
-                block_num: Some(target),
-                details: Some(AccountDetailRequest {
-                    code_commitment: None,
-                    vault_request: AccountVaultRequest::Assets(entries),
-                    storage_request: AccountStorageRequest::None,
-                }),
+            .read(move |view| {
+                let (block, _) =
+                    super::get_account_witnesses::witness_headers(&view, account, target)?;
+                view.snapshot
+                    .vault_witness(account, block, entries)
+                    .map_err(GetAccountError::from)
             })
             .await
-            .map_err(get_account_error_to_status)?
-            .details
-            .ok_or_else(|| {
-                super::error_codes::internal_error("missing requested account details")
-            })?;
-        let AccountVaultDetails::Partial { vault, .. } = details.vault_details else {
+            .map_err(get_account_error_to_status)?;
+        let AccountVaultDetails::Partial { vault, .. } = details else {
             return Err(super::error_codes::internal_error("missing requested vault proof"));
         };
         Ok(v2::GetAccountVaultWitnessesResponse {

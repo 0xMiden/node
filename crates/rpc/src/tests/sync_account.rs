@@ -242,9 +242,19 @@ async fn v2_account_witnesses() {
 async fn v2_entry_witnesses() {
     for count in [1, 65] {
         let (account, ..) = entry_witness_account(count);
-        let (mut store, _, config) = fixture(&account).await;
-        let block = next_block_with_protocol_config(&store, &config).await;
-        store.writer.apply_block(block, None).await.unwrap();
+        let (mut store, genesis, config) = fixture(&account).await;
+        let asset = account.vault().assets().next().unwrap();
+        let mut updated = account.clone();
+        let patch = AccountPatch::new(
+            account.id(),
+            AccountStoragePatch::default(),
+            AccountVaultPatch::new(BTreeMap::from([(asset.id(), Word::empty())])).unwrap(),
+            AccountCodePatch::default(),
+            Some(account.nonce() + Felt::ONE),
+        )
+        .unwrap();
+        apply(&mut store, &genesis, &config, &mut updated, patch).await;
+        assert_ne!(updated.to_header().vault_root(), account.to_header().vault_root());
         let rpc = service(&store);
         let ids = vault_stream_values(count + 1);
         let vault = |assets: Vec<AssetId>| {
@@ -256,6 +266,9 @@ async fn v2_entry_witnesses() {
         };
         let present = ids[0].0;
         let absent = ids.last().unwrap().0;
+        let empty = vault(vec![]).await.unwrap().into_inner();
+        let empty_proof = empty.vault.unwrap().decode_fields().unwrap().verify().unwrap();
+        assert_eq!(empty_proof.root(), account.to_header().vault_root());
         let response = vault(vec![present, absent]).await.unwrap().into_inner();
         let proof = response.vault.unwrap().decode_fields().unwrap().verify().unwrap();
         assert_eq!(proof.root(), account.to_header().vault_root());

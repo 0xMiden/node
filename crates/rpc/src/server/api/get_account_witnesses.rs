@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
 use miden_node_proto::generated as proto;
-use miden_node_store::{DatabaseError, GetAccountError};
+use miden_node_store::read::ReadView;
+use miden_node_store::{DatabaseError, GetAccountError, ScopedBlockNum};
 use miden_node_tracing::{instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountId, AccountStorageHeader};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::block::account_tree::AccountWitness;
 use miden_protocol::crypto::merkle::smt::PartialSmt;
@@ -78,4 +79,22 @@ impl proto::server::miden_node_v2_node_service::GetAccountWitnesses for RpcServi
             account_tree: Some(proof.into()),
         })
     }
+}
+
+/// Validates a historical witness height and retrieves the account headers visible at that height.
+pub(super) fn witness_headers(
+    view: &ReadView<'_>,
+    account: AccountId,
+    target: BlockNumber,
+) -> Result<(ScopedBlockNum, AccountStorageHeader), GetAccountError> {
+    let block = view.snapshot.scope_block(target).ok_or(GetAccountError::UnknownBlock(target))?;
+    view.snapshot
+        .account_tree
+        .root_at(target)
+        .ok_or(GetAccountError::BlockPruned(target))?;
+    let (_, storage) = view
+        .tx
+        .select_account_headers(account, block)?
+        .ok_or(GetAccountError::AccountNotFound(account, target))?;
+    Ok((block, storage))
 }
