@@ -330,33 +330,6 @@ pub enum NoteSyncError {
     DeserializationFailed(#[from] ConversionError),
 }
 
-#[derive(Error, Debug)]
-pub enum GetNoteInclusionProofsError {
-    #[error("failed to select note inclusion proofs")]
-    SelectNoteInclusionProofError(#[source] DatabaseError),
-    #[error("reference block {reference_block} is newer than the latest block {latest_block_num}")]
-    ReferenceBlockAfterTip {
-        reference_block: BlockNumber,
-        latest_block_num: BlockNumber,
-    },
-}
-
-#[derive(Error, Debug)]
-pub enum GetBlockInclusionProofsError {
-    #[error("failed to select block headers")]
-    SelectBlockHeaderError(#[source] DatabaseError),
-    #[error("reference block {reference_block} is newer than the latest block {latest_block_num}")]
-    ReferenceBlockAfterTip {
-        reference_block: BlockNumber,
-        latest_block_num: BlockNumber,
-    },
-    #[error("block {block_num} is newer than the reference block {reference_block}")]
-    BlockAfterReferenceBlock {
-        block_num: BlockNumber,
-        reference_block: BlockNumber,
-    },
-}
-
 // GET ACCOUNT ERRORS
 // ================================================================================================
 

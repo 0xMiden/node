@@ -6,7 +6,14 @@ use std::time::Instant;
 
 use metrics::SeedingMetrics;
 use miden_node_proto::generated as proto;
-use miden_node_store::{BlockWriter, DataDirectory, GenesisState, State, WriterTask};
+use miden_node_store::{
+    BlockWriter,
+    DataDirectory,
+    DatabaseError,
+    GenesisState,
+    State,
+    WriterTask,
+};
 use miden_node_utils::clap::StorageOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::auth::AuthScheme;
@@ -54,6 +61,7 @@ use miden_protocol::transaction::{
     InputNotes,
     OrderedTransactionHeaders,
     OutputNote,
+    PartialBlockchain,
     ProvenTransaction,
     PublicOutputNote,
     PublicTransactionLogs,
@@ -317,12 +325,12 @@ pub async fn seed_store_with_readers(
     println!("{metrics}");
 }
 
-/// Loops `get_block_header` (latest header with MMR proof) against the state until `stop` is set,
+/// Loops reads of the latest block header and its MMR proof against the state until `stop` is set,
 /// returning the latency of every request.
 ///
 /// The request combines an in-memory read (opening the latest block's MMR proof against the
-/// snapshot's blockchain) with a database header lookup scoped to the snapshot's tip, so it
-/// exercises the read path most exposed to concurrent block application.
+/// snapshot's blockchain) with a database header lookup at the snapshot's tip, so it exercises the
+/// read path most exposed to concurrent block application.
 async fn read_latest_header_until(
     state: &Arc<State>,
     stop: &AtomicBool,
@@ -330,16 +338,20 @@ async fn read_latest_header_until(
     let mut latencies = Vec::new();
     while !stop.load(Ordering::Relaxed) {
         let start = Instant::now();
-        let (header, proof) = state
-            .view()
-            .get_block_header(None, true)
+        let (header, _proof) = state
+            .read(|view| {
+                let block_num = view.snapshot.block_num;
+                let proof = view
+                    .snapshot
+                    .blockchain
+                    .open(block_num)
+                    .expect("the snapshot's blockchain contains its tip");
+                Ok::<_, DatabaseError>((view.tx.select_block_header(block_num)?, proof))
+            })
             .await
-            .expect("get_block_header should succeed during seeding");
+            .expect("reading the latest block header should succeed during seeding");
         latencies.push(start.elapsed());
-        assert!(
-            header.is_some() && proof.is_some(),
-            "latest block header and MMR proof should exist"
-        );
+        assert!(header.is_some(), "latest block header should exist");
     }
     latencies
 }
@@ -1115,9 +1127,10 @@ async fn get_note_inclusion_proofs(
     metrics: &mut SeedingMetrics,
 ) -> BTreeMap<NoteId, NoteInclusionProof> {
     let start = Instant::now();
+    let note_ids: BTreeSet<_> = notes.iter().map(Note::id).collect();
+    let reference_block = block_ref.block_num();
     let note_inclusion_proofs = state
-        .view()
-        .get_note_inclusion_proofs(block_ref.block_num(), notes.iter().map(Note::id).collect())
+        .read(move |view| view.tx.select_note_inclusion_proofs(&note_ids, reference_block))
         .await
         .unwrap();
     metrics.add_get_note_inclusion_proofs(start.elapsed());
@@ -1135,7 +1148,7 @@ async fn get_block_inputs(
     let nullifiers = batches.iter().flat_map(ProvenBatch::created_nullifiers).collect::<Vec<_>>();
     let mut block_numbers: BTreeSet<_> =
         batches.iter().map(ProvenBatch::reference_block_num).collect();
-    let note_ids = batches
+    let note_ids: BTreeSet<_> = batches
         .iter()
         .flat_map(|batch| {
             batch
@@ -1144,27 +1157,46 @@ async fn get_block_inputs(
                 .filter_map(|note| note.header().map(miden_protocol::note::NoteHeader::id))
         })
         .collect();
-    let view = state.view();
-    let reference_block = *view.tip();
-    let note_inclusion_proofs =
-        view.get_note_inclusion_proofs(reference_block, note_ids).await.unwrap();
-    block_numbers.extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
-    let partial_blockchain =
-        view.get_block_inclusion_proofs(reference_block, block_numbers).await.unwrap();
-    let reference_block_header = view
-        .get_block_header(Some(reference_block), false)
+    // The reference block is the chain tip, and the partial blockchain describes the chain before
+    // it.
+    let inputs = state
+        .read(move |view| {
+            let reference_block = view.snapshot.block_num;
+            let note_inclusion_proofs =
+                view.tx.select_note_inclusion_proofs(&note_ids, reference_block)?;
+            block_numbers
+                .extend(note_inclusion_proofs.values().map(|proof| proof.location().block_num()));
+            block_numbers.remove(&reference_block);
+            let partial_mmr = view
+                .snapshot
+                .blockchain
+                .partial_mmr_from_blocks(&block_numbers, reference_block)
+                .expect("all requested blocks precede the reference block");
+            let headers = view.tx.select_block_headers(block_numbers.iter().copied())?;
+            let partial_blockchain = PartialBlockchain::new_unchecked(partial_mmr, headers)
+                .expect("the partial MMR and the headers cover the same blocks");
+            let reference_block_header = view
+                .tx
+                .select_block_header(reference_block)?
+                .expect("reference block header should exist");
+            let account_witnesses = account_ids
+                .into_iter()
+                .map(|id| (id, view.snapshot.account_tree.open_latest(id)))
+                .collect();
+            let nullifier_witnesses = nullifiers
+                .into_iter()
+                .map(|nullifier| (nullifier, view.snapshot.nullifier_tree.open(&nullifier)))
+                .collect();
+            Ok::<_, DatabaseError>(BlockInputs::new(
+                reference_block_header,
+                partial_blockchain,
+                account_witnesses,
+                nullifier_witnesses,
+                note_inclusion_proofs,
+            ))
+        })
         .await
-        .unwrap()
-        .0
-        .expect("reference block header should exist");
-    let state_witnesses = view.get_state_witnesses(&account_ids, &nullifiers);
-    let inputs = BlockInputs::new(
-        reference_block_header,
-        partial_blockchain,
-        state_witnesses.account_witnesses,
-        state_witnesses.nullifier_witnesses,
-        note_inclusion_proofs,
-    );
+        .unwrap();
     let get_block_inputs_time = start.elapsed();
     metrics.add_get_block_inputs(get_block_inputs_time);
     inputs

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
-use miden_node_store::state::StateView;
+use miden_node_store::state::State;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::{
     Account,
@@ -56,7 +56,7 @@ impl FeeCollectorTransactionBuilder {
     pub(crate) async fn new(
         target: AccountId,
         account_file: AccountFile,
-        view: &StateView,
+        state: &State,
     ) -> anyhow::Result<Self> {
         let (account, auth_secret_keys) = account_file.into_parts();
         let auth_root = AuthTxFeeCollector::code()
@@ -82,7 +82,7 @@ impl FeeCollectorTransactionBuilder {
             "fee collector account file must contain its signing key",
         );
         let authenticator = BasicAuthenticator::new(&auth_secret_keys);
-        let fee_faucet = FeeFaucet::load(view).await?;
+        let fee_faucet = FeeFaucet::load(state).await?;
 
         Ok(Self {
             account,
@@ -98,7 +98,7 @@ impl FeeCollectorTransactionBuilder {
         reference_block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
-        view: &StateView,
+        state: &State,
     ) -> anyhow::Result<ExecutedTransaction> {
         let asset_ids = notes
             .iter()
@@ -128,7 +128,7 @@ impl FeeCollectorTransactionBuilder {
             protocol_config,
             partial_blockchain,
             &self.fee_faucet,
-            view,
+            state,
         );
 
         Ok(TransactionExecutor::new(&data_store)
@@ -154,7 +154,7 @@ struct FeeCollectorDataStore<'a> {
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
     fee_faucet: &'a FeeFaucet,
-    view: &'a StateView,
+    state: &'a State,
 }
 
 impl<'a> FeeCollectorDataStore<'a> {
@@ -164,7 +164,7 @@ impl<'a> FeeCollectorDataStore<'a> {
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
         fee_faucet: &'a FeeFaucet,
-        view: &'a StateView,
+        state: &'a State,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
@@ -177,7 +177,7 @@ impl<'a> FeeCollectorDataStore<'a> {
             partial_blockchain,
             mast_store,
             fee_faucet,
-            view,
+            state,
         }
     }
 }
@@ -217,7 +217,7 @@ impl DataStore for FeeCollectorDataStore<'_> {
             {
                 return Err(DataStoreError::other("invalid native faucet request"));
             }
-            self.fee_faucet.account_inputs(self.view, ref_block).await.map_err(|error| {
+            self.fee_faucet.account_inputs(self.state, ref_block).await.map_err(|error| {
                 DataStoreError::Other {
                     error_msg: "failed to fetch native faucet account inputs".into(),
                     source: Some(error.into()),
@@ -256,7 +256,7 @@ impl DataStore for FeeCollectorDataStore<'_> {
             }
             self.fee_faucet
                 .storage_map_witness(
-                    self.view,
+                    self.state,
                     self.reference_block_header.block_num(),
                     map_root,
                     map_key,
@@ -345,8 +345,7 @@ mod tests {
         let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         let mut builder =
-            FeeCollectorTransactionBuilder::new(target, mock_collection_account(), &state.view())
-                .await?;
+            FeeCollectorTransactionBuilder::new(target, mock_collection_account(), &state).await?;
         assert!(builder.account.is_new());
         assert!(builder.account.vault().is_empty());
         let executed = builder
@@ -355,7 +354,7 @@ mod tests {
                 chain.latest_block_header(),
                 chain.protocol_config().clone(),
                 chain.latest_partial_blockchain(),
-                &state.view(),
+                &state,
             )
             .await?;
         let deployment = FeeCollectorTransactionBuilder::prove(executed)?;
@@ -398,7 +397,7 @@ mod tests {
                     chain.latest_block_header(),
                     chain.protocol_config().clone(),
                     chain.latest_partial_blockchain(),
-                    &state.view(),
+                    &state,
                 )
                 .await?;
             let transaction = FeeCollectorTransactionBuilder::prove(executed)?;
@@ -474,8 +473,7 @@ mod tests {
                 .serial_number(Word::from([1, 2, 3, 4u32]))
                 .asset(asset)
                 .build()?;
-            let builder =
-                FeeCollectorTransactionBuilder::new(target, collector, &state.view()).await?;
+            let builder = FeeCollectorTransactionBuilder::new(target, collector, &state).await?;
             Box::pin(update_blocklist(&mut chain, &mut writer, faucet.id(), collector_id, blocked))
                 .await?;
             let result = builder
@@ -484,7 +482,7 @@ mod tests {
                     chain.latest_block_header(),
                     chain.protocol_config().clone(),
                     chain.latest_partial_blockchain(),
-                    &state.view(),
+                    &state,
                 )
                 .await;
             if blocked {
@@ -562,7 +560,7 @@ mod tests {
             let result = FeeCollectorTransactionBuilder::new(
                 target,
                 AccountFile::new(account.clone(), keys),
-                &state.view(),
+                &state,
             )
             .await;
             let error = result.err().expect("the collector must require its own signing key");
@@ -579,12 +577,9 @@ mod tests {
         let (state, ..) = State::for_tests(directory.path()).await;
         let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let result = FeeCollectorTransactionBuilder::new(
-            target,
-            AccountFile::new(account, vec![]),
-            &state.view(),
-        )
-        .await;
+        let result =
+            FeeCollectorTransactionBuilder::new(target, AccountFile::new(account, vec![]), &state)
+                .await;
         let error = result.err().expect("an ordinary wallet must not collect batch fees");
         assert!(error.to_string().contains("AuthTxFeeCollector"));
         Ok(())

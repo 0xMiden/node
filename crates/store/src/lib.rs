@@ -49,8 +49,6 @@ pub use errors::{
     DatabaseError,
     GetAccountError,
     GetBlockHeaderError,
-    GetBlockInclusionProofsError,
-    GetNoteInclusionProofsError,
     NoteSyncError,
     RangeBelowRetention,
     RangeBeyondTip,
@@ -65,7 +63,6 @@ pub use state::{
     ScopedBlockRange,
     State,
     StateView,
-    StateWitnesses,
     WriterTask,
 };
 

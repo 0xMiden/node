@@ -95,6 +95,7 @@ where
                         blockchain: &snapshot.blockchain,
                         account_tree: &snapshot.account_tree,
                         nullifier_tree: &snapshot.nullifier_tree,
+                        forest: &snapshot.forest,
                     },
                 })))
             })

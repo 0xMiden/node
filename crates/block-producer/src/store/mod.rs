@@ -5,8 +5,10 @@ use miden_node_proto::domain::sequencer::TransactionInputs;
 use miden_node_store::State;
 use miden_node_store::read::ReadView;
 use miden_node_tracing::{debug, instrument};
+use miden_protocol::Word;
 use miden_protocol::block::{BlockHeader, BlockNumber};
 use miden_protocol::note::{NoteHeader, NoteId, NoteInclusionProof};
+use miden_protocol::protocol_config::ProtocolConfig;
 use miden_protocol::transaction::{PartialBlockchain, ProvenTransaction};
 
 use crate::errors::{MempoolSubmissionError, StateConflict, StoreError};
@@ -62,6 +64,24 @@ pub(crate) fn read_chain_inputs(
         partial_blockchain,
         note_inclusion_proofs,
     })
+}
+
+/// Reads the protocol configuration of the reference block and the genesis block commitment, which
+/// a fee collection transaction requires.
+pub(crate) fn read_fee_collection_inputs(
+    view: &ReadView<'_>,
+    reference_block_header: &BlockHeader,
+) -> Result<(ProtocolConfig, Word), StoreError> {
+    let protocol_config = view
+        .tx
+        .select_protocol_config(reference_block_header.protocol_config_commitment())?
+        .expect("the reference block's protocol configuration is stored");
+    let genesis = view
+        .tx
+        .select_block_header(BlockNumber::GENESIS)?
+        .expect("the genesis block header is stored")
+        .commitment();
+    Ok((protocol_config, genesis))
 }
 
 /// Authenticates a proven transaction against the store, returning the [`TransactionInputs`]

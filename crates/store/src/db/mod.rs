@@ -32,7 +32,6 @@ use miden_protocol::note::{
     NoteAttachments,
     NoteDetails,
     NoteId,
-    NoteInclusionProof,
     NoteMetadata,
     NoteScript,
     Nullifier,
@@ -414,19 +413,6 @@ impl Db {
             .await
     }
 
-    /// Loads multiple block headers from the DB.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn select_block_headers(
-        &self,
-        blocks: impl Iterator<Item = ScopedBlockNum> + Send + 'static,
-    ) -> Result<Vec<BlockHeader>> {
-        self.reader
-            .read("block headers from given block numbers", move |tx| {
-                queries::select_block_headers(tx, blocks.map(|block| *block))
-            })
-            .await
-    }
-
     /// Loads all the block headers from the DB.
     #[instrument(level = "debug", err(level = "debug"))]
     pub async fn select_all_block_header_commitments(&self) -> Result<Vec<BlockHeaderCommitment>> {
@@ -466,14 +452,7 @@ impl Db {
     ) -> Result<Option<miden_protocol::account::AccountCode>> {
         self.reader
             .read("Get account code by commitment", move |tx| {
-                queries::select_account_code_by_commitment(tx, code_commitment)?
-                    .map(|bytes| {
-                        miden_node_persistence::decode::<miden_protocol::account::AccountCode>(
-                            &bytes,
-                        )
-                    })
-                    .transpose()
-                    .map_err(DatabaseError::from)
+                ReadTransaction::new(tx).select_account_code(code_commitment)
             })
             .await
     }
@@ -490,9 +469,8 @@ impl Db {
     ) -> Result<Option<(AccountHeader, AccountStorageHeader)>> {
         self.reader
             .read("Get account header with storage header at block", move |tx| {
-                queries::select_account_header_with_storage_header_at_block(
-                    tx, account_id, *block_num,
-                )
+                ReadTransaction::new(tx)
+                    .select_account_header_with_storage_header(account_id, *block_num)
             })
             .await
     }
@@ -503,21 +481,6 @@ impl Db {
     pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
         self.reader
             .read("note by id", move |tx| queries::select_notes_by_id(tx, note_ids.as_slice()))
-            .await
-    }
-
-    /// Loads inclusion proofs for notes matching the given note commitments that were committed at
-    /// or before `up_to_block`.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn select_note_inclusion_proofs(
-        &self,
-        note_commitments: BTreeSet<Word>,
-        up_to_block: ScopedBlockNum,
-    ) -> Result<BTreeMap<NoteId, NoteInclusionProof>> {
-        self.reader
-            .read("block note inclusion proofs by commitment", move |tx| {
-                queries::select_note_inclusion_proofs(tx, &note_commitments, *up_to_block)
-            })
             .await
     }
 

@@ -1,14 +1,5 @@
 use anyhow::Context;
-use miden_node_proto::domain::account::{
-    AccountDetailRequest,
-    AccountStorageRequest,
-    AccountVaultRequest,
-    GetAccountRequest,
-    SlotData,
-    StorageMapEntries,
-    StorageMapRequest,
-};
-use miden_node_store::state::StateView;
+use miden_node_store::state::State;
 use miden_protocol::Word;
 use miden_protocol::account::{
     AccountCode,
@@ -31,105 +22,99 @@ pub(super) struct FeeFaucet {
 }
 
 impl FeeFaucet {
-    pub(super) async fn load(view: &StateView) -> anyhow::Result<Self> {
-        let commitment = view
-            .get_protocol_config_commitment_at(*view.tip())
-            .await?
-            .context("protocol configuration commitment is missing")?;
-        let config = view
-            .get_protocol_config(commitment)
-            .await?
-            .context("protocol configuration is missing")?;
-        let id = config.fee_asset_id().faucet_id();
-        let response = view
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: Some(AccountDetailRequest {
-                    code_commitment: Some(Word::empty()),
-                    vault_request: AccountVaultRequest::None,
-                    storage_request: AccountStorageRequest::None,
-                }),
+    pub(super) async fn load(state: &State) -> anyhow::Result<Self> {
+        state
+            .read(|view| {
+                let block_num = view.snapshot.block_num;
+                let commitment = view
+                    .tx
+                    .select_protocol_config_commitment_at(block_num)?
+                    .context("protocol configuration commitment is missing")?;
+                let config = view
+                    .tx
+                    .select_protocol_config(commitment)?
+                    .context("protocol configuration is missing")?;
+                let id = config.fee_asset_id().faucet_id();
+                let (header, _) = view
+                    .tx
+                    .select_account_header_with_storage_header(id, block_num)?
+                    .context("native faucet account is missing")?;
+                let code = view
+                    .tx
+                    .select_account_code(header.code_commitment())?
+                    .context("native faucet account code is missing")?;
+                Ok(Self { id, code })
             })
-            .await?;
-        let details = response.details.context("native faucet account details are missing")?;
-        let code = details.account_code.context("native faucet account code is missing")?;
-        Ok(Self { id, code })
+            .await
     }
 
     pub(super) async fn account_inputs(
         &self,
-        view: &StateView,
+        state: &State,
         block: BlockNumber,
     ) -> anyhow::Result<AccountInputs> {
-        let response = view
-            .get_account(GetAccountRequest {
-                account_id: self.id,
-                block_num: Some(block),
-                details: Some(AccountDetailRequest {
-                    code_commitment: None,
-                    vault_request: AccountVaultRequest::None,
-                    storage_request: AccountStorageRequest::None,
-                }),
+        let id = self.id;
+        let (witness, header, storage_header) = state
+            .read(move |view| {
+                let witness = view
+                    .snapshot
+                    .account_tree
+                    .open_at(id, block)
+                    .context("native faucet witness is not available at the reference block")?;
+                let (header, storage_header) = view
+                    .tx
+                    .select_account_header_with_storage_header(id, block)?
+                    .context("native faucet account is missing")?;
+                anyhow::Ok((witness, header, storage_header))
             })
             .await?;
-        let details = response.details.context("native faucet account details are missing")?;
         anyhow::ensure!(
-            details.account_header.code_commitment() == self.code.commitment(),
+            header.code_commitment() == self.code.commitment(),
             "native faucet code does not match the reference block",
         );
         let account = PartialAccount::new(
-            self.id,
-            details.account_header.nonce(),
+            id,
+            header.nonce(),
             self.code.clone(),
-            PartialStorage::new(details.storage_details.header, [])?,
-            PartialVault::new(details.account_header.vault_root()),
+            PartialStorage::new(storage_header, [])?,
+            PartialVault::new(header.vault_root()),
             None,
         )?;
-        Ok(AccountInputs::new(account, response.witness))
+        Ok(AccountInputs::new(account, witness))
     }
 
     pub(super) async fn storage_map_witness(
         &self,
-        view: &StateView,
+        state: &State,
         block: BlockNumber,
         map_root: Word,
         map_key: StorageMapKey,
     ) -> anyhow::Result<StorageMapWitness> {
-        let account = self.account_inputs(view, block).await?;
-        let slot_name = account
-            .storage()
-            .header()
-            .slots()
-            .find(|slot| slot.slot_type() == StorageSlotType::Map && slot.value() == map_root)
-            .context("native faucet storage map is missing")?
-            .name()
-            .clone();
-        let response = view
-            .get_account(GetAccountRequest {
-                account_id: self.id,
-                block_num: Some(block),
-                details: Some(AccountDetailRequest {
-                    code_commitment: None,
-                    vault_request: AccountVaultRequest::None,
-                    storage_request: AccountStorageRequest::Explicit(vec![StorageMapRequest {
-                        slot_name: slot_name.clone(),
-                        slot_data: SlotData::MapKeys(vec![map_key]),
-                    }]),
-                }),
+        let id = self.id;
+        let code_commitment = self.code.commitment();
+        state
+            .read(move |view| {
+                let (header, storage_header) = view
+                    .tx
+                    .select_account_header_with_storage_header(id, block)?
+                    .context("native faucet account is missing")?;
+                anyhow::ensure!(
+                    header.code_commitment() == code_commitment,
+                    "native faucet code does not match the reference block",
+                );
+                let slot_name = storage_header
+                    .slots()
+                    .find(|slot| {
+                        slot.slot_type() == StorageSlotType::Map && slot.value() == map_root
+                    })
+                    .context("native faucet storage map is missing")?
+                    .name();
+                let proof = view
+                    .snapshot
+                    .open_storage_map_key(id, slot_name, block, map_key)
+                    .context("native faucet storage map is not tracked at the reference block")??;
+                Ok(StorageMapWitness::new(proof, [map_key])?)
             })
-            .await?;
-        let details = response.details.context("native faucet account details are missing")?;
-        let map = details
-            .storage_details
-            .map_details
-            .into_iter()
-            .find(|map| map.slot_name == slot_name)
-            .context("native faucet storage map witness is missing")?;
-        let StorageMapEntries::PartialMap { partial_smt, .. } = map.entries else {
-            anyhow::bail!("native faucet storage map witness is incomplete");
-        };
-        let proof = partial_smt.open(&map_key.hash().as_word())?;
-        Ok(StorageMapWitness::new(proof, [map_key])?)
+            .await
     }
 }

@@ -2,21 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
-use miden_node_proto::domain::account::GetAccountRequest;
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{info, instrument, miden_span_record};
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::Account;
 use miden_protocol::batch::ProposedBatch;
-use miden_protocol::block::BlockNumber;
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, ONE};
 use url::Url;
 
 use crate::batch_builder::BatchProver;
 use crate::block_builder::{BlockBuilder, SelectedBlock};
 use crate::block_prover::BlockProver;
+use crate::store::{ChainInputs, read_chain_inputs, read_fee_collection_inputs};
 use crate::validator::BlockProducerValidatorClient;
 
 #[cfg(test)]
@@ -57,39 +55,32 @@ pub async fn deploy_fee_collector(
         return Ok(());
     }
     // Deployment creates no output note, so the recipient is not used.
-    let builder = FeeCollectorTransactionBuilder::new(
-        account_file.account().id(),
-        account_file,
-        &state.view(),
-    )
-    .await?;
+    let builder =
+        FeeCollectorTransactionBuilder::new(account_file.account().id(), account_file, state)
+            .await?;
     let validator = BlockProducerValidatorClient::new(
         validator_urls,
         validator_timeout,
         max_decoding_message_size,
     )?;
 
-    let (executed, header, blockchain, genesis) = state
-        .with_view(async |view| {
-            let tip = *view.tip();
-            let (header, _) = view.get_block_header(Some(tip), false).await?;
-            let header = header.context("chain tip header is missing")?;
-            let config = view
-                .get_protocol_config(header.protocol_config_commitment())
-                .await?
-                .context("protocol configuration is missing")?;
-            let blockchain = view.get_block_inclusion_proofs(tip, BTreeSet::new()).await?;
-            let genesis = view
-                .get_block_header(Some(BlockNumber::GENESIS), false)
-                .await?
-                .0
-                .context("genesis block header is missing")?
-                .commitment();
-            let executed = builder
-                .execute(Vec::new(), header.clone(), config, blockchain.clone(), view)
-                .await?;
-            anyhow::Ok((executed, header, blockchain, genesis))
+    let (inputs, config, genesis) = state
+        .read(|view| {
+            let reference_block = view.snapshot.block_num;
+            let inputs =
+                read_chain_inputs(&view, reference_block, BTreeSet::new(), &BTreeSet::new())?;
+            let (config, genesis) =
+                read_fee_collection_inputs(&view, &inputs.reference_block_header)?;
+            anyhow::Ok((inputs, config, genesis))
         })
+        .await?;
+    let ChainInputs {
+        reference_block_header: header,
+        partial_blockchain: blockchain,
+        ..
+    } = inputs;
+    let executed = builder
+        .execute(Vec::new(), header.clone(), config, blockchain.clone(), state)
         .await?;
     let inputs = executed.tx_inputs().clone();
     let transaction =
@@ -151,19 +142,15 @@ pub(crate) async fn load_deployed_collector(
 }
 
 async fn collector_is_deployed(state: &State, account: &Account) -> anyhow::Result<bool> {
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id: account.id(),
-            block_num: None,
-            details: None,
-        })
+    let id = account.id();
+    let commitment = state
+        .read(move |view| anyhow::Ok(view.snapshot.account_tree.get_latest_commitment(id)))
         .await?;
-    if response.witness.state_commitment().is_empty() {
+    if commitment.is_empty() {
         return Ok(false);
     }
     anyhow::ensure!(
-        response.witness.state_commitment() == account.to_commitment(),
+        commitment == account.to_commitment(),
         "fee collector account file does not match the deployed account",
     );
     Ok(true)
