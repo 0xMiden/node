@@ -3,6 +3,7 @@ use miden_node_db::sqlite::ReadTx;
 mod account_storage_map_updates;
 mod account_vault_updates;
 mod note_sync_page;
+mod nullifier_updates_page;
 mod select_block_header;
 pub(crate) use select_block_header::select_block_header;
 mod select_block_header_and_signatures;

@@ -100,15 +100,15 @@ impl Paginator for NullifierPaginator {
         }
         let range = self.target.database_range();
         let is_first_page = self.cursor.is_none();
+        let ids = if range.is_some() { self.ids.clone() } else { vec![] };
+        let target = self.target.target;
+        let cursor = self.cursor;
         let page = self
             .state
-            .view()
-            .sync_nullifiers_v2_page(
-                if range.is_some() { self.ids.clone() } else { vec![] },
-                range.unwrap_or(self.target.target..=self.target.target),
-                self.cursor,
-                DB_PAGE_SIZE,
-            )
+            .read(move |view| {
+                let range = view.snapshot.scope_range(range.unwrap_or(target..=target))?;
+                view.tx.nullifier_updates_page(ids, range, cursor, DB_PAGE_SIZE)
+            })
             .await
             .map_err(|err| match err {
                 DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
