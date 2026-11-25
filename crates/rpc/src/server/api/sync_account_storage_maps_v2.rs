@@ -104,19 +104,25 @@ impl Paginator for StorageMapPaginator {
         // target row to reuse the same snapshot validation, then discard it.
         let range = self.block_range.database_range();
         let is_first_page = self.cursor.is_none();
+        let account = self.account_id;
+        let cursor = self.cursor.take();
+        let page_size = if range.is_some() {
+            DB_PAGE_SIZE
+        } else {
+            NonZeroUsize::MIN
+        };
+        let blocks = range.clone().unwrap_or(self.block_range.target..=self.block_range.target);
         let page = self
             .state
-            .view()
-            .sync_account_storage_maps_v2_page(
-                self.account_id,
-                range.clone().unwrap_or(self.block_range.target..=self.block_range.target),
-                self.cursor.take(),
-                if range.is_some() {
-                    DB_PAGE_SIZE
-                } else {
-                    NonZeroUsize::MIN
-                },
-            )
+            .read(move |view| {
+                let blocks = view.snapshot.scope_range(blocks)?;
+                view.tx.account_storage_map_updates_page(
+                    account,
+                    blocks,
+                    cursor.as_ref(),
+                    page_size,
+                )
+            })
             .await
             .map_err(|err| match err {
                 DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),

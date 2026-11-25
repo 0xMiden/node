@@ -1,5 +1,6 @@
 use miden_node_db::sqlite::ReadTx;
 
+mod account_storage_map_updates;
 mod account_vault_updates;
 mod select_block_header;
 pub(crate) use select_block_header::select_block_header;

@@ -1,4 +1,3 @@
-use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 
 use miden_node_tracing::instrument;
@@ -13,8 +12,6 @@ use crate::db::queries::{
     AccountVaultAssets,
     NoteSyncMulti,
     NullifiersByPrefix,
-    StorageMapCursor,
-    StorageMapUpdatesPage,
     StorageMapValuesPage,
     TransactionsRecords,
 };
@@ -126,29 +123,6 @@ impl StateView {
         let query = AccountVaultAssets::new(account_id, block_range.scoped_end());
         let page = self.db.page(query, block_range.start()).await?;
         Ok((page.last_block_included(block_range.end()), page.items))
-    }
-
-    /// Loads a bounded page of squashed storage-map updates at the requested target.
-    pub async fn sync_account_storage_maps_v2_page(
-        &self,
-        account_id: AccountId,
-        range: RangeInclusive<BlockNumber>,
-        cursor: Option<StorageMapCursor>,
-        page_size: NonZeroUsize,
-    ) -> Result<StorageMapUpdatesPage, DatabaseError> {
-        let range = self.scope_range(range)?;
-        self.db
-            .reader
-            .read("Read storage map updates page", move |tx| {
-                crate::db::queries::account_storage_map_updates_page(
-                    tx,
-                    account_id,
-                    range,
-                    cursor.as_ref(),
-                    page_size,
-                )
-            })
-            .await
     }
 
     /// Returns storage map values for syncing within a block range.
