@@ -1,10 +1,13 @@
 use std::collections::HashSet;
 
 use miden_node_proto::generated as proto;
+use miden_node_store::{DatabaseError, GetAccountError};
 use miden_node_tracing::{instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::block::account_tree::AccountWitness;
+use miden_protocol::crypto::merkle::smt::PartialSmt;
 use proto::miden::node::v2;
 use tonic::Status;
 
@@ -50,8 +53,25 @@ impl proto::server::miden_node_v2_node_service::GetAccountWitnesses for RpcServi
 
         let proof = self
             .state
-            .view()
-            .account_tree_witnesses(target, &ids)
+            .read(move |view| {
+                let block = view
+                    .snapshot
+                    .scope_block(target)
+                    .ok_or(GetAccountError::UnknownBlock(target))?;
+                let proofs = ids
+                    .into_iter()
+                    .map(|id| {
+                        view.snapshot
+                            .account_tree
+                            .open_at(id, *block)
+                            .map(AccountWitness::into_proof)
+                            .ok_or(GetAccountError::BlockPruned(*block))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                PartialSmt::from_proofs(proofs)
+                    .map_err(|err| DatabaseError::MerkleError(err).into())
+            })
+            .await
             .map_err(get_account_error_to_status)?;
         Ok(v2::GetAccountWitnessesResponse {
             block_num: target.as_u32(),
