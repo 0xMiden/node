@@ -26,12 +26,6 @@ use crate::errors::{DatabaseError, NoteSyncError};
 // STATE SYNCHRONIZATION ENDPOINTS
 // ================================================================================================
 
-/// A bounded page of note groups with proofs anchored at the requested target.
-pub struct NoteSyncStreamPage {
-    pub updates: Vec<(NoteSyncUpdate, MmrProof)>,
-    pub next_cursor: Option<crate::NoteSyncCursor>,
-}
-
 impl StateView {
     /// Returns the complete transaction records for the specified accounts within the specified
     /// block range, including state commitments and note IDs.
@@ -47,45 +41,6 @@ impl StateView {
         let query = TransactionsRecords::new(account_ids, block_range.scoped_end());
         let page = self.db.page(query, block_range.start()).await?;
         Ok((page.last_block_included(block_range.end()), page.items))
-    }
-
-    /// Loads bounded note records and authenticates each included block at forest target + 1.
-    pub async fn sync_notes_v2_page(
-        &self,
-        tags: Vec<u32>,
-        range: RangeInclusive<BlockNumber>,
-        cursor: Option<crate::NoteSyncCursor>,
-        page_size: NonZeroUsize,
-    ) -> Result<NoteSyncStreamPage, NoteSyncError> {
-        let range = self.scope_range(range)?;
-        let checkpoint =
-            range.end().as_u32().checked_add(1).ok_or(NoteSyncError::TargetOverflow)?;
-        let query = crate::db::queries::NoteSyncPaged::new(tags, range, page_size);
-        let page = self.db.page(query, cursor).await?;
-        let mut updates: Vec<(NoteSyncUpdate, MmrProof)> = Vec::new();
-        for note in page.items {
-            if updates
-                .last()
-                .is_some_and(|(update, _)| update.block_header.block_num() == note.block_num)
-            {
-                updates.last_mut().expect("matching group exists").0.notes.push(note);
-            } else {
-                let block_num =
-                    self.scope_block(note.block_num).expect("query is scoped to the view");
-                let header = self.db.select_block_header(block_num).await?.ok_or_else(|| {
-                    DatabaseError::DataCorrupted(format!(
-                        "block header {} is missing for a stored note",
-                        note.block_num
-                    ))
-                })?;
-                let proof = self.blockchain().open_at(note.block_num, checkpoint.into())?;
-                updates.push((NoteSyncUpdate { block_header: header, notes: vec![note] }, proof));
-            }
-        }
-        Ok(NoteSyncStreamPage {
-            updates,
-            next_cursor: page.next.flatten(),
-        })
     }
 
     /// Loads data to synchronize a client's notes.

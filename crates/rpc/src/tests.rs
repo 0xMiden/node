@@ -3549,8 +3549,9 @@ fn note_stream_fixture(
 async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
     use miden_protocol::crypto::merkle::mmr::Mmr;
     use miden_protocol::note::Note;
+    use miden_protocol::transaction::RawOutputNote;
     use v2::sync_notes_response::Item;
-    let (mut client, _, mut store, _guard) = start_rpc_v2().await;
+    let mut store = TestStore::start().await;
     let (genesis, _) = store.state.view().get_block_header(Some(0.into()), false).await.unwrap();
     let genesis = genesis.unwrap();
     let config = store
@@ -3564,45 +3565,52 @@ async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
     let mut mmr = Mmr::new();
     mmr.add(genesis.commitment()).unwrap();
     let mut expected = vec![];
-    for (height, count) in [(1_u32, 300_u32), (2, 0), (3, 2)] {
+    for (height, count) in [(1_u32, 300_u32), (2, 2)] {
         let notes = note_stream_fixture(sender, height, count);
         let outputs = notes
             .iter()
-            .map(|note| match note.metadata().note_type() {
-                NoteType::Public => {
-                    OutputNote::Public(PublicOutputNote::new(note.clone()).unwrap())
-                },
-                NoteType::Private => OutputNote::Private(
-                    miden_protocol::transaction::PrivateOutputNote::new(
-                        *note.header(),
-                        note.attachments().clone(),
-                    )
-                    .unwrap(),
-                ),
-            })
+            .cloned()
+            .map(|note| RawOutputNote::Full(note).into_output_note().unwrap())
             .collect();
         let block = next_block_with_notes(&store, &config, outputs).await;
         mmr.add(block.header().commitment()).unwrap();
         expected.extend(notes);
         store.writer.apply_block(block, None).await.unwrap();
     }
-    let mut stream = client
-        .sync_notes(v2::SyncNotesRequest {
-            range: Some(v2::StateDeltaRange {
-                from_block_exclusive: None,
-                to_block_inclusive: Some(3),
-            }),
-            note_tags: vec![42, 42],
-        })
-        .await
-        .unwrap()
-        .into_inner();
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let mut stream = proto::server::miden_node_v2_node_service::SyncNotes::handle(
+        &service,
+        (
+            miden_node_proto::domain::block::SyncRange { from_exclusive: None, target: 2.into() },
+            vec![42],
+        ),
+        &MetadataMap::new(),
+        &Extensions::new(),
+    )
+    .await
+    .unwrap();
+    // The first page exceeds the stream buffer. Holding the receiver here keeps the second page
+    // from loading until the newer block has committed.
     let block = next_block_with_protocol_config(&store, &config).await;
+    let mut latest_mmr = mmr.clone();
+    latest_mmr.add(block.header().commitment()).unwrap();
+    assert_ne!(
+        mmr.open(2).unwrap().merkle_path(),
+        latest_mmr.open(2).unwrap().merkle_path(),
+        "the second page must distinguish the requested target from the latest tip"
+    );
     store.writer.apply_block(block, None).await.unwrap();
     let mut blocks = vec![];
     let mut actual = vec![];
     let mut current_header = None;
-    while let Some(frame) = stream.message().await.unwrap() {
+    while let Some(frame) = tokio_stream::StreamExt::next(&mut stream).await {
+        let frame = frame.unwrap();
         match frame.item.unwrap() {
             Item::Block(block) => {
                 let header: miden_protocol::block::BlockHeader =
@@ -3634,7 +3642,7 @@ async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
             },
         }
     }
-    assert_eq!(blocks, vec![1, 3]);
+    assert_eq!(blocks, vec![1, 2]);
     assert_eq!(actual, expected.iter().map(Note::id).collect::<Vec<_>>());
 }
 

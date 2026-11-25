@@ -89,35 +89,46 @@ impl Paginator for NotePaginator {
         }
         let range = self.range.database_range();
         let is_first_page = self.cursor.is_none();
-        let page = self
+        let target = self.range.target;
+        let tags = if range.is_some() { self.tags.clone() } else { vec![] };
+        let cursor = self.cursor;
+        let mut last_block = self.last_block;
+        let (frames, next_cursor, last_block) = self
             .state
-            .view()
-            .sync_notes_v2_page(
-                if range.is_some() { self.tags.clone() } else { vec![] },
-                range.unwrap_or(self.range.target..=self.range.target),
-                self.cursor,
-                DB_PAGE_SIZE,
-            )
+            .read(move |view| {
+                let blocks = view.snapshot.scope_range(range.unwrap_or(target..=target))?;
+                let checkpoint =
+                    target.as_u32().checked_add(1).ok_or(NoteSyncError::TargetOverflow)?;
+                let page = view.tx.note_sync_page(tags, blocks, cursor, DB_PAGE_SIZE)?;
+                let mut frames = Vec::new();
+                for note in page.notes {
+                    let block = note.block_num;
+                    if last_block != Some(block) {
+                        let header = view.tx.select_block_header(block)?.ok_or_else(|| {
+                            miden_node_store::DatabaseError::DataCorrupted(format!(
+                                "block header {block} is missing for a stored note"
+                            ))
+                        })?;
+                        let proof = view.snapshot.blockchain.open_at(block, checkpoint.into())?;
+                        frames.push(SyncNotesResponse {
+                            item: Some(Item::Block(NoteBlockStart {
+                                block_header: Some(header.into()),
+                                mmr_path: Some(proof.merkle_path().clone().into()),
+                            })),
+                        });
+                        last_block = Some(block);
+                    }
+                    frames.push(SyncNotesResponse {
+                        item: Some(Item::Note(note_sync_record_to_proto(note).into())),
+                    });
+                }
+                Ok::<_, NoteSyncError>((frames, page.next_cursor, last_block))
+            })
             .await
             .map_err(note_stream_error_to_status)?;
-        self.cursor = page.next_cursor;
-        self.done = page.next_cursor.is_none();
-        let mut frames = Vec::new();
-        for (update, proof) in page.updates {
-            let block = update.block_header.block_num();
-            if self.last_block != Some(block) {
-                frames.push(SyncNotesResponse {
-                    item: Some(Item::Block(NoteBlockStart {
-                        block_header: Some(update.block_header.into()),
-                        mmr_path: Some(proof.merkle_path().clone().into()),
-                    })),
-                });
-                self.last_block = Some(block);
-            }
-            frames.extend(update.notes.into_iter().map(|note| SyncNotesResponse {
-                item: Some(Item::Note(note_sync_record_to_proto(note).into())),
-            }));
-        }
+        self.cursor = next_cursor;
+        self.done = next_cursor.is_none();
+        self.last_block = last_block;
         if is_first_page && self.done && frames.is_empty() {
             return Ok(None);
         }
@@ -132,7 +143,10 @@ impl Paginator for NotePaginator {
 fn note_stream_error_to_status(err: NoteSyncError) -> Status {
     let message = err.to_string();
     match err {
-        NoteSyncError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(message),
+        NoteSyncError::RangeBeyondTip(_)
+        | NoteSyncError::DatabaseError(miden_node_store::DatabaseError::RangeBeyondTip(_)) => {
+            ErrorCode::FutureTarget.invalid_argument(message)
+        },
         NoteSyncError::TargetOverflow => ErrorCode::InvalidRange.invalid_argument(message),
         NoteSyncError::DatabaseError(err) => database_error_to_status(&err),
         _ => internal_error(message),
