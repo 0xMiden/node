@@ -113,6 +113,7 @@ use crate::db::queries::{
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
+use crate::read::ReadTransaction;
 
 mod transaction_logs;
 
@@ -253,11 +254,11 @@ fn select_notes_since_block_by_tag(
 
 fn select_notes_by_id(db: &TestDb, note_ids: &[NoteId]) -> Result<Vec<NoteRecord>> {
     let note_ids = note_ids.to_vec();
-    db.read(move |tx| queries::select_notes_by_id(tx, &note_ids))
+    db.read(move |tx| ReadTransaction::new(tx).select_notes_by_id(&note_ids))
 }
 
 fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScript>> {
-    db.read(move |tx| queries::select_note_script_by_root(tx, root))
+    db.read(move |tx| ReadTransaction::new(tx).select_note_script_by_root(root))
 }
 
 fn get_note_sync_multi(

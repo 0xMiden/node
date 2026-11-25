@@ -5,7 +5,7 @@ use miden_node_proto::{DecodeExecution, DecodeMessageExt, generated as proto};
 use miden_node_tracing::ErrorReport;
 use tonic::Status;
 
-use super::{SequencerInternalService, get_block_header_error_to_status, load_protocol_config};
+use super::{SequencerInternalService, database_error_to_status, require_protocol_config};
 
 #[tonic::async_trait]
 impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx for SequencerInternalService {
@@ -49,13 +49,18 @@ impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx for SequencerIn
             .await?;
 
         let (block_num, commitment) = tx.reference_block();
-        let reference_header = self
+        let (reference_header, protocol_config) = self
             .state
-            .view()
-            .get_block_header(Some(block_num), false)
+            .read(move |view| {
+                let Some(header) = view.tx.select_block_header(block_num)? else {
+                    return Ok(None);
+                };
+                let config =
+                    require_protocol_config(&view.tx, header.protocol_config_commitment())?;
+                Ok(Some((header, config)))
+            })
             .await
-            .map_err(get_block_header_error_to_status)?
-            .0
+            .map_err(|err| database_error_to_status(&err))?
             .ok_or_else(|| Status::invalid_argument(format!("unknown block {block_num}")))?;
 
         if reference_header.commitment() != commitment {
@@ -65,7 +70,6 @@ impl miden_sequencer_v1_sequencer_service::SubmitAuthenticatedTx for SequencerIn
             )));
         }
 
-        let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
         ensure_transaction_has_fee(
             tx.raw_proven_transaction(),
             protocol_config.fee_asset_id(),

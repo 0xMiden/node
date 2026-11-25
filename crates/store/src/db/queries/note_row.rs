@@ -46,7 +46,7 @@ pub(super) fn note_sync_record_from_row(row: &Row<'_>) -> Result<NoteSyncRecord,
 ///
 /// The `script` column comes from a left join on `note_scripts`, so it can be NULL. The detail
 /// columns can also be NULL. A note has details only if all of them are present.
-pub(super) fn note_record_from_row(row: &Row<'_>) -> Result<NoteRecord, DatabaseError> {
+pub(crate) fn note_record_from_row(row: &Row<'_>) -> Result<NoteRecord, DatabaseError> {
     let (metadata, attachments) = note_metadata_from_row(row, 4)?;
     let details = note_details_from_row(row, 8)?;
 

@@ -169,20 +169,14 @@ fn transaction_logs_insertion_failure_rolls_back_the_block() {
 
 fn lookup(
     db: &TestDb,
-    header: &TransactionHeader,
-    tip: BlockNumber,
+    account: AccountId,
+    id: TransactionId,
 ) -> Result<Option<GetTransactionLogsResponse>, DatabaseError> {
-    use crate::db::queries::select_transaction_logs;
-    use crate::state::ScopedBlockNum;
-    let account = header.account_id();
-    let id = header.id();
-    db.read(move |tx| select_transaction_logs(tx, account, id, ScopedBlockNum::new_unchecked(tip)))
+    db.read(move |tx| ReadTransaction::new(tx).select_transaction_logs(account, id))
 }
 
 #[test]
 fn lookup_preserves_visibility_positions_and_native_ownership() {
-    use crate::db::queries::select_transaction_logs;
-    use crate::state::ScopedBlockNum;
     let root = tempdir().unwrap();
     let path = root.path().join("store.sqlite3");
     bootstrap_database(&path).unwrap();
@@ -199,7 +193,7 @@ fn lookup_preserves_visibility_positions_and_native_ownership() {
         .flat_map(OrderedTransactionHeaders::as_slice)
         .collect();
     for (index, header) in headers.iter().enumerate() {
-        let result = lookup(&db, header, BlockNumber::ONE).unwrap().unwrap();
+        let result = lookup(&db, header.account_id(), header.id()).unwrap().unwrap();
         assert_eq!(result.transaction_id, header.id());
         assert_eq!(result.native_account_id, header.account_id());
         assert_eq!(result.block_num, BlockNumber::ONE);
@@ -218,29 +212,13 @@ fn lookup_preserves_visibility_positions_and_native_ownership() {
             2 => assert_eq!(result.logs, Some(vec![])),
             _ => unreachable!(),
         }
-        assert!(lookup(&db, header, BlockNumber::GENESIS).unwrap().is_none());
     }
     let wrong: AccountId = ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2.try_into().unwrap();
     let id = headers[1].id();
     let native = headers[1].account_id();
-    let result = db
-        .read::<_, DatabaseError, _>(move |tx| {
-            select_transaction_logs(tx, wrong, id, ScopedBlockNum::new_unchecked(BlockNumber::ONE))
-        })
-        .unwrap();
-    assert!(result.is_none());
+    assert!(lookup(&db, wrong, id).unwrap().is_none());
     let missing = TransactionId::from_raw(num_to_word(1234));
-    let result = db
-        .read::<_, DatabaseError, _>(move |tx| {
-            select_transaction_logs(
-                tx,
-                native,
-                missing,
-                ScopedBlockNum::new_unchecked(BlockNumber::ONE),
-            )
-        })
-        .unwrap();
-    assert!(result.is_none());
+    assert!(lookup(&db, native, missing).unwrap().is_none());
 }
 
 #[test]
@@ -282,7 +260,7 @@ fn lookup_rejects_corrupt_log_collections() {
         } else {
             &block.body().transactions()[0].as_slice()[1]
         };
-        assert!(lookup(&db, header, BlockNumber::ONE).is_err(), "{sql}");
+        assert!(lookup(&db, header.account_id(), header.id()).is_err(), "{sql}");
     }
 }
 
@@ -299,7 +277,7 @@ fn lookup_accepts_the_protocol_log_and_content_limits() {
         Ok(())
     }).unwrap();
     let header = &block.body().transactions()[0].as_slice()[1];
-    let response = lookup(&db, header, BlockNumber::ONE).unwrap().unwrap();
+    let response = lookup(&db, header.account_id(), header.id()).unwrap().unwrap();
     let logs = response.logs.unwrap();
     assert_eq!(logs.len(), TransactionLogs::MAX_COUNT);
     assert_eq!(

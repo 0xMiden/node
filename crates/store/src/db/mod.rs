@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,6 @@ use anyhow::Context;
 use futures::{Stream, TryStreamExt};
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
-use miden_node_proto::domain::transaction_logs::GetTransactionLogsResponse;
 use miden_node_tracing::{info, instrument, warn};
 use miden_node_utils::limiter::{
     MAX_RESPONSE_PAYLOAD_BYTES,
@@ -34,11 +33,10 @@ use miden_protocol::note::{
     NoteId,
     NoteInclusionProof,
     NoteMetadata,
-    NoteScript,
     Nullifier,
 };
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{TransactionHeader, TransactionId};
+use miden_protocol::transaction::TransactionHeader;
 
 use crate::db::migrations::{migrate_database, verify_latest_schema};
 use crate::db::pagination::{Page, Paginated};
@@ -285,20 +283,6 @@ impl Db {
         &self.writer
     }
 
-    /// Returns one transaction's stored log collection within the published chain.
-    pub(crate) async fn select_transaction_logs(
-        &self,
-        native_account_id: AccountId,
-        transaction_id: TransactionId,
-        tip: ScopedBlockNum,
-    ) -> Result<Option<GetTransactionLogsResponse>> {
-        self.reader
-            .read("transaction logs", move |tx| {
-                queries::select_transaction_logs(tx, native_account_id, transaction_id, tip)
-            })
-            .await
-    }
-
     /// Selects a protocol configuration by its commitment.
     #[instrument(level = "debug", err(level = "debug"))]
     pub async fn select_protocol_config_by_commitment(
@@ -445,19 +429,6 @@ impl Db {
             .await
     }
 
-    /// Returns the subset of the provided account IDs that classify as network accounts.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn filter_network_accounts(
-        &self,
-        account_ids: Vec<AccountId>,
-    ) -> Result<HashSet<AccountId>> {
-        self.reader
-            .read("Filter network accounts", move |tx| {
-                queries::filter_network_accounts(tx, &account_ids)
-            })
-            .await
-    }
-
     /// Queries the account code by its commitment hash.
     ///
     /// Returns `None` if no code exists with that commitment.
@@ -496,15 +467,6 @@ impl Db {
                     tx, account_id, *block_num,
                 )
             })
-            .await
-    }
-
-    /// Loads all the [`miden_protocol::note::Note`]s matching a certain [`NoteId`] from the
-    /// database.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub async fn select_notes_by_id(&self, note_ids: Vec<NoteId>) -> Result<Vec<NoteRecord>> {
-        self.reader
-            .read("note by id", move |tx| queries::select_notes_by_id(tx, note_ids.as_slice()))
             .await
     }
 
@@ -691,13 +653,6 @@ impl Db {
             .read("select vault at block", move |tx| {
                 queries::select_vault_at_block(tx, account_id, *block_num)
             })
-            .await
-    }
-
-    /// Returns the script for a note by its root.
-    pub async fn select_note_script_by_root(&self, root: Word) -> Result<Option<NoteScript>> {
-        self.reader
-            .read("note script by root", move |tx| queries::select_note_script_by_root(tx, root))
             .await
     }
 }

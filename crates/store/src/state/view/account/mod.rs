@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use miden_node_proto::domain::account::{
     AccountDetailRequest,
     AccountDetails,
@@ -429,19 +427,6 @@ use response_budget::{
     MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS,
     apply_all_storage_maps_response_budget,
 };
-
-// NETWORK ACCOUNT CLASSIFICATION
-// ================================================================================================
-
-impl StateView {
-    /// Filters `account_ids` down to the subset classified as network accounts.
-    pub async fn filter_network_accounts(
-        &self,
-        account_ids: &[AccountId],
-    ) -> Result<HashSet<AccountId>, DatabaseError> {
-        self.db.filter_network_accounts(account_ids.to_vec()).await
-    }
-}
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ use miden_node_proto::clients::NtxBuilderClient;
 use miden_node_proto::domain::block::InvalidBlockRange;
 use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolStats;
 use miden_node_proto::generated::{self as proto};
+use miden_node_store::read::ReadTransaction;
 use miden_node_store::state::State;
 use miden_node_store::{DatabaseError, GetBlockHeaderError};
 use miden_node_tracing::instrument;
@@ -16,12 +17,13 @@ use miden_node_utils::retry::RetryableGrpc;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::Semaphore;
 use tonic::metadata::MetadataMap;
 use tonic::{Request, Status};
 
+use self::error_codes::SyncErrorCode;
 pub(crate) use self::error_codes::log_internal_error;
-use self::error_codes::{SyncErrorCode, internal_error};
 use crate::server::{AccountAdmission, NetworkTxAuth, RpcBackend};
 
 // VALIDATOR FAN-OUT
@@ -163,13 +165,11 @@ impl RpcService {
 
     /// Reads the genesis block header from the local store.
     pub async fn get_genesis_header(&self) -> anyhow::Result<BlockHeader> {
-        let (header, _) = self
-            .state
-            .view()
-            .get_block_header(Some(BlockNumber::GENESIS), false)
+        self.state
+            .read(|view| view.tx.select_block_header(BlockNumber::GENESIS))
             .await
-            .context("failed to read genesis block header")?;
-        header.context("genesis block header is missing")
+            .context("failed to read genesis block header")?
+            .context("genesis block header is missing")
     }
 
     /// Returns the given block's onchain header.
@@ -188,11 +188,9 @@ impl RpcService {
 
         let header = self
             .state
-            .view()
-            .get_block_header(Some(block), false)
+            .read(move |view| view.tx.select_block_header(block))
             .await
-            .map_err(get_block_header_error_to_status)?
-            .0
+            .map_err(|err| database_error_to_status(&err))?
             .ok_or_else(|| Status::invalid_argument(format!("unknown block {block}")))?;
 
         self.block_header_cache.put(block, header.clone());
@@ -231,10 +229,9 @@ impl RpcService {
 
         let network_accounts = self
             .state
-            .view()
-            .filter_network_accounts(&account_ids)
+            .read(move |view| view.tx.filter_network_accounts(&account_ids))
             .await
-            .map_err(|err| log_internal_error(&err))?;
+            .map_err(|err| database_error_to_status(&err))?;
 
         if !network_accounts.is_empty() {
             return Err(Status::invalid_argument(
@@ -295,14 +292,26 @@ fn invalid_block_range_to_status(err: InvalidBlockRange) -> Status {
 
 /// Loads the configuration committed to by a stored header.
 async fn load_protocol_config(
-    view: &miden_node_store::state::StateView,
+    state: &State,
     header: &BlockHeader,
-) -> tonic::Result<miden_protocol::protocol_config::ProtocolConfig> {
+) -> tonic::Result<ProtocolConfig> {
     let commitment = header.protocol_config_commitment();
-    view.get_protocol_config(commitment)
+    state
+        .read(move |view| require_protocol_config(&view.tx, commitment))
         .await
-        .map_err(|err| log_internal_error(&err))?
-        .ok_or_else(|| internal_error(format!("protocol config {commitment} is missing")))
+        .map_err(|err| database_error_to_status(&err))
+}
+
+/// Returns the stored configuration with `commitment`.
+///
+/// Every stored header commits to a stored configuration, so a missing configuration means the
+/// database is inconsistent.
+fn require_protocol_config(
+    tx: &ReadTransaction<'_>,
+    commitment: Word,
+) -> Result<ProtocolConfig, DatabaseError> {
+    tx.select_protocol_config(commitment)?
+        .ok_or(DatabaseError::ProtocolConfigNotFound(commitment))
 }
 
 // LIMIT HELPERS

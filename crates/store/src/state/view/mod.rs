@@ -26,13 +26,10 @@ pub(crate) use snapshot::StateSnapshot;
 mod account;
 mod block;
 mod inclusion_proofs;
-mod note;
 mod protocol_config;
 mod state_witnesses;
 pub use state_witnesses::StateWitnesses;
 mod sync;
-
-mod transaction_logs;
 
 // STATE VIEW
 // ================================================================================================

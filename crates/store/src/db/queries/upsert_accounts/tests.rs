@@ -119,7 +119,7 @@ fn filter_network_accounts(
     account_ids: &[AccountId],
 ) -> Result<std::collections::HashSet<AccountId>> {
     let account_ids = account_ids.to_vec();
-    db.read(move |tx| queries::filter_network_accounts(tx, &account_ids))
+    db.read(move |tx| crate::read::ReadTransaction::new(tx).filter_network_accounts(&account_ids))
 }
 
 // TEST HELPERS

@@ -345,12 +345,9 @@ pub async fn bench_sync_nullifiers(
             note_ids.iter().take(NOTE_IDS_PER_NULLIFIERS_CHECK).copied().collect();
         if !note_ids_to_fetch.is_empty() {
             let notes = store_state
-                .view()
-                .get_notes_by_id(note_ids_to_fetch)
+                .read(move |view| view.tx.select_notes_by_id(&note_ids_to_fetch))
                 .await
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>();
+                .unwrap();
 
             nullifier_prefixes.extend(notes.iter().filter_map(|n| {
                 let details = n.details.as_ref()?;

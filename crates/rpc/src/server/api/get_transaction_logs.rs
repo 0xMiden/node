@@ -46,10 +46,17 @@ impl GetTransactionLogs for RpcService {
             .transaction_log_requests
             .try_acquire()
             .map_err(|_| Status::resource_exhausted("Too many active transaction log requests"))?;
-        let result = self.state.view().get_transaction_logs(request).await.map_err(|err| {
-            error!(err, "Failed to read transaction logs");
-            internal_error("Failed to read transaction logs")
-        })?;
+        let result = self
+            .state
+            .read(move |view| {
+                view.tx
+                    .select_transaction_logs(request.native_account_id, request.transaction_id)
+            })
+            .await
+            .map_err(|err| {
+                error!(err, "Failed to read transaction logs");
+                internal_error("Failed to read transaction logs")
+            })?;
         result.ok_or_else(|| {
             Status::with_details(
                 Code::NotFound,
