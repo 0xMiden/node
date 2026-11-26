@@ -10,7 +10,7 @@ component), reducing the load in this critical component.
 
 ## RPC Versioning and the HTTP `ACCEPT` header
 
-The RPC API is versioned by its protobuf package, currently `miden.node.v1`, independently of the node release version.
+The RPC API is versioned by its protobuf package, currently `miden.node.v1` and `miden.node.v2`, independently of the node release version.
 The RPC component checks the target network using the HTTP `Accept` header:
 
 ```sh
@@ -25,8 +25,10 @@ as well as against network resets.
 
 ## Query limits (`GetLimits`)
 
-The RPC service exposes a `GetLimits` endpoint which returns the query parameter limits enforced by the server for
+Each public service exposes a `GetLimits` endpoint which returns the query parameter limits enforced by the server for
 multi-value parameters (e.g. number of nullifiers, note tags, note IDs, account IDs).
+
+Each API version advertises its own limits under bare method names.
 
 These limits are defined centrally in `miden_node_utils::limiter` and are enforced at the RPC boundary (and also inside
 the store) to keep database queries bounded and to keep response payloads within the ~4 MB budget.

@@ -1,0 +1,346 @@
+// Public account, note, and transaction synchronization API.
+syntax = "proto3";
+package miden.node.v2;
+
+import "asset.proto";
+import "block.proto";
+import "primitives.proto";
+import "note.proto";
+import "google/protobuf/empty.proto";
+import "protocol_config.proto";
+import "types/submission.proto";
+
+service NodeService {
+    // Returns the chain MMR delta from the client's current height through the target block,
+    // together with the target header and validator signatures.
+    //
+    // Omit target_block_num to use the selected finality tip. Authenticate the target before using
+    // its height for subsequent synchronization requests.
+    rpc SyncChainMmr(SyncChainMmrRequest) returns (SyncChainMmrResponse) {}
+
+    // Returns the node's version, genesis commitment, chain tip, and component status.
+    rpc Status(StatusRequest) returns (StatusResponse) {}
+
+    // Returns request parameter limits for v2 methods.
+    rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse) {}
+
+    // Returns a network note's execution status, failed attempts, and fee sponsorships. Returns
+    // NOT_FOUND when the network transaction builder no longer tracks the note or has never tracked
+    // it.
+    rpc GetNetworkNoteStatus(GetNetworkNoteStatusRequest) returns (GetNetworkNoteStatusResponse) {}
+
+    // Returns the signed block at the requested height and, when requested and available, its
+    // execution proof.
+    rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse) {}
+
+    // Returns the header at the requested height, defaulting to the latest committed block. Clients
+    // can request the MMR inclusion path and chain length, the active protocol configuration, or
+    // both.
+    rpc GetBlockHeaderByNumber(GetBlockHeaderByNumberRequest) returns (GetBlockHeaderByNumberResponse) {}
+
+    // Returns committed notes matching the requested IDs, with their inclusion proofs. Unknown IDs
+    // are omitted.
+    rpc GetNotesById(GetNotesByIdRequest) returns (GetNotesByIdResponse) {}
+
+    // Looks up a note script by its root. The script field is absent when the node has no matching
+    // script.
+    rpc GetNoteScriptByRoot(GetNoteScriptByRootRequest) returns (GetNoteScriptByRootResponse) {}
+
+    // Returns the public key for encrypting private transaction inputs and the validator
+    // attestations for that key. Verify an attestation against a chain-recognized validator signing
+    // key before encrypting inputs.
+    rpc GetTransactionEncryptionKey(GetTransactionEncryptionKeyRequest) returns (GetTransactionEncryptionKeyResponse) {}
+
+    // Submits a proven transaction and its sealed inputs. The response reports the node's current
+    // block height. Use GetTransactionsById to check when the transaction commits.
+    rpc SubmitProvenTx(SubmitProvenTxRequest) returns (SubmitProvenTxResponse) {}
+
+    // Submits a proven batch and its sealed transaction inputs for atomic inclusion. The response
+    // reports the node's current block height at submission.
+    rpc SubmitProvenTxBatch(SubmitProvenTxBatchRequest) returns (SubmitProvenTxBatchResponse) {}
+
+    // Streams signed blocks in height order starting at block_from, inclusive. After replaying
+    // committed blocks, the subscription stays open for new commitments.
+    //
+    // The first item includes the active protocol configuration. Later items include it when its
+    // commitment changes. After RESOURCE_EXHAUSTED, reconnect from the first height still missing
+    // locally.
+    rpc BlockSubscription(BlockSubscriptionRequest) returns (stream BlockSubscriptionResponse) {}
+
+    // Streams block execution proofs starting at block_from, inclusive. After replaying available
+    // proofs, the subscription stays open for newly proven blocks.
+    //
+    // Each item identifies the block height and the proven chain tip. After RESOURCE_EXHAUSTED,
+    // reconnect from the first height whose proof is still missing locally.
+    rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
+}
+
+message StatusRequest {}
+
+message StatusResponse {
+    // The rpc component's running version.
+    string version = 1;
+
+    // The genesis commitment.
+    primitives.Word genesis_commitment = 2;
+
+    // Number of the latest block committed by the responding node.
+    fixed32 chain_tip = 3;
+
+    // The block producer status.
+    //
+    // Full nodes cache the upstream response, including failed lookups, for five seconds.
+    // This is not a consistent snapshot with the local chain_tip: the cached producer
+    // height can be lower than the local height even when both nodes are healthy.
+    BlockProducerStatus block_producer = 4;
+}
+
+message GetLimitsRequest {}
+
+message GetLimitsResponse {
+    // Parameter limits keyed by RPC method name.
+    map<string, EndpointLimits> endpoints = 1;
+}
+
+message GetNetworkNoteStatusRequest {
+    note.NoteId note_id = 1;
+}
+
+message GetNetworkNoteStatusResponse {
+    // Current lifecycle status of the note.
+    NetworkNoteStatus status = 1;
+    // The latest error message from execution, if any.
+    optional string last_error = 2;
+    // Number of failed execution attempts.
+    uint32 attempt_count = 3;
+    // Block number of the last failed attempt, if any.
+    optional fixed32 last_attempt_block_num = 4;
+    // FEE_SPONSORSHIP notes bound to this note.
+    repeated NetworkNoteSponsorship sponsorships = 5;
+}
+
+message GetBlockByNumberRequest {
+    fixed32 block_num = 1;
+    optional bool include_proof = 2;
+}
+
+message GetBlockByNumberResponse {
+    optional blockchain.SignedBlock block = 1;
+    optional primitives.ExecutionProof proof = 2;
+}
+
+message GetBlockHeaderByNumberRequest {
+    // The target block height, defaults to latest if not provided.
+    optional uint32 block_num = 1;
+    // Whether or not to return authentication data for the block header.
+    optional bool include_mmr_proof = 2;
+    // Whether to include the active configuration for the returned header.
+    optional bool include_protocol_config = 3;
+}
+
+message GetBlockHeaderByNumberResponse {
+    // The requested block header.
+    blockchain.BlockHeader block_header = 1;
+
+    // Merkle path to verify the block's inclusion in the MMR at the returned `chain_length`.
+    optional primitives.MerklePath mmr_path = 2;
+
+    // Current chain length.
+    optional fixed32 chain_length = 3;
+
+    // Included when requested and the header exists. Verify its commitment against that header.
+    optional protocol_config.ProtocolConfig protocol_config = 4;
+}
+
+message GetNotesByIdRequest {
+    repeated note.NoteId note_ids = 1;
+}
+
+message GetNotesByIdResponse {
+    repeated CommittedNote notes = 1;
+}
+
+message GetNoteScriptByRootRequest {
+    primitives.Word root = 1;
+}
+
+message GetNoteScriptByRootResponse {
+    // The script for a note by its root.
+    optional note.NoteScript script = 1;
+}
+
+message GetTransactionEncryptionKeyRequest {}
+
+message GetTransactionEncryptionKeyResponse {
+    submission.TransactionEncryptionKey key = 1;
+}
+
+message SubmitProvenTxRequest {
+    submission.ProvenTransactionSubmission submission = 1;
+}
+
+message SubmitProvenTxResponse {
+    fixed32 block_num = 1;
+}
+
+message SubmitProvenTxBatchRequest {
+    submission.TransactionBatch submission = 1;
+}
+
+message SubmitProvenTxBatchResponse {
+    fixed32 block_num = 1;
+}
+
+message BlockSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+message BlockSubscriptionResponse {
+    // The signed block.
+    blockchain.SignedBlock block = 1;
+
+    // The committed chain tip when this item was emitted.
+    fixed32 committed_chain_tip = 2;
+
+    // The active configuration. Included with the first response and when its commitment changes.
+    // Verify its commitment against the accompanying block header.
+    optional protocol_config.ProtocolConfig protocol_config = 3;
+}
+
+message ProofSubscriptionRequest {
+    // The block number to start streaming from (inclusive).
+    fixed32 block_from = 1;
+}
+
+message ProofSubscriptionResponse {
+    // The block number this proof corresponds to.
+    fixed32 block_num = 1;
+
+    // The execution proof for the block.
+    primitives.ExecutionProof proof = 2;
+
+    // The proven chain tip when this item was emitted.
+    fixed32 proven_chain_tip = 3;
+}
+
+message BlockProducerStatus {
+    // The block producer's running version.
+    string version = 1;
+
+    // The block producer's status.
+    string status = 2;
+
+    // The block producer's current view of the chain tip height.
+    //
+    // This is the height of the latest block that the block producer considers
+    // to be part of the canonical chain.
+    fixed32 chain_tip = 4;
+
+    // Statistics about the mempool.
+    MempoolStats mempool_stats = 3;
+}
+
+message MempoolStats {
+    // Number of transactions currently in the mempool waiting to be batched.
+    uint64 unbatched_transactions = 1;
+
+    // Number of batches currently being proven.
+    uint64 proposed_batches = 2;
+
+    // Number of proven batches waiting for block inclusion.
+    uint64 proven_batches = 3;
+
+    // Number of transactions that have not yet been committed.
+    uint64 uncommitted_transactions = 4;
+}
+
+enum NetworkNoteStatus {
+    // Default / unspecified status.
+    NETWORK_NOTE_STATUS_UNSPECIFIED = 0;
+    // The note is awaiting execution or being retried after transient failures.
+    NETWORK_NOTE_STATUS_PENDING = 1;
+    // The note has been consumed by a transaction that was sent to the block producer.
+    NETWORK_NOTE_STATUS_NULLIFIER_INFLIGHT = 2;
+    // The note exceeded the maximum retry count and will not be retried.
+    NETWORK_NOTE_STATUS_DISCARDED = 3;
+    // The note's consuming transaction has been committed on-chain.
+    NETWORK_NOTE_STATUS_NULLIFIER_COMMITTED = 4;
+}
+
+message NetworkNoteSponsorship {
+    // ID of the sponsorship note.
+    note.NoteId note_id = 1;
+    // Fee asset that the sponsorship note carries.
+    asset.Asset fee_asset = 2;
+    // Block height at or after which the reclaimer can reclaim the note. Not set when reclaim is
+    // disabled.
+    optional fixed32 reclaim_height = 3;
+    // Block number in which the sponsorship note was consumed. Not set while it is unconsumed.
+    optional fixed32 committed_block_num = 4;
+    // The latest execution error of the sponsorship note, if any.
+    optional string last_error = 5;
+    // Block number of the last failed attempt of the sponsorship note, if any.
+    optional fixed32 last_attempt_block_num = 6;
+}
+
+message CommittedNote {
+    note.Note note = 1;
+    note.NoteInclusionProof inclusion_proof = 2;
+}
+
+message EndpointLimits {
+    // Maximum values keyed by parameter name.
+    map<string, uint32> parameters = 1;
+}
+
+enum FinalityLevel {
+    FINALITY_LEVEL_UNSPECIFIED = 0;
+    // Sync up to the latest committed block (chain tip).
+    FINALITY_LEVEL_COMMITTED = 1;
+    // Sync up to the latest proven block.
+    FINALITY_LEVEL_PROVEN = 2;
+}
+
+message BlockRange {
+    // Block number from which to start (inclusive).
+    fixed32 block_from = 1;
+
+    // Block number up to which to check (inclusive).
+    fixed32 block_to = 2;
+}
+
+message SyncChainMmrRequest {
+    // Block number from which to synchronize. Set this to the last block
+    // already present in the caller's MMR so the delta begins at the next block.
+    fixed32 current_client_block_height = 1;
+
+    // Selects the committed or proven tip as the highest permissible target.
+    FinalityLevel finality_level = 2;
+
+    // Omit to sync to the selected tip. An explicit target (including zero for genesis) must
+    // be at or above current_client_block_height, otherwise the request fails with INVALID_ARGUMENT.
+    // Targets above the selected tip or outside retained history fail with OUT_OF_RANGE.
+    optional fixed32 target_block_num = 3;
+}
+
+message SyncChainMmrResponse {
+    // For which block range the MMR delta is returned.
+    BlockRange block_range = 1;
+
+    // Data needed to update the partial MMR from `request.current_client_block_height + 1` to
+    // the sync target.
+    primitives.MmrDelta mmr_delta = 2;
+
+    // Block header for the sync target.
+    blockchain.BlockHeader block_header = 3;
+
+    // Validator signatures for the sync target, ordered positionally with respect to the
+    // validator set committed to by the parent block's header.
+    repeated primitives.Signature block_signatures = 4;
+
+    // The target header's active configuration. Included when the client starts at genesis or
+    // the starting and target headers have different configuration commitments.
+    // Verify its commitment against the target header.
+    optional protocol_config.ProtocolConfig protocol_config = 5;
+}

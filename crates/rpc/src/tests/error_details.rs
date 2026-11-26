@@ -230,3 +230,15 @@ async fn chain_mmr_sync_returns_future_block_code() {
         .unwrap_err();
     assert_client_error(&error, 2);
 }
+
+#[tokio::test]
+async fn v2_service_parity_errors() {
+    let (mut client, _, _store, _guard) = start_rpc_v2().await;
+    let error = client
+        .get_notes_by_id(v2::GetNotesByIdRequest {
+            note_ids: vec![proto::note::NoteId::default()],
+        })
+        .await
+        .unwrap_err();
+    assert_client_error(&error, 1);
+}

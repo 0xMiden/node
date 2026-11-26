@@ -21,3 +21,13 @@ impl RecordAttribute for crate::generated::miden::node::v1::FinalityLevel {
         self.as_str_name()
     }
 }
+
+impl RecordAttribute for crate::generated::miden::node::v2::FinalityLevel {
+    const FIELD_NAMES: &'static [&'static str] = &["finality_level"];
+
+    fn record_attribute(&self) -> impl Value + '_ {
+        self.as_str_name()
+    }
+}
+
+mod rpc_versions;

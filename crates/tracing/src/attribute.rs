@@ -20,6 +20,7 @@ const BOOLEAN_FIELD_NAMES: &[&str] = &[
     "panic",
     "request.include_mmr_proof",
     "request.include_proof",
+    "request.include_protocol_config",
     "rpc.authentication.configured",
 ];
 
