@@ -62,15 +62,15 @@ miden-node-tracing-macro    = { path = "crates/tracing-macro", version = "0.18.3
 miden-node-utils            = { path = "crates/utils", version = "0.18.3" }
 
 # miden-protocol dependencies. These should be updated in sync.
-miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-protobuf     = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-tx           = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-tx-batch     = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
-miden-usdcx        = { git = "https://github.com/0xMiden/protocol", rev = "28ff7f34cee969c831a15df6f7b6e715df57db7c" }
+miden-block-prover = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-objects      = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-protobuf     = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-protocol     = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-standards    = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-testing      = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-tx           = { default-features = false, git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-tx-batch     = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
+miden-usdcx        = { git = "https://github.com/0xMiden/protocol", rev = "20a6bb42891f2081eb080bdb1eb6bf5bbcd04c42" }
 
 # Other miden dependencies. These should align with those expected by miden-protocol.
 miden-crypto    = { version = "=1.0.0-rc.1" }
