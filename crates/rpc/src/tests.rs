@@ -76,6 +76,7 @@ use miden_protocol::block::{
     ProvenBlock,
     SignedBlock,
     ValidatorConfig,
+    ValidatorSignature,
 };
 use miden_protocol::crypto::merkle::mmr::Mmr;
 use miden_protocol::note::NoteType;
@@ -3296,15 +3297,16 @@ async fn v2_rejects_unknown_finality() {
 async fn commit_signed_chain(
     store: &mut TestStore,
     configs: [&ProtocolConfig; 3],
-) -> Vec<proto::primitives::Signature> {
+) -> Vec<proto::blockchain::ValidatorSignature> {
     let signer =
         miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey::read_from_bytes(&[7; 32])
             .unwrap();
     let mut signatures = Vec::new();
     for config in configs {
         let (header, body, _) = next_block_with_protocol_config(store, config).await.into_parts();
-        let signature = signer.sign(header.commitment());
-        signatures.push(proto::primitives::Signature::from(&signature));
+        let signature =
+            ValidatorSignature::new(signer.public_key(), signer.sign(header.commitment()));
+        signatures.push(proto::blockchain::ValidatorSignature::from(&signature));
         let block = SignedBlock::new_unchecked(
             header,
             body,

@@ -11,7 +11,13 @@ use miden_node_store::{GenesisState, State};
 use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::batch::OrderedBatches;
-use miden_protocol::block::{BlockInputs, BlockNumber, ProposedBlock, SignedBlock};
+use miden_protocol::block::{
+    BlockInputs,
+    BlockNumber,
+    ProposedBlock,
+    SignedBlock,
+    ValidatorSignature,
+};
 use miden_protocol::transaction::PartialBlockchain;
 use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
@@ -109,16 +115,12 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
                 .await?
                 .into_inner()
                 .decode_and_build_unchecked()?;
-            signatures.push(response.signature);
+            signatures.push(ValidatorSignature::new(response.public_key, response.signature));
         }
         let block = SignedBlock::new_unchecked(
             header,
             body,
-            coalesce_signatures(
-                signatures,
-                request.block_header.commitment(),
-                parent.validator_config(),
-            )?,
+            coalesce_signatures(signatures, parent.validator_config())?,
         );
         let original = tempfile::tempdir()?;
         State::bootstrap(
@@ -424,8 +426,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 .into_inner()
                 .decode_and_build_unchecked()?;
             let signatures = coalesce_signatures(
-                vec![response.signature],
-                header.commitment(),
+                vec![ValidatorSignature::new(response.public_key, response.signature)],
                 parent.validator_config(),
             )?;
             blocks.push(SignedBlock::new_unchecked(header.clone(), body, signatures));

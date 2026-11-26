@@ -121,7 +121,7 @@ fn genesis_rejects_non_genesis_and_signed_blocks() {
 
     let (header, body, _) = genesis(BlockNumber::GENESIS, &config).into_parts();
     let key = SigningKey::read_from_bytes(&[7; 32]).unwrap();
-    let signatures = BlockSignatures::new(vec![key.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(&key), header.commitment());
     let block = SignedBlock::new(header, body, signatures).unwrap();
     assert!(
         GenesisBlock::new(block, config)

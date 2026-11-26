@@ -62,7 +62,7 @@ pub(super) struct ListedValidatedTransaction {
 impl From<ListedTransaction> for ListedValidatedTransaction {
     fn from(item: ListedTransaction) -> Self {
         Self {
-            transaction_id: hex::encode(item.transaction_id.to_bytes()),
+            transaction_id: hex::encode(item.transaction_id.as_word().to_bytes()),
             block_num: item.block_num.as_u32(),
             block_tx_index: item.block_tx_index,
             key_epoch: hex::encode(item.key_epoch.as_bytes()),

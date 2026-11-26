@@ -15,6 +15,7 @@ use miden_protocol::block::{
     BlockSignatures,
     ProposedBlock,
     SignedBlock,
+    ValidatorSignature,
 };
 use miden_protocol::transaction::TransactionHeader;
 use tokio::time::Duration;
@@ -322,9 +323,8 @@ impl BlockBuilder {
             }
         }
 
-        // Place each validator's signature at its position in the block's signature set. The
-        // signature at position `i` must be produced by the key at index `i` of the validator set
-        // committed to by the parent block's header.
+        // Every validator in the set committed to by the parent block's header must have signed the
+        // block.
         let parent_header = block_inputs.prev_block_header();
         let signatures = parent_header
             .validator_config()
@@ -335,7 +335,9 @@ impl BlockBuilder {
                 responses
                     .iter()
                     .find(|response| &response.public_key == key)
-                    .map(|response| response.signature.clone())
+                    .map(|response| {
+                        ValidatorSignature::new(key.clone(), response.signature.clone())
+                    })
                     .ok_or(BuildBlockError::MissingValidatorSignature { position })
             })
             .collect::<Result<Vec<_>, _>>()?;
