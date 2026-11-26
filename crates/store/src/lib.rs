@@ -21,6 +21,7 @@ mod errors;
 pub mod genesis;
 mod proven_tip;
 pub mod state;
+pub mod validator_config;
 
 pub use accounts::{
     AccountTreeWithHistory,

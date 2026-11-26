@@ -66,7 +66,8 @@ miden-validator validator-config register change.json
 
 A successful registration survives a restart. Your validator will continue signing blocks with the active configuration.
 If registration returns a conflict, run `status` again. The active quorum may have changed, or a different change may be
-pending.
+pending. Once enough validators have registered the change, the sequencer operator can
+[register it on the sequencer](./sequencer.md#changing-the-chains-validator-quorum).
 
 The latest signed block can be replaced. While it contains the transition, `status` keeps the previous quorum under
 `active` and the registered change under `pending`. Signing a valid child confirms the transition, moves its quorum to

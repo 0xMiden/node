@@ -79,6 +79,7 @@ pub struct SequencerCommand {
 impl SequencerCommand {
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         self.log_starting();
+        let admin_server = AdminServer::bind(self.admin.listen).await?;
         let runtime = self.runtime.runtime_config(&self.store);
         let max_decoding_message_size =
             runtime.grpc_options.message_size.max_decoding_message_size.get();
@@ -129,6 +130,7 @@ impl SequencerCommand {
         .await
         .context("failed to start sequencer")?;
         let block_producer = sequencer.api();
+        let validator_config = sequencer.validator_config();
 
         let rpc = Rpc {
             listener: bind_rpc(runtime.rpc_listen).await?,
@@ -146,11 +148,9 @@ impl SequencerCommand {
         tasks.spawn("sequencer", sequencer.wait());
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         tasks.spawn("store block writer", join_store_writer(writer_task));
-        if let Some(address) = self.admin.listen {
-            let shutdown = shutdown.clone();
-            tasks.spawn("sequencer admin API", async move {
-                AdminServer::bind(address, allowlist, funding).await?.serve(shutdown).await
-            });
+        if let Some(server) = admin_server {
+            let admin_api = server.serve(allowlist, funding, validator_config, shutdown.clone());
+            tasks.spawn("sequencer admin API", admin_api);
         }
         for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
             tasks.spawn_infallible(

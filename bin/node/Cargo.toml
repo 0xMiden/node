@@ -44,6 +44,7 @@ tonic                     = { default-features = false, workspace = true }
 url                       = { workspace = true }
 
 [dev-dependencies]
+miden-node-db      = { workspace = true }
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
 miden-protocol     = { features = ["testing"], workspace = true }
 miden-validator    = { path = "../validator" }

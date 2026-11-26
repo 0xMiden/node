@@ -20,6 +20,8 @@ use miden_protocol::account::AccountId;
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 
+mod validator_config;
+
 mod client;
 pub(crate) use client::AdminClient;
 
@@ -29,23 +31,24 @@ mod tests;
 /// Serves the private administration API behind external authentication.
 pub(crate) struct AdminServer {
     listener: TcpListener,
-    allowlist: Arc<AccountAllowlist>,
-    funding: Option<FundingClient>,
 }
 
 impl AdminServer {
-    pub(crate) async fn bind(
-        address: SocketAddr,
-        allowlist: Arc<AccountAllowlist>,
-        funding: Option<FundingClient>,
-    ) -> anyhow::Result<Self> {
+    pub(crate) async fn bind(address: Option<SocketAddr>) -> anyhow::Result<Option<Self>> {
+        let Some(address) = address else { return Ok(None) };
         let listener = TcpListener::bind(address)
             .await
             .with_context(|| format!("failed to bind admin listener to {address}"))?;
-        Ok(Self { listener, allowlist, funding })
+        Ok(Some(Self { listener }))
     }
 
-    pub(crate) async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
+    pub(crate) async fn serve(
+        self,
+        allowlist: Arc<AccountAllowlist>,
+        funding: Option<FundingClient>,
+        validator_config: miden_node_block_producer::validator_config::ValidatorConfigState,
+        shutdown: CancellationToken,
+    ) -> anyhow::Result<()> {
         info!(
             "Sequencer admin server ready",
             admin.listen = self
@@ -54,10 +57,13 @@ impl AdminServer {
                 .context("failed to read admin listen address")?
                 .to_string()
         );
-        axum::serve(self.listener, router(self.allowlist, self.funding))
-            .with_graceful_shutdown(shutdown.cancelled_owned())
-            .await
-            .context("failed to serve sequencer admin API")
+        axum::serve(
+            self.listener,
+            router(allowlist, funding, validator_config::router(validator_config)),
+        )
+        .with_graceful_shutdown(shutdown.cancelled_owned())
+        .await
+        .context("failed to serve sequencer admin API")
     }
 }
 
@@ -67,7 +73,11 @@ struct AdminState {
     funding: Option<FundingClient>,
 }
 
-fn router(allowlist: Arc<AccountAllowlist>, funding: Option<FundingClient>) -> Router {
+fn router(
+    allowlist: Arc<AccountAllowlist>,
+    funding: Option<FundingClient>,
+    validator_config_routes: Router,
+) -> Router {
     Router::new()
         .route(
             "/admin/allowlist/invitations/{invitation_digest}",
@@ -76,6 +86,7 @@ fn router(allowlist: Arc<AccountAllowlist>, funding: Option<FundingClient>) -> R
         .route("/admin/allowlist/accounts/{account_id}", get(account_status).put(put_account))
         .with_state(AdminState { allowlist, funding })
         .merge(miden_node_tracing::admin::router())
+        .merge(validator_config_routes)
         .layer(middleware::map_response(no_store))
 }
 

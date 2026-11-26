@@ -31,6 +31,7 @@ mod proof_scheduler;
 mod rpc_sync;
 pub mod store;
 mod validator;
+pub mod validator_config;
 
 #[cfg(feature = "testing")]
 pub mod errors;

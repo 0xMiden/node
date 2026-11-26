@@ -4,7 +4,15 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Once};
 
 use arc_swap::ArcSwap;
-use miden_node_tracing::{ErrorReport, Instrument, debug, instrument, miden_span_record, warn};
+use miden_node_tracing::{
+    ErrorReport,
+    Instrument,
+    debug,
+    info,
+    instrument,
+    miden_span_record,
+    warn,
+};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::account::{AccountId, AccountUpdateDetails};
@@ -147,10 +155,33 @@ impl WriteWorker {
                     None => break,
                 },
             };
+            let mut validator_config_guard = req.validator_config_guard;
+            let consumes_registration = validator_config_guard.as_ref().is_some_and(|guard| {
+                guard.as_ref().is_some_and(|pending| {
+                    pending.activation_height.parent()
+                        == Some(req.signed_block.header().block_num())
+                        && pending.quorum == req.signed_block.header().validator_config().quorum()
+                })
+            });
             let result = self
                 .write_block(req.signed_block, req.protocol_config)
-                .instrument(req.span)
+                .instrument(req.span.clone())
                 .await;
+            if result.is_ok()
+                && consumes_registration
+                && let Some(guard) = validator_config_guard.as_mut()
+            {
+                if let Some(change) = guard.take() {
+                    req.span.in_scope(|| {
+                        info!(
+                            "Validator configuration change committed",
+                            validator.quorum = change.quorum #[nonstandard],
+                            validator.activation_height = change.activation_height.as_u32() #[nonstandard]
+                        );
+                    });
+                }
+            }
+            drop(validator_config_guard);
             let _ = req.result_tx.send(result);
         }
     }
@@ -656,6 +687,14 @@ mod tests {
     }
 
     async fn empty_block(state: &State, protocol_config: &ProtocolConfig) -> SignedBlock {
+        empty_block_with_config(state, protocol_config, None).await
+    }
+
+    async fn empty_block_with_config(
+        state: &State,
+        protocol_config: &ProtocolConfig,
+        validator_config: Option<ValidatorConfig>,
+    ) -> SignedBlock {
         let body = BlockBody::new(
             Vec::new(),
             Vec::new(),
@@ -663,7 +702,7 @@ mod tests {
             OrderedTransactionHeaders::new_unchecked(Vec::new()),
         )
         .unwrap();
-        block_with_body(state, protocol_config, body, None).await
+        block_with_body(state, protocol_config, body, None, validator_config).await
     }
 
     async fn block_with_body(
@@ -671,6 +710,7 @@ mod tests {
         protocol_config: &ProtocolConfig,
         body: BlockBody,
         account_root: Option<Word>,
+        validator_config: Option<ValidatorConfig>,
     ) -> SignedBlock {
         let view = state.view();
         let (parent, _) = view.get_block_header(None, false).await.unwrap();
@@ -688,13 +728,132 @@ mod tests {
             parent.nullifier_root(),
             body.compute_block_note_tree().root(),
             body.transaction_commitment(),
-            parent.validator_config().clone(),
+            validator_config.unwrap_or_else(|| parent.validator_config().clone()),
             parent.fee_parameters().clone(),
             protocol_config.to_commitment(),
             None,
             parent.timestamp() + 1,
         );
         SignedBlock::new_unchecked(header, body, BlockSignatures::new(Vec::new()).unwrap())
+    }
+
+    // The store accepts protocol-valid membership changes during sync. Two keys allow these tests
+    // to exercise a quorum transition with the current protocol library.
+    fn next_validator_config() -> ValidatorConfig {
+        ValidatorConfig::new((0..2).map(|_| random_secret_key().public_key()).collect(), 2).unwrap()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_block_write_keeps_the_configuration_locked_until_commit() {
+        use tokio::sync::{Mutex, oneshot};
+
+        use crate::validator_config::PendingValidatorQuorum;
+
+        let (_dir, state, writer, task, config) = start_store().await;
+        let pending = Arc::new(Mutex::new(Some(PendingValidatorQuorum {
+            quorum: 2,
+            activation_height: 2.into(),
+        })));
+        let block = empty_block_with_config(&state, &config, Some(next_validator_config())).await;
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let db_state = Arc::clone(&state);
+        let hold_writer = tokio::spawn(async move {
+            db_state
+                .db
+                .writer()
+                .write::<_, DatabaseError, _>("hold writer", move |_tx| {
+                    entered_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                    Ok(())
+                })
+                .await
+                .unwrap();
+        });
+        entered_rx.await.unwrap();
+        let guard = Arc::clone(&pending).lock_owned().await;
+        let (result_tx, result_rx) = oneshot::channel();
+        let mut tip = state.subscribe_committed_tip();
+        writer
+            .write_tx
+            .send(super::WriteRequest {
+                signed_block: block,
+                protocol_config: None,
+                validator_config_guard: Some(guard),
+                result_tx,
+                span: miden_node_tracing::Span::current(),
+            })
+            .await
+            .unwrap();
+        drop(result_rx);
+        assert!(pending.try_lock().is_err());
+        release_tx.send(()).unwrap();
+        hold_writer.await.unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            tip.wait_for(|height| *height == 1.into()),
+        )
+        .await
+        .expect("block should commit")
+        .unwrap();
+        assert_eq!(*pending.lock().await, None);
+        assert_eq!(
+            state
+                .view()
+                .get_block_header(None, false)
+                .await
+                .unwrap()
+                .0
+                .unwrap()
+                .validator_config()
+                .quorum(),
+            2
+        );
+        writer.stop(task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ordinary_blocks_preserve_a_future_configuration_schedule() {
+        use tokio::sync::Mutex;
+
+        use crate::validator_config::PendingValidatorQuorum;
+
+        let (_dir, state, mut writer, task, config) = start_store().await;
+        let change = PendingValidatorQuorum { quorum: 2, activation_height: 3.into() };
+        let pending = Arc::new(Mutex::new(Some(change)));
+        let guard = Arc::clone(&pending).lock_owned().await;
+        let block = empty_block(&state, &config).await;
+        writer.apply_block_with_guard(block, None, Some(guard)).await.unwrap();
+        assert_eq!(*pending.lock().await, Some(change));
+        assert_eq!(state.committed_tip(), 1.into());
+        writer.stop(task).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_transitions_keep_the_schedule_for_retry() {
+        use tokio::sync::Mutex;
+
+        use crate::validator_config::PendingValidatorQuorum;
+
+        let (_dir, state, mut writer, task, config) = start_store().await;
+        let change = PendingValidatorQuorum { quorum: 2, activation_height: 2.into() };
+        let pending = Arc::new(Mutex::new(Some(change)));
+        let block = empty_block_with_config(
+            &state,
+            &alternate_protocol_config(),
+            Some(next_validator_config()),
+        )
+        .await;
+        let guard = Arc::clone(&pending).lock_owned().await;
+        assert!(writer.apply_block_with_guard(block, None, Some(guard)).await.is_err());
+        assert_eq!(*pending.lock().await, Some(change));
+        assert_eq!(state.committed_tip(), 0.into());
+        let block = empty_block_with_config(&state, &config, Some(next_validator_config())).await;
+        let guard = Arc::clone(&pending).lock_owned().await;
+        writer.apply_block_with_guard(block, None, Some(guard)).await.unwrap();
+        assert_eq!(*pending.lock().await, None);
+        assert_eq!(state.committed_tip(), 1.into());
+        writer.stop(task).await;
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -937,7 +1096,7 @@ mod tests {
         .unwrap();
         let mut account_tree: AccountTree = AccountTree::default();
         account_tree.insert(id, commitment).unwrap();
-        let block = block_with_body(&state, &config, body, Some(account_tree.root())).await;
+        let block = block_with_body(&state, &config, body, Some(account_tree.root()), None).await;
         writer.apply_block(block.clone(), None).await.unwrap();
         let parent = tempfile::tempdir().unwrap();
         let options = miden_node_utils::clap::RocksDbOptions::default();

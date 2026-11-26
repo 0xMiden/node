@@ -17,7 +17,7 @@ fn setup() -> (tempfile::TempDir, Arc<AccountAllowlist>, Router) {
     let path = dir.path().join("allowlist.sqlite3");
     AccountAllowlist::bootstrap(&path).unwrap();
     let allowlist = Arc::new(AccountAllowlist::load(path).unwrap());
-    let app = router(Arc::clone(&allowlist), None);
+    let app = router(Arc::clone(&allowlist), None, Router::new());
     (dir, allowlist, app)
 }
 
@@ -91,7 +91,7 @@ async fn admin_registration_workflow() {
             .unwrap();
     });
     let funding = FundingClient::new(url, std::num::NonZeroU64::new(42).unwrap()).unwrap();
-    let app = router(Arc::clone(&allowlist), Some(funding));
+    let app = router(Arc::clone(&allowlist), Some(funding), Router::new());
     let path = format!("/admin/allowlist/invitations/{INVITATION_DIGEST}");
     let (status, body) = request(&app, "GET", &path, None).await;
     assert_eq!(status, StatusCode::OK);

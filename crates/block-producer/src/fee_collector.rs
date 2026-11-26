@@ -114,6 +114,7 @@ pub async fn deploy_fee_collector(
             block_number,
             batches: vec![Arc::new(proof)],
         },
+        None,
     )
     .await?;
     let proof = BlockProver::local()

@@ -159,6 +159,78 @@ miden-node admin --url http://127.0.0.1:50100 allowlist-account <hex-account-id>
 
 The command uses the account `PUT` endpoint and inherits its funding behavior when funding is configured.
 
+## Changing the chain's validator quorum
+
+Schedule a quorum change to change how many validator signatures are required per block. The activation height is the
+first block signed under the new quorum; the preceding block commits the change. The validator keys and service URLs
+stay fixed.
+
+Coordinate the new quorum and activation height with validator operators. Have them
+[register the change on their validators](./validator.md#changing-the-chains-validator-quorum) before scheduling it on
+the sequencer. Enough validators must be ready to sign the transition to meet the active quorum.
+
+Enable the [private administration listener](#allowlist-administration) and set its URL. Read the sequencer's current
+settings:
+
+```bash
+export MIDEN_NODE_ADMIN_URL=http://127.0.0.1:50100
+miden-node admin validator-config status
+```
+
+Review `active`, any existing `pending` quorum, and its `activation_height`. Use the `change.json` agreed with the
+validator operators. Its `active` must match the current quorum, and `pending` must be between one and the number of
+validators. This example changes the quorum from three to two:
+
+```json
+{ "active": 3, "pending": 2 }
+```
+
+Schedule the change for block 1000. Its transition block, 999, must still be ahead of the committed chain tip:
+
+```bash
+miden-node admin validator-config register change.json --activation-height 1000
+```
+
+Success confirms that the quorum and activation height are scheduled in memory. The sequencer continues accepting
+transactions and producing blocks with the active quorum until the transition. Failed block attempts are retried at the
+same height.
+
+A restart discards any uncommitted schedule. Register it on the sequencer again if you still want the change, choosing a
+later activation height if its transition height has already passed.
+
+Check whether the transition has committed:
+
+```bash
+miden-node admin validator-config status
+```
+
+After commitment, `active` contains the new quorum, and `pending` and `activation_height` are `null`. Validators confirm
+the transition after signing its child, so their status may update one block later.
+
+A conflict means the transition height has already been committed, the active quorum changed, or a different change is
+pending. Run `status` and coordinate with the other operators before retrying. Invalid values and quorums unsupported by
+the installed protocol return `400` without registering a change.
+
+### Cancel a pending quorum change
+
+Cancel on the sequencer first, using the same file and activation height:
+
+```bash
+miden-node admin validator-config cancel change.json --activation-height 1000
+```
+
+Cancellation waits for any block being built to finish. Success confirms that the change was cancelled. If that block
+committed the transition, cancellation returns a conflict reporting that the requested quorum is already active. Check
+`status` for other conflicts.
+
+After successful cancellation on the sequencer, have each participating validator operator
+[cancel their registration](./validator.md#cancel-a-pending-change). A validator that already signed the transition must
+first sign a replacement with the previous quorum before it can cancel.
+
+The endpoints are `GET /admin/v1/validator-config` for status and `PUT` or `DELETE`
+`/admin/v1/validator-config/pending?activation_height=1000` for registration or cancellation. Both mutations take the
+change file as their JSON body and return `204` on success.
+
 ## Registration Funding
 
 Configure both options to request funding for each new account registration:

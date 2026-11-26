@@ -132,6 +132,7 @@ impl Sequencer {
             validator.clone(),
             self.block_interval,
         );
+        let validator_config = block_builder.validator_config.clone();
         let batch_prover = match self.batch_prover_url {
             Some(url) => BatchProver::remote(url, self.max_decoding_message_size)?,
             None => BatchProver::new(),
@@ -196,7 +197,7 @@ impl Sequencer {
         });
         let task = tokio::spawn(async move { tasks.join_next_or_cancelled(shutdown).await });
 
-        Ok(SequencerHandle { api, task })
+        Ok(SequencerHandle { api, task, validator_config })
     }
 }
 
@@ -204,9 +205,15 @@ impl Sequencer {
 pub struct SequencerHandle {
     api: BlockProducerApi,
     task: JoinHandle<anyhow::Result<()>>,
+    validator_config: crate::validator_config::ValidatorConfigState,
 }
 
 impl SequencerHandle {
+    /// Returns access to the sequencer's validator configuration registration.
+    pub fn validator_config(&self) -> crate::validator_config::ValidatorConfigState {
+        self.validator_config.clone()
+    }
+
     /// Returns a cloneable handle to the block producer API.
     pub fn api(&self) -> BlockProducerApi {
         self.api.clone()
