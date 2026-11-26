@@ -231,8 +231,8 @@ pub(crate) use select_note_sync_page::note_sync_page;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
 
 mod select_transactions_by_id;
-pub(crate) use select_transactions_by_id::TransactionsById;
 pub use select_transactions_by_id::TransactionsByIdPage;
+pub(crate) use select_transactions_by_id::transactions_by_id_page;
 
 mod transaction_page;
 mod transaction_record;
