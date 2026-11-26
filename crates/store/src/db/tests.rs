@@ -215,6 +215,24 @@ fn select_account_vault_updates_v2(
     })
 }
 
+fn select_account_storage_map_updates_v2(
+    db: &TestDb,
+    account: AccountId,
+    range: RangeInclusive<BlockNumber>,
+    cursor: Option<queries::StorageMapCursor>,
+    page_size: NonZeroUsize,
+) -> Result<queries::StorageMapUpdatesPage> {
+    db.read(move |tx| {
+        queries::account_storage_map_updates_page(
+            tx,
+            account,
+            crate::ScopedBlockRange::new_unchecked(range),
+            cursor.as_ref(),
+            page_size,
+        )
+    })
+}
+
 fn insert_storage_map_value(
     db: &TestDb,
     account_id: AccountId,
@@ -5048,24 +5066,22 @@ fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
         let mut values = vec![];
         loop {
             let start = cursor.clone();
-            let page = db
-                .read(move |tx| {
-                    queries::AccountStorageMapUpdatesV2::new(
-                        account,
-                        crate::ScopedBlockRange::new_unchecked(2.into()..=5.into()),
-                        page_size,
-                    )
-                    .page(tx, &cursor)
-                })
-                .unwrap();
+            let page = select_account_storage_map_updates_v2(
+                db,
+                account,
+                2.into()..=5.into(),
+                cursor,
+                page_size,
+            )
+            .unwrap();
             if let Some(start) = start {
                 assert_eq!(
-                    (&page.items[0].block_num, &page.items[0].slot_name, &page.items[0].key),
+                    (&page.values[0].block_num, &page.values[0].slot_name, &page.values[0].key),
                     (&start.block_num, &start.slot_name, &start.key)
                 );
             }
-            values.extend(page.items);
-            match page.next.flatten() {
+            values.extend(page.values);
+            match page.next_cursor {
                 Some(next) => cursor = Some(next),
                 None => break,
             }
@@ -5104,39 +5120,21 @@ fn storage_map_stream_rechecks_retention_between_pages() {
         )
         .unwrap();
     }
-    let first = db
-        .read(move |tx| {
-            queries::AccountStorageMapUpdatesV2::new(
-                account,
-                crate::ScopedBlockRange::new_unchecked(0.into()..=5.into()),
-                NonZeroUsize::MIN,
-            )
-            .page(tx, &None)
-        })
-        .unwrap();
-    let cursor = first.next.flatten().expect("must continue within block five");
-    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
-    let at_cutoff = cursor.clone();
-    assert!(
-        db.read(move |tx| queries::AccountStorageMapUpdatesV2::new(
+    let page = |cursor| {
+        select_account_storage_map_updates_v2(
+            db,
             account,
-            crate::ScopedBlockRange::new_unchecked(0.into()..=5.into()),
-            NonZeroUsize::MIN
+            0.into()..=5.into(),
+            cursor,
+            NonZeroUsize::MIN,
         )
-        .page(tx, &Some(at_cutoff)))
-            .is_ok()
-    );
+    };
+    let cursor = page(None).unwrap().next_cursor.expect("must continue within block five");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    assert!(page(Some(cursor.clone())).is_ok());
     create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
     prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
-    assert_matches!(
-        db.read(move |tx| queries::AccountStorageMapUpdatesV2::new(
-            account,
-            crate::ScopedBlockRange::new_unchecked(0.into()..=5.into()),
-            NonZeroUsize::MIN
-        )
-        .page(tx, &Some(cursor))),
-        Err(DatabaseError::BlockPruned { .. })
-    );
+    assert_matches!(page(Some(cursor)), Err(DatabaseError::BlockPruned { .. }));
 }
 
 /// Vault pages include the first key at the range start and split a block without omissions.
@@ -5223,12 +5221,12 @@ fn streaming_history_queries_validate_retention_before_empty_selection() {
     let vault =
         select_account_vault_updates_v2(&db, account, 0.into()..=1.into(), None, NonZeroUsize::MIN);
     assert_matches!(vault, Err(DatabaseError::BlockPruned { .. }));
-    db.read(move |tx| -> Result<()> {
-        let range = crate::ScopedBlockRange::new_unchecked(0.into()..=1.into());
-        let maps = queries::AccountStorageMapUpdatesV2::new(account, range, NonZeroUsize::MIN)
-            .page(tx, &None);
-        assert_matches!(maps, Err(DatabaseError::BlockPruned { .. }));
-        Ok(())
-    })
-    .unwrap();
+    let maps = select_account_storage_map_updates_v2(
+        &db,
+        account,
+        0.into()..=1.into(),
+        None,
+        NonZeroUsize::MIN,
+    );
+    assert_matches!(maps, Err(DatabaseError::BlockPruned { .. }));
 }

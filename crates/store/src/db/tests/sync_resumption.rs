@@ -114,17 +114,14 @@ impl History {
             Kind::Maps => {
                 let mut cursor = None;
                 loop {
-                    let account = self.account;
-                    let range = range.clone();
-                    let page = self.db.read(move |tx| {
-                        queries::AccountStorageMapUpdatesV2::new(
-                            account,
-                            crate::ScopedBlockRange::new_unchecked(range),
-                            size,
-                        )
-                        .page(tx, &cursor)
-                    })?;
-                    updates.extend(page.items.into_iter().map(|row| {
+                    let page = select_account_storage_map_updates_v2(
+                        &self.db,
+                        self.account,
+                        range.clone(),
+                        cursor,
+                        size,
+                    )?;
+                    updates.extend(page.values.into_iter().map(|row| {
                         let key = (0..7)
                             .find(|key| Self::map_key(*key) == (row.slot_name.clone(), row.key))
                             .unwrap();
@@ -132,7 +129,7 @@ impl History {
                             (row.value != Word::empty()).then(|| row.value[3].as_canonical_u64());
                         (row.block_num.as_u32(), key, amount)
                     }));
-                    match page.next.flatten() {
+                    match page.next_cursor {
                         Some(next) => cursor = Some(next),
                         None => break,
                     }

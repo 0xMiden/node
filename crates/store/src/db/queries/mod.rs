@@ -217,8 +217,6 @@ mod apply_block;
 pub(crate) use apply_block::apply_block;
 
 mod select_account_storage_map_updates_v2;
-#[cfg(test)]
-pub(crate) use select_account_storage_map_updates_v2::AccountStorageMapUpdatesV2;
 pub use select_account_storage_map_updates_v2::{
     StorageMapCursor,
     StorageMapUpdatesPage,
