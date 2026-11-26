@@ -330,15 +330,16 @@ impl BlockBuilder {
             .validator_config()
             .keys()
             .iter()
-            .enumerate()
-            .map(|(position, key)| {
+            .map(|key| {
                 responses
                     .iter()
                     .find(|response| &response.public_key == key)
                     .map(|response| {
                         ValidatorSignature::new(key.clone(), response.signature.clone())
                     })
-                    .ok_or(BuildBlockError::MissingValidatorSignature { position })
+                    .ok_or_else(|| BuildBlockError::MissingValidatorSignature {
+                        public_key: key.clone(),
+                    })
             })
             .collect::<Result<Vec<_>, _>>()?;
         let signatures = BlockSignatures::new(signatures)

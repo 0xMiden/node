@@ -411,9 +411,7 @@ async fn coalesce_blocks(
 /// signatures into a fully signed block, validated against the trusted `parent` header.
 ///
 /// Every validator serves the same header and body for a committed block, but each backup carries
-/// exactly one signature — the validator's own — and does not record which position in the
-/// validator set that signature occupies. The signatures are therefore matched to their positions
-/// by verifying them against the validator keys committed to by the parent header.
+/// exactly one signature, the validator's own.
 async fn next_coalesced_block(
     block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)],
     parent: &BlockHeader,
@@ -472,7 +470,7 @@ async fn next_coalesced_block(
     let (header, body, protocol_config) =
         first_parts.context("at least one validator stream is required")?;
 
-    let signatures = coalesce_signatures(signatures, parent.validator_config())?;
+    let signatures = require_full_signature_set(signatures, parent.validator_config())?;
     let block = SignedBlock::new_unchecked(header, body, signatures);
 
     // Fully validate the reconstructed block before it is persisted, including verifying the
@@ -496,7 +494,7 @@ async fn next_coalesced_block(
 ///
 /// Every validator in the set must have signed. The signatures are authenticated later, when the
 /// coalesced block is validated against its parent.
-fn coalesce_signatures(
+fn require_full_signature_set(
     signatures: Vec<ValidatorSignature>,
     validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {

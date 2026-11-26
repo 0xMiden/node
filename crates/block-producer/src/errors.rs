@@ -9,6 +9,7 @@ use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
 use miden_protocol::batch::BatchId;
 use miden_protocol::block::BlockNumber;
+use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::errors::{ProposedBatchError, ProposedBlockError, ProvenBatchError};
 use miden_protocol::note::{NoteId, Nullifier};
 use miden_protocol::transaction::TransactionId;
@@ -194,10 +195,8 @@ pub enum BuildBlockError {
     ValidateBlockFailed(#[source] Box<ValidatorError>),
     #[error("block signatures are invalid")]
     InvalidSignature,
-    #[error(
-        "no signature received for the validator key at position {position} of the parent's validator set"
-    )]
-    MissingValidatorSignature { position: usize },
+    #[error("no signature received from validator {public_key} of the parent's validator set")]
+    MissingValidatorSignature { public_key: PublicKey },
     #[error(
         "block commitment signed by a validator {validator} does not match the block proposed by the sequencer {sequencer}"
     )]

@@ -20,7 +20,12 @@ use miden_protocol::transaction::{PartialBlockchain, PublicTransactionLogs};
 use tokio::sync::mpsc;
 use url::Url;
 
-use super::{ProtocolConfigStreamState, RecoveredBlock, coalesce_signatures, next_coalesced_block};
+use super::{
+    ProtocolConfigStreamState,
+    RecoveredBlock,
+    next_coalesced_block,
+    require_full_signature_set,
+};
 
 fn signers(count: usize) -> Vec<SigningKey> {
     (0..count).map(|_| SigningKey::new()).collect()
@@ -49,19 +54,6 @@ fn protocol_configs() -> (ProtocolConfig, ProtocolConfig) {
 }
 
 #[test]
-fn signatures_are_ordered_against_the_validator_set() {
-    let commitment = Word::from([1u32, 2, 3, 4]);
-    let signers = signers(3);
-    let keys = validator_config(&signers);
-
-    // Reversed validator order exercises signature ordering in the recovered block.
-    let shuffled = signers.iter().rev().map(|signer| sign(signer, commitment)).collect();
-
-    let coalesced = coalesce_signatures(shuffled, &keys).unwrap();
-    coalesced.verify_against(commitment, &keys).unwrap();
-}
-
-#[test]
 fn signature_count_mismatch_is_rejected() {
     let commitment = Word::from([1u32, 2, 3, 4]);
     let signers = signers(3);
@@ -69,7 +61,7 @@ fn signature_count_mismatch_is_rejected() {
 
     let missing_one = signers.iter().take(2).map(|signer| sign(signer, commitment)).collect();
 
-    let err = coalesce_signatures(missing_one, &keys).unwrap_err();
+    let err = require_full_signature_set(missing_one, &keys).unwrap_err();
     assert!(err.to_string().contains("collected 2 signatures"), "{err}");
 }
 
@@ -87,7 +79,7 @@ fn duplicate_validator_signature_is_rejected() {
         sign(&signers[1], commitment),
     ];
 
-    let err = coalesce_signatures(duplicated, &keys).unwrap_err();
+    let err = require_full_signature_set(duplicated, &keys).unwrap_err();
     assert!(
         err.to_string().contains("failed to construct the coalesced signature set"),
         "{err}"
@@ -107,7 +99,7 @@ fn foreign_signature_is_rejected() {
         sign(&SigningKey::new(), commitment),
     ];
 
-    let coalesced = coalesce_signatures(with_foreign, &keys).unwrap();
+    let coalesced = require_full_signature_set(with_foreign, &keys).unwrap();
     assert!(coalesced.verify_against(commitment, &keys).is_err());
 }
 

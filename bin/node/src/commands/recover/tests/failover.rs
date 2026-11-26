@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 use tokio_stream::StreamExt;
 use url::Url;
 
-use super::super::{coalesce_signatures, inputs, recover_from_validators};
+use super::super::{inputs, recover_from_validators, require_full_signature_set};
 use super::support::*;
 
 #[tokio::test]
@@ -120,7 +120,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         let block = SignedBlock::new_unchecked(
             header,
             body,
-            coalesce_signatures(signatures, parent.validator_config())?,
+            require_full_signature_set(signatures, parent.validator_config())?,
         );
         let original = tempfile::tempdir()?;
         State::bootstrap(
@@ -425,7 +425,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 .await?
                 .into_inner()
                 .decode_and_build_unchecked()?;
-            let signatures = coalesce_signatures(
+            let signatures = require_full_signature_set(
                 vec![ValidatorSignature::new(response.public_key, response.signature)],
                 parent.validator_config(),
             )?;
