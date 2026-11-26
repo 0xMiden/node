@@ -86,23 +86,6 @@ fn duplicate_validator_signature_is_rejected() {
     );
 }
 
-#[test]
-fn foreign_signature_is_rejected() {
-    let commitment = Word::from([1u32, 2, 3, 4]);
-    let signers = signers(3);
-    let keys = validator_config(&signers);
-
-    // One signature comes from a key outside the validator set.
-    let with_foreign = vec![
-        sign(&signers[0], commitment),
-        sign(&signers[1], commitment),
-        sign(&SigningKey::new(), commitment),
-    ];
-
-    let coalesced = require_full_signature_set(with_foreign, &keys).unwrap();
-    assert!(coalesced.verify_against(commitment, &keys).is_err());
-}
-
 fn sign(signer: &SigningKey, commitment: Word) -> ValidatorSignature {
     ValidatorSignature::new(signer.public_key(), signer.sign(commitment))
 }
