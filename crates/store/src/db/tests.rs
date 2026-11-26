@@ -5261,21 +5261,22 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
             let start = cursor;
             let page = db
                 .read(move |tx| {
-                    queries::NullifierUpdatesPaged::new(
+                    queries::nullifier_updates_page(
+                        tx,
                         vec![1, 2, 1],
                         crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                        cursor,
                         page_size,
                     )
-                    .page(tx, &cursor)
                 })
                 .unwrap();
             if let Some(start) = start {
                 assert_eq!(
-                    (page.items[0].block_num, page.items[0].nullifier),
+                    (page.records[0].block_num, page.records[0].nullifier),
                     (start.block, start.nullifier)
                 );
             }
-            for row in page.items {
+            for row in page.records {
                 assert_eq!(row.block_num, BlockNumber::from(1));
                 assert!(found.insert(row.nullifier));
                 ordered.push(row.nullifier);
@@ -5283,23 +5284,24 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
             if cursor.is_none() && page_size.get() == 1 {
                 insert_nullifiers_for_block(db, &[num_to_nullifier((1 << 48) + 99)], 2.into())
                     .unwrap();
-                let earlier_cursor = page.next.flatten();
+                let earlier_cursor = page.next_cursor;
                 let later = db
                     .read(move |tx| {
-                        queries::NullifierUpdatesPaged::new(
+                        queries::nullifier_updates_page(
+                            tx,
                             vec![1],
                             crate::ScopedBlockRange::new_unchecked(2.into()..=2.into()),
+                            earlier_cursor,
                             NonZeroUsize::MIN,
                         )
-                        .page(tx, &earlier_cursor)
                     })
                     .unwrap();
-                assert_eq!(later.items.len(), 1);
-                assert_eq!(later.items[0].block_num, BlockNumber::from(2));
-                assert_eq!(later.items[0].nullifier, num_to_nullifier((1 << 48) + 99));
-                assert!(later.next.flatten().is_none());
+                assert_eq!(later.records.len(), 1);
+                assert_eq!(later.records[0].block_num, BlockNumber::from(2));
+                assert_eq!(later.records[0].nullifier, num_to_nullifier((1 << 48) + 99));
+                assert!(later.next_cursor.is_none());
             }
-            cursor = page.next.flatten();
+            cursor = page.next_cursor;
             if cursor.is_none() {
                 break;
             }
@@ -5313,16 +5315,17 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
     for prefixes in [vec![], vec![3]] {
         let page = db
             .read(move |tx| {
-                queries::NullifierUpdatesPaged::new(
+                queries::nullifier_updates_page(
+                    tx,
                     prefixes,
                     crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                    None,
                     std::num::NonZeroUsize::MIN,
                 )
-                .page(tx, &None)
             })
             .unwrap();
-        assert_eq!(page.items, [] as [NullifierInfo; 0]);
-        assert!(page.next.flatten().is_none());
+        assert_eq!(page.records, [] as [NullifierInfo; 0]);
+        assert!(page.next_cursor.is_none());
     }
 }
 

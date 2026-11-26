@@ -231,5 +231,5 @@ pub(crate) use select_note_sync_page::note_sync_page;
 pub use select_note_sync_page::{NoteSyncCursor, NoteSyncPage};
 
 mod select_nullifier_updates_page;
-pub(crate) use select_nullifier_updates_page::NullifierUpdatesPaged;
+pub(crate) use select_nullifier_updates_page::nullifier_updates_page;
 pub use select_nullifier_updates_page::{NullifierCursor, NullifierUpdatesPage};
