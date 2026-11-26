@@ -3,6 +3,7 @@ use miden_node_store::{DatabaseError, RangeBeyondTip, StateSyncError};
 use miden_node_tracing::{debug, instrument};
 use miden_protocol::block::{BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::mmr::{Forest, MmrDelta, MmrError};
+use proto::miden::node::{v1, v2};
 
 use super::RpcService;
 use super::error_codes::{SyncChainMmrErrorCode, log_internal_error};
@@ -46,6 +47,71 @@ impl proto::server::miden_node_v1_node_service::SyncChainMmr for RpcService {
             proto::miden::node::v1::FinalityLevel::Proven => self.state.proven_tip(),
         };
 
+        self.chain_mmr_at(current_client_block_height, sync_target).await
+    }
+}
+
+#[tonic::async_trait]
+impl proto::server::miden_node_v2_node_service::SyncChainMmr for RpcService {
+    type Input = v2::SyncChainMmrRequest;
+    type Output = v1::SyncChainMmrResponse;
+
+    fn decode(request: v2::SyncChainMmrRequest) -> tonic::Result<Self::Input> {
+        Ok(request)
+    }
+
+    fn encode(output: Self::Output) -> tonic::Result<v2::SyncChainMmrResponse> {
+        Ok(v2::SyncChainMmrResponse {
+            block_range: output.block_range.map(|range| v2::BlockRange {
+                block_from: range.block_from,
+                block_to: range.block_to,
+            }),
+            mmr_delta: output.mmr_delta,
+            block_header: output.block_header,
+            block_signatures: output.block_signatures,
+            protocol_config: output.protocol_config,
+        })
+    }
+
+    #[instrument(
+        name = "sync_chain_mmr_v2",
+        fields(
+            current_client_block_height = request.current_client_block_height,
+            block_range.to = request.target_block_num,
+            finality_level = v2::FinalityLevel::try_from(request.finality_level).ok(),
+        ),
+        err
+    )]
+    async fn handle(
+        &self,
+        request: Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::Output> {
+        let finality = v2::FinalityLevel::try_from(request.finality_level)
+            .map_err(|_| tonic::Status::invalid_argument("unknown finality level"))?;
+        let ceiling = match finality {
+            v2::FinalityLevel::Proven => self.state.proven_tip(),
+            v2::FinalityLevel::Unspecified | v2::FinalityLevel::Committed => {
+                self.state.committed_tip()
+            },
+        };
+        let target = request.target_block_num.map_or(ceiling, BlockNumber::from);
+        if target > ceiling {
+            return Err(tonic::Status::out_of_range(format!(
+                "target block {target} exceeds selected tip {ceiling}"
+            )));
+        }
+        self.chain_mmr_at(request.current_client_block_height.into(), target).await
+    }
+}
+
+impl RpcService {
+    async fn chain_mmr_at(
+        &self,
+        current_client_block_height: BlockNumber,
+        sync_target: BlockNumber,
+    ) -> tonic::Result<v1::SyncChainMmrResponse> {
         if current_client_block_height > sync_target {
             return Err(SyncChainMmrErrorCode::FutureBlock.invalid_argument(format!(
                 "start block is not known: current client block height {current_client_block_height} is greater than chain tip {sync_target}"
