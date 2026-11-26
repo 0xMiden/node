@@ -4,8 +4,6 @@ use miden_protocol::account::AccountId;
 
 use super::ReadTransaction;
 use crate::db::TransactionRecordsPage;
-use crate::db::pagination::Paginated;
-use crate::db::queries::TransactionRecordsPaged;
 use crate::{DatabaseError, ScopedBlockRange, TransactionCursor};
 
 impl ReadTransaction<'_> {
@@ -17,10 +15,6 @@ impl ReadTransaction<'_> {
         cursor: Option<TransactionCursor>,
         limit: NonZeroUsize,
     ) -> Result<TransactionRecordsPage, DatabaseError> {
-        let page = TransactionRecordsPaged::new(ids, range, limit).page(self.inner, &cursor)?;
-        Ok(TransactionRecordsPage {
-            records: page.items,
-            next_cursor: page.next.flatten(),
-        })
+        crate::db::queries::transaction_records_page(self.inner, ids, range, cursor, limit)
     }
 }

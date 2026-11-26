@@ -4653,15 +4653,16 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     assert_eq!(*record, expected);
     let history = db
         .read(move |tx_db| {
-            queries::TransactionRecordsPaged::new(
+            queries::transaction_records_page(
+                tx_db,
                 vec![bob],
                 crate::ScopedBlockRange::new_unchecked(BlockNumber::GENESIS..=block_num),
+                None,
                 NonZeroUsize::MIN,
             )
-            .page(tx_db, &None)
         })
         .unwrap();
-    assert_eq!(history.items, retrieved.1);
+    assert_eq!(history.records, retrieved.1);
 }
 
 /// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
@@ -4714,15 +4715,16 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
     assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
     let history = db
         .read(move |tx_db| {
-            queries::TransactionRecordsPaged::new(
+            queries::transaction_records_page(
+                tx_db,
                 vec![bob],
                 crate::ScopedBlockRange::new_unchecked(BlockNumber::GENESIS..=block_num),
+                None,
                 NonZeroUsize::MIN,
             )
-            .page(tx_db, &None)
         })
         .unwrap();
-    assert_eq!(history.items, retrieved.1);
+    assert_eq!(history.records, retrieved.1);
 }
 
 /// Per-output-note contribution to a transaction's recorded `size_in_bytes`, mirroring
@@ -5297,25 +5299,26 @@ fn transaction_history_stream_continues_within_blocks_with_oversized_estimates()
         let start = cursor;
         let page = db
             .read(move |tx| {
-                queries::TransactionRecordsPaged::new(
+                queries::transaction_records_page(
+                    tx,
                     vec![account, account],
                     crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                    cursor,
                     NonZeroUsize::MIN,
                 )
-                .page(tx, &cursor)
             })
             .unwrap();
         if let Some(start) = start {
             assert_eq!(
-                (page.items[0].block_num, page.items[0].header.id()),
+                (page.records[0].block_num, page.records[0].header.id()),
                 (start.block, start.id)
             );
         }
-        actual.extend(page.items.into_iter().map(|r| {
+        actual.extend(page.records.into_iter().map(|r| {
             assert_eq!(r.block_num, 1.into());
             r.header
         }));
-        match page.next.flatten() {
+        match page.next_cursor {
             Some(next) => cursor = Some(next),
             None => break,
         }
@@ -5442,17 +5445,18 @@ fn transaction_history_byte_pages_preserve_order_across_blocks() {
     loop {
         let page = db
             .read(move |tx| {
-                queries::TransactionRecordsPaged::new(
+                queries::transaction_records_page(
+                    tx,
                     vec![account, other, account],
                     crate::ScopedBlockRange::new_unchecked(0.into()..=2.into()),
+                    cursor,
                     NonZeroUsize::new(250).unwrap(),
                 )
-                .page(tx, &cursor)
             })
             .unwrap();
-        assert_eq!(page.items.len(), 2);
-        actual.extend(page.items.into_iter().map(|record| (record.block_num, record.header)));
-        match page.next.flatten() {
+        assert_eq!(page.records.len(), 2);
+        actual.extend(page.records.into_iter().map(|record| (record.block_num, record.header)));
+        match page.next_cursor {
             Some(next) => cursor = Some(next),
             None => break,
         }

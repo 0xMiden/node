@@ -234,7 +234,7 @@ mod transaction_page;
 mod transaction_record;
 
 mod select_transactions_records_page;
-pub(crate) use select_transactions_records_page::TransactionRecordsPaged;
+pub(crate) use select_transactions_records_page::transaction_records_page;
 pub use select_transactions_records_page::{TransactionCursor, TransactionRecordsPage};
 
 mod select_nullifier_updates_page;
