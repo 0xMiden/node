@@ -23,8 +23,11 @@ pub struct StateSnapshot<'a> {
 impl StateSnapshot<'_> {
     /// Opens `key` in the storage map at `slot_name` of `account_id` as of `block_num`.
     ///
-    /// Returns `None` if no map is tracked for that slot at that block. Only public accounts have
-    /// tracked storage maps.
+    /// Returns `None` if `block_num` is after the snapshot block, or if no map is tracked for that
+    /// slot at that block. Only public accounts have tracked storage maps.
+    ///
+    /// The forest resolves a block without its own map version to the latest earlier version, so
+    /// without the block check a future block would return the current map as its state.
     pub fn open_storage_map_key(
         &self,
         account_id: AccountId,
@@ -32,6 +35,9 @@ impl StateSnapshot<'_> {
         block_num: BlockNumber,
         key: StorageMapKey,
     ) -> Option<Result<SmtProof, MerkleError>> {
+        if block_num > self.block_num {
+            return None;
+        }
         self.forest.open_storage_map_key(account_id, slot_name, block_num, key)
     }
 }

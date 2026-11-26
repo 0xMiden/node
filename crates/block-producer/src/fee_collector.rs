@@ -64,14 +64,16 @@ pub async fn deploy_fee_collector(
         max_decoding_message_size,
     )?;
 
-    let (inputs, config, genesis) = state
-        .read(|view| {
+    let fee_faucet = builder.fee_faucet().clone();
+    let (inputs, config, genesis, fee_faucet_inputs) = state
+        .read(move |view| {
             let reference_block = view.snapshot.block_num;
             let inputs =
                 read_chain_inputs(&view, reference_block, BTreeSet::new(), &BTreeSet::new())?;
             let (config, genesis) =
                 read_fee_collection_inputs(&view, &inputs.reference_block_header)?;
-            anyhow::Ok((inputs, config, genesis))
+            let fee_faucet_inputs = fee_faucet.account_inputs(&view, reference_block)?;
+            anyhow::Ok((inputs, config, genesis, fee_faucet_inputs))
         })
         .await?;
     let ChainInputs {
@@ -80,7 +82,7 @@ pub async fn deploy_fee_collector(
         ..
     } = inputs;
     let executed = builder
-        .execute(Vec::new(), header.clone(), config, blockchain.clone(), state)
+        .execute(Vec::new(), header.clone(), config, blockchain.clone(), fee_faucet_inputs, state)
         .await?;
     let inputs = executed.tx_inputs().clone();
     let transaction =

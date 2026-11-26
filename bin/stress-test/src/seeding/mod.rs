@@ -310,11 +310,14 @@ pub async fn seed_store_with_readers(
     let write_load_elapsed = start.elapsed();
     stop_readers.store(true, Ordering::Relaxed);
     let mut read_latencies = Vec::new();
+    let mut unavailable_reads = 0;
     for task in reader_tasks {
-        read_latencies.extend(task.await.expect("benchmark reader should not panic"));
+        let (latencies, unavailable) = task.await.expect("benchmark reader should not panic");
+        read_latencies.extend(latencies);
+        unavailable_reads += unavailable;
     }
     if readers > 0 {
-        report_read_latencies(&read_latencies, readers, write_load_elapsed);
+        report_read_latencies(&read_latencies, unavailable_reads, readers, write_load_elapsed);
     }
 
     // Wait for the store to release its backing storage so callers can immediately re-load the
@@ -326,19 +329,24 @@ pub async fn seed_store_with_readers(
 }
 
 /// Loops reads of the latest block header and its MMR proof against the state until `stop` is set,
-/// returning the latency of every request.
+/// returning the latency of every completed read and the number of reads that found no snapshot.
 ///
 /// The request combines an in-memory read (opening the latest block's MMR proof against the
 /// snapshot's blockchain) with a database header lookup at the snapshot's tip, so it exercises the
 /// read path most exposed to concurrent block application.
+///
+/// A read fails with [`DatabaseError::ReadSnapshotUnavailable`] when the trees of a committed block
+/// take longer than the publication timeout to appear, which the large seeding blocks can cause.
+/// Those reads are counted apart so they do not skew the latency summary.
 async fn read_latest_header_until(
     state: &Arc<State>,
     stop: &AtomicBool,
-) -> Vec<std::time::Duration> {
+) -> (Vec<std::time::Duration>, usize) {
     let mut latencies = Vec::new();
+    let mut unavailable = 0;
     while !stop.load(Ordering::Relaxed) {
         let start = Instant::now();
-        let (header, _proof) = state
+        let result = state
             .read(|view| {
                 let block_num = view.snapshot.block_num;
                 let proof = view
@@ -348,24 +356,33 @@ async fn read_latest_header_until(
                     .expect("the snapshot's blockchain contains its tip");
                 Ok::<_, DatabaseError>((view.tx.select_block_header(block_num)?, proof))
             })
-            .await
-            .expect("reading the latest block header should succeed during seeding");
-        latencies.push(start.elapsed());
-        assert!(header.is_some(), "latest block header should exist");
+            .await;
+        match result {
+            Ok((header, _proof)) => {
+                latencies.push(start.elapsed());
+                assert!(header.is_some(), "latest block header should exist");
+            },
+            Err(DatabaseError::ReadSnapshotUnavailable) => unavailable += 1,
+            Err(err) => {
+                panic!("reading the latest block header should succeed during seeding: {err}")
+            },
+        }
     }
-    latencies
+    (latencies, unavailable)
 }
 
 /// Prints read-side statistics for the mixed read/write benchmark.
 #[expect(clippy::cast_precision_loss)]
 fn report_read_latencies(
     latencies: &[std::time::Duration],
+    unavailable: usize,
     readers: usize,
     elapsed: std::time::Duration,
 ) {
     println!("Concurrent read statistics ({readers} readers during seeding):");
     println!("  Total reads: {}", latencies.len());
     println!("  Reads per second: {:.0}", latencies.len() as f64 / elapsed.as_secs_f64());
+    println!("  Reads without a published snapshot: {unavailable}");
     crate::store::metrics::print_summary(latencies);
 }
 

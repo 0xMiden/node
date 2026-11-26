@@ -15,12 +15,17 @@ use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
 use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Note;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionId};
+use miden_protocol::transaction::{
+    AccountInputs,
+    ExecutedTransaction,
+    ProvenTransaction,
+    TransactionId,
+};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use tokio::task::{JoinError, JoinSet};
 
 use crate::domain::batch::{SelectedBatch, SelectedBatchId};
-use crate::errors::BuildBatchError;
+use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::{MempoolTransaction, SharedMempool};
 use crate::store::{ChainInputs, read_chain_inputs, read_fee_collection_inputs};
@@ -246,13 +251,20 @@ impl BatchJob {
             .collect();
 
         // A deployed collector must consume at least one note to prevent replay.
-        let collect_fees = !fee_notes.is_empty();
+        let fee_faucet = (!fee_notes.is_empty()).then(|| self.fee_collector.fee_faucet().clone());
         let (inputs, fee_collection_inputs) = self
             .state
             .read(move |view| {
                 let inputs = read_chain_inputs(&view, reference_block, block_numbers, &note_ids)?;
-                let fee_collection_inputs = collect_fees
-                    .then(|| read_fee_collection_inputs(&view, &inputs.reference_block_header))
+                let fee_collection_inputs = fee_faucet
+                    .map(|fee_faucet| {
+                        let (protocol_config, genesis) =
+                            read_fee_collection_inputs(&view, &inputs.reference_block_header)?;
+                        // A native faucet that cannot be read fails the fee transaction, not the
+                        // batch inputs.
+                        let fee_faucet_inputs = fee_faucet.account_inputs(&view, reference_block);
+                        Ok::<_, StoreError>((protocol_config, genesis, fee_faucet_inputs))
+                    })
                     .transpose()?;
                 Ok((inputs, fee_collection_inputs))
             })
@@ -260,9 +272,12 @@ impl BatchJob {
             .map_err(BuildBatchError::FetchBatchInputsFailed)?;
         let executed_fee_collection = match fee_collection_inputs {
             None => None,
-            Some((protocol_config, genesis)) => {
-                let executed =
-                    self.execute_fee_collection(fee_notes, &inputs, protocol_config).await?;
+            Some((protocol_config, genesis, fee_faucet_inputs)) => {
+                let fee_faucet_inputs =
+                    fee_faucet_inputs.map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+                let executed = self
+                    .execute_fee_collection(fee_notes, &inputs, protocol_config, fee_faucet_inputs)
+                    .await?;
                 Some((executed, genesis))
             },
         };
@@ -302,6 +317,7 @@ impl BatchJob {
         fee_notes: Vec<Note>,
         inputs: &ChainInputs,
         protocol_config: ProtocolConfig,
+        fee_faucet_inputs: AccountInputs,
     ) -> Result<ExecutedTransaction, BuildBatchError> {
         self.fee_collector
             .execute(
@@ -309,6 +325,7 @@ impl BatchJob {
                 inputs.reference_block_header.clone(),
                 protocol_config,
                 inputs.partial_blockchain.clone(),
+                fee_faucet_inputs,
                 &self.state,
             )
             .await
