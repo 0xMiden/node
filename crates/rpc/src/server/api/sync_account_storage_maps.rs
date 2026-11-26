@@ -1,10 +1,15 @@
 use miden_node_proto::errors::ConversionResultExt;
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
-use miden_node_store::DatabaseError;
+use miden_node_store::{DatabaseError, default_storage_map_entries_limit};
 use miden_node_tracing::{debug, instrument, miden_span_record};
 
 use super::error_codes::SyncAccountStorageMapsErrorCode;
-use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
+use super::{
+    RpcService,
+    check_account_sync_range,
+    database_error_to_status,
+    invalid_block_range_to_status,
+};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncAccountStorageMaps for RpcService {
@@ -55,22 +60,29 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMaps for RpcSe
                 .invalid_argument(format!("account {account_id} is not public")));
         }
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
-        let (chain_tip, storage_maps_page) = self
+        let block_to = *block_range.end();
+        let (chain_tip, page) = self
             .state
-            .with_view(async |view| {
-                view.sync_account_storage_maps(account_id, block_range)
-                    .await
-                    .map(|page| (view.tip(), page))
-                    .map_err(|err| match err {
-                        DatabaseError::RangeBeyondTip(_) => {
-                            SyncAccountStorageMapsErrorCode::FutureBlock.invalid_argument(err)
-                        },
-                        err => database_error_to_status(&err),
-                    })
+            .read(move |view| {
+                let chain_tip = view.snapshot.block_num;
+                check_account_sync_range(&block_range, chain_tip)?;
+                let page = view.tx.select_account_storage_map_values_paged(
+                    account_id,
+                    block_range,
+                    default_storage_map_entries_limit(),
+                )?;
+                Ok::<_, DatabaseError>((chain_tip, page))
             })
-            .await?;
-        let updates = storage_maps_page
-            .values
+            .await
+            .map_err(|err| match err {
+                DatabaseError::RangeBeyondTip(_) => {
+                    SyncAccountStorageMapsErrorCode::FutureBlock.invalid_argument(err)
+                },
+                err => database_error_to_status(&err),
+            })?;
+        let last_block_included = page.last_block_included(block_to);
+        let updates = page
+            .items
             .into_iter()
             .map(|map_value| proto::miden::node::v1::StorageMapUpdate {
                 slot_name: map_value.slot_name.to_string(),
@@ -83,7 +95,7 @@ impl proto::server::miden_node_v1_node_service::SyncAccountStorageMaps for RpcSe
         Ok(proto::miden::node::v1::SyncAccountStorageMapsResponse {
             pagination_info: Some(proto::miden::node::v1::PaginationInfo {
                 chain_tip: chain_tip.as_u32(),
-                block_num: storage_maps_page.last_block_included.as_u32(),
+                block_num: last_block_included.as_u32(),
             }),
             updates,
         })

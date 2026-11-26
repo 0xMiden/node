@@ -4,7 +4,13 @@ use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamAccountIdLimit;
 
 use super::error_codes::SyncTransactionsErrorCode;
-use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
+use super::{
+    RpcService,
+    check,
+    check_range_within_tip,
+    database_error_to_status,
+    invalid_block_range_to_status,
+};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService {
@@ -56,22 +62,24 @@ impl proto::server::miden_node_v1_node_service::SyncTransactions for RpcService 
         );
 
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
-        let (chain_tip, (last_block_included, transaction_records_db)) = self
+        let block_to = *block_range.end();
+        let (chain_tip, page) = self
             .state
-            .with_view(async |view| {
-                view.sync_transactions(account_ids, block_range)
-                    .await
-                    .map(|records| (view.tip(), records))
-                    .map_err(|err| match err {
-                        DatabaseError::RangeBeyondTip(_) => {
-                            SyncTransactionsErrorCode::FutureBlock.invalid_argument(err)
-                        },
-                        err => database_error_to_status(&err),
-                    })
+            .read(move |view| {
+                let chain_tip = view.snapshot.block_num;
+                check_range_within_tip(&block_range, chain_tip)?;
+                let page = view.tx.select_transactions_records(&account_ids, block_range)?;
+                Ok::<_, DatabaseError>((chain_tip, page))
             })
-            .await?;
-        let transactions =
-            transaction_records_db.into_iter().map(transaction_record_to_proto).collect();
+            .await
+            .map_err(|err| match err {
+                DatabaseError::RangeBeyondTip(_) => {
+                    SyncTransactionsErrorCode::FutureBlock.invalid_argument(err)
+                },
+                err => database_error_to_status(&err),
+            })?;
+        let last_block_included = page.last_block_included(block_to);
+        let transactions = page.items.into_iter().map(transaction_record_to_proto).collect();
 
         Ok(proto::miden::node::v1::SyncTransactionsResponse {
             pagination_info: Some(proto::miden::node::v1::PaginationInfo {

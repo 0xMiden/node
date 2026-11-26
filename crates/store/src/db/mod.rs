@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use futures::{Stream, TryStreamExt};
-use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
+use miden_node_db::sqlite::{DbReader, DbWriter, ReadTx, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_tracing::{info, instrument, warn};
 use miden_node_utils::limiter::{
@@ -48,13 +48,14 @@ pub use crate::db::queries::{
 };
 use crate::errors::DatabaseError;
 use crate::genesis::GenesisBlock;
-use crate::read::ReadTransaction;
+use crate::read::{ReadTransaction, StorageMapValue};
 use crate::state::ScopedBlockNum;
 
 const STORAGE_MAP_VALUE_PER_ROW_BYTES: usize =
     2 * size_of::<Word>() + size_of::<u32>() + size_of::<u8>();
 
-pub(crate) fn default_storage_map_entries_limit() -> usize {
+/// Returns the maximum number of storage map values that fit in one response page.
+pub fn default_storage_map_entries_limit() -> usize {
     MAX_RESPONSE_PAYLOAD_BYTES / STORAGE_MAP_VALUE_PER_ROW_BYTES
 }
 
@@ -313,18 +314,6 @@ impl Db {
     pub fn migrate(database_filepath: impl AsRef<Path>) -> Result<(), DatabaseError> {
         migrate_database(database_filepath.as_ref())?;
         Ok(())
-    }
-
-    /// Reads the page of `query` that starts at `next`.
-    #[instrument(level = "debug", err(level = "debug"))]
-    pub(crate) async fn page<Q: Paginated>(
-        &self,
-        query: Q,
-        next: Q::Cursor,
-    ) -> Result<Page<Q::Item, Q::Cursor>> {
-        self.reader
-            .read(std::any::type_name::<Q>(), move |tx| query.page(tx, &next))
-            .await
     }
 
     /// Streams the items of every non-empty page of `query` in order, starting at `start` and
@@ -598,8 +587,11 @@ impl Db {
         // TODO this remains expensive with a large history until we implement pruning for DB
         // columns
         let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
-        let query =
-            queries::AccountStorageMapValuesPaged::new(account_id, block_num, entries_limit);
+        let query = StorageMapValuesUpTo {
+            account_id,
+            block_to: *block_num,
+            limit: entries_limit,
+        };
 
         let mut values = Vec::new();
         let mut pages = pin!(self.pages(query, BlockNumber::GENESIS));
@@ -654,5 +646,30 @@ impl Db {
                 queries::select_vault_at_block(tx, account_id, *block_num)
             })
             .await
+    }
+}
+
+/// Pages through the storage map values an account wrote up to `block_to`, with at most `limit`
+/// values per page.
+struct StorageMapValuesUpTo {
+    account_id: AccountId,
+    block_to: BlockNumber,
+    limit: usize,
+}
+
+impl Paginated for StorageMapValuesUpTo {
+    type Item = StorageMapValue;
+    type Cursor = BlockNumber;
+
+    fn page(
+        &self,
+        tx: &ReadTx<'_>,
+        next: &BlockNumber,
+    ) -> Result<Page<StorageMapValue, BlockNumber>> {
+        ReadTransaction::new(tx).select_account_storage_map_values_paged(
+            self.account_id,
+            *next..=self.block_to,
+            self.limit,
+        )
     }
 }

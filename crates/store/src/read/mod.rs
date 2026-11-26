@@ -5,12 +5,16 @@ mod snapshot;
 mod transaction;
 
 pub use snapshot::StateSnapshot;
-pub use transaction::ReadTransaction;
+#[cfg(test)]
+pub(crate) use transaction::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
+pub use transaction::{ReadTransaction, StorageMapValue};
 pub(crate) use transaction::{
     select_block_header,
     select_block_headers,
     select_note_inclusion_proofs,
 };
+
+pub use crate::db::pagination::Page;
 
 /// A read-only database transaction and tree snapshot at the same committed block.
 ///

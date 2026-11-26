@@ -1,11 +1,11 @@
 use miden_node_proto::{DecodeMessage, Verify, generated as proto};
 use miden_node_store::{NoteSyncError, NoteSyncRecord};
 use miden_node_tracing::{debug, instrument, miden_span_record};
-use miden_node_utils::limiter::QueryParamNoteTagLimit;
+use miden_node_utils::limiter::{MAX_RESPONSE_PAYLOAD_BYTES, QueryParamNoteTagLimit};
 use tonic::Status;
 
 use super::error_codes::{SyncErrorCode, SyncNotesErrorCode, log_internal_error};
-use super::{RpcService, check, invalid_block_range_to_status};
+use super::{RpcService, check, check_range_within_tip, invalid_block_range_to_status};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
@@ -49,15 +49,36 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
         );
 
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
-        let (chain_tip, (results, last_block_checked)) = self
+        let (chain_tip, results, last_block_checked) = self
             .state
-            .with_view(async |view| {
-                view.sync_notes(note_tags, block_range)
-                    .await
-                    .map(|notes| (view.tip(), notes))
-                    .map_err(note_sync_error_to_status)
+            .read(move |view| {
+                let chain_tip = view.snapshot.block_num;
+                check_range_within_tip(&block_range, chain_tip)?;
+                let block_to = *block_range.end();
+                let page = view.tx.select_note_sync_updates(
+                    &note_tags,
+                    block_range,
+                    MAX_RESPONSE_PAYLOAD_BYTES,
+                )?;
+                let last_block_checked = page.last_block_included(block_to);
+
+                // The MMR at forest N contains proofs for blocks 0..N-1, so forest `block_to + 1`
+                // includes the proof for `block_to`. The snapshot's MMR has `chain_tip + 1` leaves,
+                // and `block_to` is at or below the chain tip.
+                let mmr_checkpoint = block_to + 1;
+                let mut results = Vec::with_capacity(page.items.len());
+                for update in page.items {
+                    let mmr_proof = view
+                        .snapshot
+                        .blockchain
+                        .open_at(update.block_header.block_num(), mmr_checkpoint)?;
+                    results.push((update, mmr_proof));
+                }
+
+                Ok::<_, NoteSyncError>((chain_tip, results, last_block_checked))
             })
-            .await?;
+            .await
+            .map_err(note_sync_error_to_status)?;
         let blocks = results
             .into_iter()
             .map(

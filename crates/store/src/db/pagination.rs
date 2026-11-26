@@ -11,9 +11,9 @@ use crate::errors::DatabaseError;
 // PAGE
 // ================================================================================================
 
-/// One page of results from a [`Paginated`] query.
+/// One page of results from a paginated read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Page<T, C> {
+pub struct Page<T, C> {
     /// The items in this page, in cursor order.
     pub items: Vec<T>,
     /// Where the next page starts, or `None` if this is the last page.
@@ -25,7 +25,7 @@ impl<T, C> Page<T, C> {
     ///
     /// Queries fetch one row beyond the page size to learn whether another page exists without a
     /// separate count. The extra row is dropped, and its cursor becomes the start of the next page.
-    pub fn from_overflow(
+    pub(crate) fn from_overflow(
         mut rows: Vec<T>,
         page_size: NonZeroUsize,
         cursor_of: impl Fn(&T) -> C,

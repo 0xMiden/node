@@ -5,7 +5,12 @@ use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_protocol::Word;
 
 use super::error_codes::SyncAccountVaultErrorCode;
-use super::{RpcService, database_error_to_status, invalid_block_range_to_status};
+use super::{
+    RpcService,
+    check_account_sync_range,
+    database_error_to_status,
+    invalid_block_range_to_status,
+};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService {
@@ -56,21 +61,25 @@ impl proto::server::miden_node_v1_node_service::SyncAccountVault for RpcService 
                 .invalid_argument(format!("account {account_id} is not public")));
         }
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
-        let (chain_tip, (last_included_block, updates)) = self
+        let block_to = *block_range.end();
+        let (chain_tip, page) = self
             .state
-            .with_view(async |view| {
-                view.sync_account_vault(account_id, block_range)
-                    .await
-                    .map(|updates| (view.tip(), updates))
-                    .map_err(|err| match err {
-                        DatabaseError::RangeBeyondTip(_) => {
-                            SyncAccountVaultErrorCode::FutureBlock.invalid_argument(err)
-                        },
-                        err => database_error_to_status(&err),
-                    })
+            .read(move |view| {
+                let chain_tip = view.snapshot.block_num;
+                check_account_sync_range(&block_range, chain_tip)?;
+                let page = view.tx.select_account_vault_assets(account_id, block_range)?;
+                Ok::<_, DatabaseError>((chain_tip, page))
             })
-            .await?;
-        let updates = updates
+            .await
+            .map_err(|err| match err {
+                DatabaseError::RangeBeyondTip(_) => {
+                    SyncAccountVaultErrorCode::FutureBlock.invalid_argument(err)
+                },
+                err => database_error_to_status(&err),
+            })?;
+        let last_included_block = page.last_block_included(block_to);
+        let updates = page
+            .items
             .into_iter()
             .map(|update| {
                 let vault_key: Word = update.vault_key.into();

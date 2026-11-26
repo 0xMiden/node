@@ -99,21 +99,22 @@ use crate::account_state_forest::{
     HISTORICAL_BLOCK_RETENTION,
     TestAccountStateForestExt,
 };
-use crate::db::pagination::{Page, Paginated};
+use crate::db::pagination::Page;
 use crate::db::queries::{
     self,
-    NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
-    NOTE_SYNC_RECORD_BYTES,
     PrecomputedPublicAccountState,
     PrecomputedPublicAccountStates,
     PreparedTransactionLogs,
-    StorageMapValue,
-    StorageMapValuesPage,
     insert_transactions as insert_transaction_records,
 };
 use crate::db::{AccountVaultValue, BlockHeaderCommitment, NoteSyncUpdate, Result, TestDb, utils};
 use crate::errors::DatabaseError;
-use crate::read::ReadTransaction;
+use crate::read::{
+    NOTE_SYNC_BLOCK_OVERHEAD_BYTES,
+    NOTE_SYNC_RECORD_BYTES,
+    ReadTransaction,
+    StorageMapValue,
+};
 
 mod transaction_logs;
 
@@ -228,17 +229,14 @@ fn select_all_nullifiers(db: &TestDb) -> Result<Vec<NullifierInfo>> {
 
 fn select_nullifiers_by_prefix(
     db: &TestDb,
-    prefix_len: u8,
     nullifier_prefixes: &[u16],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(Vec<NullifierInfo>, BlockNumber)> {
-    let (block_from, block_to) = block_range.into_inner();
-    let query = queries::NullifiersByPrefix::new(
-        prefix_len,
-        nullifier_prefixes.to_vec(),
-        ScopedBlockNum::new_unchecked(block_to),
-    );
-    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let block_to = *block_range.end();
+    let nullifier_prefixes = nullifier_prefixes.to_vec();
+    let page = db.read(move |tx| {
+        ReadTransaction::new(tx).select_nullifiers_by_prefix(&nullifier_prefixes, block_range)
+    })?;
     let last_block_included = page.last_block_included(block_to);
     Ok((page.items, last_block_included))
 }
@@ -261,19 +259,20 @@ fn select_note_script_by_root(db: &TestDb, root: Word) -> Result<Option<NoteScri
     db.read(move |tx| ReadTransaction::new(tx).select_note_script_by_root(root))
 }
 
-fn get_note_sync_multi(
+fn select_note_sync_updates(
     db: &TestDb,
     note_tags: &[u32],
     block_range: RangeInclusive<BlockNumber>,
     max_response_payload_bytes: usize,
 ) -> Result<Page<NoteSyncUpdate, BlockNumber>> {
-    let (block_from, block_to) = block_range.into_inner();
-    let query = queries::NoteSyncMulti::new(
-        note_tags.to_vec(),
-        ScopedBlockNum::new_unchecked(block_to),
-        max_response_payload_bytes,
-    );
-    db.read(move |tx| query.page(tx, &block_from))
+    let note_tags = note_tags.to_vec();
+    db.read(move |tx| {
+        ReadTransaction::new(tx).select_note_sync_updates(
+            &note_tags,
+            block_range,
+            max_response_payload_bytes,
+        )
+    })
 }
 
 fn select_block_header(db: &TestDb, block_num: BlockNumber) -> Result<Option<BlockHeader>> {
@@ -311,19 +310,27 @@ fn select_latest_storage(db: &TestDb, account_id: AccountId) -> Result<AccountSt
     db.read(move |tx| queries::select_latest_storage(tx, account_id))
 }
 
+/// A page of storage map values with the last block it covers completely.
+#[derive(Debug)]
+struct StorageMapValuesPage {
+    last_block_included: BlockNumber,
+    values: Vec<StorageMapValue>,
+}
+
 fn select_account_storage_map_values_paged(
     db: &TestDb,
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
     limit: usize,
 ) -> Result<StorageMapValuesPage> {
-    let (block_from, block_to) = block_range.into_inner();
-    let query = queries::AccountStorageMapValuesPaged::new(
-        account_id,
-        ScopedBlockNum::new_unchecked(block_to),
-        limit,
-    );
-    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let block_to = *block_range.end();
+    let page = db.read(move |tx| {
+        ReadTransaction::new(tx).select_account_storage_map_values_paged(
+            account_id,
+            block_range,
+            limit,
+        )
+    })?;
     Ok(StorageMapValuesPage {
         last_block_included: page.last_block_included(block_to),
         values: page.items,
@@ -335,10 +342,10 @@ fn select_account_vault_assets(
     account_id: AccountId,
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<AccountVaultValue>)> {
-    let (block_from, block_to) = block_range.into_inner();
-    let query =
-        queries::AccountVaultAssets::new(account_id, ScopedBlockNum::new_unchecked(block_to));
-    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let block_to = *block_range.end();
+    let page = db.read(move |tx| {
+        ReadTransaction::new(tx).select_account_vault_assets(account_id, block_range)
+    })?;
     Ok((page.last_block_included(block_to), page.items))
 }
 
@@ -355,12 +362,11 @@ fn select_transactions_records(
     account_ids: &[AccountId],
     block_range: RangeInclusive<BlockNumber>,
 ) -> Result<(BlockNumber, Vec<TransactionRecord>)> {
-    let (block_from, block_to) = block_range.into_inner();
-    let query = queries::TransactionsRecords::new(
-        account_ids.to_vec(),
-        ScopedBlockNum::new_unchecked(block_to),
-    );
-    let page = db.read(move |tx| query.page(tx, &block_from))?;
+    let block_to = *block_range.end();
+    let account_ids = account_ids.to_vec();
+    let page = db.read(move |tx| {
+        ReadTransaction::new(tx).select_transactions_records(&account_ids, block_range)
+    })?;
     Ok((page.last_block_included(block_to), page.items))
 }
 
@@ -794,13 +800,12 @@ fn sync_account_vault_basic_validation() {
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn select_nullifiers_by_prefix_works() {
-    const PREFIX_LEN: u8 = 16;
     let db = &TestDb::new();
     // test empty table
     let block_number0 = 0.into();
     let block_number10 = 10.into();
     let (nullifiers, block_number_reached) =
-        select_nullifiers_by_prefix(db, PREFIX_LEN, &[], block_number0..=block_number10).unwrap();
+        select_nullifiers_by_prefix(db, &[], block_number0..=block_number10).unwrap();
     assert!(nullifiers.is_empty());
     assert_eq!(block_number_reached, block_number10);
 
@@ -813,7 +818,6 @@ fn select_nullifiers_by_prefix_works() {
 
     let (nullifiers, block_number_reached) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier1)],
         block_number0..=block_number10,
     )
@@ -841,7 +845,6 @@ fn select_nullifiers_by_prefix_works() {
     // only the nullifiers matching the prefix are included
     let (nullifiers, _) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier1)],
         block_number0..=block_number10,
     )
@@ -855,7 +858,6 @@ fn select_nullifiers_by_prefix_works() {
     );
     let (nullifiers, _) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[utils::get_nullifier_prefix(&nullifier2)],
         block_number0..=block_number10,
     )
@@ -871,7 +873,6 @@ fn select_nullifiers_by_prefix_works() {
     // All matching nullifiers are included
     let (nullifiers, _) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
             utils::get_nullifier_prefix(&nullifier2),
@@ -896,7 +897,6 @@ fn select_nullifiers_by_prefix_works() {
     // If a non-matching prefix is provided, no nullifiers are returned
     let (nullifiers, _) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[utils::get_nullifier_prefix(&num_to_nullifier(3 << 48))],
         block_number0..=block_number10,
     )
@@ -907,7 +907,6 @@ fn select_nullifiers_by_prefix_works() {
     // returned
     let (nullifiers, _) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
             utils::get_nullifier_prefix(&nullifier2),
@@ -932,7 +931,6 @@ fn select_nullifiers_by_prefix_works() {
 
     let (nullifiers, block_number_reached) = select_nullifiers_by_prefix(
         db,
-        PREFIX_LEN,
         &[
             utils::get_nullifier_prefix(&nullifier1),
             utils::get_nullifier_prefix(&nullifier2),
@@ -991,10 +989,10 @@ fn eidos_nullifier_prefix_pages_preserve_all_matches() {
         );
     }
     let (mut first, reached) =
-        select_nullifiers_by_prefix(db, 16, &[1, 1], BlockNumber::GENESIS..=2.into()).unwrap();
+        select_nullifiers_by_prefix(db, &[1, 1], BlockNumber::GENESIS..=2.into()).unwrap();
     assert_eq!(reached, BlockNumber::ONE);
     let (second, reached) =
-        select_nullifiers_by_prefix(db, 16, &[1], reached.child()..=2.into()).unwrap();
+        select_nullifiers_by_prefix(db, &[1], reached.child()..=2.into()).unwrap();
     first.extend(second);
     assert_eq!(reached, BlockNumber::from(2));
     assert!(first.windows(2).all(|pair| pair[0].block_num <= pair[1].block_num));
@@ -1004,8 +1002,7 @@ fn eidos_nullifier_prefix_pages_preserve_all_matches() {
     assert_eq!(first, expected);
     for prefix in [0x7fff, 0x8000, 0xffff] {
         let (matches, reached) =
-            select_nullifiers_by_prefix(db, 16, &[prefix], BlockNumber::GENESIS..=2.into())
-                .unwrap();
+            select_nullifiers_by_prefix(db, &[prefix], BlockNumber::GENESIS..=2.into()).unwrap();
         assert_eq!(matches, [] as [NullifierInfo; 0]);
         assert_eq!(reached, BlockNumber::from(2));
     }
@@ -1179,8 +1176,8 @@ fn notes() {
 
     let block_range = 0.into()..=2.into();
 
-    // only the first matching block is returned; `get_note_sync_multi` loops this inside a single
-    // database transaction when multiple blocks are requested.
+    // only the first matching block is returned; `select_note_sync_updates` loops this inside a
+    // single database transaction when multiple blocks are requested.
     let res = select_notes_since_block_by_tag(db, &[tag], block_range).unwrap();
     assert_eq!(res, vec![note.clone().into()]);
 
@@ -1205,8 +1202,8 @@ fn notes() {
     assert_eq!(note_1.details, None);
 }
 
-/// Creates notes across 3 blocks, then calls `get_note_sync_multi` once and verifies all 3 blocks'
-/// notes are returned in a single query, ordered by block number.
+/// Creates notes across 3 blocks, then calls `select_note_sync_updates` once and verifies all 3
+/// blocks' notes are returned in a single query, ordered by block number.
 #[test]
 #[miden_node_test_macro::enable_logging]
 fn note_sync_across_multiple_blocks() {
@@ -1276,9 +1273,9 @@ fn note_sync_across_multiple_blocks() {
     // Use block_end + 1 as the MMR forest, same as State::sync_notes.
     let mmr_forest = Forest::new(4).unwrap();
 
-    // A single call to get_note_sync_multi should return all 3 blocks.
+    // A single call to select_note_sync_updates should return all 3 blocks.
     let block_range = BlockNumber::GENESIS..=BlockNumber::from(3);
-    let page = get_note_sync_multi(
+    let page = select_note_sync_updates(
         db,
         &[tag],
         block_range,
@@ -1369,7 +1366,7 @@ fn note_sync_multi_respects_payload_limit() {
     }
 
     let one_block_budget = NOTE_SYNC_BLOCK_OVERHEAD_BYTES + NOTE_SYNC_RECORD_BYTES;
-    let page = get_note_sync_multi(
+    let page = select_note_sync_updates(
         db,
         &[tag],
         BlockNumber::GENESIS..=BlockNumber::from(3),
@@ -1393,8 +1390,9 @@ fn note_sync_multi_respects_payload_limit() {
         .collect::<Vec<_>>();
     let mut next = page.next;
     while let Some(cursor) = next {
-        let page = get_note_sync_multi(db, &[tag], cursor..=BlockNumber::from(3), one_block_budget)
-            .unwrap();
+        let page =
+            select_note_sync_updates(db, &[tag], cursor..=BlockNumber::from(3), one_block_budget)
+                .unwrap();
         collected_ids.extend(
             page.items
                 .iter()
@@ -1449,7 +1447,7 @@ fn note_sync_no_matching_tags() {
 
     // Query with a different tag should return empty vec.
     let range = BlockNumber::GENESIS..=BlockNumber::from(1);
-    let page = get_note_sync_multi(
+    let page = select_note_sync_updates(
         db,
         &[999],
         range,
@@ -4296,7 +4294,6 @@ fn multi_batch_block_roundtrip_preserves_grouping() {
     assert_eq!(notes[0].note_id, surviving.id().as_word());
     let (nullifiers, _) = select_nullifiers_by_prefix(
         &db,
-        16,
         &[utils::get_nullifier_prefix(&external.nullifier())],
         BlockNumber::GENESIS..=BlockNumber::ONE,
     )

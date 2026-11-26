@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use anyhow::Context as AnyhowContext;
@@ -9,7 +10,13 @@ use miden_node_proto::generated::miden::node::v1::MempoolStats as ProtoMempoolSt
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::read::ReadTransaction;
 use miden_node_store::state::State;
-use miden_node_store::{DatabaseError, GetBlockHeaderError};
+use miden_node_store::{
+    DatabaseError,
+    GetBlockHeaderError,
+    HISTORICAL_BLOCK_RETENTION,
+    RangeBelowRetention,
+    RangeBeyondTip,
+};
 use miden_node_tracing::instrument;
 use miden_node_utils::limiter::QueryParamLimiter;
 use miden_node_utils::lru_cache::LruCache;
@@ -290,6 +297,38 @@ fn invalid_block_range_to_status(err: InvalidBlockRange) -> Status {
     SyncErrorCode::InvalidBlockRange.invalid_argument(err)
 }
 
+/// Checks that a sync range ends at or below `chain_tip`, the block of the read snapshot.
+fn check_range_within_tip(
+    block_range: &RangeInclusive<BlockNumber>,
+    chain_tip: BlockNumber,
+) -> Result<(), RangeBeyondTip> {
+    let block_to = *block_range.end();
+    if block_to > chain_tip {
+        return Err(RangeBeyondTip { chain_tip, block_to });
+    }
+    Ok(())
+}
+
+/// Checks that an account sync range ends at or below `chain_tip` and inside the account history
+/// retention window.
+///
+/// The store deletes account history rows that stop being valid at or below
+/// `chain_tip - HISTORICAL_BLOCK_RETENTION`. A range that ends below that block can miss updates,
+/// so it is rejected instead of answered.
+fn check_account_sync_range(
+    block_range: &RangeInclusive<BlockNumber>,
+    chain_tip: BlockNumber,
+) -> Result<(), DatabaseError> {
+    check_range_within_tip(block_range, chain_tip)?;
+    let oldest_retained =
+        BlockNumber::from(chain_tip.as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
+    let block_to = *block_range.end();
+    if block_to < oldest_retained {
+        return Err(RangeBelowRetention { oldest_retained, block_to }.into());
+    }
+    Ok(())
+}
+
 /// Loads the configuration committed to by a stored header.
 async fn load_protocol_config(
     state: &State,
@@ -399,5 +438,34 @@ mod tests {
         let status = database_error_to_status(&error);
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
         assert_eq!(status.details(), &[SyncErrorCode::InvalidBlockRange as u8]);
+    }
+
+    /// Account history rows are pruned once they fall out of the retention window. A sync range
+    /// that ends below the window can miss updates, so it must be rejected instead of answered.
+    #[rstest::rstest]
+    #[case::below_the_window(HISTORICAL_BLOCK_RETENTION + 10, 9, Some(10))]
+    #[case::at_the_oldest_retained_block(HISTORICAL_BLOCK_RETENTION + 10, 10, None)]
+    #[case::tip_inside_the_window(HISTORICAL_BLOCK_RETENTION - 1, 0, None)]
+    fn account_syncs_reject_ranges_that_end_below_the_retention_window(
+        #[case] chain_tip: u32,
+        #[case] block_to: u32,
+        #[case] oldest_retained: Option<u32>,
+    ) {
+        let block_range = BlockNumber::GENESIS..=BlockNumber::from(block_to);
+        let result = check_account_sync_range(&block_range, chain_tip.into());
+
+        match oldest_retained {
+            None => result.expect("a range that ends inside the retention window is accepted"),
+            Some(oldest_retained) => assert!(
+                matches!(
+                    result,
+                    Err(DatabaseError::RangeBelowRetention(RangeBelowRetention {
+                        oldest_retained: oldest,
+                        block_to: rejected,
+                    })) if oldest == oldest_retained.into() && rejected == block_to.into()
+                ),
+                "a range that ends below the retention window must fail, got {result:?}"
+            ),
+        }
     }
 }
