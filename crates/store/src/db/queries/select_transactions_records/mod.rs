@@ -43,6 +43,7 @@ struct TransactionRow {
     size_in_bytes: i64,
     logs_commitment: Word,
     code_patch_commitment: CodePatchCommitment,
+    transaction_index: u32,
 }
 
 /// Paginated query over the complete transaction records of a set of accounts up to `block_to`,
@@ -204,6 +205,7 @@ fn transaction_row_from_row(row: &Row<'_>) -> Result<TransactionRow, miden_node_
         size_in_bytes: row.get::<i64>(7)?,
         logs_commitment: row.get::<Word>(8)?,
         code_patch_commitment: CodePatchCommitment::from_raw(row.get::<Word>(9)?),
+        transaction_index: row.get::<u32>(10)?,
     })
 }
 
@@ -298,6 +300,7 @@ fn with_output_note_proofs(
 
             Ok(TransactionRecord {
                 block_num: raw.block_num,
+                transaction_index: raw.transaction_index,
                 header,
                 output_note_proofs,
                 consumed_note_refs,

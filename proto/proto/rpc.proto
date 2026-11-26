@@ -891,6 +891,10 @@ message TransactionRecord {
     // resolve. Authenticated inputs in `header.input_notes` carry only a nullifier, so this lets a
     // follower recover the consumed note via `GetNotesById`. Private notes are absent.
     repeated ConsumedNoteRef consumed_note_refs = 4;
+
+    // Position of the transaction within its block. Together with `block_num`, it gives the order
+    // in which transactions were committed.
+    uint32 transaction_index = 5;
 }
 
 // Maps a consumed input note's nullifier to its note ID.
