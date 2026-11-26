@@ -80,6 +80,7 @@ pub async fn deferred_transaction_fixture() -> &'static DeferredTransactionFixtu
                 &mast_store,
                 scripts,
                 indices,
+                inputs.tx_args().ies_seal_seed().cloned(),
             )
             .unwrap();
             // Keep the precompile witness in the proof for the batch prover.
