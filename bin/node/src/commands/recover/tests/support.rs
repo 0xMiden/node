@@ -86,6 +86,7 @@ pub async fn reopen_validator(
         )),
         private_record_sealer: miden_validator::PrivateRecordSealer::from_operator_key(&operator),
         db,
+        signing_lock: Arc::default(),
     };
     let shutdown = CancellationToken::new();
     let task = tokio::spawn(server.serve_on(listener, shutdown.clone()));

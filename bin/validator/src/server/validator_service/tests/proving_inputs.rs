@@ -27,6 +27,7 @@ async fn acknowledged_block_retains_inputs_after_restart() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await
@@ -218,6 +219,7 @@ async fn restart_with_retention(tv: TestValidator, retention: u32) -> TestValida
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await

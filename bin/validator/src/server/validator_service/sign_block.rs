@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use miden_node_db::DatabaseError;
 use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
@@ -62,17 +65,14 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             tonic::Status::resource_exhausted("validator is busy streaming a backup")
         })?;
 
-        // Serialize sign_block requests to prevent race conditions between loading the chain tip
-        // and persisting the validated block header.
-        let _permit = self
-            .sign_block_semaphore
-            .acquire()
-            .instrument(info_span!("acquire_permit"))
-            .await
-            .or_internal("sign_block semaphore closed")?;
+        let signing_guard = Arc::clone(&self.signing_lock)
+            .lock_owned()
+            .instrument(info_span!("acquire_signing_lock"))
+            .await;
 
         let header = &proving_inputs.block_header;
-        self.validate_block(header, &body)
+        let confirms_validator_quorum = self
+            .validate_block(header, &body)
             .await
             .map_err(ValidatorError::into_validation_status)?;
 
@@ -100,8 +100,18 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             .expect("a single signature is within the signature set bounds");
         let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
 
-        self.db
-            .upsert_signed_block(signed_block, protocol_config, proving_inputs)
+        let _guard_until_commit = self
+            .db
+            .write("upsert_signed_block", move |tx| {
+                tx.upsert_signed_block(&signed_block, protocol_config.as_ref(), &proving_inputs)?;
+                if confirms_validator_quorum {
+                    tx.delete_pending_validator_quorum()?;
+                }
+                // SQLite can finish the write after the RPC is cancelled. Returning the guard keeps
+                // the signing lock held through commit in that case too.
+                Ok::<_, DatabaseError>(signing_guard)
+            })
+            .instrument(info_span!("upsert_signed_block"))
             .await
             .or_internal("Failed to persist signed block")?;
 

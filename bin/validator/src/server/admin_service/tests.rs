@@ -1,5 +1,7 @@
 //! Tests exercising the administration endpoints end to end.
 
+mod validator_config;
+
 use axum::Json;
 use axum::body::{Body, to_bytes};
 use axum::extract::{Path, Query, State};

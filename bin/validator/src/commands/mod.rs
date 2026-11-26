@@ -5,6 +5,7 @@ mod export_private_record;
 mod issue_private_record_share;
 mod privacy;
 mod start;
+mod validator_config;
 
 use std::num::{NonZeroU32, NonZeroUsize};
 use std::path::PathBuf;
@@ -157,6 +158,9 @@ pub enum ValidatorCommand {
     /// Storage-key ceremonies and private-record recovery commands.
     Privacy(privacy::PrivacyOptions),
 
+    /// Manage validator configuration changes on a running validator.
+    ValidatorConfig(validator_config::ValidatorConfigOptions),
+
     /// Starts the validator component.
     Start {
         /// Socket address at which to serve the gRPC API.
@@ -242,6 +246,7 @@ impl ValidatorCommand {
                 Ok(())
             },
             Self::Privacy(options) => options.handle(shutdown).await,
+            Self::ValidatorConfig(options) => options.handle().await,
             Self::Start {
                 listen,
                 admin,
@@ -304,6 +309,7 @@ impl ValidatorCommand {
             | Self::Pubkey { .. }
             | Self::Keygen
             | Self::Privacy(_)
+            | Self::ValidatorConfig(_)
             | Self::Migrate { .. } => OpenTelemetry::Disabled,
         }
     }

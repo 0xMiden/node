@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use anyhow::Context;
 use miden_node_proto::server::miden_validator_v1_validator_service;
@@ -10,6 +11,7 @@ use miden_node_utils::clap::GrpcOptions;
 use miden_node_utils::grpc;
 use miden_node_utils::shutdown::CancellationToken;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use crate::db::ValidatorDbWriter;
@@ -40,14 +42,16 @@ pub struct ValidatorServer {
 
     /// The decrypter for the shared transaction encryption key, used to unseal encrypted
     /// transaction inputs.
-    pub decrypter: std::sync::Arc<dyn TransactionInputDecrypter>,
+    pub decrypter: Arc<dyn TransactionInputDecrypter>,
 
     /// The public Golden key used to seal private records.
     pub private_record_sealer: PrivateRecordSealer,
 
-    /// Handle to the shared validator database. Carrying the write handle makes the public API the
-    /// database's single writer; reads reach the shared read handle through its `Deref`.
+    /// Database handle for persisting signed blocks and validated transactions.
     pub db: ValidatorDbWriter,
+
+    /// Held while signing a block or updating the pending validator configuration.
+    pub signing_lock: Arc<Mutex<()>>,
 }
 
 impl ValidatorServer {
@@ -85,6 +89,7 @@ impl ValidatorServer {
             db,
             self.decrypter,
             self.private_record_sealer,
+            self.signing_lock,
             metrics,
         )
         .await

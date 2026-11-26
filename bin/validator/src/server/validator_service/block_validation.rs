@@ -11,13 +11,14 @@ const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 
 impl ValidatorService {
     /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
-    /// against local state, and checks that the parent authorizes the signing key.
+    /// against local state, and checks that the parent authorizes the signing key. Returns whether
+    /// accepting this block confirms a validator quorum change in its parent.
     #[instrument(err)]
     pub(super) async fn validate_block(
         &self,
         proposed_header: &BlockHeader,
         proposed_body: &BlockBody,
-    ) -> Result<(), ValidatorError> {
+    ) -> Result<bool, ValidatorError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(ValidatorError::ClockBeforeUnixEpoch)?
@@ -31,13 +32,14 @@ impl ValidatorService {
             });
         }
 
-        let chain_tip = self
+        let chain = self
             .db
-            .load_chain_tip()
+            .read("chain_state", |tx| tx.select_chain_state())
             .await
             .map_err(ValidatorError::DatabaseError)?
             .ok_or(ValidatorError::NoChainTip)?;
-        miden_span_record!(tip.number = chain_tip.block_num());
+        let latest = chain.pending.as_ref().unwrap_or(&chain.tip);
+        miden_span_record!(tip.number = chain.tip.block_num());
 
         // Search for any proposed transactions that have not previously been validated.
         let proposed_tx_ids = proposed_body
@@ -62,33 +64,42 @@ impl ValidatorService {
             block.commitment = proposed_header.commitment()
         );
 
-        let prev = if proposed_header.block_num() == chain_tip.block_num() {
-            // Replacements are rare, so load the tip's parent on demand. An ordinary extension
-            // needs only the tip header.
-            let prev_block_num =
-                chain_tip.block_num().parent().ok_or(ValidatorError::CannotReplaceGenesis)?;
-            self.db
-                .load_block_header(prev_block_num)
-                .await
-                .map_err(ValidatorError::DatabaseError)?
-                .ok_or(ValidatorError::NoPrevBlockHeader)?
+        let prev = if proposed_header.block_num() == latest.block_num() {
+            if chain.pending.is_none() {
+                return Err(ValidatorError::CannotReplaceGenesis);
+            }
+            &chain.tip
         } else {
             // Proposed block is a new block. Block number must be sequential.
-            let expected_block_num = chain_tip.block_num().child();
+            let expected_block_num = latest.block_num().child();
             if proposed_header.block_num() != expected_block_num {
                 return Err(ValidatorError::BlockNumberMismatch {
                     expected: expected_block_num,
                     actual: proposed_header.block_num(),
                 });
             }
-            // Current chain tip is the parent of the proposed block.
-            chain_tip
+            latest
         };
 
-        // The proposed block's parent must match the block that the Validator has determined is its
-        // parent (either chain tip or parent of chain tip).
+        // A proposal must reference the confirmed tip when replacing the pending block, or the
+        // pending block when extending it.
         if proposed_header.prev_block_commitment() != prev.commitment() {
             return Err(ValidatorError::PrevBlockCommitmentMismatch);
+        }
+
+        if proposed_header.validator_config().keys() != prev.validator_config().keys() {
+            return Err(ValidatorError::ValidatorKeySetChange);
+        }
+
+        if proposed_header.validator_config().quorum() != prev.validator_config().quorum() {
+            let pending = self
+                .db
+                .read("pending_validator_quorum", |tx| tx.select_pending_validator_quorum())
+                .await
+                .map_err(ValidatorError::DatabaseError)?;
+            if pending != Some(proposed_header.validator_config().quorum()) {
+                return Err(ValidatorError::UnregisteredValidatorQuorum);
+            }
         }
 
         // Check that our key is a member of the validator set authorized to sign this block,
@@ -101,7 +112,7 @@ impl ValidatorService {
             return Err(ValidatorError::ValidatorKeyNotInSet { actual: signing_key });
         }
 
-        Ok(())
+        Ok(prev.validator_config().quorum() != chain.tip.validator_config().quorum())
     }
 }
 
@@ -112,6 +123,8 @@ impl ValidatorError {
             Self::UnvalidatedTransactions(_)
             | Self::BlockTimestampTooFarInFuture { .. }
             | Self::BlockNumberMismatch { .. }
+            | Self::UnregisteredValidatorQuorum
+            | Self::ValidatorKeySetChange
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),

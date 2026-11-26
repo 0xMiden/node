@@ -1,5 +1,6 @@
 mod proving_inputs;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use miden_node_proto::domain::encryption::{
     TransactionEncryptionScheme,
@@ -120,6 +121,7 @@ impl TestValidator {
                 db,
                 std::sync::Arc::new(test_decrypter()),
                 PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+                Arc::default(),
                 InitialMetrics::default(),
             )
             .await
@@ -134,6 +136,14 @@ impl TestValidator {
     /// Builds an empty [`ProposedBlock`] extending the current chain tip.
     fn propose_empty_block(&self) -> ProposedBlock {
         empty_block(&self.chain_tip, &self.chain)
+    }
+
+    async fn register_pending_quorum(&self, quorum: u16) {
+        self.server
+            .db
+            .write("register test quorum", move |tx| tx.insert_pending_validator_quorum(quorum))
+            .await
+            .unwrap();
     }
 
     /// Calls `submit_proven_transaction` on the validator server.
@@ -540,6 +550,7 @@ async fn signing_key_mismatch_rejected() {
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await;
@@ -1829,6 +1840,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await
@@ -1864,6 +1876,7 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
         db,
         std::sync::Arc::new(test_decrypter()),
         PrivateRecordSealer::from_operator_key(&operator_keys().remove(0)),
+        Arc::default(),
         InitialMetrics::default(),
     )
     .await
@@ -1884,4 +1897,149 @@ async fn single_signature_backup_reopens_and_streams_with_multiple_validators() 
     assert_eq!(streamed, backed_up);
     assert_eq!(streamed.header(), &header);
     assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn restored_validator_config_is_confirmed_by_a_child_and_survives_restart() {
+    let mut tv = TestValidator::new().await;
+    let active = tv.chain_tip.validator_config().clone();
+    let signer = tv.server.signer.public_key();
+    let next = ValidatorConfig::new(vec![signer, random_secret_key().public_key()], 2).unwrap();
+    let proposed = tv.propose_empty_block().with_next_validator_config(next.clone());
+    assert_eq!(
+        tv.call_sign_block(&proposed).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+
+    tv.register_pending_quorum(next.quorum()).await;
+    tv.apply_empty_block().await;
+    let transition = tv.propose_empty_block().with_next_validator_config(next.clone());
+    let (header, _) = transition.clone().into_header_and_body().unwrap();
+    tv.server
+        .db
+        .insert_legacy_signed_block(
+            crate::db::block_with_header(header.clone()),
+            tv.protocol_config.clone(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    tv.chain.add_block(&tv.chain_tip, false);
+    tv.chain_tip = header;
+    drop(tv.server.db);
+    tv.server.db = crate::db::load(tv.temp_dir.path().join("validator.sqlite3")).await.unwrap();
+
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_quorum()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &active);
+    assert_eq!(chain.pending.unwrap().validator_config(), &next);
+    assert_eq!(pending, Some(next.quorum()));
+    let child = tv.propose_empty_block();
+    let mut keys = next.keys().to_vec();
+    keys.push(random_secret_key().public_key());
+    let unregistered =
+        child.clone().with_next_validator_config(ValidatorConfig::new(keys, 3).unwrap());
+    assert_eq!(
+        tv.call_sign_block(&unregistered).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    let pending = tv
+        .server
+        .db
+        .read("pending configuration", |tx| tx.select_pending_validator_quorum())
+        .await
+        .unwrap();
+    assert_eq!(pending, Some(next.quorum()));
+
+    tv.apply_block(child).await;
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_quorum()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &next);
+    assert_eq!(pending, None);
+}
+
+#[tokio::test]
+async fn replacing_a_transition_block_can_restore_the_previous_validator_config() {
+    let mut tv = TestValidator::new().await;
+    let active = tv.chain_tip.validator_config().clone();
+    let next = ValidatorConfig::new(
+        vec![tv.server.signer.public_key(), random_secret_key().public_key()],
+        2,
+    )
+    .unwrap();
+    let original = tv.propose_empty_block();
+    let transition = original.clone().with_next_validator_config(next.clone());
+    tv.register_pending_quorum(next.quorum()).await;
+    let (header, _) = transition.clone().into_header_and_body().unwrap();
+    tv.server
+        .db
+        .insert_legacy_signed_block(
+            crate::db::block_with_header(header),
+            tv.protocol_config.clone(),
+            vec![],
+        )
+        .await
+        .unwrap();
+    tv.call_sign_block(&original).await.unwrap();
+
+    let (chain, pending) = tv
+        .server
+        .db
+        .read("configuration status", |tx| {
+            Ok::<_, miden_node_db::DatabaseError>((
+                tx.select_chain_state()?.unwrap(),
+                tx.select_pending_validator_quorum()?,
+            ))
+        })
+        .await
+        .unwrap();
+    assert_eq!(chain.tip.validator_config(), &active);
+    assert_eq!(chain.pending.unwrap().validator_config(), &active);
+    assert_eq!(pending, Some(next.quorum()));
+
+    tv.server
+        .db
+        .write("cancel test quorum", |tx| tx.delete_pending_validator_quorum())
+        .await
+        .unwrap();
+    assert_eq!(
+        tv.call_sign_block(&transition).await.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+    tv.apply_block(original).await;
+    tv.apply_empty_block().await;
+    assert_eq!(tv.load_chain_tip().await.validator_config(), &active);
+}
+
+#[tokio::test]
+async fn changing_validator_keys_is_rejected_even_with_a_registered_quorum() {
+    let tv = TestValidator::new().await;
+    let config = ValidatorConfig::new(
+        vec![tv.server.signer.public_key(), random_secret_key().public_key()],
+        2,
+    )
+    .unwrap();
+    tv.register_pending_quorum(config.quorum()).await;
+    let block = tv.propose_empty_block().with_next_validator_config(config);
+    let error = tv.call_sign_block(&block).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert!(error.message().contains("changing the validator key set is unsupported"));
 }

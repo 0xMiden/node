@@ -3,6 +3,7 @@
 use axum::Json;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use miden_node_db::DatabaseError;
 use miden_node_tracing::{ErrorReport, error};
 use serde::Serialize;
 
@@ -16,6 +17,13 @@ impl ApiError {
     pub(super) fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message: message.into(),
         }
     }
@@ -44,6 +52,12 @@ impl ApiError {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: message.to_owned(),
         }
+    }
+}
+
+impl From<DatabaseError> for ApiError {
+    fn from(error: DatabaseError) -> Self {
+        Self::internal("validator database operation failed", &error)
     }
 }
 

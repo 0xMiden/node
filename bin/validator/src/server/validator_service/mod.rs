@@ -8,7 +8,7 @@ use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::crypto::utils::Serializable;
 use miden_protocol::transaction::TransactionId;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 use crate::db::ValidatorDbWriter;
 use crate::metrics::InitialMetrics;
@@ -51,10 +51,12 @@ pub enum ValidatorError {
     },
     #[error("previous block commitment does not match chain tip")]
     PrevBlockCommitmentMismatch,
+    #[error("validator quorum change has not been registered")]
+    UnregisteredValidatorQuorum,
+    #[error("changing the validator key set is unsupported")]
+    ValidatorKeySetChange,
     #[error("genesis block cannot be replaced")]
     CannotReplaceGenesis,
-    #[error("no previous block header available for chain tip overwrite")]
-    NoPrevBlockHeader,
     #[error(
         "validator signing key {actual:?} is not a member of the validator set authorized to sign this block"
     )]
@@ -95,8 +97,7 @@ impl<T, E: miden_node_tracing::ErrorReport> StatusResultExt<T> for Result<T, E> 
 /// Implements the gRPC API for the validator.
 pub(crate) struct ValidatorService {
     signer: ValidatorSigner,
-    /// Handle to the validator database. Owning the write handle makes this service the single
-    /// writer; reads reach the underlying read handle through its `Deref`.
+    /// Database handle for persisting signed blocks and validated transactions.
     db: ValidatorDbWriter,
     /// Decrypter for transaction inputs sealed against the shared encryption key.
     decrypter: Arc<dyn TransactionInputDecrypter>,
@@ -116,9 +117,9 @@ pub(crate) struct ValidatorService {
     /// exclusive write side for its entire lifetime. Acquired with `try_*` on both sides so that a
     /// conflicting request fails fast with `resource_exhausted` rather than blocking.
     serve_lock: Arc<tokio::sync::RwLock<()>>,
-    /// Serializes `sign_block` requests so that concurrent calls are processed sequentially,
-    /// ensuring consistent chain tip reads and preventing race conditions.
-    sign_block_semaphore: Semaphore,
+    /// Held from block validation through commit. The admin API takes the same lock to register or
+    /// cancel a pending validator configuration.
+    signing_lock: Arc<Mutex<()>>,
     /// Bounds concurrently executing transaction validations. Proof verification and re-execution
     /// each pin a CPU on the blocking pool, and unbounded concurrency saturates every core,
     /// starving the async runtime — and with it `sign_block` — of CPU time. A delayed block
@@ -146,6 +147,7 @@ impl ValidatorService {
         db: ValidatorDbWriter,
         decrypter: Arc<dyn TransactionInputDecrypter>,
         private_record_sealer: PrivateRecordSealer,
+        signing_lock: Arc<Mutex<()>>,
         initial_metrics: InitialMetrics,
     ) -> Result<Self, ValidatorError> {
         // The chain tip's header commits to the validator set authorized to sign the next block, so
@@ -193,7 +195,7 @@ impl ValidatorService {
             encryption_key_attestation,
             serve_lock: Arc::new(tokio::sync::RwLock::new(())),
             db,
-            sign_block_semaphore: Semaphore::new(1),
+            signing_lock,
             tx_validation_semaphore: Semaphore::new(max_tx_concurrency()),
             validated_transactions_count: AtomicU64::new(initial_metrics.validated_transactions),
         })

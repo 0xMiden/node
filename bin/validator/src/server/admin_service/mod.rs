@@ -16,6 +16,7 @@ use tokio::net::TcpListener;
 
 use crate::GoldenOperatorKey;
 use crate::db::ValidatorDbReader;
+use crate::server::ValidatorServer;
 use crate::server::admin_service::error::ApiError;
 
 #[cfg(test)]
@@ -26,19 +27,26 @@ mod error;
 mod get_transaction;
 mod issue_decryption_share;
 mod list_transactions;
+mod validator_config;
 
 /// Serves the private validator administration API on a network-isolated listener.
 pub struct ValidatorAdminServer {
-    /// Address of the private administration listener.
-    pub address: SocketAddr,
-    /// Golden key material used to issue this validator's decryption shares.
-    pub operator_key: GoldenOperatorKey,
-    /// Read handle to the shared validator database. Administration routes cannot mutate stored
-    /// validator records through this handle.
-    pub reader: ValidatorDbReader,
+    address: SocketAddr,
+    router: Router,
 }
 
 impl ValidatorAdminServer {
+    /// Builds the operator routes for this validator's database and signing key.
+    pub fn new(
+        address: SocketAddr,
+        operator_key: GoldenOperatorKey,
+        validator: &ValidatorServer,
+    ) -> Self {
+        let router = router(operator_key, validator.db.reader())
+            .merge(validator_config::router(&validator.db, Arc::clone(&validator.signing_lock)));
+        Self { address, router }
+    }
+
     /// Serves the private validator administration API.
     pub async fn serve(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let listener =
@@ -46,7 +54,8 @@ impl ValidatorAdminServer {
         self.serve_on(listener, shutdown).await
     }
 
-    async fn serve_on(
+    /// Serves the private validator administration API on an already-bound listener.
+    pub async fn serve_on(
         self,
         listener: TcpListener,
         shutdown: CancellationToken,
@@ -59,7 +68,7 @@ impl ValidatorAdminServer {
             validator.admin_listen = endpoint.to_string()
         );
 
-        axum::serve(listener, router(self.operator_key, self.reader))
+        axum::serve(listener, self.router)
             .with_graceful_shutdown(shutdown.cancelled_owned())
             .await
             .context("failed to serve validator admin API")
