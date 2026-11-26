@@ -140,7 +140,6 @@ mod tests {
             .enumerate()
             .map(|(index, header)| miden_node_store::NoteSyncRecord {
                 block_num: BlockNumber::from(u32::MAX),
-            transaction_index: u32::MAX,
                 note_index: BlockNoteIndex::new(miden_protocol::MAX_BATCHES_PER_BLOCK - 1, index)
                     .unwrap(),
                 note_id: header.id(),
