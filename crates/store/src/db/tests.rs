@@ -5185,31 +5185,31 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
         let mut cursor: Option<queries::NoteSyncCursor> = None;
         let mut actual = vec![];
         loop {
-            let start = cursor;
             let page = db
                 .read(move |tx| {
-                    queries::NoteSyncPaged::new(
+                    queries::note_sync_page(
+                        tx,
                         vec![42, 99, 42],
                         crate::ScopedBlockRange::new_unchecked(0.into()..=3.into()),
+                        cursor,
                         page_size,
                     )
-                    .page(tx, &cursor)
                 })
                 .unwrap();
-            if let Some(start) = start {
+            if let Some(start) = cursor {
                 assert_eq!(
-                    (page.items[0].block_num, page.items[0].note_index),
+                    (page.notes[0].block_num, page.notes[0].note_index),
                     (start.block_num, start.index)
                 );
             }
             actual.extend(
-                page.items
+                page.notes
                     .into_iter()
                     .map(|n| (n.block_num, n.note_index, n.note_id, n.metadata.note_type())),
             );
-            match page.next.flatten() {
-                Some(next) => cursor = Some(next),
-                None => break,
+            cursor = page.next_cursor;
+            if cursor.is_none() {
+                break;
             }
         }
         assert_eq!(actual, expected);
@@ -5217,28 +5217,30 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
 
     for tags in [vec![], vec![101]] {
         assert_eq!(
-            db.read(move |tx| queries::NoteSyncPaged::new(
+            db.read(move |tx| queries::note_sync_page(
+                tx,
                 tags,
                 crate::ScopedBlockRange::new_unchecked(0.into()..=3.into()),
+                None,
                 NonZeroUsize::MIN
-            )
-            .page(tx, &None))
-                .unwrap()
-                .items,
+            ))
+            .unwrap()
+            .notes,
             []
         );
     }
     let before_second_block = db
         .read(|tx| {
-            queries::NoteSyncPaged::new(
+            queries::note_sync_page(
+                tx,
                 vec![42],
                 crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                None,
                 NonZeroUsize::new(10).unwrap(),
             )
-            .page(tx, &None)
         })
         .unwrap();
-    assert_eq!(before_second_block.items.len(), 4);
+    assert_eq!(before_second_block.notes.len(), 4);
 }
 
 /// Vault pages include the first key at the range start and split a block without omissions.

@@ -1,8 +1,6 @@
 use std::num::NonZeroUsize;
 
 use super::ReadTransaction;
-use crate::db::pagination::Paginated;
-use crate::db::queries::NoteSyncPaged;
 use crate::{DatabaseError, NoteSyncCursor, NoteSyncPage, ScopedBlockRange};
 
 impl ReadTransaction<'_> {
@@ -14,10 +12,6 @@ impl ReadTransaction<'_> {
         cursor: Option<NoteSyncCursor>,
         limit: NonZeroUsize,
     ) -> Result<NoteSyncPage, DatabaseError> {
-        let page = NoteSyncPaged::new(tags, range, limit).page(self.inner, &cursor)?;
-        Ok(NoteSyncPage {
-            notes: page.items,
-            next_cursor: page.next.flatten(),
-        })
+        crate::db::queries::note_sync_page(self.inner, tags, range, cursor, limit)
     }
 }
