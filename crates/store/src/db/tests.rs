@@ -203,16 +203,13 @@ fn select_account_vault_updates_v2(
     page_size: NonZeroUsize,
 ) -> Result<super::AccountVaultValuesPage> {
     db.read(move |tx| {
-        let query = queries::AccountVaultUpdatesV2::new(
+        queries::account_vault_updates_page(
+            tx,
             account_id,
             crate::ScopedBlockRange::new_unchecked(block_range),
+            cursor.as_ref(),
             page_size,
-        );
-        let page = query.page(tx, &cursor)?;
-        Ok(super::AccountVaultValuesPage {
-            values: page.items,
-            next_cursor: page.next.flatten(),
-        })
+        )
     })
 }
 
@@ -5097,12 +5094,7 @@ fn streaming_history_queries_validate_retention_before_empty_selection() {
     let db = TestDb::new();
     let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
     create_block(&db, (HISTORICAL_BLOCK_RETENTION + 2).into());
-    db.read(move |tx| -> Result<()> {
-        let range = || crate::ScopedBlockRange::new_unchecked(0.into()..=1.into());
-        let vault = queries::AccountVaultUpdatesV2::new(account, range(), NonZeroUsize::MIN)
-            .page(tx, &None);
-        assert_matches!(vault, Err(DatabaseError::BlockPruned { .. }));
-        Ok(())
-    })
-    .unwrap();
+    let vault =
+        select_account_vault_updates_v2(&db, account, 0.into()..=1.into(), None, NonZeroUsize::MIN);
+    assert_matches!(vault, Err(DatabaseError::BlockPruned { .. }));
 }

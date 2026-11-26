@@ -196,8 +196,6 @@ pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
 pub use select_account_storage_map_values_paged::StorageMapValuesPage;
 
 mod select_account_vault_updates_v2;
-#[cfg(test)]
-pub(crate) use select_account_vault_updates_v2::AccountVaultUpdatesV2;
 pub use select_account_vault_updates_v2::account_vault_updates_page;
 
 mod select_account_vault_assets;
