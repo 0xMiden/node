@@ -142,6 +142,10 @@ ID. Headers and entry witnesses require public accounts. All account reads requi
 selecting genesis. Only an absent public account produces the per-ID `not_found` result from `GetAccountInfos`. A
 missing height, invalid ID or private ID in a header request fails the whole batch.
 
+`GetAccountVaultWitnesses` accepts up to 64 asset IDs. `GetAccountStorageWitnesses` accepts up to 64 keys in total
+across the requested map slots. The `storage_maps` limit bounds the number of slots. Oversized lists return
+`OUT_OF_RANGE`. Unknown slots, value slots and duplicate slot names fail the request.
+
 V2 `SyncChainMmr` returns `INVALID_ARGUMENT` for a target below the starting height and `OUT_OF_RANGE` for a target
 above the requested finality tip. If the node has pruned account state at the authenticated height, select a newer
 authenticated block and repeat all account reads there.

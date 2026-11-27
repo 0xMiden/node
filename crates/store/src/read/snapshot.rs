@@ -1,8 +1,8 @@
 use std::ops::RangeInclusive;
 
 use miden_crypto::merkle::smt::RocksDbSnapshotStorage;
-use miden_node_proto::domain::account::AccountVaultDetails;
-use miden_protocol::account::AccountId;
+use miden_node_proto::domain::account::{AccountStorageMapDetails, AccountVaultDetails};
+use miden_protocol::account::{AccountId, StorageMapKey, StorageSlotName};
 use miden_protocol::asset::AssetId;
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
@@ -74,5 +74,25 @@ impl StateSnapshot<'_> {
                     *block
                 ))
             })
+    }
+}
+
+impl StateSnapshot<'_> {
+    /// Opens the requested keys against the account's storage map at the selected block.
+    pub fn storage_map_witness(
+        &self,
+        account: AccountId,
+        block: ScopedBlockNum,
+        slot: &StorageSlotName,
+        keys: Vec<StorageMapKey>,
+    ) -> Result<AccountStorageMapDetails, DatabaseError> {
+        self.forest
+            .get_storage_map_details_for_keys(account, slot.clone(), *block, keys)
+            .ok_or_else(|| DatabaseError::StorageRootNotFound {
+                account_id: account,
+                slot_name: slot.to_string(),
+                block_num: *block,
+            })?
+            .map_err(DatabaseError::MerkleError)
     }
 }

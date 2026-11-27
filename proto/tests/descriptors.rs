@@ -173,6 +173,7 @@ fn node_service_versions_expose_their_sync_contracts() {
                 ("GetAccountInfos", false),
                 ("GetAccountWitnesses", false),
                 ("GetAccountVaultWitnesses", false),
+                ("GetAccountStorageWitnesses", false),
                 ("GetTransactionsById", true),
                 ("SyncChainMmr", false),
                 ("SyncAccountStorageMaps", true),
@@ -194,7 +195,8 @@ fn node_service_versions_expose_their_sync_contracts() {
             "GetTransactionsById"
             | "GetAccountInfos"
             | "GetAccountWitnesses"
-            | "GetAccountVaultWitnesses" => {
+            | "GetAccountVaultWitnesses"
+            | "GetAccountStorageWitnesses" => {
                 assert!(!v1.iter().any(|(v, _)| v == name));
             },
             name if name.starts_with("Sync") => assert!(v1.contains(&(name.to_owned(), false))),

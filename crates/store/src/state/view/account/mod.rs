@@ -22,6 +22,7 @@ use miden_protocol::block::account_tree::AccountWitness;
 use super::{ScopedBlockNum, StateView};
 use crate::account_state_forest::AccountStorageMapResult;
 use crate::errors::{DatabaseError, GetAccountError};
+use crate::read::validate_storage_map_slots;
 
 impl StateView {
     /// Returns an account witness and optionally account details at a specific block.
@@ -213,10 +214,10 @@ impl StateView {
         let should_apply_response_budget =
             matches!(&storage_request, AccountStorageRequest::AllStorageMaps);
         let storage_requests = expand_account_storage_request(storage_request, &storage_header);
-        validate_storage_map_requests(
+        validate_storage_map_slots(
             account_id,
             scoped_block,
-            &storage_requests,
+            storage_requests.iter().map(|request| &request.slot_name),
             &storage_header,
         )?;
 
@@ -397,33 +398,6 @@ fn expand_account_storage_request(
 
 /// Validates that each requested slot exists in the account storage and is a map slot.
 ///
-/// A request for a missing slot or a value slot is a client error. The forest has no map root for
-/// such a slot, so a forest lookup cannot tell this case apart from a missing storage root.
-fn validate_storage_map_requests(
-    account_id: AccountId,
-    block_num: ScopedBlockNum,
-    requests: &[StorageMapRequest],
-    storage_header: &AccountStorageHeader,
-) -> Result<(), GetAccountError> {
-    for StorageMapRequest { slot_name, .. } in requests {
-        let slot = storage_header.find_slot_header_by_name(slot_name).ok_or_else(|| {
-            GetAccountError::StorageSlotNotFound {
-                account_id,
-                slot_name: slot_name.clone(),
-                block_num: *block_num,
-            }
-        })?;
-        if slot.slot_type() != StorageSlotType::Map {
-            return Err(GetAccountError::StorageSlotNotMap {
-                account_id,
-                slot_name: slot_name.clone(),
-                block_num: *block_num,
-            });
-        }
-    }
-    Ok(())
-}
-
 mod response_budget;
 use response_budget::{
     MAX_ALL_STORAGE_MAPS_RESPONSE_PAYLOAD_WITH_BUDGET_RESERVED_FOR_LIMIT_EXCEEDED_SLOTS,

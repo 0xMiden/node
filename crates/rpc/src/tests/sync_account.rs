@@ -240,14 +240,21 @@ async fn v2_account_witnesses() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_entry_witnesses() {
+    use miden_protocol::account::{StorageMapPatch, StorageMapPatchEntries, StorageSlotPatch};
     for count in [1, 65] {
-        let (account, ..) = entry_witness_account(count);
+        let (account, empty_map, value_slot) = entry_witness_account(count);
         let (mut store, genesis, config) = fixture(&account).await;
         let asset = account.vault().assets().next().unwrap();
         let mut updated = account.clone();
         let patch = AccountPatch::new(
             account.id(),
-            AccountStoragePatch::default(),
+            AccountStoragePatch::from_entries([(
+                StorageSlotName::mock(0),
+                StorageSlotPatch::Map(StorageMapPatch::Update {
+                    entries: StorageMapPatchEntries::from_raw(BTreeMap::from([(key(0), word(99))])),
+                }),
+            )])
+            .unwrap(),
             AccountVaultPatch::new(BTreeMap::from([(asset.id(), Word::empty())])).unwrap(),
             AccountCodePatch::default(),
             Some(account.nonce() + Felt::ONE),
@@ -283,6 +290,55 @@ async fn v2_entry_witnesses() {
                 .is_ok()
         );
         assert!(vault(vec![present; 65]).await.is_err());
+        let map = StorageSlotName::mock(0);
+        let query = |name: &StorageSlotName, keys: Vec<StorageMapKey>| {
+            v2::get_account_storage_witnesses_request::MapQuery {
+                slot_name: name.to_string(),
+                keys: keys.into_iter().map(|key| Word::from(key).into()).collect(),
+            }
+        };
+        let maps = |maps| {
+            rpc.get_account_storage_witnesses(Request::new(v2::GetAccountStorageWitnessesRequest {
+                account_id: Some(account.id().into()),
+                block_num: Some(0),
+                maps,
+            }))
+        };
+        let response =
+            maps(vec![query(&map, (0..63).map(key).collect()), query(&empty_map, vec![key(3)])])
+                .await
+                .unwrap()
+                .into_inner();
+        assert_eq!(response.maps[0].slot_name, map.to_string());
+        assert_eq!(response.maps[1].slot_name, empty_map.to_string());
+        let empty =
+            response.maps[1].map.clone().unwrap().decode_fields().unwrap().verify().unwrap();
+        assert_eq!(empty.get_value(&key(3).hash().into()).unwrap(), Word::empty());
+        let proof = response
+            .maps
+            .into_iter()
+            .next()
+            .unwrap()
+            .map
+            .unwrap()
+            .decode_fields()
+            .unwrap()
+            .verify()
+            .unwrap();
+        assert_eq!(
+            proof.root(),
+            account.storage().to_header().find_slot_header_by_name(&map).unwrap().value()
+        );
+        assert_eq!(proof.get_value(&key(0).hash().into()).unwrap(), word(1));
+        assert_eq!(proof.get_value(&key(3).hash().into()).unwrap(), Word::empty());
+        for queries in [
+            vec![query(&map, vec![key(0); 64]), query(&empty_map, vec![key(1)])],
+            vec![query(&value_slot, vec![])],
+            vec![query(&map, vec![]), query(&map, vec![])],
+            vec![query(&StorageSlotName::mock(31), vec![key(0)])],
+        ] {
+            assert!(maps(queries).await.is_err());
+        }
     }
 }
 
