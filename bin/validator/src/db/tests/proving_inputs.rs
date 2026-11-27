@@ -473,6 +473,23 @@ async fn confirmed_backup_survives_restart_and_rejects_a_sibling() {
     assert_eq!(page.transactions.len(), 1);
     assert_eq!(page.transactions[0].transaction_id, known_id);
     assert_eq!(page.transactions[0].block_tx_index, 1);
+    let late_id = sibling.body().transactions().as_slice()[0].id();
+    db.insert_validated_private_transaction(private_record(late_id, 4))
+        .await
+        .unwrap();
+    let page = db
+        .list_validated_transactions(ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.transactions.len(), 2);
+    assert_eq!(page.transactions[0].transaction_id, late_id);
+    assert_eq!(page.transactions[0].block_num, 1.into());
+    assert_eq!(page.transactions[0].block_tx_index, 0);
     assert_eq!(backup.block, sibling);
     assert!(backup.proving_inputs.is_none());
     assert!(db.store_confirmed_block(sign(local), None).await.is_err());

@@ -1155,8 +1155,7 @@ mod tests {
         );
     }
 
-    /// Linking a transaction this validator never validated fails the foreign key on
-    /// `block_transactions`, so a signed block cannot silently reference unknown transactions.
+    /// A locally signed block can only include transactions this validator has validated.
     #[tokio::test]
     async fn insert_signed_block_rejects_unvalidated_transactions() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");

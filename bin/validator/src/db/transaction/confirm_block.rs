@@ -46,7 +46,7 @@ impl WriteTransaction<'_> {
                 let index = u32::try_from(index)?;
                 self.inner.execute(
                     "INSERT INTO block_transactions (block_num, block_tx_index, transaction_id)
-                     SELECT ?1, ?2, id FROM validated_transactions WHERE id = ?3",
+                     VALUES (?1, ?2, ?3)",
                     &[&height, &index, &transaction.id()],
                 )?;
             }
