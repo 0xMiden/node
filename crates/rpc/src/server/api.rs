@@ -84,6 +84,8 @@ mod validator_tests;
 
 mod error_codes;
 mod get_account;
+#[cfg(test)]
+pub(crate) use get_account::read_account;
 mod get_block_by_number;
 mod get_block_header_by_number;
 mod get_limits;

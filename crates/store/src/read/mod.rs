@@ -8,6 +8,8 @@ pub use snapshot::StateSnapshot;
 pub use transaction::ReadTransaction;
 pub(crate) use transaction::select_block_header;
 
+pub use crate::account_state_forest::{AccountStorageMapResult, WitnessError};
+
 /// A read-only database transaction and tree snapshot at the same committed block.
 ///
 /// The store lends this view to a synchronous closure on a blocking worker. All database reads
