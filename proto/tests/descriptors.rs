@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 fn methods_have_dedicated_request_and_response_messages() {
     let descriptors = [
         miden_node_proto_build::rpc_api_descriptor(),
+        miden_node_proto_build::rpc_v2_api_descriptor(),
         miden_node_proto_build::remote_prover_api_descriptor(),
         miden_node_proto_build::note_transport_api_descriptor(),
         #[cfg(feature = "internal")]
@@ -54,6 +55,7 @@ fn methods_have_dedicated_request_and_response_messages() {
 fn public_descriptors_exclude_internal_services() {
     for descriptor in [
         miden_node_proto_build::rpc_api_descriptor(),
+        miden_node_proto_build::rpc_v2_api_descriptor(),
         miden_node_proto_build::remote_prover_api_descriptor(),
         miden_node_proto_build::note_transport_api_descriptor(),
     ] {
@@ -62,7 +64,10 @@ fn public_descriptors_exclude_internal_services() {
                 assert!(
                     matches!(
                         file.package(),
-                        "miden.node.v1" | "miden.remote_prover.v1" | "miden.note_transport.v1"
+                        "miden.node.v1"
+                            | "miden.node.v2"
+                            | "miden.remote_prover.v1"
+                            | "miden.note_transport.v1"
                     ),
                     "public reflection exposes {}",
                     file.package(),
@@ -76,6 +81,7 @@ fn public_descriptors_exclude_internal_services() {
 fn descriptors_embed_their_dependencies() {
     let descriptors = [
         miden_node_proto_build::rpc_api_descriptor(),
+        miden_node_proto_build::rpc_v2_api_descriptor(),
         miden_node_proto_build::remote_prover_api_descriptor(),
         miden_node_proto_build::note_transport_api_descriptor(),
         #[cfg(feature = "internal")]
@@ -122,4 +128,63 @@ fn note_transport_fetch_bounds_are_message_fields() {
         assert_eq!(field.number(), number);
         assert_eq!(field.type_name(), ".miden.note_transport.v1.FetchNotesCursor");
     }
+}
+
+#[test]
+fn node_service_versions_expose_their_sync_contracts() {
+    let methods = |package: &str| {
+        let descriptor = if package == "miden.node.v2" {
+            miden_node_proto_build::rpc_v2_api_descriptor()
+        } else {
+            miden_node_proto_build::rpc_api_descriptor()
+        };
+        descriptor
+            .file
+            .iter()
+            .find(|file| file.package() == package)
+            .unwrap()
+            .service
+            .iter()
+            .find(|service| service.name() == "NodeService")
+            .unwrap()
+            .method
+            .iter()
+            .map(|method| (method.name().to_owned(), method.server_streaming()))
+            .collect::<BTreeSet<_>>()
+    };
+
+    let v2 = methods("miden.node.v2");
+    assert_eq!(
+        v2,
+        BTreeSet::from(
+            [
+                ("Status", false),
+                ("GetLimits", false),
+                ("GetNetworkNoteStatus", false),
+                ("GetBlockByNumber", false),
+                ("GetBlockHeaderByNumber", false),
+                ("GetNotesById", false),
+                ("GetNoteScriptByRoot", false),
+                ("GetTransactionEncryptionKey", false),
+                ("SubmitProvenTx", false),
+                ("SubmitProvenTxBatch", false),
+                ("BlockSubscription", true),
+                ("ProofSubscription", true),
+                ("SyncChainMmr", false),
+            ]
+            .map(|(name, streaming)| (name.to_owned(), streaming))
+        )
+    );
+
+    let v1 = methods("miden.node.v1");
+    for name in ["RegisterAccount", "IsAccountAllowed", "IsInvitationCodeValid"] {
+        assert!(v1.contains(&(name.to_owned(), false)));
+    }
+    for (name, streaming) in &v2 {
+        match name.as_str() {
+            name if name.starts_with("Sync") => assert!(v1.contains(&(name.to_owned(), false))),
+            _ => assert!(v1.contains(&(name.clone(), *streaming))),
+        }
+    }
+    assert!(v1.iter().all(|(name, _)| !name.ends_with("V2")));
 }

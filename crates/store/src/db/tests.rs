@@ -70,6 +70,7 @@ use miden_protocol::testing::account_id::{
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_2,
     ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_3,
+    ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE_2,
 };
@@ -4108,6 +4109,7 @@ fn transaction_records_preserve_commitments_after_reopen() {
 
     let expected = TransactionRecord {
         block_num,
+        transaction_index: 0,
         header: tx.clone(),
         output_note_proofs: expected_sync_records.clone(),
         // The input note's nullifier is not present in the `notes` table, so it does not resolve.
@@ -4116,6 +4118,45 @@ fn transaction_records_preserve_commitments_after_reopen() {
 
     // Verify database roundtrip
     assert_eq!(*record, expected);
+}
+
+/// Each transaction record carries its position within the block, counted across all accounts in
+/// the block rather than only the requested ones.
+#[test]
+#[miden_node_test_macro::enable_logging]
+fn select_transactions_records_report_position_in_block() {
+    let db = &TestDb::new();
+    let block_num = BlockNumber::from(1);
+    create_block(db, block_num);
+
+    let alice = AccountId::try_from(ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE).unwrap();
+    let bob = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    upsert_accounts(
+        db,
+        &[mock_block_account_update(alice, 0), mock_block_account_update(bob, 1)],
+        block_num,
+        &PrecomputedPublicAccountStates::new(),
+        &BTreeSet::from([alice, bob]),
+    )
+    .unwrap();
+
+    let transactions = vec![
+        mock_block_transaction(bob, 1),
+        mock_block_transaction(alice, 2),
+        mock_block_transaction(bob, 3),
+    ];
+    let ordered = OrderedTransactionHeaders::new_unchecked(transactions.clone());
+    insert_transactions(db, block_num, &ordered).unwrap();
+
+    let (_, records) =
+        select_transactions_records(db, &[bob], BlockNumber::GENESIS..=block_num).unwrap();
+    let mut positions: Vec<_> = records
+        .iter()
+        .map(|record| (record.header.id(), record.transaction_index))
+        .collect();
+    positions.sort_by_key(|(_, index)| *index);
+
+    assert_eq!(positions, vec![(transactions[0].id(), 0), (transactions[2].id(), 2)]);
 }
 
 fn multi_batch_erasure_fixture()
@@ -4388,6 +4429,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
 
     let expected = TransactionRecord {
         block_num,
+        transaction_index: 0,
         header: tx,
         output_note_proofs: vec![],
         consumed_note_refs: vec![],

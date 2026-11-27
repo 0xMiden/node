@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use miden_node_proto::clients::RpcClient;
+use miden_node_proto::server::{miden_node_v1_node_service, miden_node_v2_node_service};
 use miden_node_store::state::{BlockWriter, ProofWriter, State};
 use miden_node_tracing::{debug, info, warn};
 use miden_node_utils::shutdown::CancellationToken;
@@ -42,7 +43,6 @@ enum ReadinessTransition {
 }
 
 impl RpcReadiness {
-    const SERVICE_NAME: &'static str = "miden.node.v1.NodeService";
     const UNKNOWN: u8 = 0;
     const NOT_READY: u8 = 1;
     const READY: u8 = 2;
@@ -55,6 +55,16 @@ impl RpcReadiness {
         }
     }
 
+    /// Reports the same serving status for every public RPC service version.
+    pub async fn set_service_status(reporter: &HealthReporter, status: ServingStatus) {
+        for service in [
+            miden_node_v1_node_service::service_name(),
+            miden_node_v2_node_service::service_name(),
+        ] {
+            reporter.set_service_status(service, status).await;
+        }
+    }
+
     /// Updates the RPC service health status based on the upstream/local tip gap.
     pub async fn update(&self, upstream_tip: BlockNumber, local_tip: BlockNumber) {
         let gap = upstream_tip.as_u32().saturating_sub(local_tip.as_u32());
@@ -64,7 +74,7 @@ impl RpcReadiness {
         } else {
             ServingStatus::NotServing
         };
-        self.reporter.set_service_status(Self::SERVICE_NAME, status).await;
+        Self::set_service_status(&self.reporter, status).await;
 
         match self.record_transition(ready) {
             ReadinessTransition::BecameReady => {
