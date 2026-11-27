@@ -84,6 +84,7 @@ mod validator_tests;
 
 mod error_codes;
 mod get_account;
+mod get_account_infos;
 mod get_block_by_number;
 mod get_block_header_by_number;
 mod get_limits;

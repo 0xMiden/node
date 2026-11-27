@@ -121,6 +121,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 mod allowlist;
 mod error_details;
 mod status;
+mod sync_account;
 mod sync_resumption;
 mod sync_streams;
 mod transaction_logs;
@@ -4313,6 +4314,7 @@ async fn v2_service_parity() {
             "SyncNullifiers",
             "SyncTransactions",
             "GetTransactionsById",
+            "GetAccountInfos",
         ]),
     );
     for shared in ["GetNotesById", "SyncNotes", "SyncNullifiers", "SyncTransactions"] {
