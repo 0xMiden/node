@@ -284,7 +284,7 @@ mod tests {
             .await
             .expect("vault sync at the retention boundary should succeed");
         assert_eq!(last_block, oldest_retained);
-        assert!(updates.is_empty());
+        assert_eq!(updates, []);
         view.sync_account_storage_maps(account_id, BlockNumber::GENESIS..=oldest_retained)
             .await
             .expect("storage map sync at the retention boundary should succeed");

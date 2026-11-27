@@ -2,7 +2,6 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
-use std::time::Duration;
 
 use miden_node_store::DatabaseError;
 use miden_node_tracing::error;
@@ -13,14 +12,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
 use super::super::RpcService;
+use super::super::stream_settings::{SEND_TIMEOUT, STREAM_BUFFER_SIZE};
 
 #[cfg(test)]
 mod tests;
 
-/// Buffered messages per subscriber before back-pressure begins.
-const SUBSCRIBER_CHANNEL_CAPACITY: usize = 32;
-/// Safety-net timeout for a single send when the client has stalled.
-const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum gap between tip and subscriber's requested starting block where the starting block is
 /// greater than the tip.
 const MAX_FUTURE_GAP_IN_SUBSCRIPTIONS: u32 = 100u32;
@@ -87,7 +83,7 @@ impl SubscriptionStream {
 
         // Keep one channel slot reserved for the terminal status. This prevents a full data buffer
         // from causing the terminal status to be dropped as well.
-        let (tx, rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY + 1);
+        let (tx, rx) = mpsc::channel(STREAM_BUFFER_SIZE + 1);
         let terminal_permit = tx
             .clone()
             .try_reserve_owned()

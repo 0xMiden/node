@@ -81,7 +81,11 @@ use miden_protocol::block::{
 use miden_protocol::crypto::merkle::mmr::Mmr;
 use miden_protocol::note::NoteType;
 use miden_protocol::protocol_config::ProtocolConfig;
-use miden_protocol::testing::account_id::{ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET, ACCOUNT_ID_SENDER};
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1,
+    ACCOUNT_ID_SENDER,
+};
 use miden_protocol::testing::noop_auth_component::NoopAuthComponent;
 use miden_protocol::transaction::{
     OutputNote,
@@ -2823,7 +2827,7 @@ async fn invalid_protocol_config_does_not_advance_store() {
 /// the chain-tip check from the range-validity check.
 #[tokio::test]
 async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
-    let (mut rpc_client, _rpc_addr, _store, _server) = start_rpc().await;
+    let (mut rpc_client, rpc_addr, _store, _server) = start_rpc().await;
 
     // A range ending one block past the genesis tip; otherwise valid (non-empty, start <= end).
     let block_range = || Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 1 });
@@ -2880,6 +2884,19 @@ async fn sync_endpoints_reject_block_to_beyond_chain_tip() {
         .expect_err("sync_account_vault should reject block_to beyond chain tip");
     assert_beyond_tip(&status, "sync_account_vault");
     assert_eq!(status.details(), &[4]);
+
+    let status = connect_rpc::<RpcV2Client>(rpc_addr)
+        .await
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            account_id: account_id(),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(1),
+            }),
+        })
+        .await
+        .expect_err("v2 SyncAccountVault should reject block_to beyond chain tip");
+    assert_beyond_tip(&status, "v2 SyncAccountVault");
 
     let status = rpc_client
         .sync_transactions(proto::miden::node::v1::SyncTransactionsRequest {
@@ -3055,6 +3072,325 @@ pub(crate) async fn transaction_log_test_service() -> RpcService {
         NonZeroUsize::new(10).unwrap(),
         None,
     )
+}
+
+/// Malformed requests and private accounts must fail before streaming. Empty public results must
+/// complete.
+#[tokio::test]
+async fn v2_sync_account_vault_validates_requests_and_completes_empty_stream() {
+    let (mut rpc_client, _rpc_addr, _store, _guard) = start_rpc_v2().await;
+    let public_account = AccountId::dummy(
+        [0; 15],
+        AccountIdVersion::Version1,
+        AccountType::Public,
+        AssetCallbackFlag::Disabled,
+    );
+
+    let status = rpc_client
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            range: None,
+            account_id: Some(public_account.into()),
+        })
+        .await
+        .expect_err("v2 SyncAccountVault should require a block range");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let private_account = AccountId::dummy(
+        [1; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    let status = rpc_client
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            account_id: Some(private_account.into()),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+        })
+        .await
+        .expect_err("v2 SyncAccountVault should reject private accounts");
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+
+    let mut stream = rpc_client
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            account_id: Some(public_account.into()),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+        })
+        .await
+        .expect("v2 SyncAccountVault should accept a public account at the chain tip")
+        .into_inner();
+    assert_eq!(stream.message().await.expect("stream should complete successfully"), None);
+}
+
+/// A changed vault key must expose its final target value, including deletion.
+#[tokio::test]
+async fn v2_sync_account_vault_streams_squashed_updates() {
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc_v2().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let other_faucet = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET_1).unwrap();
+    let asset_a = Asset::from(FungibleAsset::new(account_id, 100).unwrap());
+    let asset_b = Asset::from(FungibleAsset::new(other_faucet, 200).unwrap());
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &[(asset_a.id(), Some(asset_a)), (asset_b.id(), Some(asset_b))],
+    )
+    .await;
+
+    let mut stream = rpc_client
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            account_id: Some(account_id.into()),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+        })
+        .await
+        .expect("v2 SyncAccountVault should return a stream")
+        .into_inner();
+
+    let mut assets = Vec::new();
+    while let Some(update) = stream.message().await.expect("stream should complete successfully") {
+        assert_eq!(update.last_updated_at, 0);
+        assets.push(
+            update
+                .asset
+                .expect("seeded values are additions")
+                .decode_fields()
+                .unwrap()
+                .verify()
+                .unwrap(),
+        );
+    }
+    assets.sort_by_key(Asset::id);
+
+    let mut expected = vec![asset_a, asset_b];
+    expected.sort_by_key(Asset::id);
+    assert_eq!(assets, expected);
+}
+
+/// The response must retain every changed key when one block exceeds the database page size.
+#[tokio::test]
+async fn v2_sync_account_vault_streams_every_key_across_database_pages() {
+    let (mut rpc_client, _rpc_addr, store, _guard) = start_rpc_v2().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let values = vault_stream_values(300);
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &values,
+    )
+    .await;
+    let mut stream = rpc_client
+        .sync_account_vault(v2::SyncAccountVaultRequest {
+            account_id: Some(account_id.into()),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let mut actual = Vec::new();
+    while let Some(update) = stream.message().await.unwrap() {
+        assert_eq!(update.last_updated_at, 0);
+        actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+    }
+    actual.sort_by_key(Asset::id);
+    let mut expected: Vec<_> = values.into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    assert_eq!(actual, expected);
+}
+
+/// Builds distinct vault keys so stream tests can detect missing rows across database pages.
+fn vault_stream_values(count: u32) -> Vec<(AssetId, Option<Asset>)> {
+    (0_u32..count)
+        .map(|index| {
+            let mut bytes = [0; 15];
+            bytes[5..9].copy_from_slice(&index.to_le_bytes());
+            let issuer = AccountId::dummy(
+                bytes,
+                AccountIdVersion::Version1,
+                AccountType::Public,
+                AssetCallbackFlag::Disabled,
+            );
+            let asset = Asset::from(FungibleAsset::new(issuer, u64::from(index) + 1).unwrap());
+            (asset.id(), Some(asset))
+        })
+        .collect()
+}
+
+/// Bootstrap must include genesis. An already synchronized target must return an empty delta.
+#[tokio::test]
+async fn v2_sync_account_vault_accepts_bootstrap_and_empty_delta_ranges() {
+    let (mut client, _, store, _guard) = start_rpc_v2().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(2),
+    )
+    .await;
+    for (from, expected) in [(None, 2), (Some(0), 0)] {
+        let mut stream = client
+            .sync_account_vault(v2::SyncAccountVaultRequest {
+                account_id: Some(account_id.into()),
+                range: Some(v2::StateDeltaRange {
+                    from_block_exclusive: from,
+                    to_block_inclusive: Some(0),
+                }),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut count = 0;
+        while stream.message().await.unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, expected);
+    }
+}
+
+/// Invalid ranges and future targets must fail, including when the delta is empty.
+#[tokio::test]
+async fn v2_sync_account_vault_rejects_invalid_ranges_and_future_empty_targets() {
+    let (mut client, _, _store, _guard) = start_rpc_v2().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for (from, target, expected_detail) in
+        [(Some(1), Some(0), 2), (Some(1), Some(1), 3), (None, None, 2)]
+    {
+        let request = v2::SyncAccountVaultRequest {
+            account_id: Some(account_id.into()),
+            range: Some(v2::StateDeltaRange {
+                from_block_exclusive: from,
+                to_block_inclusive: target,
+            }),
+        };
+        let error = client.sync_account_vault(request).await.unwrap_err();
+        assert_eq!(error.code(), tonic::Code::InvalidArgument);
+        assert_eq!(error.details(), &[expected_detail]);
+    }
+}
+
+/// A backpressured vault stream releases the store's only database reader between pages.
+#[tokio::test]
+async fn v2_sync_account_vault_releases_reader_under_backpressure() {
+    use miden_node_proto::domain::block::SyncRange;
+    use miden_node_proto::generated::server::miden_node_v2_node_service::SyncAccountVault;
+
+    let directory = new_tempdir();
+    TestStore::bootstrap(&directory).await;
+    let (state, _writer, _proof_writer, _task) = State::load_with_database_options(
+        &directory,
+        miden_node_utils::clap::StorageOptions::default(),
+        miden_node_store::DatabaseOptions { connection_pool_size: NonZeroUsize::MIN },
+    )
+    .await
+    .unwrap()
+    .start(CancellationToken::new());
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &directory.join("miden-store.sqlite3"),
+        account,
+        BlockNumber::GENESIS,
+        &vault_stream_values(300),
+    )
+    .await;
+    let service = RpcService::new(
+        Arc::clone(&state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let stream = SyncAccountVault::handle(
+        &service,
+        (
+            account,
+            SyncRange {
+                from_exclusive: None,
+                target: BlockNumber::GENESIS,
+            },
+        ),
+        &MetadataMap::new(),
+        &Extensions::new(),
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while stream.as_ref().capacity() != 0 {
+            tokio::task::yield_now().await;
+        }
+        state.read(|view| view.tx.select_block_header(BlockNumber::GENESIS)).await
+    })
+    .await
+    .expect("a full stream must leave the reader available")
+    .unwrap()
+    .expect("genesis header");
+    drop(stream);
+}
+
+/// Concurrent vault streams must return complete results without a client or global limit.
+#[tokio::test]
+async fn v2_sync_account_vault_accepts_many_concurrent_streams() {
+    use tokio_stream::StreamExt;
+    let store = TestStore::start().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    miden_node_store::test_support::seed_account_vault(
+        &store.data_directory_path().join("miden-store.sqlite3"),
+        account_id,
+        BlockNumber::GENESIS,
+        &vault_stream_values(300),
+    )
+    .await;
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::new(1).unwrap(),
+        None,
+    );
+    let request = v2::SyncAccountVaultRequest {
+        account_id: Some(account_id.into()),
+        range: Some(v2::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+    };
+    let mut expected: Vec<_> =
+        vault_stream_values(300).into_iter().map(|(_, asset)| asset.unwrap()).collect();
+    expected.sort_by_key(Asset::id);
+    let mut streams = Vec::new();
+    for _ in 0..40 {
+        streams.push(
+            v2::node_service_server::NodeService::sync_account_vault(
+                &service,
+                Request::new(request),
+            )
+            .await
+            .unwrap()
+            .into_inner(),
+        );
+    }
+    for mut stream in streams {
+        let mut actual = Vec::new();
+        while let Some(item) = stream.next().await {
+            let update = item.unwrap();
+            assert_eq!(update.last_updated_at, 0);
+            actual.push(update.asset.unwrap().decode_fields().unwrap().verify().unwrap());
+        }
+        actual.sort_by_key(Asset::id);
+        assert_eq!(actual, expected);
+    }
 }
 
 #[tokio::test]

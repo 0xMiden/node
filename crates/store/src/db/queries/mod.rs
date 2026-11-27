@@ -195,6 +195,9 @@ pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesP
 pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
 pub use select_account_storage_map_values_paged::StorageMapValuesPage;
 
+mod select_account_vault_updates_v2;
+pub use select_account_vault_updates_v2::account_vault_updates_page;
+
 mod select_account_vault_assets;
 pub(crate) use select_account_vault_assets::AccountVaultAssets;
 
@@ -214,3 +217,6 @@ pub(crate) use select_latest_storage::select_latest_storage;
 
 mod apply_block;
 pub(crate) use apply_block::apply_block;
+
+mod check_account_history_target;
+pub use check_account_history_target::check_account_history_target;

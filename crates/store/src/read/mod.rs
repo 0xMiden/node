@@ -18,7 +18,7 @@ pub(crate) use transaction::{
 /// share one SQLite transaction, and neither the transaction nor the snapshot can escape the closure.
 pub struct ReadView<'a> {
     pub tx: ReadTransaction<'a>,
-    pub snapshot: StateSnapshot<'a>,
+    pub snapshot: &'a StateSnapshot<'a>,
 }
 
 #[cfg(test)]

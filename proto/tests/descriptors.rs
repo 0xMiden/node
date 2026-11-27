@@ -171,6 +171,7 @@ fn node_service_versions_expose_their_sync_contracts() {
                 ("BlockSubscription", true),
                 ("ProofSubscription", true),
                 ("SyncChainMmr", false),
+                ("SyncAccountVault", true),
             ]
             .map(|(name, streaming)| (name.to_owned(), streaming))
         )
