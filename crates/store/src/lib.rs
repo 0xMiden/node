@@ -34,6 +34,8 @@ pub use data_directory::DataDirectory;
 pub use db::queries::{
     NoteSyncCursor,
     NoteSyncPage,
+    NullifierCursor,
+    NullifierUpdatesPage,
     StorageMapCursor,
     StorageMapUpdatesPage,
     StorageMapValue,
@@ -185,5 +187,20 @@ pub mod test_support {
             })
             .await
             .expect("insert test storage-map values");
+    }
+    /// Inserts nullifiers for downstream prefix-discovery tests.
+    pub async fn seed_nullifiers(
+        db_path: &Path,
+        block: BlockNumber,
+        nullifiers: Vec<miden_protocol::note::Nullifier>,
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed nullifiers", move |tx| {
+                crate::db::queries::insert_nullifiers_for_block(tx, &nullifiers, block)
+            })
+            .await
+            .expect("insert test nullifiers");
     }
 }

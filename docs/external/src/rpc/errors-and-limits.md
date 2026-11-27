@@ -144,10 +144,12 @@ authenticated block and repeat all account reads there.
 ## Finite synchronization stream errors
 
 The following methods belong to `miden.node.v2.NodeService`. On v2, look up each method by its bare name in `GetLimits`.
-Each API version advertises its own methods.
+Each API version advertises its own methods. `SyncNullifiers` treats prefix values above 65535 as malformed input. For
+the maximum number of prefixes per request, see `GetLimits.endpoints["SyncNullifiers"].parameters["nullifier_prefix"]`.
 
 | Method                                       | Codes with `INVALID_ARGUMENT`                                                                              |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `SyncNullifiers`                             | `1` malformed input, `2` invalid or missing range, `3` future target, `6` prefix length other than 16      |
 | `SyncAccountVault`, `SyncAccountStorageMaps` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
 | `SyncNotes`                                  | `1` malformed input, `2` invalid range, `3` future target                                                  |
 

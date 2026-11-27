@@ -111,6 +111,7 @@ mod sync_chain_mmr;
 mod sync_notes;
 mod sync_notes_v2;
 mod sync_nullifiers;
+mod sync_nullifiers_v2;
 mod sync_stream;
 mod sync_transactions;
 

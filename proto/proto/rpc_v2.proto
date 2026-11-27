@@ -75,6 +75,14 @@ service NodeService {
     // reconnect from the first height whose proof is still missing locally.
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
+    // Streams each nullifier that matches a requested 16-bit prefix in (from_block_exclusive,
+    // to_block_inclusive]. Omit the lower bound to include genesis.
+    //
+    // Use prefixes from tracked notes to discover their consumption without disclosing full nullifiers.
+    // Filter returned matches against local nullifiers. Every matching identity is emitted separately.
+    // Pin the target to SyncChainMmr and apply results only after successful stream completion.
+    rpc SyncNullifiers(SyncNullifiersRequest) returns (stream SyncNullifiersResponse) {}
+
     // Streams matching note records, preceded by one block frame for each block with matches.
     //
     // Use note tags to discover new notes through the target authenticated by SyncChainMmr.
@@ -191,6 +199,20 @@ message SyncNotesResponse {
 message NoteBlockStart {
     blockchain.BlockHeader block_header = 1;
     primitives.MerklePath mmr_path = 2;
+}
+
+// Prefix queries preserve the privacy of individual tracked note nullifiers.
+message SyncNullifiersRequest {
+    StateDeltaRange range = 1;
+    uint32 prefix_len = 2;
+    repeated uint32 nullifiers = 3;
+}
+// Every nullifier is an append-only identity. OK end-of-stream completes the requested range.
+message SyncNullifiersResponse {
+    primitives.Word nullifier = 1;
+
+    // Block number at which the nullifier was recorded.
+    fixed32 last_updated_at = 2;
 }
 
 message NoteSyncAttachment {
