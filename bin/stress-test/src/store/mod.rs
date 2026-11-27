@@ -9,6 +9,7 @@ use miden_node_proto::generated::{self as proto};
 use miden_node_store::DatabaseError;
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
+use miden_node_utils::limiter::MAX_RESPONSE_PAYLOAD_BYTES;
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::block::BlockNumber;
@@ -273,8 +274,21 @@ pub async fn sync_notes(
         .collect::<Vec<_>>();
     let start = Instant::now();
     state
-        .view()
-        .sync_notes(note_tags, BlockNumber::from(0)..=BlockNumber::from(chain_tip))
+        .read(move |view| {
+            let block_to = BlockNumber::from(chain_tip);
+            let page = view.tx.select_note_sync_updates(
+                &note_tags,
+                BlockNumber::GENESIS..=block_to,
+                MAX_RESPONSE_PAYLOAD_BYTES,
+            )?;
+            for update in page.items {
+                view.snapshot
+                    .blockchain
+                    .open_at(update.block_header.block_num(), block_to + 1)
+                    .unwrap();
+            }
+            Ok::<_, DatabaseError>(())
+        })
         .await
         .unwrap();
     start.elapsed()
@@ -313,7 +327,7 @@ pub async fn bench_sync_nullifiers(
     let chain_tip = store_state.committed_tip().as_u32();
 
     // Get all nullifier prefixes from the store using sync_notes
-    let mut nullifier_prefixes: Vec<u32> = vec![];
+    let mut nullifier_prefixes: Vec<u16> = vec![];
     let mut current_block_num = 0;
     loop {
         // Get the accounts notes using sync_notes
@@ -321,14 +335,19 @@ pub async fn bench_sync_nullifiers(
             .iter()
             .map(|id| u32::from(NoteTag::with_account_target(*id)))
             .collect();
-        let (blocks, last_block_checked) = store_state
-            .view()
-            .sync_notes(
-                note_tags,
-                BlockNumber::from(current_block_num)..=BlockNumber::from(chain_tip),
-            )
+        let block_range = BlockNumber::from(current_block_num)..=BlockNumber::from(chain_tip);
+        let page = store_state
+            .read(move |view| {
+                view.tx.select_note_sync_updates(
+                    &note_tags,
+                    block_range,
+                    MAX_RESPONSE_PAYLOAD_BYTES,
+                )
+            })
             .await
             .unwrap();
+        let last_block_checked = page.last_block_included(BlockNumber::from(chain_tip));
+        let blocks = page.items;
 
         if blocks.is_empty() || last_block_checked.as_u32() >= chain_tip {
             break;
@@ -337,7 +356,7 @@ pub async fn bench_sync_nullifiers(
         // Collect note IDs from all blocks in the response.
         let note_ids: Vec<_> = blocks
             .iter()
-            .flat_map(|(block, _)| block.notes.iter().map(|note| note.note_id))
+            .flat_map(|block| block.notes.iter().map(|note| note.note_id))
             .collect();
 
         // Get the notes nullifiers, limiting to 20 notes maximum.
@@ -354,7 +373,7 @@ pub async fn bench_sync_nullifiers(
                 let metadata = n.metadata;
                 let nullifier =
                     miden_protocol::note::Nullifier::from_details_and_metadata(details, &metadata);
-                Some(u32::from(nullifier.prefix()))
+                Some(nullifier.prefix())
             }));
         }
 
@@ -367,7 +386,7 @@ pub async fn bench_sync_nullifiers(
     let request = |_| {
         let state = Arc::clone(&store_state);
 
-        let nullifiers_batch: Vec<u32> = nullifiers.by_ref().take(prefixes_per_request).collect();
+        let nullifiers_batch: Vec<u16> = nullifiers.by_ref().take(prefixes_per_request).collect();
 
         tokio::spawn(async move { sync_nullifiers(&state, nullifiers_batch, chain_tip).await })
     };
@@ -393,20 +412,20 @@ pub async fn bench_sync_nullifiers(
 /// - the response.
 async fn sync_nullifiers(
     state: &Arc<State>,
-    nullifiers_prefixes: Vec<u32>,
+    nullifiers_prefixes: Vec<u16>,
     chain_tip: u32,
 ) -> (Duration, usize) {
     let start = Instant::now();
-    let (nullifiers, _) = state
-        .view()
-        .sync_nullifiers(
-            16,
-            nullifiers_prefixes,
-            BlockNumber::from(0)..=BlockNumber::from(chain_tip),
-        )
+    let page = state
+        .read(move |view| {
+            view.tx.select_nullifiers_by_prefix(
+                &nullifiers_prefixes,
+                BlockNumber::GENESIS..=BlockNumber::from(chain_tip),
+            )
+        })
         .await
         .unwrap();
-    (start.elapsed(), nullifiers.len())
+    (start.elapsed(), page.items.len())
 }
 
 // SYNC TRANSACTIONS
@@ -518,17 +537,19 @@ pub async fn sync_transactions(
     block_to: u32,
 ) -> (Duration, proto::miden::node::v1::SyncTransactionsResponse) {
     let start = Instant::now();
-    let (chain_tip, (last_block_included, records)) = state
-        .with_view(async |view| {
-            view.sync_transactions(
-                account_ids,
-                BlockNumber::from(block_from)..=BlockNumber::from(block_to),
-            )
-            .await
-            .map(|records| (*view.tip(), records))
-            .unwrap()
+    let block_to = BlockNumber::from(block_to);
+    let (chain_tip, page) = state
+        .read(move |view| {
+            let page = view.tx.select_transactions_records(
+                &account_ids,
+                BlockNumber::from(block_from)..=block_to,
+            )?;
+            Ok::<_, DatabaseError>((view.snapshot.block_num, page))
         })
-        .await;
+        .await
+        .unwrap();
+    let last_block_included = page.last_block_included(block_to);
+    let records = page.items;
     let response = proto::miden::node::v1::SyncTransactionsResponse {
         pagination_info: Some(proto::miden::node::v1::PaginationInfo {
             chain_tip: chain_tip.as_u32(),

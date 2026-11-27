@@ -31,16 +31,17 @@ pub use accounts::{
 };
 pub use blocks::BlockStore;
 pub use data_directory::DataDirectory;
-pub use db::queries::StorageMapValuesPage;
 pub use db::{
     AccountVaultValue,
     DatabaseOptions,
     Db,
+    HISTORICAL_BLOCK_RETENTION,
     NoteRecord,
     NoteSyncRecord,
     NoteSyncUpdate,
     NullifierInfo,
     TransactionRecord,
+    default_storage_map_entries_limit,
 };
 pub use errors::{
     AccountStateForestUpdateError,
@@ -62,7 +63,6 @@ pub use state::{
     LoadedState,
     ProofWriter,
     ScopedBlockNum,
-    ScopedBlockRange,
     State,
     StateView,
     StateWitnesses,

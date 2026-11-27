@@ -68,7 +68,7 @@ impl QueryParamLimiter for QueryParamNullifierPrefixLimit {
 }
 
 /// Used for the following RPC endpoints
-/// * `get_note_sync_multi`
+/// * `sync_notes`
 ///
 /// Capped at 1000 tags so note sync responses remain within the 4 MB payload budget.
 pub struct QueryParamNoteTagLimit;

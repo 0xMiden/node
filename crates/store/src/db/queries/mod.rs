@@ -7,8 +7,7 @@
 //! function and the `.sql` file it executes.
 //!
 //! Paginated queries are types that implement [`Paginated`](crate::db::pagination::Paginated)
-//! rather than functions, and are driven through [`Db::page`](crate::db::Db::page) and
-//! [`Db::pages`](crate::db::Db::pages).
+//! rather than functions, and are driven through [`Db::pages`](crate::db::Db::pages).
 
 use miden_node_db::DatabaseError;
 use miden_node_db::sqlite::{DbValue, DbValueRef, FromSqlValue, ToSqlValue};
@@ -95,11 +94,6 @@ pub(crate) use insert_notes::insert_notes;
 
 pub(crate) mod note_row;
 
-mod get_note_sync_multi;
-pub(crate) use get_note_sync_multi::NoteSyncMulti;
-#[cfg(test)]
-pub(crate) use get_note_sync_multi::{NOTE_SYNC_BLOCK_OVERHEAD_BYTES, NOTE_SYNC_RECORD_BYTES};
-
 mod select_notes_since_block_by_tag;
 pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 
@@ -122,9 +116,6 @@ mod select_all_nullifiers;
 #[cfg(test)]
 pub(crate) use select_all_nullifiers::select_all_nullifiers;
 
-mod select_nullifiers_by_prefix;
-pub(crate) use select_nullifiers_by_prefix::NullifiersByPrefix;
-
 mod select_nullifiers_paged;
 pub(crate) use select_nullifiers_paged::NullifiersPaged;
 
@@ -133,9 +124,6 @@ pub(crate) use select_nullifiers_paged::NullifiersPaged;
 
 mod insert_transactions;
 pub(crate) use insert_transactions::insert_transactions;
-
-mod select_transactions_records;
-pub(crate) use select_transactions_records::TransactionsRecords;
 
 // ACCOUNT QUERIES
 // =================================================================================================
@@ -176,15 +164,6 @@ pub(crate) use select_account::select_account;
 
 mod select_account_code_by_commitment;
 pub(crate) use select_account_code_by_commitment::select_account_code_by_commitment;
-
-mod select_account_storage_map_values_paged;
-pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesPaged;
-#[cfg(test)]
-pub(crate) use select_account_storage_map_values_paged::StorageMapValue;
-pub use select_account_storage_map_values_paged::StorageMapValuesPage;
-
-mod select_account_vault_assets;
-pub(crate) use select_account_vault_assets::AccountVaultAssets;
 
 #[cfg(test)]
 mod select_all_accounts;

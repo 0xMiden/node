@@ -4,7 +4,13 @@ use miden_node_tracing::{debug, instrument, miden_span_record};
 use miden_node_utils::limiter::QueryParamNullifierPrefixLimit;
 
 use super::error_codes::SyncNullifiersErrorCode;
-use super::{RpcService, check, database_error_to_status, invalid_block_range_to_status};
+use super::{
+    RpcService,
+    check,
+    check_range_within_tip,
+    database_error_to_status,
+    invalid_block_range_to_status,
+};
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
@@ -59,31 +65,40 @@ impl proto::server::miden_node_v1_node_service::SyncNullifiers for RpcService {
             )));
         }
 
-        // Every prefix must fit in the requested 16-bit prefix length. The store narrows prefixes
-        // with `prefix as u16`, which would otherwise silently truncate an out-of-range value (e.g.
-        // 65536 -> 0) and query a different prefix than the client requested.
-        if let Some(&prefix) = nullifiers.iter().find(|&&prefix| prefix > u32::from(u16::MAX)) {
-            return Err(SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(format!(
-                "nullifier prefix {prefix} does not fit in the requested prefix length of 16 bits"
-            )));
-        }
+        // Every prefix must fit in the requested 16-bit prefix length. Rejecting out-of-range
+        // values keeps them from being truncated (e.g. 65536 -> 0) into a different prefix than the
+        // client requested.
+        let nullifier_prefixes = nullifiers
+            .iter()
+            .map(|&prefix| {
+                u16::try_from(prefix).map_err(|_| {
+                    SyncNullifiersErrorCode::DeserializationFailed.invalid_argument(format!(
+                        "nullifier prefix {prefix} does not fit in the requested prefix length of 16 bits"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let block_range = range.verify().map_err(invalid_block_range_to_status)?;
-        let (chain_tip, (nullifiers, block_num)) = self
+        let block_to = *block_range.end();
+        let (chain_tip, page) = self
             .state
-            .with_view(async |view| {
-                view.sync_nullifiers(request.prefix_len, nullifiers, block_range)
-                    .await
-                    .map(|nullifiers| (view.tip(), nullifiers))
-                    .map_err(|err| match err {
-                        DatabaseError::RangeBeyondTip(_) => {
-                            SyncNullifiersErrorCode::FutureBlock.invalid_argument(err)
-                        },
-                        err => database_error_to_status(&err),
-                    })
+            .read(move |view| {
+                let chain_tip = view.snapshot.block_num;
+                check_range_within_tip(&block_range, chain_tip)?;
+                let page = view.tx.select_nullifiers_by_prefix(&nullifier_prefixes, block_range)?;
+                Ok::<_, DatabaseError>((chain_tip, page))
             })
-            .await?;
-        let nullifiers = nullifiers
+            .await
+            .map_err(|err| match err {
+                DatabaseError::RangeBeyondTip(_) => {
+                    SyncNullifiersErrorCode::FutureBlock.invalid_argument(err)
+                },
+                err => database_error_to_status(&err),
+            })?;
+        let block_num = page.last_block_included(block_to);
+        let nullifiers = page
+            .items
             .into_iter()
             .map(|nullifier_info| {
                 proto::miden::node::v1::sync_nullifiers_response::NullifierUpdate {

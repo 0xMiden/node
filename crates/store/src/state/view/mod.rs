@@ -5,19 +5,17 @@
 //! Each database query opens its own transaction. Caller-composed reads use [`State::read`] to pair
 //! the tree snapshot with a single SQLite transaction.
 //!
-use std::ops::RangeInclusive;
 use std::sync::Arc;
 
 use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
 use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
-use crate::db::{Db, HISTORICAL_BLOCK_RETENTION};
-use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
+use crate::db::Db;
 use crate::state::State;
 
 mod scoped;
-pub use scoped::{ScopedBlockNum, ScopedBlockRange};
+pub use scoped::ScopedBlockNum;
 
 mod snapshot;
 pub(in crate::state) use snapshot::PublishedGenerations;
@@ -29,7 +27,6 @@ mod inclusion_proofs;
 mod protocol_config;
 mod state_witnesses;
 pub use state_witnesses::StateWitnesses;
-mod sync;
 
 // STATE VIEW
 // ================================================================================================
@@ -108,41 +105,6 @@ impl StateView {
     /// number required by block-bounded database queries.
     fn scope_block(&self, block_num: BlockNumber) -> Option<ScopedBlockNum> {
         (block_num <= *self.tip()).then(|| ScopedBlockNum::new(block_num))
-    }
-
-    /// Validates that `range` does not extend beyond this view's chain tip, returning the scoped
-    /// range required by range-bounded database queries.
-    ///
-    /// Every range-scoped read on this type calls this before touching the database, so callers
-    /// never need to pre-validate ranges themselves.
-    fn scope_range(
-        &self,
-        range: RangeInclusive<BlockNumber>,
-    ) -> Result<ScopedBlockRange, RangeBeyondTip> {
-        let tip = *self.tip();
-        if *range.end() > tip {
-            return Err(RangeBeyondTip { chain_tip: tip, block_to: *range.end() });
-        }
-        Ok(ScopedBlockRange::new(range))
-    }
-
-    /// Validates `range` like [`Self::scope_range`], and also validates that `range` ends inside
-    /// the account history retention window.
-    ///
-    /// The store deletes account history rows that stop being valid at or below
-    /// `tip - HISTORICAL_BLOCK_RETENTION`. A range that ends below that block can miss updates, so
-    /// account state sync reads must use this check.
-    fn scope_retained_range(
-        &self,
-        range: RangeInclusive<BlockNumber>,
-    ) -> Result<ScopedBlockRange, DatabaseError> {
-        let range = self.scope_range(range)?;
-        let oldest_retained =
-            BlockNumber::from(self.tip().as_u32().saturating_sub(HISTORICAL_BLOCK_RETENTION));
-        if range.end() < oldest_retained {
-            return Err(RangeBelowRetention { oldest_retained, block_to: range.end() }.into());
-        }
-        Ok(range)
     }
 
     /// Runs a synchronous read-only operation over the pinned state snapshot on Tokio's blocking
