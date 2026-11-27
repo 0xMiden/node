@@ -736,6 +736,7 @@ async fn rpc_server_checks_transaction_fee_notes(
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let status = service
@@ -866,6 +867,7 @@ async fn rpc_server_rejects_invalid_deferred_transaction_proofs() {
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let status = service
@@ -910,6 +912,7 @@ async fn rpc_server_forwards_valid_deferred_proofs_and_rejects_missing_witnesses
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     let request = proto::submission::ProvenTransactionSubmission {
         transaction: Some((&fixture.transaction).into()),
@@ -1044,6 +1047,7 @@ async fn rpc_rejects_post_deployment_network_account_tx() {
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let response = service
@@ -1236,6 +1240,7 @@ async fn start_source_rpc_with_genesis(
                 Some(ntx_builder),
                 NonZeroUsize::new(1_000_000).unwrap(),
                 None,
+                crate::SyncAccountConfig::default(),
             );
 
             tonic::transport::Server::builder()
@@ -1506,6 +1511,7 @@ async fn full_node_with_validator_forwards_get_transaction_encryption_key() {
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let response = full_node
@@ -1548,6 +1554,7 @@ async fn full_node_forwards_get_transaction_encryption_key_to_source_rpc() {
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let response = full_node
@@ -1578,6 +1585,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding_encryption
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let original_accept = format!(
@@ -1631,6 +1639,7 @@ async fn full_node_forwards_get_network_note_status_to_source_rpc() {
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let response = full_node
@@ -1675,6 +1684,7 @@ async fn full_node_preserves_original_accept_metadata_when_forwarding() {
         None,
         NonZeroUsize::new(1_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let original_accept = format!(
@@ -1722,6 +1732,7 @@ async fn full_node_forwards_complete_transaction_batch_to_source_rpc(#[case] inc
         None,
         NonZeroUsize::new(1_000_000).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
 
     let mut malformed = fixture.request.clone();
@@ -1950,6 +1961,7 @@ async fn start_rpc_with_allowlist<C: GrpcClient>(
                 ntx_builder: None,
                 grpc_options,
                 network_tx_auth: None,
+                sync_account: crate::SyncAccountConfig::default(),
             }
             .serve(shutdown)
             .await
@@ -2181,6 +2193,7 @@ async fn full_nodes_forward_allowlist_requests_to_the_sequencer() {
             None,
             NonZeroUsize::new(1).unwrap(),
             None,
+            crate::SyncAccountConfig::default(),
         );
         let registration = proto::miden::node::v1::RegisterAccountRequest {
             invitation_code: code.clone(),
@@ -3093,6 +3106,7 @@ pub(crate) async fn transaction_log_test_service() -> RpcService {
         None,
         NonZeroUsize::new(10).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     )
 }
 
@@ -3333,6 +3347,7 @@ async fn v2_sync_account_vault_releases_reader_under_backpressure() {
         None,
         NonZeroUsize::MIN,
         None,
+        crate::SyncAccountConfig::default(),
     );
     let stream = SyncAccountVault::handle(
         &service,
@@ -3380,6 +3395,7 @@ async fn v2_sync_account_vault_accepts_many_concurrent_streams() {
         None,
         NonZeroUsize::new(1).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     let request = v2::SyncAccountVaultRequest {
         account_id: Some(account_id.into()),
@@ -3588,6 +3604,7 @@ async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
         None,
         NonZeroUsize::MIN,
         None,
+        crate::SyncAccountConfig::default(),
     );
     let mut stream = proto::server::miden_node_v2_node_service::SyncNotes::handle(
         &service,
@@ -4313,6 +4330,7 @@ async fn v2_service_parity() {
             "SyncNotes",
             "SyncNullifiers",
             "SyncTransactions",
+            "SyncAccount",
             "GetTransactionsById",
             "GetAccountInfos",
             "GetAccountWitnesses",
@@ -4429,6 +4447,7 @@ async fn v2_rejects_unknown_finality() {
         None,
         NonZeroUsize::MIN,
         None,
+        crate::SyncAccountConfig::default(),
     );
     let result = v2::node_service_server::NodeService::sync_chain_mmr(
         &rpc,

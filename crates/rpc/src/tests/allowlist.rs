@@ -39,6 +39,7 @@ async fn disabled_allowlist_registers_accounts_without_changing_invitations() {
         None,
         NonZeroUsize::new(1).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     let request = |code: &str, account_id| {
         let mut request = Request::new(proto::miden::node::v1::RegisterAccountRequest {
@@ -173,6 +174,7 @@ async fn registration_requests_funding_once_after_commit(#[case] disabled: bool)
         None,
         NonZeroUsize::new(1).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     for (index, account) in accounts.into_iter().enumerate() {
         let code = if disabled && index == 1 {
@@ -372,6 +374,7 @@ async fn is_account_allowed_respects_enforcement() {
             None,
             NonZeroUsize::new(1).unwrap(),
             None,
+            crate::SyncAccountConfig::default(),
         );
         for account_id in [
             None,
@@ -468,6 +471,7 @@ async fn submission_endpoints_reject_unregistered_creation_without_partial_batch
         None,
         NonZeroUsize::new(10).unwrap(),
         None,
+        crate::SyncAccountConfig::default(),
     );
     let internal = SequencerInternalService {
         state: Arc::clone(&store.state),
@@ -606,6 +610,7 @@ async fn is_invitation_code_valid_respects_enforcement() {
             None,
             NonZeroUsize::new(1).unwrap(),
             None,
+            crate::SyncAccountConfig::default(),
         );
         let query = |code: &str| {
             Request::new(proto::miden::node::v1::IsInvitationCodeValidRequest {

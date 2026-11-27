@@ -141,6 +141,7 @@ impl SequencerCommand {
             ntx_builder: Some(ntx_builder_client),
             grpc_options: runtime.grpc_options,
             network_tx_auth,
+            sync_account: self.runtime.rpc.sync_account.into(),
         };
         let mut tasks = Tasks::new();
         tasks.spawn("sequencer", sequencer.wait());
@@ -152,12 +153,7 @@ impl SequencerCommand {
                 AdminServer::bind(address, allowlist, funding).await?.serve(shutdown).await
             });
         }
-        for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
-            tasks.spawn_infallible(
-                format!("validator {index} connection monitor"),
-                validator_monitor.monitor::<ValidatorClient>("validator", shutdown.clone()),
-            );
-        }
+        spawn_validator_monitors(&mut tasks, validator_monitors, &shutdown);
         tasks.spawn_infallible(
             "ntx-builder connection monitor",
             ntx_builder_monitor.monitor::<NtxBuilderClient>("ntx-builder", shutdown.clone()),
@@ -409,16 +405,12 @@ impl FullNodeCommand {
             ntx_builder: None,
             grpc_options: runtime.grpc_options,
             network_tx_auth,
+            sync_account: self.runtime.rpc.sync_account.into(),
         };
         let mut tasks = Tasks::new();
         tasks.spawn("RPC server", rpc.serve(shutdown.clone()));
         tasks.spawn("store block writer", join_store_writer(writer_task));
-        for (index, validator_monitor) in validator_monitors.into_iter().enumerate() {
-            tasks.spawn_infallible(
-                format!("validator {index} connection monitor"),
-                validator_monitor.monitor::<ValidatorClient>("validator", shutdown.clone()),
-            );
-        }
+        spawn_validator_monitors(&mut tasks, validator_monitors, &shutdown);
         if let Some(sequencer_monitor) = sequencer_monitor {
             tasks.spawn_infallible(
                 "sequencer connection monitor",
@@ -557,6 +549,19 @@ fn remote_prover_monitor(
                 .with_otel_context_injection())
         })
         .transpose()
+}
+
+fn spawn_validator_monitors(
+    tasks: &mut Tasks,
+    monitors: Vec<Builder<WantsConnection>>,
+    shutdown: &CancellationToken,
+) {
+    for (index, monitor) in monitors.into_iter().enumerate() {
+        tasks.spawn_infallible(
+            format!("validator {index} connection monitor"),
+            monitor.monitor::<ValidatorClient>("validator", shutdown.clone()),
+        );
+    }
 }
 
 fn spawn_prover_monitor(

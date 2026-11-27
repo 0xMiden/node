@@ -18,7 +18,8 @@ const SQL_INSERT: &str = include_str!("insert_storage_map_value.sql");
 ///
 /// # Returns
 ///
-/// The total number of inserted and invalidated rows.
+/// The change in the number of nonzero map entries: `1` for an insertion, `-1` for a removal,
+/// or `0` when membership is unchanged.
 ///
 /// # Errors
 ///
@@ -30,7 +31,7 @@ pub(crate) fn insert_storage_map_value(
     slot_name: &StorageSlotName,
     key: StorageMapKey,
     value: Word,
-) -> Result<usize, DatabaseError> {
+) -> Result<i64, DatabaseError> {
     insert_storage_map_value_inner(tx, account_id, block_num, slot_name, key, value, true)
 }
 
@@ -41,7 +42,8 @@ pub(crate) fn insert_storage_map_value(
 ///
 /// # Returns
 ///
-/// The total number of inserted and invalidated rows.
+/// The change in the number of nonzero map entries: `1` for an insertion, `-1` for a removal,
+/// or `0` when membership is unchanged.
 ///
 /// # Errors
 ///
@@ -54,15 +56,21 @@ pub(super) fn insert_storage_map_value_inner(
     key: StorageMapKey,
     value: Word,
     invalidate_previous: bool,
-) -> Result<usize, DatabaseError> {
-    let mut count = 0;
-    if invalidate_previous {
-        count +=
-            tx.execute(SQL_CLOSE, &[&block_num, &account_id, slot_name, &key, &VALID_FOREVER])?;
-    }
+) -> Result<i64, DatabaseError> {
+    let previous = if invalidate_previous {
+        tx.execute_returning(
+            SQL_CLOSE,
+            &[&block_num, &account_id, slot_name, &key, &VALID_FOREVER],
+            |row| row.get::<i64>(0),
+        )?
+        .into_iter()
+        .next()
+        .unwrap_or(0)
+    } else {
+        0
+    };
 
-    count += tx
-        .execute(SQL_INSERT, &[&account_id, &block_num, slot_name, &key, &value, &VALID_FOREVER])?;
+    tx.execute(SQL_INSERT, &[&account_id, &block_num, slot_name, &key, &value, &VALID_FOREVER])?;
 
-    Ok(count)
+    Ok(i64::from(value != Word::empty()) - previous)
 }

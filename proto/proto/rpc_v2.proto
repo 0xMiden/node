@@ -83,6 +83,12 @@ service NodeService {
     // reconnect from the first height whose proof is still missing locally.
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
+    // Synchronizes a public account with a bounded number of slots, map entries, and vault assets.
+    // Returns a complete snapshot or a delta over the requested range. The account_entries limit
+    // reported by GetLimits counts live storage slots, map entries, and vault assets at the target.
+    // Use the streaming account synchronization endpoints for larger accounts.
+    rpc SyncAccount(SyncAccountRequest) returns (SyncAccountResponse) {}
+
     // Streams each nullifier that matches a requested 16-bit prefix in (from_block_exclusive,
     // to_block_inclusive]. Omit the lower bound to include genesis.
     //
@@ -152,6 +158,41 @@ message StateDeltaRange {
 
     // Required by validation. Zero selects genesis.
     optional fixed32 to_block_inclusive = 2;
+}
+
+// SYNC ACCOUNT
+// ================================================================================================
+
+message SyncAccountRequest {
+    account.AccountId account_id = 1;
+    // Omit the lower bound for a snapshot, including genesis state.
+    StateDeltaRange range = 2;
+}
+
+message AccountContents {
+    message MapEntries {
+        string slot_name = 1;
+        repeated account.StorageMapEntry entries = 2;
+    }
+    message VaultEntry {
+        asset.AssetId asset_id = 1;
+        // Absence deletes the asset in a delta. Snapshots contain only present assets.
+        optional asset.Asset asset = 2;
+    }
+    repeated MapEntries maps = 1;
+    repeated VaultEntry vault = 2;
+}
+
+message SyncAccountResponse {
+    fixed32 block_num = 1;
+    // Both variants describe the requested target. Obtain its headers through GetAccountInfos.
+    oneof update {
+        // Replace all contents; empty maps are identified by the target storage header.
+        AccountContents snapshot = 2;
+        // Absolute target values. Empty map values and absent assets delete entries, including
+        // old keys lost through map removal/recreation. Use the target header for the slot layout.
+        AccountContents delta = 3;
+    }
 }
 
 // Account vault synchronization request with squashed, server-streaming responses.

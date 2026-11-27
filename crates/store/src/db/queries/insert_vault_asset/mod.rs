@@ -20,23 +20,30 @@ const SQL_INSERT: &str = include_str!("insert_vault_asset.sql");
 ///
 /// # Returns
 ///
-/// The number of affected rows.
+/// The change in the number of vault assets: `1` for an insertion, `-1` for a removal, or `0`
+/// when membership is unchanged.
 pub(crate) fn insert_vault_asset(
     tx: &WriteTx<'_>,
     account_id: AccountId,
     block_num: BlockNumber,
     vault_key: AssetId,
     asset: Option<Asset>,
-) -> Result<usize, DatabaseError> {
+) -> Result<i64, DatabaseError> {
     // The column stores the asset id as its word representation.
     let vault_key = Word::from(vault_key);
 
     // Close the previous version's validity interval at the new row's block.
-    let mut count =
-        tx.execute(SQL_CLOSE, &[&block_num, &account_id, &vault_key, &VALID_FOREVER])?;
+    let previous = tx
+        .execute_returning(
+            SQL_CLOSE,
+            &[&block_num, &account_id, &vault_key, &VALID_FOREVER],
+            |row| row.get::<i64>(0),
+        )?
+        .into_iter()
+        .next()
+        .unwrap_or(0);
 
-    count +=
-        tx.execute(SQL_INSERT, &[&account_id, &block_num, &vault_key, &asset, &VALID_FOREVER])?;
+    tx.execute(SQL_INSERT, &[&account_id, &block_num, &vault_key, &asset, &VALID_FOREVER])?;
 
-    Ok(count)
+    Ok(i64::from(asset.is_some()) - previous)
 }

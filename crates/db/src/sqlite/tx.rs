@@ -6,10 +6,9 @@
 //! or end the transaction themselves.
 //!
 //! A write transaction is a read transaction with the extra ability to mutate: [`WriteTx`] wraps a
-//! [`ReadTx`] and derefs to it, so it inherits [`query`](ReadTx::query) and only adds
-//! [`execute`](WriteTx::execute). A function that receives `&ReadTx` therefore cannot compile a
-//! mutation. Both prepare statements with `prepare_cached`, so prepared statements are always
-//! cached.
+//! [`ReadTx`] and derefs to it, so it inherits [`query`](ReadTx::query) and adds
+//! [`execute`](WriteTx::execute) and [`execute_returning`](WriteTx::execute_returning). Statements
+//! are prepared with `prepare_cached`, so prepared statements are always cached.
 
 use std::ops::Deref;
 
@@ -75,7 +74,8 @@ impl<'t> ReadTx<'t> {
 
 /// A read-write transaction. Borrows a connection on which an `IMMEDIATE` transaction is open; the
 /// transaction is committed by the owner when the work returns `Ok`. Derefs to [`ReadTx`] for all
-/// read queries and adds [`execute`](Self::execute).
+/// read queries and adds [`execute`](Self::execute) and
+/// [`execute_returning`](Self::execute_returning).
 pub struct WriteTx<'t>(ReadTx<'t>);
 
 impl<'t> WriteTx<'t> {
@@ -93,6 +93,16 @@ impl<'t> WriteTx<'t> {
         let values = to_values(params);
         let mut stmt = self.0.0.prepare_cached(sql)?;
         Ok(stmt.execute(rusqlite::params_from_iter(values))?)
+    }
+
+    /// Executes a mutation with a `RETURNING` clause and collects the returned rows.
+    pub fn execute_returning<T>(
+        &self,
+        sql: &'static str,
+        params: &[&dyn ToSqlValue],
+        map: impl FnMut(&Row<'_>) -> Result<T, DatabaseError>,
+    ) -> Result<Vec<T>, DatabaseError> {
+        self.0.query(sql, params, map)
     }
 }
 
