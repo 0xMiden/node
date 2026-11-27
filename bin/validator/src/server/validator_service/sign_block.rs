@@ -99,7 +99,7 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
                 && proposed_parent == Some(latest.block_num())
                 && header.prev_block_commitment() != latest.commitment())
         {
-            let recovery = self.recovery.as_ref().ok_or_else(|| tonic::Status::unavailable(
+            let recovery = self.recovery.as_ref().ok_or_else(|| tonic::Status::failed_precondition(
                 "block number mismatch or unknown previous block commitment; configure --recovery.url for validator catch-up"
             ))?;
             recovery.start(self.db.clone(), chain.tip, signing_guard, serve_guard);

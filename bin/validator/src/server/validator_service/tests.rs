@@ -1091,6 +1091,18 @@ async fn new_block_after_replacement_with_stale_commitment_rejected() {
 
 /// Verify that `validate_block` rejects blocks with a non-sequential block number.
 #[tokio::test]
+async fn missing_recovery_endpoint_is_a_signing_precondition() {
+    let tv = TestValidator::new().await;
+    let (parent, _) = tv.propose_empty_block().into_header_and_body().unwrap();
+    let mut chain = tv.chain.clone();
+    chain.add_block(&tv.chain_tip, false);
+    let skipped = empty_block(&parent, &chain);
+    let error = tv.call_sign_block(&skipped).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::FailedPrecondition);
+    assert!(error.message().contains("--recovery.url"));
+}
+
+#[tokio::test]
 async fn validate_block_number_mismatch() {
     let mut tv = TestValidator::new().await;
 
