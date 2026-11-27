@@ -10,8 +10,7 @@ const SQL: &str = include_str!("link_block_transactions.sql");
 /// Links each transaction to `block_num` at its index within `transactions` (the block order).
 ///
 /// The header for `block_num` must already be stored, and every transaction must have been
-/// validated by this validator; the foreign keys on `block_transactions` fail the insert
-/// otherwise.
+/// validated by this validator. The insert resolves each ID from the local validation records.
 pub fn link_block_transactions(
     tx: &WriteTx<'_>,
     block_num: BlockNumber,

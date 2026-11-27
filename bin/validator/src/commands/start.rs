@@ -33,6 +33,7 @@ pub(crate) struct ValidatorDatabaseOptions {
 pub async fn start(
     address: SocketAddr,
     admin_address: Option<SocketAddr>,
+    recovery_url: Option<url::Url>,
     grpc_options: GrpcOptions,
     keys: ValidatorKeys,
     database_options: ValidatorDatabaseOptions,
@@ -48,6 +49,7 @@ pub async fn start(
     let private_record_sealer = PrivateRecordSealer::from_operator_key(&keys.operator_key);
     let public_server = ValidatorServer {
         address,
+        recovery_url,
         grpc_options,
         signer: keys.signer,
         decrypter: keys.decrypter,

@@ -244,6 +244,15 @@ impl std::ops::Deref for ValidatorDbWriter {
 }
 
 impl ValidatorDbWriter {
+    /// Persists a block selected by the configured full node and verified against local history.
+    pub async fn store_confirmed_block(
+        &self,
+        block: SignedBlock,
+        config: Option<ProtocolConfig>,
+    ) -> anyhow::Result<()> {
+        self.write("confirm_block", move |tx| tx.confirm_block(&block, config)).await
+    }
+
     /// Commits the caller's writes together when the closure succeeds.
     pub(crate) async fn write<R, E>(
         &self,
@@ -1146,8 +1155,7 @@ mod tests {
         );
     }
 
-    /// Linking a transaction this validator never validated fails the foreign key on
-    /// `block_transactions`, so a signed block cannot silently reference unknown transactions.
+    /// A locally signed block can only include transactions this validator has validated.
     #[tokio::test]
     async fn insert_signed_block_rejects_unvalidated_transactions() {
         let temp_dir = tempfile::tempdir().expect("failed to create temp directory");

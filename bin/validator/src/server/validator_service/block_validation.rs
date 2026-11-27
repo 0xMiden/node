@@ -9,35 +9,31 @@ use super::{ValidatorError, ValidatorService};
 /// Maximum time a proposal may lead the validator's clock to allow for operator clock skew.
 const MAX_BLOCK_FUTURE_SKEW_SECS: u64 = 60;
 
+/// Rejects proposals beyond the local clock-skew allowance before signing or catch-up.
+pub(super) fn validate_timestamp(timestamp: u32) -> Result<(), ValidatorError> {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(ValidatorError::ClockBeforeUnixEpoch)?
+        .as_secs();
+    let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
+    if u64::from(timestamp) > latest_timestamp {
+        return Err(ValidatorError::BlockTimestampTooFarInFuture { timestamp, latest_timestamp });
+    }
+
+    Ok(())
+}
+
 impl ValidatorService {
-    /// Checks the timestamp against the validator's clock, verifies the transaction IDs and parent
-    /// against local state, and checks that the parent authorizes the signing key. Returns whether
-    /// accepting this block confirms a validator quorum change in its parent.
+    /// Verifies the transaction IDs and parent against local state, and checks that the parent
+    /// authorizes the signing key. Returns whether accepting this block confirms a validator quorum
+    /// change in its parent.
     #[instrument(err)]
     pub(super) async fn validate_block(
         &self,
         proposed_header: &BlockHeader,
         proposed_body: &BlockBody,
+        chain: &crate::db::ChainState,
     ) -> Result<bool, ValidatorError> {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(ValidatorError::ClockBeforeUnixEpoch)?
-            .as_secs();
-        let timestamp = proposed_header.timestamp();
-        let latest_timestamp = now + MAX_BLOCK_FUTURE_SKEW_SECS;
-        if u64::from(timestamp) > latest_timestamp {
-            return Err(ValidatorError::BlockTimestampTooFarInFuture {
-                timestamp,
-                latest_timestamp,
-            });
-        }
-
-        let chain = self
-            .db
-            .read("chain_state", |tx| tx.select_chain_state())
-            .await
-            .map_err(ValidatorError::DatabaseError)?
-            .ok_or(ValidatorError::NoChainTip)?;
         let latest = chain.pending.as_ref().unwrap_or(&chain.tip);
         miden_span_record!(tip.number = chain.tip.block_num());
 
@@ -66,7 +62,11 @@ impl ValidatorService {
 
         let prev = if proposed_header.block_num() == latest.block_num() {
             if chain.pending.is_none() {
-                return Err(ValidatorError::CannotReplaceGenesis);
+                return Err(if latest.block_num().as_u32() == 0 {
+                    ValidatorError::CannotReplaceGenesis
+                } else {
+                    ValidatorError::CannotReplaceConfirmedBlock
+                });
             }
             &chain.tip
         } else {
@@ -125,6 +125,7 @@ impl ValidatorError {
             | Self::BlockNumberMismatch { .. }
             | Self::UnregisteredValidatorQuorum
             | Self::ValidatorKeySetChange
+            | Self::CannotReplaceConfirmedBlock
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),

@@ -39,6 +39,7 @@ async fn admin_server(
     ))?
     .decode()?;
     let validator = ValidatorServer {
+        recovery_url: None,
         address,
         grpc_options: GrpcOptions::default(),
         signer: ValidatorSigner::new_local(signer),

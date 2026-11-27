@@ -37,6 +37,7 @@ rand                      = { workspace = true }
 reqwest                   = { features = ["json"], workspace = true }
 serde                     = { features = ["derive"], workspace = true }
 serde_json                = { workspace = true }
+tempfile                  = { workspace = true }
 thiserror                 = { workspace = true }
 tokio                     = { features = ["macros", "net", "rt-multi-thread", "sync"], workspace = true }
 tokio-stream              = { workspace = true }
@@ -48,6 +49,5 @@ miden-node-db      = { workspace = true }
 miden-node-tracing = { features = ["tracing-forest"], workspace = true }
 miden-protocol     = { features = ["testing"], workspace = true }
 miden-validator    = { path = "../validator" }
-tempfile           = { workspace = true }
 tokio              = { features = ["net"], workspace = true }
 tower              = { features = ["util"], workspace = true }

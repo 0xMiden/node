@@ -600,6 +600,11 @@ impl UnaryMethod {
         ret.attr("tonic::async_trait");
         add_decode_policy(&mut ret);
         ret.associated_type("Output");
+        ret.new_fn("check_admission")
+            .doc("Checks whether the service can accept the request before domain decoding.")
+            .arg_ref_self()
+            .ret("tonic::Result<()>")
+            .line("Ok(())");
 
         ret.new_fn("decode")
             .arg("request", &self.request)
@@ -626,6 +631,7 @@ impl UnaryMethod {
             .line(
                 r#"miden_node_tracing::Span::current().record("rpc.request.size", prost::Message::encoded_len(&message));"#,
             )
+            .line("self.check_admission()?;")
             .line("let input = Self::DECODE_EXECUTION.run(move || Self::decode(message)).await?;")
             .line("let output = self.handle(input, &metadata, &extensions).await?;")
             .line("let response = Self::encode(output)?;")

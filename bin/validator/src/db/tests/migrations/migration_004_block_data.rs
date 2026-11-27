@@ -145,6 +145,10 @@ async fn migration_preserves_transaction_links_and_replacement_cascades() {
     drop(db);
     migrate(&path).unwrap();
     let db = open_with_pool_size(&path, NonZeroUsize::new(2).unwrap()).unwrap();
+    assert_eq!(
+        db.list_validated_transactions(params).await.unwrap().transactions,
+        page.transactions
+    );
     let replacement = block_with_header(header_with_next_timestamp(next.header()));
     db.replace_legacy_signed_block(replacement.clone(), test_protocol_config(), Vec::new())
         .await

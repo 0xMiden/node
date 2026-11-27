@@ -21,14 +21,15 @@ reconstruct their missing inputs.
 For recovery, you need:
 
 - An initialized data directory for the same network on the replacement node.
-- Reachable endpoints for every validator in the set, with their signing histories intact. Recovery requires all
-  validators' signatures, although one retained copy of a block's proving inputs is sufficient.
+- Validator backups that together supply the quorum authorized by each block's parent. The signers can differ between
+  heights. Copies of the same signature count once. One matching copy of the proving inputs is sufficient.
 - Proving inputs for every unproven block, either in the replacement's local storage or in validator backups. If neither
   has usable inputs, you need the original sequencer inputs or a surviving source of that block's proof.
 
-Coordinate with validator operators if their latest signed block heights differ. Recovery uses the lowest height as its
-target and cannot recover newer blocks until every validator can supply its signature. It verifies recovered blocks and
-proving inputs automatically and rejects blocks that conflict with the replacement's local chain.
+Recovery verifies each candidate against its parent and follows the highest chain for which it can obtain all required
+signatures and proving inputs. It preserves the replacement's committed history. If two equally long branches qualify,
+it chooses the tip with the lower block commitment. Provide temporary disk space for competing blocks and their inputs
+from the first unresolved fork onward.
 
 ## Choose when to prove
 
@@ -76,12 +77,16 @@ prover and does not enable proving by itself.
    Omit `--block-prover.url` to prove locally. A successful exit reports `Recovery proving complete`. All locally
    committed blocks then have proofs, and the reported proven and committed block heights match.
 
-3. Restore the fee collector account. If `fee-collector.mac` survives, copy it into the replacement data directory. It
+3. Check the restored height and any incomplete-backup warnings before promotion. Recovery retries interrupted streams
+   from the first unread height. It can succeed with a verified prefix even if a backup remains unavailable. If you
+   expected a higher tip, contact the affected validator operators and rerun recovery. Confirm that enough live
+   validators can follow the selected tip before resuming production.
+4. Restore the fee collector account. If `fee-collector.mac` survives, copy it into the replacement data directory. It
    contains the collector's signing key and is not replicated with chain state. The existing account is already deployed
    and does not need deployment again. If the file was lost, wait for `--prove` to succeed, then create and deploy a new
    account using [Fee Collection](./sequencer.md#fee-collection). Keep the replacement node stopped until deployment
    completes.
-4. Start the replacement as a [sequencer](./sequencer.md#start). Keep the old sequencer disabled so only the replacement
+5. Start the replacement as a [sequencer](./sequencer.md#start). Keep the old sequencer disabled so only the replacement
    produces blocks.
 
 ## Failure and retry

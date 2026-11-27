@@ -1,3 +1,6 @@
+//! Runs validators and backup proxies for failover tests. The proxies can interrupt a live
+//! subscription or serve a specific history to exercise recovery across forks and quorum changes.
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -49,6 +52,7 @@ pub async fn start_validator(
     key: SigningKey,
     genesis: SignedBlock,
     config: ProtocolConfig,
+    recovery_url: Option<Url>,
 ) -> anyhow::Result<RunningValidator> {
     let directory = tempfile::tempdir()?;
     miden_validator::db::bootstrap(
@@ -58,12 +62,13 @@ pub async fn start_validator(
         config,
     )
     .await?;
-    reopen_validator(key, directory).await
+    reopen_validator(key, directory, recovery_url).await
 }
 
 pub async fn reopen_validator(
     key: SigningKey,
     directory: TempDir,
+    recovery_url: Option<Url>,
 ) -> anyhow::Result<RunningValidator> {
     let db = miden_validator::db::load(directory.path().join("validator.sqlite3")).await?;
     let operator = miden_validator::EncodedGoldenOperatorKey::from_bytes(include_bytes!(concat!(
@@ -78,6 +83,7 @@ pub async fn reopen_validator(
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
     let server = miden_validator::ValidatorServer {
+        recovery_url,
         address,
         grpc_options: GrpcOptions::default(),
         signer: miden_validator::ValidatorSigner::new_local(key),
@@ -113,8 +119,10 @@ pub async fn load_store(
 pub enum Fault {
     InterruptAfterFirst(Arc<Notify>),
     Hold(Arc<Notify>),
+    EndAt(u32),
     Refuse(Arc<Notify>),
     Synthetic(Box<wire::BlockSubscriptionResponse>),
+    History(Vec<wire::BlockSubscriptionResponse>),
 }
 
 #[derive(Clone)]
@@ -186,6 +194,12 @@ impl api::Status for BackupProxy {
         _: &tonic::metadata::MetadataMap,
         _: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
+        if let Fault::History(entries) = &self.fault {
+            return Ok(wire::StatusResponse {
+                chain_tip: u32::try_from(entries.len()).unwrap(),
+                ..Default::default()
+            });
+        }
         Ok(self.upstream.clone().status(input).await?.into_inner())
     }
 }
@@ -207,6 +221,13 @@ impl api::BlockSubscription for BackupProxy {
         _: &tonic::metadata::MetadataMap,
         _: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::ItemStream> {
+        if let Fault::History(items) = &self.fault {
+            let from = usize::try_from(input.block_from).unwrap().saturating_sub(1);
+            return Ok(ObservedStream {
+                inner: Box::pin(tokio_stream::iter(items.clone().into_iter().skip(from).map(Ok))),
+                dropped: self.dropped.clone(),
+            });
+        }
         if let Fault::Synthetic(response) = &self.fault {
             return Ok(ObservedStream {
                 inner: Box::pin(tokio_stream::iter([Ok(response.as_ref().clone())])),
@@ -217,12 +238,22 @@ impl api::BlockSubscription for BackupProxy {
             release.notified().await;
             return Err(tonic::Status::unavailable("injected setup refusal"));
         }
+        if let Fault::EndAt(last) = self.fault {
+            let count = (last + 1).saturating_sub(input.block_from);
+            let stream = self.upstream.clone().block_subscription(input).await?.into_inner();
+            return Ok(ObservedStream {
+                inner: Box::pin(tokio_stream::StreamExt::take(stream, count as usize)),
+                dropped: self.dropped.clone(),
+            });
+        }
         let upstream = self.upstream.clone().block_subscription(input).await?.into_inner();
         self.opened.notify_one();
         let (release, interrupt) = match &self.fault {
             Fault::Hold(release) => (release.clone(), false),
             Fault::InterruptAfterFirst(release) => (release.clone(), true),
-            Fault::Refuse(_) | Fault::Synthetic(_) => unreachable!(),
+            Fault::Refuse(_) | Fault::Synthetic(_) | Fault::History(_) | Fault::EndAt(_) => {
+                unreachable!()
+            },
         };
         let inner = Box::pin(GatedStream {
             upstream,

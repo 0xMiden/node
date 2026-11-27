@@ -44,6 +44,8 @@ pub(super) async fn recovery_start(
 ) -> anyhow::Result<Option<BlockNumber>> {
     let committed = state.committed_tip();
     let mut first_gap = None;
+    // Remember the earliest repairable gap but finish the scan: a later gap may be beyond every
+    // backup, in which case starting recovery here would only partially repair the store.
     for raw in u64::from(state.proven_tip().as_u32()) + 1..=u64::from(committed.as_u32()) {
         let height = BlockNumber::from(u32::try_from(raw)?);
         let bytes = state
@@ -82,6 +84,8 @@ pub(super) async fn apply_recovered(
     } else {
         None
     };
+    // Different subsets of validators can sign the same block. The header and body determine
+    // whether these inputs belong to the retained chain.
     if let Some(local) = &local {
         anyhow::ensure!(
             local.header() == recovered.block.header() && local.body() == recovered.block.body(),
@@ -100,10 +104,46 @@ pub(super) async fn apply_recovered(
         let request = recovered.proving_inputs.context(format!(
             "no proving inputs available for block {height}; restore original sequencer inputs or sync an existing proof before promotion",
         ))?;
+        // Make the request durable before advancing the committed tip so an interrupted restore
+        // leaves the new block ready for proving.
         writer.save_proving_inputs(height, &request).await?;
     }
     if !is_existing {
         writer.apply_block(recovered.block, recovered.protocol_config).await?;
     }
     Ok(())
+}
+
+/// Repairs a retained block using its locally authenticated body and a matching proving request.
+///
+/// The committed block already fixes the branch, so a single matching backup can repair its
+/// inputs even when the other backups are unavailable or contain a sibling.
+pub(super) async fn repair_retained(
+    state: &State,
+    writer: &mut BlockWriter,
+    height: BlockNumber,
+    mut groups: std::collections::BTreeMap<miden_protocol::Word, Vec<(url::Url, RecoveredBlock)>>,
+) -> anyhow::Result<()> {
+    let bytes = state.load_block(height).await?.context("missing retained block")?;
+    let local: SignedBlock = miden_node_persistence::decode(&bytes)?;
+    if load_valid_local_inputs(state, &local).await?.is_some() {
+        return Ok(());
+    }
+    for (url, candidate) in groups.remove(&local.header().commitment()).unwrap_or_default() {
+        if let Some(request) = candidate.proving_inputs {
+            match request.validate_against(&local) {
+                Ok(()) => {
+                    writer.save_proving_inputs(height, &request).await?;
+                    return Ok(());
+                },
+                Err(error) => warn!(
+                    error,
+                    "Invalid backup proving inputs",
+                    block.number = height,
+                    sync.block_source.endpoint = url.as_str()
+                ),
+            }
+        }
+    }
+    anyhow::bail!("unable to repair retained block {height}")
 }

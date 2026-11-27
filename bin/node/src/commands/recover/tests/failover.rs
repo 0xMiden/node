@@ -1,3 +1,6 @@
+//! Exercises recovery through validator backup RPCs, including proving on a replacement node and
+//! resuming after a stream interruption.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,6 +37,7 @@ async fn validator_serves_bound_listener() -> anyhow::Result<()> {
         key,
         genesis.into_block()?.inner().clone(),
         miden_node_utils::fee::test_protocol_config(),
+        None,
     )
     .await?;
     let result = validator
@@ -62,21 +66,25 @@ async fn failover_recovers_inputs_and_proves_without_original_store() -> anyhow:
     reason = "Keep the recovery scenario and resource cleanup together"
 )]
 async fn failover(already_committed: bool) -> anyhow::Result<()> {
-    let keys = super::signers(2);
+    let keys = super::signers(3);
     let config = miden_node_utils::fee::test_protocol_config();
     let genesis = GenesisState::new(
         vec![],
         miden_node_utils::fee::test_fee_params(),
         0,
-        super::validator_config(&keys),
+        miden_protocol::block::ValidatorConfig::new(
+            keys.iter().map(super::SigningKey::public_key).collect(),
+            2,
+        )?,
         config.clone(),
     )
     .into_block()?;
     let mut validators = Vec::new();
     let result = Box::pin(async {
-        for key in &keys {
-            validators
-                .push(start_validator(key.clone(), genesis.inner().clone(), config.clone()).await?);
+        for key in &keys[..2] {
+            validators.push(
+                start_validator(key.clone(), genesis.inner().clone(), config.clone(), None).await?,
+            );
         }
         let parent = genesis.inner().header().clone();
         let block_inputs = BlockInputs::new(
@@ -109,7 +117,7 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
                 .await?
                 .into_inner()
                 .decode_and_build_unchecked()?;
-            signatures.push(response.signature);
+            signatures.push((validator.url.clone(), vec![response.signature]));
         }
         let block = SignedBlock::new_unchecked(
             header,
@@ -145,9 +153,9 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
         drop(request);
 
         if !already_committed {
-            for (index, key) in keys.iter().enumerate() {
+            for (index, key) in keys[..2].iter().enumerate() {
                 let validator = validators.remove(index);
-                let reopened = reopen_validator(key.clone(), validator.stop().await?).await?;
+                let reopened = reopen_validator(key.clone(), validator.stop().await?, None).await?;
                 validators.insert(index, reopened);
             }
         }
@@ -218,6 +226,8 @@ async fn failover(already_committed: bool) -> anyhow::Result<()> {
                 genesis.protocol_config().clone(),
             )?,
             &block,
+            keys[2].clone(),
+            already_committed,
             proof,
         )
         .await?;
@@ -240,6 +250,8 @@ async fn replicate(
     directory: &tempfile::TempDir,
     genesis: miden_node_store::genesis::GenesisBlock,
     block: &SignedBlock,
+    missing_signer: super::SigningKey,
+    sign_sibling: bool,
     proof: Vec<u8>,
 ) -> anyhow::Result<()> {
     let shutdown = CancellationToken::new();
@@ -285,6 +297,14 @@ async fn replicate(
         };
         upstream_task = Some(tokio::spawn(rpc.serve(shutdown.clone())));
         let mut upstream_client = client(upstream_url.clone());
+        Box::pin(catch_up_and_sign(
+            &genesis,
+            block,
+            missing_signer,
+            sign_sibling,
+            upstream_url.clone(),
+        ))
+        .await?;
         downstream_directory = Some(tempfile::tempdir()?);
         let downstream_dir = downstream_directory.as_ref().unwrap();
         State::bootstrap(genesis, downstream_dir.path()).await?;
@@ -372,6 +392,98 @@ async fn replicate(
     result.and(cleanup)
 }
 
+/// A third validator reconciles its local tip with a block signed by the other two validators.
+async fn catch_up_and_sign(
+    genesis: &miden_node_store::genesis::GenesisBlock,
+    block: &SignedBlock,
+    signer: super::SigningKey,
+    sign_sibling: bool,
+    source: Url,
+) -> anyhow::Result<()> {
+    let validator = start_validator(
+        signer.clone(),
+        genesis.inner().clone(),
+        genesis.protocol_config().clone(),
+        Some(source),
+    )
+    .await?;
+    let result = async {
+        let mut client = validator.client();
+        let mut chain = PartialBlockchain::default();
+        let make_request =
+            |parent: &miden_protocol::block::BlockHeader, chain: &PartialBlockchain, timestamp| {
+                let inputs = BlockInputs::new(
+                    parent.clone(),
+                    chain.clone(),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                    BTreeMap::new(),
+                );
+                let (header, _) = ProposedBlock::new_at(inputs.clone(), vec![], timestamp)?
+                    .into_header_and_body()?;
+                let request: miden_node_proto::generated::miden::validator::v1::SignBlockRequest =
+                    miden_node_proto::SignBlockRequest {
+                        tx_batches: OrderedBatches::new(vec![]),
+                        block_header: header.clone(),
+                        block_inputs: inputs,
+                        protocol_config: None,
+                    }
+                    .into();
+                anyhow::Ok((header, request))
+            };
+        if sign_sibling {
+            let (_, sibling) =
+                make_request(genesis.inner().header(), &chain, block.header().timestamp() + 1)?;
+            client.sign_block(sibling).await?;
+        }
+        chain.add_block(genesis.inner().header(), false);
+        let (child, request) =
+            make_request(block.header(), &chain, block.header().timestamp() + 1)?;
+        ensure!(
+            client.sign_block(request.clone()).await.unwrap_err().code()
+                == tonic::Code::Unavailable
+        );
+        let response = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match client.sign_block(request.clone()).await {
+                    Err(error) if error.code() == tonic::Code::Unavailable => {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    },
+                    result => return result,
+                }
+            }
+        })
+        .await??;
+        let response: SignBlockResponse = response.into_inner().decode_and_build_unchecked()?;
+        ensure!(response.signature.verify(child.commitment(), &signer.public_key()));
+        let mut backup = client
+            .block_subscription(
+                miden_node_proto::generated::miden::validator::v1::BlockSubscriptionRequest {
+                    block_from: 1,
+                },
+            )
+            .await?
+            .into_inner();
+        let recovered: SignedBlock = backup
+            .message()
+            .await?
+            .context("missing recovered block")?
+            .block
+            .context("missing backup body")?
+            .decode_and_build_unchecked()?;
+        ensure!(recovered == *block);
+        let status = client
+            .status(miden_node_proto::generated::miden::validator::v1::StatusRequest {})
+            .await?
+            .into_inner();
+        ensure!(status.chain_tip == 2 && status.signed_blocks_count == 2 + u64::from(sign_sibling));
+        anyhow::Ok(())
+    }
+    .await;
+    validator.stop().await?;
+    result
+}
+
 /// Verifies that interrupted recovery preserves completed writes and releases backup streams.
 ///
 /// Fault injection affects only transport; signing services supply the signatures and proving inputs.
@@ -392,7 +504,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
         config.clone(),
     )
     .into_block()?;
-    let validator = start_validator(key, genesis.inner().clone(), config).await?;
+    let validator = start_validator(key, genesis.inner().clone(), config, None).await?;
     let result = Box::pin(async {
         let mut parent = genesis.inner().header().clone();
         let mut chain = miden_protocol::transaction::PartialBlockchain::default();
@@ -424,7 +536,7 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 .into_inner()
                 .decode_and_build_unchecked()?;
             let signatures = coalesce_signatures(
-                vec![response.signature],
+                vec![(validator.url.clone(), vec![response.signature])],
                 header.commitment(),
                 parent.validator_config(),
             )?;
@@ -468,8 +580,8 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 })
                 .await?;
                 trigger?;
-                ensure!(result.is_err());
-                ensure!(state.committed_tip() == BlockNumber::from(1u32));
+                result?;
+                ensure!(state.committed_tip() == BlockNumber::from(2u32));
                 inputs::load_valid_local_inputs(&state, &blocks[0])
                     .await?
                     .context("lost recovered prefix")?;
@@ -511,6 +623,34 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
         writer.stop(task).await;
         tested?;
         drop(state);
+
+        // A permanently truncated backup can establish the first block and report partial success.
+        let partial_dir = tempfile::tempdir()?;
+        State::bootstrap(
+            miden_node_store::genesis::GenesisBlock::new(
+                genesis.inner().clone(),
+                genesis.protocol_config().clone(),
+            )?,
+            partial_dir.path(),
+        )
+        .await?;
+        let (partial, mut partial_writer, proofs, task) = load_store(partial_dir.path()).await?;
+        let truncated = start_proxy(validator.client(), Fault::EndAt(1)).await?;
+        let result = recover_from_validators(
+            &partial,
+            &mut partial_writer,
+            vec![(truncated.url.clone(), truncated.client())],
+            CancellationToken::new(),
+        )
+        .await;
+        drop(proofs);
+        partial_writer.stop(task).await;
+        truncated.stop().await?;
+        result?;
+        ensure!(partial.committed_tip() == BlockNumber::from(1u32));
+        inputs::load_valid_local_inputs(&partial, &blocks[0])
+            .await?
+            .context("lost partial backup inputs")?;
 
         for refuse_setup in [false, true] {
             let target = tempfile::tempdir()?;
@@ -675,4 +815,103 @@ async fn validator_backup_decoding_limit_is_configurable() -> anyhow::Result<()>
     let stopped = proxy.stop().await;
     result?;
     stopped
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn restore_rotating_quorums_across_activation() -> anyhow::Result<()> {
+    use miden_node_proto::generated::miden::validator::v1::BlockSubscriptionResponse;
+    use miden_protocol::block::{BlockSignatures, ValidatorConfig};
+
+    let keys = super::signers(4);
+    let validators =
+        |k| ValidatorConfig::new(keys.iter().map(super::SigningKey::public_key).collect(), k);
+    let config = miden_node_utils::fee::test_protocol_config();
+    let genesis = GenesisState::new(
+        vec![],
+        miden_node_utils::fee::test_fee_params(),
+        0,
+        validators(3)?,
+        config.clone(),
+    );
+    let mut parent = genesis.clone().into_block()?.inner().header().clone();
+    let mut chain = PartialBlockchain::default();
+    let mut histories = [vec![], vec![]];
+    let mut commitments = Vec::new();
+    // H1 needs three signers despite announcing two. H2 uses a different pair. H3 has only one.
+    for backups in [[&[0, 1][..], &[1, 2][..]], [&[3], &[2]], [&[3], &[3]]] {
+        let inputs = BlockInputs::new(
+            parent.clone(),
+            chain.clone(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (header, body) = ProposedBlock::new_at(inputs.clone(), vec![], parent.timestamp() + 1)?
+            .with_next_validator_config(validators(2)?)
+            .into_header_and_body()?;
+        let id = header.commitment();
+        let request = BlockProofRequest {
+            tx_batches: OrderedBatches::new(vec![]),
+            block_header: header.clone(),
+            block_inputs: inputs,
+        };
+        for (history, signers) in histories.iter_mut().zip(backups) {
+            let signatures =
+                BlockSignatures::new(signers.iter().map(|i: &usize| keys[*i].sign(id)).collect())?;
+            let block = SignedBlock::new_unchecked(header.clone(), body.clone(), signatures);
+            history.push(BlockSubscriptionResponse {
+                block: Some(block.into()),
+                committed_chain_tip: 3,
+                protocol_config: Some((&config).into()),
+                proving_inputs: Some((&request).into()),
+            });
+        }
+        commitments.push(id);
+        chain.add_block(&parent, false);
+        parent = header;
+    }
+    let (_directory, state, mut writer, task) = super::store_for(genesis).await;
+    let mut backups = vec![];
+    for history in histories {
+        let unused = Builder::new(Url::parse("http://127.0.0.1:1")?)
+            .without_tls()
+            .without_metadata_version()
+            .without_metadata_genesis()
+            .without_otel_context_injection()
+            .connect_lazy();
+        backups.push(start_proxy(unused, Fault::History(history)).await?);
+    }
+    // Each backup alone has valid proving inputs but too few signatures for the first child.
+    recover_from_validators(
+        &state,
+        &mut writer,
+        vec![(backups[0].url.clone(), backups[0].client())],
+        CancellationToken::new(),
+    )
+    .await?;
+    ensure!(state.committed_tip() == 0.into());
+    let result = recover_from_validators(
+        &state,
+        &mut writer,
+        backups.iter().map(|p| (p.url.clone(), p.client())).collect(),
+        CancellationToken::new(),
+    )
+    .await;
+    for backup in backups {
+        backup.stop().await?;
+    }
+    writer.stop(task).await;
+    result?;
+    ensure!(state.committed_tip() == 2.into());
+    ensure!(
+        state
+            .view()
+            .get_block_header(Some(2.into()), false)
+            .await?
+            .0
+            .unwrap()
+            .commitment()
+            == commitments[1]
+    );
+    Ok(())
 }

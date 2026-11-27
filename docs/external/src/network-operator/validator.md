@@ -12,9 +12,9 @@ official validator endpoint rather than running their own validator for that net
 For unofficial or private networks, this separation matters less and the validator can be run as an internal service. It
 should not be exposed publicly.
 
-Since the validator sees every block before it is committed, it also stores the raw block data for the blocks it
-validates and signs. This makes the validator a network data backup that can be used to recover committed block data if
-the sequencer or full-node replicas lose data.
+A validator stores the blocks it signs and can fetch missed blocks from a full node. These backups can help recover
+committed block data if the sequencer or full-node replicas lose data. A block imported during catch-up can supply
+signatures for recovery. At least one backup must also have retained the proving inputs for that block.
 
 The validator is also a temporary training-wheels layer while the proof and VM systems mature. It receives the private
 inputs needed to independently check proposed blocks, which gives the network another place to detect bugs before a
@@ -24,8 +24,8 @@ only component that can read them, and submissions that are not encrypted are re
 ## Storage and Snapshots
 
 Validator storage includes signed blocks and their proving inputs for [sequencer recovery](/network-operator/recovery).
-Proving inputs are retained indefinitely, even after proofs become available elsewhere. Plan disk and backup capacity
-for continued database growth; inputs are not automatically pruned.
+Set `--proving-input-retention-blocks` to cover the number of recent blocks you need for recovery. Older inputs are
+pruned even if their blocks still need a proof.
 
 Before relying on these backups for failover, coordinate with the sequencer operator to verify that they meet the
 [recovery prerequisites](/network-operator/recovery#prerequisites). Retaining a signed block does not guarantee that its
@@ -187,6 +187,20 @@ After validation, the validator stores only the transaction ID and the threshold
 client ciphertext.
 
 Use `miden-validator start --help` for the complete current option list.
+
+## Catch up after missing blocks
+
+Set `--recovery.url https://your-full-node.example:57291` or `MIDEN_VALIDATOR_RECOVERY_URL` when starting the validator.
+Use a trusted full node on the same network. It supplies the committed branch when more than one block has enough
+signatures. The validator verifies each block against its parent and the quorum active at that height.
+
+A signing request that reveals a missing parent starts catch-up. The validator reports `RECOVERING`, returns
+`UNAVAILABLE` for signing, and continues accepting proven transactions. It resumes signing after reaching the tip
+advertised at the start of that subscription. A block it missed can contain transactions it never received. Signing a
+new proposal still requires all its transactions to have been validated locally.
+
+If catch-up is interrupted, check the recovery endpoint and the validator log. Verified blocks survive restart, and a
+later signing request can resume catch-up. Bootstrap works with the endpoint offline.
 
 ## Administration API
 

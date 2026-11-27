@@ -1,6 +1,6 @@
 use super::*;
 
-fn config(seed: u32) -> ProtocolConfig {
+pub(super) fn config(seed: u32) -> ProtocolConfig {
     use miden_protocol::protocol_config::KernelConfig;
 
     let base = test_protocol_config();
@@ -131,4 +131,43 @@ async fn invalid_configs_preserve_existing_history() {
         assert_eq!(history(&db).await, before);
         assert_eq!(db.load_chain_tip().await.unwrap(), Some(genesis.clone()));
     }
+}
+
+#[tokio::test]
+async fn confirmed_replacement_reuses_pending_activation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("validator.sqlite3");
+    let first = test_protocol_config();
+    let second = config(42);
+    let key = SigningKey::new();
+    let genesis = miden_node_store::GenesisState::new(
+        vec![],
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+        first.clone(),
+    )
+    .into_block()
+    .unwrap()
+    .inner()
+    .clone();
+    bootstrap(path.clone(), NonZeroUsize::new(2).unwrap(), genesis.clone(), first)
+        .await
+        .unwrap();
+    let db = load(path).await.unwrap();
+    let pending = header_at(genesis.header(), 1, &second);
+    db.upsert_block_header_with_protocol_config(pending.clone(), Some(second.clone()))
+        .await
+        .unwrap();
+    let replacement = header_with_next_timestamp(&pending);
+    let sig = key.sign(replacement.commitment());
+    let (_, body, _) = genesis.into_parts();
+    let block = SignedBlock::new_unchecked(
+        replacement,
+        body,
+        miden_protocol::block::BlockSignatures::new(vec![sig]).unwrap(),
+    );
+    db.store_confirmed_block(block.clone(), None).await.unwrap();
+    assert_eq!(db.load_block(1.into()).await.unwrap().unwrap(), block);
+    assert_eq!(db.load_protocol_config(second.to_commitment()).await.unwrap(), Some(second));
 }
