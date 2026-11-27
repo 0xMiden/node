@@ -40,6 +40,8 @@ pub use db::queries::{
     StorageMapUpdatesPage,
     StorageMapValue,
     StorageMapValuesPage,
+    TransactionCursor,
+    TransactionRecordsPage,
 };
 pub use db::{
     AccountVaultCursor,
@@ -188,6 +190,37 @@ pub mod test_support {
             .await
             .expect("insert test storage-map values");
     }
+    /// Inserts transaction headers for downstream reconciliation tests.
+    pub async fn seed_transactions(
+        db_path: &Path,
+        block: BlockNumber,
+        headers: Vec<miden_protocol::transaction::TransactionHeader>,
+    ) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed transactions", move |tx| {
+                let first_index = tx.query(
+                    "SELECT COUNT(*) FROM transactions WHERE block_num = ?1",
+                    &[&block],
+                    |row| row.get::<u32>(0),
+                )?[0];
+                let counts = headers
+                    .iter()
+                    .filter(|header| header.account_id().is_public())
+                    .map(|header| (header.id(), 0))
+                    .collect();
+                crate::db::queries::insert_transactions(
+                    tx,
+                    block,
+                    &miden_protocol::transaction::OrderedTransactionHeaders::new_unchecked(headers),
+                    first_index,
+                    &counts,
+                )
+            })
+            .await
+            .expect("insert test transactions");
+    }
     /// Inserts nullifiers for downstream prefix-discovery tests.
     pub async fn seed_nullifiers(
         db_path: &Path,
@@ -202,5 +235,19 @@ pub mod test_support {
             })
             .await
             .expect("insert test nullifiers");
+    }
+    /// Inserts note records for transaction transport tests.
+    pub async fn seed_notes(db_path: &Path, notes: Vec<crate::NoteRecord>) {
+        let (writer, _reader) =
+            miden_node_db::sqlite::open(db_path).expect("connect to store sqlite");
+        writer
+            .write::<_, DatabaseError, _>("seed notes", move |tx| {
+                crate::db::queries::insert_notes(
+                    tx,
+                    &notes.into_iter().map(|note| (note, None)).collect::<Vec<_>>(),
+                )
+            })
+            .await
+            .expect("insert test note records");
     }
 }

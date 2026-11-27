@@ -10,6 +10,7 @@ import "note.proto";
 import "google/protobuf/empty.proto";
 import "protocol_config.proto";
 import "types/submission.proto";
+import "transaction.proto";
 
 service NodeService {
     // Returns the chain MMR delta from the client's current height through the target block,
@@ -113,6 +114,14 @@ service NodeService {
     // with the same or a newer authenticated target. Publish only after OK completion and final
     // storage verification against authenticated account details at the completed target.
     rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (stream SyncAccountStorageMapsResponse) {}
+
+    // Streams complete transaction events for requested accounts within a fixed synchronization delta.
+    //
+    // Use this endpoint for account event discovery, including externally submitted transactions whose
+    // IDs are unknown locally. Records preserve erased output commitments and consumed public-note references.
+    // These references support recovery of previously untracked public notes consumed by an account.
+    // Pin the target to SyncChainMmr and apply results only after successful stream completion.
+    rpc SyncTransactions(SyncTransactionsRequest) returns (stream SyncTransactionsResponse) {}
 }
 
 // Changes after an exclusive lower bound, materialized at an explicit target.
@@ -201,6 +210,16 @@ message NoteBlockStart {
     primitives.MerklePath mmr_path = 2;
 }
 
+// Complete event discovery for requested accounts, including externally submitted transactions.
+// Zero target selects genesis; absence is invalid. Individual records are bounded, the stream is not.
+message SyncTransactionsRequest {
+    StateDeltaRange range = 1;
+    repeated account.AccountId account_ids = 2;
+}
+// Preserve transaction input/output order, erased output commitments and public consumed-note refs.
+// Apply the complete result only after OK termination; a failed stream is incomplete.
+message SyncTransactionsResponse { TransactionRecord transaction = 1; }
+
 // Prefix queries preserve the privacy of individual tracked note nullifiers.
 message SyncNullifiersRequest {
     StateDeltaRange range = 1;
@@ -250,6 +269,32 @@ message NoteSyncRecord {
 
     // Proof of the note's inclusion in a block.
     note.NoteInclusionProof inclusion_proof = 2;
+}
+
+message TransactionRecord {
+    // Block number in which the transaction was included.
+    fixed32 block_num = 1;
+
+    // The transaction header.
+    transaction.TransactionHeader header = 2;
+
+    // Inclusion proofs for committed output notes. Erased notes (created and consumed
+    // within the same batch) can be identified by comparing note IDs here with
+    // `header.output_notes`. Any note present in the header but absent here was erased.
+    repeated note.NoteInclusionProof output_note_proofs = 3;
+
+    // Maps a consumed input note's nullifier to its note ID, for the public notes the node can
+    // resolve. Authenticated inputs in `header.input_notes` carry only a nullifier, so this lets a
+    // follower recover the consumed note via `GetNotesById`. Private notes are absent.
+    repeated ConsumedNoteRef consumed_note_refs = 4;
+}
+
+message ConsumedNoteRef {
+    // The nullifier of the consumed input note.
+    primitives.Word nullifier = 1;
+
+    // The ID of the note the nullifier resolves to.
+    note.NoteId note_id = 2;
 }
 
 message StatusRequest {}

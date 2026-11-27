@@ -151,7 +151,7 @@ the maximum number of prefixes per request, see `GetLimits.endpoints["SyncNullif
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | `SyncNullifiers`                             | `1` malformed input, `2` invalid or missing range, `3` future target, `6` prefix length other than 16      |
 | `SyncAccountVault`, `SyncAccountStorageMaps` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
-| `SyncNotes`                                  | `1` malformed input, `2` invalid range, `3` future target                                                  |
+| `SyncNotes`, `SyncTransactions`              | `1` malformed input, `2` invalid range, `3` future target                                                  |
 
 Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. Limits apply to the raw lists before
 decoding and deduplication and return `OUT_OF_RANGE`. Streaming does not relax per-message receive limits.

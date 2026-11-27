@@ -8,9 +8,9 @@ sidebar_position: 0
 Miden nodes expose a public gRPC API for querying chain state, synchronizing local state, submitting proven
 transactions, and subscribing to committed blocks and block proofs.
 
-Both public services share one address. Use `miden.node.v2.NodeService` for finite synchronization streams. V1 retains
-the paginated sync methods, `GetAccount`, and account registration. Both versions support transaction submission and
-block and proof subscriptions. Write requests require the network genesis commitment.
+Both public services share one address. Use `miden.node.v2.NodeService` for account headers and proofs and finite
+synchronization streams. V1 retains the paginated sync methods, `GetAccount`, and account registration. Both versions
+support transaction submission and block and proof subscriptions. Write requests require the network genesis commitment.
 
 The API uses standard gRPC status codes. Some methods also include additional Miden-specific error codes in status
 details for stable client-side handling.
@@ -51,16 +51,16 @@ The RPC server supports:
 
 ## Endpoint Groups
 
-| Group                      | Methods                                                                                           |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| Status and limits          | `Status`, `GetLimits`                                                                             |
-| State queries              | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot` |
-| Transaction submission     | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                            |
-| Account registration       | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                    |
-| State synchronization (v1) | `SyncChainMmr`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`       |
-| State synchronization (v2) | `SyncChainMmr`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`       |
-| Block streaming            | `BlockSubscription`, `ProofSubscription`                                                          |
-| Network note debugging     | `GetNetworkNoteStatus`                                                                            |
+| Group                      | Methods                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Status and limits          | `Status`, `GetLimits`                                                                                           |
+| State queries              | `GetAccount`, `GetBlockByNumber`, `GetBlockHeaderByNumber`, `GetNotesById`, `GetNoteScriptByRoot`               |
+| Transaction submission     | `GetTransactionEncryptionKey`, `SubmitProvenTx`, `SubmitProvenTxBatch`                                          |
+| Account registration       | `RegisterAccount`, `IsAccountAllowed`, `IsInvitationCodeValid`                                                  |
+| State synchronization (v1) | `SyncChainMmr`, `SyncTransactions`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps` |
+| State synchronization (v2) | `SyncChainMmr`, `SyncNotes`, `SyncNullifiers`, `SyncAccountVault`, `SyncAccountStorageMaps`, `SyncTransactions` |
+| Block streaming            | `BlockSubscription`, `ProofSubscription`                                                                        |
+| Network note debugging     | `GetNetworkNoteStatus`                                                                                          |
 
 See [Public RPC](/rpc/public-api) for endpoint summaries, [Subscriptions](/rpc/subscriptions) for stream semantics, and
 [Errors and Limits](/rpc/errors-and-limits) for request limits, content negotiation, and method-specific error codes.
