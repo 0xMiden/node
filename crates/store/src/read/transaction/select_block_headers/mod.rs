@@ -1,4 +1,4 @@
-use miden_node_db::sqlite::{InList, ReadTx};
+use miden_node_db::sqlite::InList;
 use miden_node_utils::limiter::{QueryParamBlockLimit, QueryParamLimiter};
 use miden_protocol::block::{BlockHeader, BlockNumber};
 
@@ -15,27 +15,12 @@ impl ReadTransaction<'_> {
         &self,
         blocks: impl Iterator<Item = BlockNumber> + Send,
     ) -> Result<Vec<BlockHeader>, DatabaseError> {
-        select_block_headers(self.inner, blocks)
+        QueryParamBlockLimit::check(blocks.size_hint().0)?;
+
+        let blocks = InList::from_values(blocks);
+
+        Ok(self.inner.query(SQL, &[&blocks], |row| row.get(0))?)
     }
-}
-
-/// Returns the block headers stored at `blocks`, ordered by block number.
-///
-/// The result does not include block numbers that have no stored header, so it can be shorter
-/// than `blocks`.
-///
-/// # Parameters
-///
-/// * `blocks`: the block numbers to retrieve, at most [`QueryParamBlockLimit`] of them.
-pub(crate) fn select_block_headers(
-    tx: &ReadTx<'_>,
-    blocks: impl Iterator<Item = BlockNumber> + Send,
-) -> Result<Vec<BlockHeader>, DatabaseError> {
-    QueryParamBlockLimit::check(blocks.size_hint().0)?;
-
-    let blocks = InList::from_values(blocks);
-
-    Ok(tx.query(SQL, &[&blocks], |row| row.get(0))?)
 }
 
 #[cfg(test)]

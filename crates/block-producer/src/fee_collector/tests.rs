@@ -17,7 +17,7 @@ use miden_node_utils::genesis::GenesisBlock;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
 use miden_protocol::asset::AssetId;
-use miden_protocol::block::{FeeParameters, ValidatorConfig};
+use miden_protocol::block::{BlockNumber, FeeParameters, ValidatorConfig};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
 use miden_protocol::crypto::ies::{SealedMessage, UnsealingKey};

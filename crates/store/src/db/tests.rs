@@ -284,7 +284,9 @@ fn select_chain_tip(db: &TestDb) -> Result<Option<BlockHeader>> {
 }
 
 fn select_block_headers(db: &TestDb, blocks: Vec<BlockNumber>) -> Result<Vec<BlockHeader>> {
-    db.read(move |tx| queries::select_block_headers(tx, blocks.into_iter()))
+    db.read(move |tx| {
+        crate::read::ReadTransaction::new(tx).select_block_headers(blocks.into_iter())
+    })
 }
 
 fn select_all_block_header_commitments(db: &TestDb) -> Result<Vec<BlockHeaderCommitment>> {
@@ -299,11 +301,8 @@ fn select_all_accounts(db: &TestDb) -> Result<Vec<AccountInfo>> {
     db.read(queries::select_all_accounts)
 }
 
-fn select_account_code_by_commitment(
-    db: &TestDb,
-    code_commitment: Word,
-) -> Result<Option<Vec<u8>>> {
-    db.read(move |tx| queries::select_account_code_by_commitment(tx, code_commitment))
+fn select_account_code(db: &TestDb, code_commitment: Word) -> Result<Option<AccountCode>> {
+    db.read(move |tx| crate::read::ReadTransaction::new(tx).select_account_code(code_commitment))
 }
 
 fn select_latest_storage(db: &TestDb, account_id: AccountId) -> Result<AccountStorage> {
@@ -2214,9 +2213,9 @@ fn test_select_account_code_by_commitment() {
     // Create an account with code at block 1 using the existing mock function
     let account = mock_account_code_and_storage(AccountType::Public, [], None);
 
-    // Get the code commitment and bytes before inserting
+    // Get the code commitment and code before inserting
     let code_commitment = account.code().commitment();
-    let expected_code = miden_node_persistence::encode(account.code());
+    let expected_code = account.code().clone();
 
     // Insert the account at block 1
     upsert_accounts(
@@ -2233,15 +2232,13 @@ fn test_select_account_code_by_commitment() {
     .unwrap();
 
     // Query code by commitment - should return the code
-    let code = select_account_code_by_commitment(db, code_commitment)
-        .unwrap()
-        .expect("Code should exist");
+    let code = select_account_code(db, code_commitment).unwrap().expect("Code should exist");
     assert_eq!(code, expected_code);
 
     // Query code for non-existent commitment - should return None
     let non_existent_commitment = [0u8; 32];
     let non_existent_commitment = Word::read_from_bytes(&non_existent_commitment).unwrap();
-    let code_other = select_account_code_by_commitment(db, non_existent_commitment).unwrap();
+    let code_other = select_account_code(db, non_existent_commitment).unwrap();
     assert!(code_other.is_none(), "Code should not exist for non-existent commitment");
 }
 
@@ -2266,7 +2263,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v1 = create_account_with_code(code_v1_str, [1u8; 32]);
     let code_v1_commitment = account_v1.code().commitment();
-    let code_v1 = miden_node_persistence::encode(account_v1.code());
+    let code_v1 = account_v1.code().clone();
 
     // Insert the account at block 1
     upsert_accounts(
@@ -2292,7 +2289,7 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     ";
     let account_v2 = create_account_with_code(code_v2_str, [1u8; 32]); // Same seed to keep same account_id
     let code_v2_commitment = account_v2.code().commitment();
-    let code_v2 = miden_node_persistence::encode(account_v2.code());
+    let code_v2 = account_v2.code().clone();
 
     // Verify that the codes are actually different
     assert_ne!(
@@ -2319,12 +2316,12 @@ fn test_select_account_code_by_commitment_multiple_codes() {
     .unwrap();
 
     // Both codes should be retrievable by their respective commitments
-    let code_from_v1_commitment = select_account_code_by_commitment(db, code_v1_commitment)
+    let code_from_v1_commitment = select_account_code(db, code_v1_commitment)
         .unwrap()
         .expect("v1 code should exist");
     assert_eq!(code_from_v1_commitment, code_v1, "v1 commitment should return v1 code");
 
-    let code_from_v2_commitment = select_account_code_by_commitment(db, code_v2_commitment)
+    let code_from_v2_commitment = select_account_code(db, code_v2_commitment)
         .unwrap()
         .expect("v2 code should exist");
     assert_eq!(code_from_v2_commitment, code_v2, "v2 commitment should return v2 code");
@@ -2387,10 +2384,7 @@ fn upsert_accounts_applies_account_creation_and_code_upgrade() -> anyhow::Result
 
     assert_eq!(upgraded_account.code(), &upgraded_code);
     assert_eq!(select_account(db, account_id)?.details, Some(upgraded_account));
-    assert_eq!(
-        select_account_code_by_commitment(db, upgraded_code.commitment())?,
-        Some(miden_node_persistence::encode(&upgraded_code)),
-    );
+    assert_eq!(select_account_code(db, upgraded_code.commitment())?, Some(upgraded_code),);
 
     Ok(())
 }

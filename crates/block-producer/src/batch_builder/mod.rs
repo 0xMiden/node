@@ -5,16 +5,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::TryFutureExt;
-use miden_node_store::state::{State, StateView};
+use miden_node_store::state::State;
 use miden_node_tracing::spawn::spawn_blocking_in_current_span;
 use miden_node_tracing::{ErrorSpanExt, Instrument, Span, error, instrument, miden_span_record};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::AccountId;
 use miden_protocol::batch::{BatchId, ProposedBatch, ProvenBatch};
-use miden_protocol::block::{BlockHeader, BlockNumber};
+use miden_protocol::block::BlockHeader;
 use miden_protocol::note::Note;
-use miden_protocol::transaction::{ExecutedTransaction, ProvenTransaction, TransactionId};
+use miden_protocol::protocol_config::ProtocolConfig;
+use miden_protocol::transaction::{
+    AccountInputs,
+    ExecutedTransaction,
+    ProvenTransaction,
+    TransactionId,
+};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use tokio::task::{JoinError, JoinSet};
 
@@ -22,7 +28,7 @@ use crate::domain::batch::{SelectedBatch, SelectedBatchId};
 use crate::errors::{BuildBatchError, StoreError};
 use crate::fee_collector::FeeCollectorTransactionBuilder;
 use crate::mempool::{MempoolTransaction, SharedMempool};
-use crate::store::{ChainInputs, read_chain_inputs};
+use crate::store::{ChainInputs, read_chain_inputs, read_fee_collection_inputs};
 use crate::validator::BlockProducerValidatorClient;
 
 mod prover;
@@ -61,12 +67,9 @@ impl BatchBuilder {
         fee_collector_account: AccountFile,
         validator: BlockProducerValidatorClient,
     ) -> anyhow::Result<Self> {
-        let fee_collector = FeeCollectorTransactionBuilder::new(
-            builder_account_id,
-            fee_collector_account,
-            &state.view(),
-        )
-        .await?;
+        let fee_collector =
+            FeeCollectorTransactionBuilder::new(builder_account_id, fee_collector_account, &state)
+                .await?;
 
         Ok(Self {
             active_jobs: JoinSet::new(),
@@ -247,22 +250,36 @@ impl BatchJob {
             .flat_map(MempoolTransaction::unauthenticated_note_ids)
             .collect();
 
-        let inputs = self
+        // A deployed collector must consume at least one note to prevent replay.
+        let fee_faucet = (!fee_notes.is_empty()).then(|| self.fee_collector.fee_faucet().clone());
+        let (inputs, fee_collection_inputs) = self
             .state
-            .read(move |view| read_chain_inputs(&view, reference_block, block_numbers, &note_ids))
+            .read(move |view| {
+                let inputs = read_chain_inputs(&view, reference_block, block_numbers, &note_ids)?;
+                let fee_collection_inputs = fee_faucet
+                    .map(|fee_faucet| {
+                        let (protocol_config, genesis) =
+                            read_fee_collection_inputs(&view, &inputs.reference_block_header)?;
+                        // A native faucet that cannot be read fails the fee transaction, not the
+                        // batch inputs.
+                        let fee_faucet_inputs = fee_faucet.account_inputs(&view, reference_block);
+                        Ok::<_, StoreError>((protocol_config, genesis, fee_faucet_inputs))
+                    })
+                    .transpose()?;
+                Ok((inputs, fee_collection_inputs))
+            })
             .await
             .map_err(BuildBatchError::FetchBatchInputsFailed)?;
-        // A deployed collector must consume at least one note to prevent replay. Fee collection
-        // reads the store at the reference block, so it can use a separate view. The view is
-        // released before the proof and the validator request.
-        let executed_fee_collection = if fee_notes.is_empty() {
-            None
-        } else {
-            let execution = self
-                .state
-                .with_view(async |view| self.execute_fee_collection(view, fee_notes, &inputs).await)
-                .await?;
-            Some(execution)
+        let executed_fee_collection = match fee_collection_inputs {
+            None => None,
+            Some((protocol_config, genesis, fee_faucet_inputs)) => {
+                let fee_faucet_inputs =
+                    fee_faucet_inputs.map_err(BuildBatchError::BuildBatchFeeTransaction)?;
+                let executed = self
+                    .execute_fee_collection(fee_notes, &inputs, protocol_config, fee_faucet_inputs)
+                    .await?;
+                Some((executed, genesis))
+            },
         };
         let ChainInputs {
             note_inclusion_proofs,
@@ -297,38 +314,22 @@ impl BatchJob {
     /// Returns the executed transaction and the genesis block commitment.
     async fn execute_fee_collection(
         &self,
-        view: &StateView,
         fee_notes: Vec<Note>,
         inputs: &ChainInputs,
-    ) -> Result<(ExecutedTransaction, Word), BuildBatchError> {
-        let protocol_config = view
-            .get_protocol_config(inputs.reference_block_header.protocol_config_commitment())
-            .await
-            .map_err(StoreError::GetProtocolConfigFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
-            .expect("the reference block's protocol configuration should exist");
-        let genesis = view
-            .get_block_header(Some(BlockNumber::GENESIS), false)
-            .await
-            .map_err(StoreError::GetBlockHeaderFailed)
-            .map_err(BuildBatchError::FetchBatchInputsFailed)?
-            .0
-            .expect("the genesis block header should exist")
-            .commitment();
-
-        let executed = self
-            .fee_collector
+        protocol_config: ProtocolConfig,
+        fee_faucet_inputs: AccountInputs,
+    ) -> Result<ExecutedTransaction, BuildBatchError> {
+        self.fee_collector
             .execute(
                 fee_notes,
                 inputs.reference_block_header.clone(),
                 protocol_config,
                 inputs.partial_blockchain.clone(),
-                view,
+                fee_faucet_inputs,
+                &self.state,
             )
             .await
-            .map_err(BuildBatchError::BuildBatchFeeTransaction)?;
-
-        Ok((executed, genesis))
+            .map_err(BuildBatchError::BuildBatchFeeTransaction)
     }
 
     /// Proves the fee collection transaction and submits the proof to the validator.
@@ -443,7 +444,7 @@ mod tests {
     use miden_node_proto::domain::sequencer::TransactionCandidate;
     use miden_node_utils::genesis::GenesisBlock;
     use miden_protocol::ONE;
-    use miden_protocol::block::{BlockSignatures, SignedBlock};
+    use miden_protocol::block::{BlockNumber, BlockSignatures, SignedBlock};
     use miden_testing::{Auth, MockChain};
     use miden_tx::LocalTransactionProver;
 
@@ -487,7 +488,7 @@ mod tests {
         let selected = mempool.lock().unwrap().select_any_batch().unwrap();
         let selected_id = selected.id().as_batch_id();
         let fee_collector =
-            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state.view()).await?;
+            FeeCollectorTransactionBuilder::new(wallet.id(), collector, &state).await?;
         let job = BatchJob {
             state,
             batch_prover: BatchProver::new(),

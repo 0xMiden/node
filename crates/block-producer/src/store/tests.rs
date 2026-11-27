@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
@@ -31,7 +31,7 @@ use miden_protocol::transaction::{
     TransactionLogs,
 };
 
-use super::get_tx_inputs;
+use super::{get_tx_inputs, read_chain_inputs};
 use crate::errors::{MempoolSubmissionError, StateConflict};
 use crate::test_utils::MockProvenTxBuilder;
 
@@ -165,4 +165,20 @@ async fn rejects_a_new_account_with_an_existing_prefix() {
     assert!(matches!(result,
         Err(MempoolSubmissionError::AuthenticationFailed(StateConflict::AccountIdPrefixAlreadyExists(id)))
             if id == ids[1]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn chain_inputs_cover_the_chain_before_the_reference_block() {
+    let (_directory, state, writer, task) = fixture().await;
+    let genesis = BlockNumber::GENESIS;
+    let inputs = state
+        .read(move |view| {
+            read_chain_inputs(&view, genesis, BTreeSet::from([genesis]), &BTreeSet::new())
+        })
+        .await
+        .unwrap();
+    writer.stop(task).await;
+    assert_eq!(inputs.reference_block_header.block_num(), genesis);
+    assert_eq!(inputs.partial_blockchain.chain_length(), genesis);
+    assert!(inputs.note_inclusion_proofs.is_empty());
 }

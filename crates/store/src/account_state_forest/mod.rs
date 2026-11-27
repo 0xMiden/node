@@ -35,6 +35,7 @@ use miden_protocol::crypto::merkle::smt::{
     SmtForestMutationSet,
     SmtForestOperation,
     SmtForestUpdateBatch,
+    SmtProof,
     SmtUpdateBatch,
     TreeId,
 };
@@ -673,6 +674,21 @@ impl<B: BackendReader> AccountStateForest<B> {
         Some(proofs.and_then(|proofs| {
             AccountStorageMapDetails::from_proofs(slot_name, map_root, raw_keys, proofs)
         }))
+    }
+
+    /// Opens `raw_key` in a storage map, returning its SMT proof.
+    ///
+    /// Returns `None` if no storage root is tracked for this account/slot/block combination.
+    pub(crate) fn open_storage_map_key(
+        &self,
+        account_id: AccountId,
+        slot_name: &StorageSlotName,
+        block_num: BlockNumber,
+        raw_key: StorageMapKey,
+    ) -> Option<Result<SmtProof, MerkleError>> {
+        let lineage = Self::storage_lineage_id(account_id, slot_name);
+        let tree = self.get_tree_id(lineage, block_num)?;
+        Some(self.forest.open(tree, raw_key.hash().into()).map_err(Self::map_forest_error))
     }
 
     /// Enumerates a storage map as it is stored in the SMT.

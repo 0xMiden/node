@@ -2,7 +2,8 @@ use std::collections::BTreeSet;
 use std::num::NonZeroU16;
 use std::sync::Arc;
 
-use miden_node_store::state::StateView;
+use anyhow::Context;
+use miden_node_store::state::State;
 use miden_objects::account_file::AccountFile;
 use miden_protocol::account::{
     Account,
@@ -10,6 +11,7 @@ use miden_protocol::account::{
     PartialAccount,
     StorageMapKey,
     StorageMapWitness,
+    StorageSlotType,
 };
 use miden_protocol::asset::{Asset, AssetId, AssetWitness};
 use miden_protocol::block::code_tree::{CodeTreeRoot, CodeWitness};
@@ -56,7 +58,7 @@ impl FeeCollectorTransactionBuilder {
     pub(crate) async fn new(
         target: AccountId,
         account_file: AccountFile,
-        view: &StateView,
+        state: &State,
     ) -> anyhow::Result<Self> {
         let (account, auth_secret_keys) = account_file.into_parts();
         let auth_root = AuthTxFeeCollector::code()
@@ -82,7 +84,7 @@ impl FeeCollectorTransactionBuilder {
             "fee collector account file must contain its signing key",
         );
         let authenticator = BasicAuthenticator::new(&auth_secret_keys);
-        let fee_faucet = FeeFaucet::load(view).await?;
+        let fee_faucet = FeeFaucet::load(state).await?;
 
         Ok(Self {
             account,
@@ -92,13 +94,20 @@ impl FeeCollectorTransactionBuilder {
         })
     }
 
+    /// Returns the native faucet, whose account inputs callers read with the other transaction
+    /// inputs.
+    pub(crate) fn fee_faucet(&self) -> &FeeFaucet {
+        &self.fee_faucet
+    }
+
     pub(crate) async fn execute(
         &self,
         notes: Vec<Note>,
         reference_block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
-        view: &StateView,
+        fee_faucet_inputs: AccountInputs,
+        state: &State,
     ) -> anyhow::Result<ExecutedTransaction> {
         let asset_ids = notes
             .iter()
@@ -127,8 +136,8 @@ impl FeeCollectorTransactionBuilder {
             reference_block_header,
             protocol_config,
             partial_blockchain,
-            &self.fee_faucet,
-            view,
+            fee_faucet_inputs,
+            state,
         );
 
         Ok(TransactionExecutor::new(&data_store)
@@ -153,8 +162,8 @@ struct FeeCollectorDataStore<'a> {
     protocol_config: ProtocolConfig,
     partial_blockchain: PartialBlockchain,
     mast_store: TransactionMastStore,
-    fee_faucet: &'a FeeFaucet,
-    view: &'a StateView,
+    fee_faucet_inputs: AccountInputs,
+    state: &'a State,
 }
 
 impl<'a> FeeCollectorDataStore<'a> {
@@ -163,12 +172,12 @@ impl<'a> FeeCollectorDataStore<'a> {
         reference_block_header: BlockHeader,
         protocol_config: ProtocolConfig,
         partial_blockchain: PartialBlockchain,
-        fee_faucet: &'a FeeFaucet,
-        view: &'a StateView,
+        fee_faucet_inputs: AccountInputs,
+        state: &'a State,
     ) -> Self {
         let mast_store = TransactionMastStore::new();
         mast_store.load_account_code(account.code());
-        mast_store.load_account_code(&fee_faucet.code);
+        mast_store.load_account_code(fee_faucet_inputs.code());
 
         Self {
             account,
@@ -176,8 +185,8 @@ impl<'a> FeeCollectorDataStore<'a> {
             protocol_config,
             partial_blockchain,
             mast_store,
-            fee_faucet,
-            view,
+            fee_faucet_inputs,
+            state,
         }
     }
 }
@@ -212,17 +221,12 @@ impl DataStore for FeeCollectorDataStore<'_> {
         ref_block: BlockNumber,
     ) -> impl FutureMaybeSend<Result<AccountInputs, DataStoreError>> {
         async move {
-            if foreign_account_id != self.fee_faucet.id
+            if foreign_account_id != self.fee_faucet_inputs.id()
                 || ref_block != self.reference_block_header.block_num()
             {
                 return Err(DataStoreError::other("invalid native faucet request"));
             }
-            self.fee_faucet.account_inputs(self.view, ref_block).await.map_err(|error| {
-                DataStoreError::Other {
-                    error_msg: "failed to fetch native faucet account inputs".into(),
-                    source: Some(error.into()),
-                }
-            })
+            Ok(self.fee_faucet_inputs.clone())
         }
     }
 
@@ -244,6 +248,12 @@ impl DataStore for FeeCollectorDataStore<'_> {
         }
     }
 
+    /// Opens a native faucet storage map key at the reference block.
+    ///
+    /// The proof comes from a new store read, not from the read that prepared the transaction
+    /// inputs, because a read cannot stay open across execution. If the chain advances past the
+    /// account state retention window in between, the map state at the reference block may already
+    /// be pruned, and the request fails instead of returning a witness for another block.
     fn get_storage_map_witness(
         &self,
         account_id: AccountId,
@@ -251,18 +261,31 @@ impl DataStore for FeeCollectorDataStore<'_> {
         map_key: StorageMapKey,
     ) -> impl FutureMaybeSend<Result<StorageMapWitness, DataStoreError>> {
         async move {
-            if account_id != self.fee_faucet.id {
+            if account_id != self.fee_faucet_inputs.id() {
                 return Err(DataStoreError::other("invalid native faucet request"));
             }
-            self.fee_faucet
-                .storage_map_witness(
-                    self.view,
-                    self.reference_block_header.block_num(),
-                    map_root,
-                    map_key,
-                )
+            let slot_name = self
+                .fee_faucet_inputs
+                .storage()
+                .header()
+                .slots()
+                .find(|slot| slot.slot_type() == StorageSlotType::Map && slot.value() == map_root)
+                .ok_or_else(|| DataStoreError::other("native faucet storage map is missing"))?
+                .name()
+                .clone();
+            let block = self.reference_block_header.block_num();
+            self.state
+                .read(move |view| {
+                    let proof = view
+                        .snapshot
+                        .open_storage_map_key(account_id, &slot_name, block, map_key)
+                        .context(
+                            "native faucet storage map is not tracked at the reference block",
+                        )??;
+                    Ok(StorageMapWitness::new(proof, [map_key])?)
+                })
                 .await
-                .map_err(|error| DataStoreError::Other {
+                .map_err(|error: anyhow::Error| DataStoreError::Other {
                     error_msg: "failed to fetch native faucet storage witness".into(),
                     source: Some(error.into()),
                 })
@@ -345,19 +368,10 @@ mod tests {
         let (state, mut writer, _proof_writer) = State::for_tests(directory.path()).await;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
         let mut builder =
-            FeeCollectorTransactionBuilder::new(target, mock_collection_account(), &state.view())
-                .await?;
+            FeeCollectorTransactionBuilder::new(target, mock_collection_account(), &state).await?;
         assert!(builder.account.is_new());
         assert!(builder.account.vault().is_empty());
-        let executed = builder
-            .execute(
-                Vec::new(),
-                chain.latest_block_header(),
-                chain.protocol_config().clone(),
-                chain.latest_partial_blockchain(),
-                &state.view(),
-            )
-            .await?;
+        let executed = execute_at_latest_block(&builder, Vec::new(), &chain, &state).await?;
         let deployment = FeeCollectorTransactionBuilder::prove(executed)?;
         let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
             .verify(&deployment)?;
@@ -392,15 +406,7 @@ mod tests {
                 AuthTxFeeCollector::auth_args(target, NoteType::Public),
                 InputNotes::from_unauthenticated_notes(notes.clone())?.commitment(),
             );
-            let executed = builder
-                .execute(
-                    notes,
-                    chain.latest_block_header(),
-                    chain.protocol_config().clone(),
-                    chain.latest_partial_blockchain(),
-                    &state.view(),
-                )
-                .await?;
+            let executed = execute_at_latest_block(&builder, notes, &chain, &state).await?;
             let transaction = FeeCollectorTransactionBuilder::prove(executed)?;
             let _outcome = TransactionVerifier::new(miden_protocol::MIN_PROOF_SECURITY_LEVEL)
                 .verify(&transaction)?;
@@ -474,19 +480,10 @@ mod tests {
                 .serial_number(Word::from([1, 2, 3, 4u32]))
                 .asset(asset)
                 .build()?;
-            let builder =
-                FeeCollectorTransactionBuilder::new(target, collector, &state.view()).await?;
+            let builder = FeeCollectorTransactionBuilder::new(target, collector, &state).await?;
             Box::pin(update_blocklist(&mut chain, &mut writer, faucet.id(), collector_id, blocked))
                 .await?;
-            let result = builder
-                .execute(
-                    vec![note.into()],
-                    chain.latest_block_header(),
-                    chain.protocol_config().clone(),
-                    chain.latest_partial_blockchain(),
-                    &state.view(),
-                )
-                .await;
+            let result = execute_at_latest_block(&builder, vec![note.into()], &chain, &state).await;
             if blocked {
                 let error = result.unwrap_err().downcast::<TransactionExecutorError>()?;
                 assert_transaction_executor_error!(Err::<(), _>(error), ERR_ACCOUNT_IS_BLOCKED);
@@ -502,6 +499,31 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    /// Executes a fee collector transaction at the latest block of `chain`, reading the native
+    /// faucet inputs from `state` as the callers do while preparing the transaction inputs.
+    async fn execute_at_latest_block(
+        builder: &FeeCollectorTransactionBuilder,
+        notes: Vec<Note>,
+        chain: &MockChain,
+        state: &State,
+    ) -> anyhow::Result<ExecutedTransaction> {
+        let reference_block_header = chain.latest_block_header();
+        let block = reference_block_header.block_num();
+        let fee_faucet = builder.fee_faucet().clone();
+        let fee_faucet_inputs =
+            state.read(move |view| fee_faucet.account_inputs(&view, block)).await?;
+        builder
+            .execute(
+                notes,
+                reference_block_header,
+                chain.protocol_config().clone(),
+                chain.latest_partial_blockchain(),
+                fee_faucet_inputs,
+                state,
+            )
+            .await
     }
 
     async fn update_blocklist(
@@ -562,7 +584,7 @@ mod tests {
             let result = FeeCollectorTransactionBuilder::new(
                 target,
                 AccountFile::new(account.clone(), keys),
-                &state.view(),
+                &state,
             )
             .await;
             let error = result.err().expect("the collector must require its own signing key");
@@ -579,12 +601,9 @@ mod tests {
         let (state, ..) = State::for_tests(directory.path()).await;
         let account = MockChain::builder().add_existing_wallet(Auth::basic_ecdsa())?;
         let target = ACCOUNT_ID_REGULAR_PRIVATE_ACCOUNT_UPDATABLE_CODE.try_into()?;
-        let result = FeeCollectorTransactionBuilder::new(
-            target,
-            AccountFile::new(account, vec![]),
-            &state.view(),
-        )
-        .await;
+        let result =
+            FeeCollectorTransactionBuilder::new(target, AccountFile::new(account, vec![]), &state)
+                .await;
         let error = result.err().expect("an ordinary wallet must not collect batch fees");
         assert!(error.to_string().contains("AuthTxFeeCollector"));
         Ok(())

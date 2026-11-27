@@ -76,7 +76,7 @@ pub(crate) use select_all_block_header_commitments::select_all_block_header_comm
 mod select_chain_tip;
 pub(crate) use select_chain_tip::select_chain_tip;
 
-pub(crate) use crate::read::{select_block_header, select_block_headers};
+pub(crate) use crate::read::select_block_header;
 
 // PROTOCOL CONFIG QUERIES
 // =================================================================================================
@@ -114,8 +114,6 @@ pub(crate) use select_notes_since_block_by_tag::select_notes_since_block_by_tag;
 
 mod select_note_ids_by_nullifier;
 pub(crate) use select_note_ids_by_nullifier::select_note_ids_by_nullifier;
-
-pub(crate) use crate::read::select_note_inclusion_proofs;
 
 mod select_note_sync_records;
 pub(crate) use select_note_sync_records::select_note_sync_records;
@@ -175,9 +173,6 @@ pub(crate) use select_public_account_ids_paged::PublicAccountIdsPaged;
 mod select_public_account_state_roots_paged;
 pub(crate) use select_public_account_state_roots_paged::PublicAccountStateRootsPaged;
 
-mod select_account_header_with_storage_header_at_block;
-pub(crate) use select_account_header_with_storage_header_at_block::select_account_header_with_storage_header_at_block;
-
 mod select_vault_at_block;
 pub(crate) use select_vault_at_block::select_vault_at_block;
 
@@ -185,9 +180,6 @@ mod account_row;
 
 mod select_account;
 pub(crate) use select_account::select_account;
-
-mod select_account_code_by_commitment;
-pub(crate) use select_account_code_by_commitment::select_account_code_by_commitment;
 
 mod select_account_storage_map_values_paged;
 pub(crate) use select_account_storage_map_values_paged::AccountStorageMapValuesPaged;

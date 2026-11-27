@@ -3,7 +3,7 @@ use core::error::Error as CoreError;
 use miden_node_persistence::PersistenceError;
 use miden_node_proto::domain::sequencer::TransactionAuthenticationError;
 use miden_node_proto::errors::GrpcError;
-use miden_node_store::{ApplyBlockWithProvingInputsError, DatabaseError, GetBlockHeaderError};
+use miden_node_store::{ApplyBlockWithProvingInputsError, DatabaseError};
 use miden_protocol::Word;
 use miden_protocol::account::AccountId;
 use miden_protocol::asset::AssetId;
@@ -239,10 +239,6 @@ pub enum StoreError {
         block_num: BlockNumber,
         reference_block: BlockNumber,
     },
-    #[error("failed to get block header from store")]
-    GetBlockHeaderFailed(#[source] GetBlockHeaderError),
-    #[error("failed to get protocol configuration from store")]
-    GetProtocolConfigFailed(#[source] DatabaseError),
     #[error("failed to apply block to store")]
     ApplyBlockFailed(#[source] ApplyBlockWithProvingInputsError),
 }

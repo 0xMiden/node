@@ -1,8 +1,20 @@
 use std::sync::Arc;
 
 use miden_node_utils::fee::{test_fee_params, test_protocol_config};
-use miden_protocol::Word;
-use miden_protocol::account::{AccountId, AccountType, AccountUpdateDetails, AssetCallbackFlag};
+use miden_protocol::account::{
+    Account,
+    AccountCode,
+    AccountId,
+    AccountStorage,
+    AccountType,
+    AccountUpdateDetails,
+    AssetCallbackFlag,
+    StorageMap,
+    StorageMapKey,
+    StorageSlot,
+    StorageSlotName,
+};
+use miden_protocol::asset::AssetVault;
 use miden_protocol::block::account_tree::AccountTree;
 use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -16,7 +28,10 @@ use miden_protocol::block::{
     ValidatorConfig,
 };
 use miden_protocol::note::Note;
-use miden_protocol::testing::account_id::account_id;
+use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
+    account_id,
+};
 use miden_protocol::testing::random_secret_key::random_secret_key;
 use miden_protocol::transaction::{
     InputNotes,
@@ -27,6 +42,7 @@ use miden_protocol::transaction::{
     TransactionHeader,
     TransactionLogs,
 };
+use miden_protocol::{Felt, Word};
 
 use crate::{DatabaseError, GenesisState, State};
 
@@ -37,17 +53,18 @@ pub(crate) async fn state() -> (tempfile::TempDir, Arc<State>, crate::BlockWrite
 async fn state_with_pool_size(
     pool_size: usize,
 ) -> (tempfile::TempDir, Arc<State>, crate::BlockWriter) {
-    let (directory, state, writer, _task) = state_with_writer_task(pool_size).await;
+    let (directory, state, writer, _task) = state_with_writer_task(pool_size, vec![]).await;
     (directory, state, writer)
 }
 
 async fn state_with_writer_task(
     pool_size: usize,
+    genesis_accounts: Vec<Account>,
 ) -> (tempfile::TempDir, Arc<State>, crate::BlockWriter, crate::WriterTask) {
     let directory = tempfile::tempdir().unwrap();
     let signer = random_secret_key();
     let genesis = GenesisState::new(
-        vec![],
+        genesis_accounts,
         test_fee_params(),
         1,
         ValidatorConfig::new(vec![signer.public_key()], 1).unwrap(),
@@ -80,6 +97,40 @@ async fn reads_header_and_configuration_from_the_snapshot() {
             let config =
                 view.tx.select_protocol_config(header.protocol_config_commitment())?.unwrap();
             assert_eq!(config, test_protocol_config());
+            Ok(())
+        })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn storage_map_keys_open_only_up_to_the_snapshot_block() {
+    let slot_name = StorageSlotName::mock(0);
+    let key = StorageMapKey::from_index(1);
+    let account = Account::new_existing(
+        ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap(),
+        AssetVault::default(),
+        AccountStorage::new(vec![StorageSlot::with_map(
+            slot_name.clone(),
+            StorageMap::with_entries([(key, Word::from([1u32, 0, 0, 0]))]).unwrap(),
+        )])
+        .unwrap(),
+        AccountCode::mock(),
+        Felt::ONE,
+    );
+    let id = account.id();
+    let (_directory, state, _writer, _task) = state_with_writer_task(2, vec![account]).await;
+    state
+        .read(move |view| -> Result<(), DatabaseError> {
+            let snapshot = &view.snapshot;
+            assert!(
+                snapshot.open_storage_map_key(id, &slot_name, snapshot.block_num, key).is_some()
+            );
+            assert!(
+                snapshot
+                    .open_storage_map_key(id, &slot_name, snapshot.block_num.child(), key)
+                    .is_none()
+            );
             Ok(())
         })
         .await
@@ -172,7 +223,7 @@ async fn first_block(state: &State, id: AccountId, commitment: Word, note: Note)
 
 #[tokio::test(flavor = "multi_thread")]
 async fn held_read_stays_consistent_while_a_block_commits() {
-    let (_directory, state, mut writer, task) = state_with_writer_task(2).await;
+    let (_directory, state, mut writer, task) = state_with_writer_task(2, vec![]).await;
     let id = AccountId::try_from(account_id(
         AccountType::Private,
         AssetCallbackFlag::Disabled,

@@ -112,7 +112,8 @@ fn select_account_header_with_storage_header_at_block(
     block_num: BlockNumber,
 ) -> Result<Option<(AccountHeader, AccountStorageHeader)>> {
     db.read(move |tx| {
-        queries::select_account_header_with_storage_header_at_block(tx, account_id, block_num)
+        crate::read::ReadTransaction::new(tx)
+            .select_account_header_with_storage_header(account_id, block_num)
     })
 }
 
