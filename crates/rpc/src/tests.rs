@@ -2635,6 +2635,17 @@ async fn next_block_with_protocol_config(
     store: &TestStore,
     config: &ProtocolConfig,
 ) -> SignedBlock {
+    next_block_with_notes(store, config, vec![]).await
+}
+
+/// Builds the next signed block with real note commitments and the preceding chain MMR.
+///
+/// Keeps account state unchanged so note-stream tests can verify paths on a committed chain.
+async fn next_block_with_notes(
+    store: &TestStore,
+    config: &ProtocolConfig,
+    notes: Vec<OutputNote>,
+) -> SignedBlock {
     use miden_protocol::block::{BlockBody, BlockHeader};
     use miden_protocol::crypto::merkle::mmr::Mmr;
 
@@ -2646,8 +2657,14 @@ async fn next_block_with_protocol_config(
         let (header, _) = view.get_block_header(Some(height.into()), false).await.unwrap();
         mmr.add(header.unwrap().commitment()).unwrap();
     }
-    let body = BlockBody::new(vec![], vec![], vec![], Vec::new(), PublicTransactionLogs::default())
-        .unwrap();
+    let batches = if notes.is_empty() {
+        vec![]
+    } else {
+        vec![notes.into_iter().enumerate().collect()]
+    };
+    let body =
+        BlockBody::new(vec![], batches, vec![], Vec::new(), PublicTransactionLogs::default())
+            .unwrap();
 
     let header = BlockHeader::new(
         parent.commitment(),
@@ -3502,6 +3519,134 @@ async fn storage_map_stream_validates_target_presence_and_account_visibility() {
     }
 }
 
+/// Builds tagged public and private notes with distinct identities for exact stream reconciliation.
+fn note_stream_fixture(
+    sender: AccountId,
+    height: u32,
+    count: u32,
+) -> Vec<miden_protocol::note::Note> {
+    use miden_protocol::note::{Note, PartialNoteMetadata};
+    (0..count)
+        .map(|index| {
+            let base = Note::mock_noop(Word::from([height, index, 0, 0]));
+            let kind = if index % 2 == 0 {
+                NoteType::Private
+            } else {
+                NoteType::Public
+            };
+            Note::with_attachments(
+                base.assets().clone(),
+                PartialNoteMetadata::new(sender, kind).with_tag(42.into()),
+                base.recipient().clone(),
+                base.attachments().clone(),
+            )
+        })
+        .collect()
+}
+
+/// Note frames must preserve every match and authenticate against the selected target after later
+/// commits.
+#[tokio::test(flavor = "multi_thread")]
+async fn note_stream_emits_one_block_frame_across_pages_and_pins_mmr_proofs() {
+    use miden_protocol::crypto::merkle::mmr::Mmr;
+    use miden_protocol::note::Note;
+    use miden_protocol::transaction::RawOutputNote;
+    use v2::sync_notes_response::Item;
+    let mut store = TestStore::start().await;
+    let (genesis, _) = store.state.view().get_block_header(Some(0.into()), false).await.unwrap();
+    let genesis = genesis.unwrap();
+    let config = store
+        .state
+        .view()
+        .get_protocol_config(genesis.protocol_config_commitment())
+        .await
+        .unwrap()
+        .unwrap();
+    let sender = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let mut mmr = Mmr::new();
+    mmr.add(genesis.commitment()).unwrap();
+    let mut expected = vec![];
+    for (height, count) in [(1_u32, 300_u32), (2, 2)] {
+        let notes = note_stream_fixture(sender, height, count);
+        let outputs = notes
+            .iter()
+            .cloned()
+            .map(|note| RawOutputNote::Full(note).into_output_note().unwrap())
+            .collect();
+        let block = next_block_with_notes(&store, &config, outputs).await;
+        mmr.add(block.header().commitment()).unwrap();
+        expected.extend(notes);
+        store.writer.apply_block(block, None).await.unwrap();
+    }
+    let service = RpcService::new(
+        Arc::clone(&store.state),
+        RpcBackend::full_node(source_rpc_client(), None),
+        None,
+        NonZeroUsize::MIN,
+        None,
+    );
+    let mut stream = proto::server::miden_node_v2_node_service::SyncNotes::handle(
+        &service,
+        (
+            miden_node_proto::domain::block::SyncRange { from_exclusive: None, target: 2.into() },
+            vec![42],
+        ),
+        &MetadataMap::new(),
+        &Extensions::new(),
+    )
+    .await
+    .unwrap();
+    // The first page exceeds the stream buffer. Holding the receiver here keeps the second page
+    // from loading until the newer block has committed.
+    let block = next_block_with_protocol_config(&store, &config).await;
+    let mut latest_mmr = mmr.clone();
+    latest_mmr.add(block.header().commitment()).unwrap();
+    assert_ne!(
+        mmr.open(2).unwrap().merkle_path(),
+        latest_mmr.open(2).unwrap().merkle_path(),
+        "the second page must distinguish the requested target from the latest tip"
+    );
+    store.writer.apply_block(block, None).await.unwrap();
+    let mut blocks = vec![];
+    let mut actual = vec![];
+    let mut current_header = None;
+    while let Some(frame) = tokio_stream::StreamExt::next(&mut stream).await {
+        let frame = frame.unwrap();
+        match frame.item.unwrap() {
+            Item::Block(block) => {
+                let header: miden_protocol::block::BlockHeader =
+                    block.block_header.unwrap().decode_fields().unwrap().build_unchecked().unwrap();
+                let path = block.mmr_path.unwrap().decode_fields().unwrap().verify().unwrap();
+                let proof =
+                    mmr.open_at(header.block_num().as_u32() as usize, mmr.forest()).unwrap();
+                assert_eq!(path, *proof.merkle_path());
+                mmr.peaks().verify(header.commitment(), proof).unwrap();
+                blocks.push(header.block_num().as_u32());
+                current_header = Some(header);
+            },
+            Item::Note(note) => {
+                let (id, proof) =
+                    note.inclusion_proof.unwrap().decode_fields().unwrap().verify().unwrap();
+                let header = current_header.as_ref().unwrap();
+                assert_eq!(header.block_num(), proof.location().block_num());
+                let expected_note = &expected[actual.len()];
+                assert_eq!(id, expected_note.id());
+                proof
+                    .note_path()
+                    .verify(
+                        u64::from(proof.location().block_note_tree_index()),
+                        expected_note.id().as_word(),
+                        &header.note_root(),
+                    )
+                    .unwrap();
+                actual.push(id);
+            },
+        }
+    }
+    assert_eq!(blocks, vec![1, 2]);
+    assert_eq!(actual, expected.iter().map(Note::id).collect::<Vec<_>>());
+}
+
 #[tokio::test]
 async fn block_header_reads_latest_and_explicit_with_optional_proof() {
     use miden_protocol::block::BlockNumber;
@@ -3589,6 +3734,93 @@ async fn both_node_services_are_discoverable_and_serving() {
     }
 }
 
+/// Both versions serve note sync at the same address. The v2 gRPC-Web stream ends with a success
+/// trailer.
+#[tokio::test]
+async fn sync_notes_serves_v1_pages_and_v2_grpc_web_streams() {
+    use miden_node_proto::prost::Message;
+    let (mut v1, address, _store, _guard) = start_rpc().await;
+    let response = v1
+        .sync_notes(proto::miden::node::v1::SyncNotesRequest {
+            block_range: Some(proto::miden::node::v1::BlockRange { block_from: 0, block_to: 0 }),
+            note_tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(response.pagination_info.unwrap().chain_tip, 0);
+    assert_eq!(response.blocks, []);
+    let request = v2::SyncNotesRequest {
+        range: Some(v2::StateDeltaRange {
+            from_block_exclusive: None,
+            to_block_inclusive: Some(0),
+        }),
+        note_tags: vec![],
+    }
+    .encode_to_vec();
+    let mut framed = vec![0];
+    framed.extend_from_slice(&u32::try_from(request.len()).unwrap().to_be_bytes());
+    framed.extend_from_slice(&request);
+    let response = miden_node_utils::http::Client::new()
+        .post(format!("http://{address}/miden.node.v2.NodeService/SyncNotes"))
+        .header(CONTENT_TYPE.as_str(), "application/grpc-web+proto")
+        .header(
+            ACCEPT.as_str(),
+            concat!("application/vnd.miden; version=", env!("CARGO_PKG_VERSION")),
+        )
+        .body(framed)
+        .send()
+        .await
+        .unwrap();
+    assert!(response.status().is_success());
+    let body = response.bytes().await.unwrap();
+    assert_eq!(body[0], 0x80, "empty successful stream ends with web trailers");
+    let size = usize::try_from(u32::from_be_bytes(body[1..5].try_into().unwrap())).unwrap();
+    assert_eq!(size, body.len() - 5);
+    let trailers = std::str::from_utf8(&body[5..]).unwrap();
+    assert!(
+        trailers
+            .lines()
+            .any(|line| line.trim() == "grpc-status:0" || line.trim() == "grpc-status: 0")
+    );
+}
+
+/// Duplicate tags must not bypass request limits. Missing or future targets must fail before
+/// streaming.
+#[tokio::test]
+async fn note_stream_validates_raw_tag_limit_and_explicit_target() {
+    let (mut client, _, _store, _guard) = start_rpc_v2().await;
+    let status = client
+        .sync_notes(v2::SyncNotesRequest { range: None, note_tags: vec![42; 1001] })
+        .await
+        .unwrap_err();
+    assert_eq!(status.code(), tonic::Code::OutOfRange);
+    for (range, detail) in [
+        (None, 1),
+        (
+            Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: None,
+            }),
+            2,
+        ),
+        (
+            Some(v2::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            3,
+        ),
+    ] {
+        let status = client
+            .sync_notes(v2::SyncNotesRequest { range, note_tags: vec![] })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
+    }
+}
+
 #[tokio::test]
 async fn v2_service_parity() {
     use std::collections::BTreeSet;
@@ -3614,12 +3846,11 @@ async fn v2_service_parity() {
     );
     assert_eq!(
         limits.endpoints.keys().map(String::as_str).collect::<BTreeSet<_>>(),
-        BTreeSet::from(["GetNotesById",]),
+        BTreeSet::from(["GetNotesById", "SyncNotes",]),
     );
-    assert_eq!(
-        limits.endpoints["GetNotesById"].parameters,
-        previous.endpoints["GetNotesById"].parameters
-    );
+    for shared in ["GetNotesById", "SyncNotes"] {
+        assert_eq!(limits.endpoints[shared].parameters, previous.endpoints[shared].parameters);
+    }
     let mut blocks = client
         .block_subscription(v2::BlockSubscriptionRequest { block_from: 0 })
         .await

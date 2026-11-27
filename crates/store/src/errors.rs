@@ -321,6 +321,8 @@ pub enum StateSyncError {
 
 #[derive(Error, Debug)]
 pub enum NoteSyncError {
+    #[error("synchronization target has no representable MMR successor")]
+    TargetOverflow,
     #[error("database error")]
     DatabaseError(#[from] DatabaseError),
     #[error("database error")]

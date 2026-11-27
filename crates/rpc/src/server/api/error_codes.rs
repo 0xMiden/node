@@ -102,3 +102,9 @@ error_codes!(SyncAccountStorageMapsV2ErrorCode {
     HistoryUnavailable = 4,
     AccountNotPublic = 6,
 });
+
+error_codes!(SyncNotesV2ErrorCode {
+    DeserializationFailed = 1,
+    InvalidRange = 2,
+    FutureTarget = 3,
+});

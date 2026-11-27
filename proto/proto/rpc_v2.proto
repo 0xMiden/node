@@ -75,6 +75,16 @@ service NodeService {
     // reconnect from the first height whose proof is still missing locally.
     rpc ProofSubscription(ProofSubscriptionRequest) returns (stream ProofSubscriptionResponse) {}
 
+    // Streams matching note records, preceded by one block frame for each block with matches.
+    //
+    // Use note tags to discover new notes through the target authenticated by SyncChainMmr.
+    // Verify each note path against its block's note root. Verify block paths against the MMR with
+    // target + 1 leaves, which includes the authenticated target header.
+    // Fetch public note bodies and missing attachment content with GetNotesById.
+    // A successful empty stream means that no notes matched the requested tags in the range.
+    // Apply results only after successful stream completion.
+    rpc SyncNotes(SyncNotesRequest) returns (stream SyncNotesResponse) {}
+
     // Streams the final target asset for each public account vault key changed in the requested range.
     //
     // Use this endpoint to update a local vault after its authenticated account state changes.
@@ -161,6 +171,63 @@ message SyncAccountStorageMapsResponse {
     primitives.Word key = 2;
     primitives.Word value = 3;
     fixed32 last_updated_at = 4;
+}
+
+// Pin the target to SyncChainMmr. An absent target is invalid; absent lower bound bootstraps.
+// Preserve tag-list limits; duplicates do not cause repeated notes.
+message SyncNotesRequest {
+    StateDeltaRange range = 1;
+    repeated fixed32 note_tags = 2;
+}
+
+// A block frame precedes that block's notes exactly once. Apply only after OK termination.
+// Block paths use the MMR at target + 1 leaves, including the authenticated target header.
+message SyncNotesResponse {
+    oneof item {
+        NoteBlockStart block = 1;
+        NoteSyncRecord note = 2;
+    }
+}
+message NoteBlockStart {
+    blockchain.BlockHeader block_header = 1;
+    primitives.MerklePath mmr_path = 2;
+}
+
+message NoteSyncAttachment {
+    // The attachment scheme.
+    fixed32 scheme = 1;
+
+    oneof payload {
+        // The raw content of a single-word attachment.
+        primitives.Word value = 2;
+
+        // The commitment to the content of a multi-word attachment.
+        primitives.Word commitment = 3;
+    }
+}
+
+message NoteSyncMetadata {
+    // The account which sent the note.
+    account.AccountId sender = 1;
+
+    // The type of the note.
+    note.NoteType note_type = 2;
+
+    // A value which can be used by the recipient(s) to identify notes intended for them.
+    fixed32 tag = 3;
+
+    // The note's attachments in canonical order.
+    repeated NoteSyncAttachment attachments = 4;
+
+    note.NoteVersion version = 5;
+}
+
+message NoteSyncRecord {
+    // The sync metadata of the note.
+    NoteSyncMetadata metadata = 1;
+
+    // Proof of the note's inclusion in a block.
+    note.NoteInclusionProof inclusion_proof = 2;
 }
 
 message StatusRequest {}

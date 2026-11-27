@@ -82,7 +82,9 @@ impl proto::server::miden_node_v1_node_service::SyncNotes for RpcService {
 // HELPERS
 // ================================================================================================
 
-fn note_sync_record_to_proto(note: NoteSyncRecord) -> proto::miden::node::v1::NoteSyncRecord {
+pub(super) fn note_sync_record_to_proto(
+    note: NoteSyncRecord,
+) -> proto::miden::node::v1::NoteSyncRecord {
     let attachments = note
         .attachments
         .iter()
@@ -132,9 +134,9 @@ fn note_sync_error_to_status(err: NoteSyncError) -> Status {
         NoteSyncError::DeserializationFailed(err) => {
             SyncNotesErrorCode::DeserializationFailed.invalid_argument(err)
         },
-        err @ (NoteSyncError::UnderlyingDatabaseError(_) | NoteSyncError::MmrError(_)) => {
-            log_internal_error(&err)
-        },
+        err @ (NoteSyncError::TargetOverflow
+        | NoteSyncError::UnderlyingDatabaseError(_)
+        | NoteSyncError::MmrError(_)) => log_internal_error(&err),
     }
 }
 
@@ -421,5 +423,21 @@ mod tests {
         let record_size = response.encoded_len() - overhead;
         assert!(record_size <= RECORD_BUDGET, "compact note record adds {record_size} bytes");
         assert!(response.encoded_len() <= BLOCK_OVERHEAD_BUDGET + RECORD_BUDGET);
+        let block = response.blocks.pop().unwrap();
+        let block_frame = proto::miden::node::v2::SyncNotesResponse {
+            item: Some(proto::miden::node::v2::sync_notes_response::Item::Block(
+                proto::miden::node::v2::NoteBlockStart {
+                    block_header: block.block_header,
+                    mmr_path: block.mmr_path,
+                },
+            )),
+        };
+        let note_frame = proto::miden::node::v2::SyncNotesResponse {
+            item: Some(proto::miden::node::v2::sync_notes_response::Item::Note(
+                block.notes.into_iter().next().unwrap().into(),
+            )),
+        };
+        assert!(block_frame.encoded_len() < 4 * 1024 * 1024);
+        assert!(note_frame.encoded_len() < 4 * 1024 * 1024);
     }
 }
