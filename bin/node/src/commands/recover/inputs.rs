@@ -107,3 +107,34 @@ pub(super) async fn apply_recovered(
     }
     Ok(())
 }
+
+/// Repairs a retained block using its locally authenticated body and a matching proving request.
+pub(super) async fn repair_retained(
+    state: &State,
+    writer: &mut BlockWriter,
+    height: BlockNumber,
+    mut groups: std::collections::BTreeMap<miden_protocol::Word, Vec<(url::Url, RecoveredBlock)>>,
+) -> anyhow::Result<()> {
+    let bytes = state.load_block(height).await?.context("missing retained block")?;
+    let local: SignedBlock = miden_node_persistence::decode(&bytes)?;
+    if load_valid_local_inputs(state, &local).await?.is_some() {
+        return Ok(());
+    }
+    for (url, candidate) in groups.remove(&local.header().commitment()).unwrap_or_default() {
+        if let Some(request) = candidate.proving_inputs {
+            match request.validate_against(&local) {
+                Ok(()) => {
+                    writer.save_proving_inputs(height, &request).await?;
+                    return Ok(());
+                },
+                Err(error) => warn!(
+                    error,
+                    "Invalid backup proving inputs",
+                    block.number = height,
+                    sync.block_source.endpoint = url.as_str()
+                ),
+            }
+        }
+    }
+    anyhow::bail!("unable to repair retained block {height}")
+}

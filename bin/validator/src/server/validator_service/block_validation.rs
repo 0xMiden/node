@@ -66,7 +66,11 @@ impl ValidatorService {
 
         let prev = if proposed_header.block_num() == latest.block_num() {
             if chain.pending.is_none() {
-                return Err(ValidatorError::CannotReplaceGenesis);
+                return Err(if latest.block_num().as_u32() == 0 {
+                    ValidatorError::CannotReplaceGenesis
+                } else {
+                    ValidatorError::CannotReplaceConfirmedBlock
+                });
             }
             &chain.tip
         } else {
@@ -125,6 +129,7 @@ impl ValidatorError {
             | Self::BlockNumberMismatch { .. }
             | Self::UnregisteredValidatorQuorum
             | Self::ValidatorKeySetChange
+            | Self::CannotReplaceConfirmedBlock
             | Self::CannotReplaceGenesis
             | Self::PrevBlockCommitmentMismatch
             | Self::ValidatorKeyNotInSet { .. } => tonic::Status::invalid_argument(message),

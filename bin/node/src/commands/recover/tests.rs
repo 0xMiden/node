@@ -17,7 +17,18 @@ use miden_protocol::transaction::{OrderedTransactionHeaders, PartialBlockchain};
 use tokio::sync::mpsc;
 use url::Url;
 
-use super::{ProtocolConfigStreamState, RecoveredBlock, coalesce_signatures, next_coalesced_block};
+use super::{ProtocolConfigStreamState, RecoveredBlock, coalesce_signatures};
+
+async fn next_coalesced_block(
+    streams: &mut [(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)],
+    parent: &BlockHeader,
+) -> anyhow::Result<RecoveredBlock> {
+    let mut entries = Vec::new();
+    for (url, stream) in streams {
+        entries.push((url.clone(), stream.recv().await.unwrap()?));
+    }
+    super::reconstruct(entries, parent)
+}
 
 fn signers(count: usize) -> Vec<SigningKey> {
     (0..count).map(|_| SigningKey::new()).collect()
@@ -514,12 +525,11 @@ async fn recovery_uses_one_validator_input_copy() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn recovery_rejects_a_bad_supplied_copy() {
+async fn recovery_discards_a_bad_copy_when_another_reconstructs_the_block() {
     // Recovery checks every supplied proving request, even after finding a valid one.
     let (parent, mut streams) = input_streams(true, true).await;
-    let error = next_coalesced_block(&mut streams, &parent).await.unwrap_err();
-    assert!(error.to_string().contains("validator-1.test"), "{error}");
-    assert!(error.to_string().contains("block 1"), "{error}");
+    let result = next_coalesced_block(&mut streams, &parent).await.unwrap();
+    result.proving_inputs.unwrap().validate_against(&result.block).unwrap();
 }
 
 fn proposal_pair(
@@ -721,3 +731,73 @@ fn recover_selects_optional_offline_prover() {
 
 mod failover;
 mod support;
+
+#[tokio::test]
+async fn fork_selection_releases_only_the_shared_prefix_and_breaks_ties() {
+    // The selector consumes preverified candidates. Distinct timestamps identify the siblings.
+    fn child(parent: &BlockHeader, chain: &PartialBlockchain, timestamp: u32) -> RecoveredBlock {
+        let inputs = miden_protocol::block::BlockInputs::new(
+            parent.clone(),
+            chain.clone(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+        );
+        let (header, body) =
+            miden_protocol::block::ProposedBlock::new_at(inputs.clone(), vec![], timestamp)
+                .unwrap()
+                .into_header_and_body()
+                .unwrap();
+        let signatures =
+            BlockSignatures::new(vec![SigningKey::new().sign(header.commitment())]).unwrap();
+        RecoveredBlock {
+            proving_inputs: Some(BlockProofRequest {
+                block_inputs: inputs,
+                block_header: header.clone(),
+                tx_batches: miden_protocol::batch::OrderedBatches::new(vec![]),
+            }),
+            block: SignedBlock::new_unchecked(header, body, signatures),
+            protocol_config: None,
+        }
+    }
+    let (genesis, ..) = empty_recovery_fixture();
+    let genesis = genesis.into_block().unwrap();
+    let parent = genesis.inner().header();
+    let mut chain = PartialBlockchain::default();
+    let mut branches = super::branches::Branches::default();
+    let common = child(parent, &chain, 2);
+    chain.add_block(parent, false);
+    let left = child(common.block.header(), &chain, 3);
+    let right = child(common.block.header(), &chain, 4);
+    let winner = right.block.header().commitment();
+    chain.add_block(common.block.header(), false);
+    let first = child(right.block.header(), &chain, 5);
+    let second = child(right.block.header(), &chain, 6);
+    let tie = first.block.header().commitment().min(second.block.header().commitment());
+    assert_eq!(branches.advance(vec![common]).await.unwrap().len(), 1);
+    assert!(branches.advance(vec![left, right]).await.unwrap().is_empty());
+    let mut selected = branches.advance(vec![second, first]).await.unwrap();
+    assert_eq!(selected.len(), 1);
+    let restored = selected.pop().unwrap().load().await.unwrap();
+    assert_eq!(restored.block.header().commitment(), winner);
+    assert!(restored.proving_inputs.is_some());
+    let mut selected = branches.finish().await.unwrap();
+    assert_eq!(selected.len(), 1);
+    assert_eq!(selected.pop().unwrap().load().await.unwrap().block.header().commitment(), tie);
+}
+
+#[test]
+fn malformed_optional_request_preserves_the_backup_signature() {
+    let (_, _, block) = empty_recovery_fixture();
+    let event = super::BlockSubscriptionResponse {
+        block: Some(block.clone().into()),
+        proving_inputs: Some(
+            miden_node_proto::generated::block_proving::BlockProofRequest::default(),
+        ),
+        ..Default::default()
+    };
+    let recovered =
+        super::decode_entry(event, Some(&Url::parse("http://validator.test").unwrap())).unwrap();
+    assert_eq!(recovered.block, block);
+    assert!(recovered.proving_inputs.is_none());
+}

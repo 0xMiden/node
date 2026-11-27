@@ -40,7 +40,15 @@ fn block_pair(
 /// Builds a single-transaction batch whose account state stays unchanged, so the block needs no
 /// account witness.
 fn transaction_batch(parent: &BlockHeader, seed: u32) -> (ProvenBatch, TransactionId) {
-    let account = ACCOUNT_ID_PRIVATE_SENDER.try_into().unwrap();
+    transaction_batch_for(parent, seed, ACCOUNT_ID_PRIVATE_SENDER)
+}
+
+fn transaction_batch_for(
+    parent: &BlockHeader,
+    seed: u32,
+    account: u128,
+) -> (ProvenBatch, TransactionId) {
+    let account = account.try_into().unwrap();
     let state = Word::from([seed, 0, 0, 0]);
     let header =
         TransactionHeader::new(account, state, state, InputNotes::default(), vec![]).unwrap();
@@ -398,4 +406,75 @@ async fn ordinary_database_open_preserves_inputs_until_retention_is_selected() {
     drop(db);
     let db = retained_db(path, 10_000).await;
     assert_inputs(&db, &[(1, false)]).await;
+}
+
+#[tokio::test]
+async fn confirmed_backup_survives_restart_and_rejects_a_sibling() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("validator.sqlite3");
+    let config = test_protocol_config();
+    let key = SigningKey::new();
+    let genesis = miden_node_store::GenesisState::new(
+        vec![],
+        test_fee_params(),
+        0,
+        ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
+        config.clone(),
+    )
+    .into_block()
+    .unwrap()
+    .inner()
+    .clone();
+    bootstrap(path.clone(), NonZeroUsize::new(2).unwrap(), genesis.clone(), config)
+        .await
+        .unwrap();
+    let db = load(path.clone()).await.unwrap();
+    let (local, _) = append_empty_block(&db).await;
+    let sign = |block: SignedBlock| {
+        let (header, body, _) = block.into_parts();
+        let sig = key.sign(header.commitment());
+        SignedBlock::new_unchecked(
+            header,
+            body,
+            miden_protocol::block::BlockSignatures::new(vec![sig]).unwrap(),
+        )
+    };
+    let (unknown, _) = transaction_batch(genesis.header(), 2);
+    let (known, _) = transaction_batch_for(
+        genesis.header(),
+        3,
+        miden_protocol::testing::account_id::ACCOUNT_ID_PRIVATE_FUNGIBLE_FAUCET,
+    );
+    let (sibling, _) =
+        block_pair(genesis.header(), PartialBlockchain::default(), 5, vec![unknown, known]);
+    let known_id = sibling.body().transactions().as_slice()[1].id();
+    db.insert_validated_private_transaction(private_record(known_id, 3))
+        .await
+        .unwrap();
+    let sibling = sign(sibling);
+    let wrong_config = protocol_config_history::config(9);
+    assert!(db.store_confirmed_block(sibling.clone(), Some(wrong_config)).await.is_err());
+    let backup = db.load_block_backup(1.into()).await.unwrap().unwrap();
+    assert_eq!(backup.block, local);
+    assert!(backup.proving_inputs.is_some());
+    db.store_confirmed_block(sibling.clone(), None).await.unwrap();
+    drop(db);
+    let db = load(path).await.unwrap();
+    let backup = db.load_block_backup(1.into()).await.unwrap().unwrap();
+    let page = db
+        .list_validated_transactions(ListTransactionsParams {
+            start: None,
+            block_to: None,
+            limit: 10,
+            include_records: false,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.transactions.len(), 1);
+    assert_eq!(page.transactions[0].transaction_id, known_id);
+    assert_eq!(page.transactions[0].block_tx_index, 1);
+    assert_eq!(backup.block, sibling);
+    assert!(backup.proving_inputs.is_none());
+    assert!(db.store_confirmed_block(sign(local), None).await.is_err());
+    assert_eq!(db.load_chain_tip().await.unwrap().unwrap(), *sibling.header());
 }

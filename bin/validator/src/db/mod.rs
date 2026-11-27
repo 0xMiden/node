@@ -244,6 +244,15 @@ impl std::ops::Deref for ValidatorDbWriter {
 }
 
 impl ValidatorDbWriter {
+    /// Persists a block selected by the configured full node and verified against local history.
+    pub async fn store_confirmed_block(
+        &self,
+        block: SignedBlock,
+        config: Option<ProtocolConfig>,
+    ) -> anyhow::Result<()> {
+        self.write("confirm_block", move |tx| tx.confirm_block(&block, config)).await
+    }
+
     /// Commits the caller's writes together when the closure succeeds.
     pub(crate) async fn write<R, E>(
         &self,

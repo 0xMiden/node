@@ -57,6 +57,8 @@ pub enum ValidatorError {
     ValidatorKeySetChange,
     #[error("genesis block cannot be replaced")]
     CannotReplaceGenesis,
+    #[error("cannot replace a block confirmed by the recovery source")]
+    CannotReplaceConfirmedBlock,
     #[error(
         "validator signing key {actual:?} is not a member of the validator set authorized to sign this block"
     )]

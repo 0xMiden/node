@@ -113,6 +113,7 @@ pub async fn load_store(
 pub enum Fault {
     InterruptAfterFirst(Arc<Notify>),
     Hold(Arc<Notify>),
+    EndAt(u32),
     Refuse(Arc<Notify>),
     Synthetic(Box<wire::BlockSubscriptionResponse>),
 }
@@ -217,12 +218,20 @@ impl api::BlockSubscription for BackupProxy {
             release.notified().await;
             return Err(tonic::Status::unavailable("injected setup refusal"));
         }
+        if let Fault::EndAt(last) = self.fault {
+            let count = (last + 1).saturating_sub(input.block_from);
+            let stream = self.upstream.clone().block_subscription(input).await?.into_inner();
+            return Ok(ObservedStream {
+                inner: Box::pin(tokio_stream::StreamExt::take(stream, count as usize)),
+                dropped: self.dropped.clone(),
+            });
+        }
         let upstream = self.upstream.clone().block_subscription(input).await?.into_inner();
         self.opened.notify_one();
         let (release, interrupt) = match &self.fault {
             Fault::Hold(release) => (release.clone(), false),
             Fault::InterruptAfterFirst(release) => (release.clone(), true),
-            Fault::Refuse(_) | Fault::Synthetic(_) => unreachable!(),
+            Fault::Refuse(_) | Fault::Synthetic(_) | Fault::EndAt(_) => unreachable!(),
         };
         let inner = Box::pin(GatedStream {
             upstream,

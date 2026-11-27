@@ -468,8 +468,8 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
                 })
                 .await?;
                 trigger?;
-                ensure!(result.is_err());
-                ensure!(state.committed_tip() == BlockNumber::from(1u32));
+                result?;
+                ensure!(state.committed_tip() == BlockNumber::from(2u32));
                 inputs::load_valid_local_inputs(&state, &blocks[0])
                     .await?
                     .context("lost recovered prefix")?;
@@ -511,6 +511,34 @@ async fn interrupted_recovery_preserves_prefix_and_releases_streams() -> anyhow:
         writer.stop(task).await;
         tested?;
         drop(state);
+
+        // A permanently truncated backup can establish the first block and report partial success.
+        let partial_dir = tempfile::tempdir()?;
+        State::bootstrap(
+            miden_node_store::genesis::GenesisBlock::new(
+                genesis.inner().clone(),
+                genesis.protocol_config().clone(),
+            )?,
+            partial_dir.path(),
+        )
+        .await?;
+        let (partial, mut partial_writer, proofs, task) = load_store(partial_dir.path()).await?;
+        let truncated = start_proxy(validator.client(), Fault::EndAt(1)).await?;
+        let result = recover_from_validators(
+            &partial,
+            &mut partial_writer,
+            vec![(truncated.url.clone(), truncated.client())],
+            CancellationToken::new(),
+        )
+        .await;
+        drop(proofs);
+        partial_writer.stop(task).await;
+        truncated.stop().await?;
+        result?;
+        ensure!(partial.committed_tip() == BlockNumber::from(1u32));
+        inputs::load_valid_local_inputs(&partial, &blocks[0])
+            .await?
+            .context("lost partial backup inputs")?;
 
         for refuse_setup in [false, true] {
             let target = tempfile::tempdir()?;
