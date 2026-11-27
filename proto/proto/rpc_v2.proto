@@ -85,6 +85,16 @@ service NodeService {
     // target. Publish only after OK completion and final vault verification against authenticated
     // account details at the completed target.
     rpc SyncAccountVault(SyncAccountVaultRequest) returns (stream SyncAccountVaultResponse) {}
+
+    // Streams the final target value for each changed public account storage-map key.
+    //
+    // Use this endpoint to update local storage maps after an authenticated account state change.
+    // Repeated changes to a key produce one absolute target value. A zero word marks deletion.
+    // Responses have nondecreasing last_updated_at, including across internal pages. Keep the
+    // authenticated target fixed per request; interrupted scans may resume at the incomplete block
+    // with the same or a newer authenticated target. Publish only after OK completion and final
+    // storage verification against authenticated account details at the completed target.
+    rpc SyncAccountStorageMaps(SyncAccountStorageMapsRequest) returns (stream SyncAccountStorageMapsResponse) {}
 }
 
 // Changes after an exclusive lower bound, materialized at an explicit target.
@@ -128,6 +138,29 @@ message SyncAccountVaultResponse {
 
     // Block number at which the above asset was updated in the account vault.
     fixed32 last_updated_at = 3;
+}
+
+// Storage-map changes at a target authenticated with SyncChainMmr.
+//
+// Clients may stage completed block prefixes and replay an interrupted block at the same or a
+// newer target on that chain. Publish only after completion and final commitment verification.
+message SyncAccountStorageMapsRequest {
+    // Use the synchronized baseline or completed scan checkpoint as the exclusive lower bound.
+    // After interruption in block B, use B - 1 to replay B; omit the lower bound for genesis.
+    // Keep the target fixed per request and within retained history; the lower bound may be older.
+    StateDeltaRange range = 1;
+    account.AccountId account_id = 2;
+}
+
+// One absolute target map value, ordered by nondecreasing last_updated_at. Zero marks deletion.
+//
+// The first item from a later block completes the preceding block's scan; only OK termination
+// completes the final block and empty suffix. v1 GetAccount at the target conveys removed slots.
+message SyncAccountStorageMapsResponse {
+    string slot_name = 1;
+    primitives.Word key = 2;
+    primitives.Word value = 3;
+    fixed32 last_updated_at = 4;
 }
 
 message StatusRequest {}

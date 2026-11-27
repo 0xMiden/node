@@ -119,6 +119,7 @@ use crate::{AccountAdmission, PreAuthSubmission, Rpc, RpcMode, ValidatorClients}
 mod allowlist;
 mod error_details;
 mod status;
+mod sync_resumption;
 mod transaction_logs;
 mod vault;
 
@@ -3390,6 +3391,114 @@ async fn v2_sync_account_vault_accepts_many_concurrent_streams() {
         }
         actual.sort_by_key(Asset::id);
         assert_eq!(actual, expected);
+    }
+}
+
+/// Storage-map streaming must preserve complete key sets and validate empty-delta targets.
+#[tokio::test]
+async fn storage_map_stream_returns_every_key_and_handles_empty_ranges() {
+    let (mut client, _, store, _guard) = start_rpc_v2().await;
+    let account_id = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let db_path = store.data_directory_path().join("miden-store.sqlite3");
+    miden_node_store::test_support::seed_account_vault(
+        &db_path,
+        account_id,
+        BlockNumber::GENESIS,
+        &[],
+    )
+    .await;
+    let values: Vec<_> = (0_u32..300)
+        .map(|n| {
+            (
+                miden_protocol::account::StorageSlotName::mock(1),
+                miden_protocol::account::StorageMapKey::new(Word::from([n, 0, 0, 0])),
+                Word::from([n + 1, 0, 0, 0]),
+            )
+        })
+        .collect();
+    miden_node_store::test_support::seed_storage_map(
+        &db_path,
+        account_id,
+        BlockNumber::GENESIS,
+        &values,
+    )
+    .await;
+    for (from, expected_count) in [(None, 300), (Some(0), 0)] {
+        let mut stream = client
+            .sync_account_storage_maps(v2::SyncAccountStorageMapsRequest {
+                range: Some(v2::StateDeltaRange {
+                    from_block_exclusive: from,
+                    to_block_inclusive: Some(0),
+                }),
+                account_id: Some(account_id.into()),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let mut actual = std::collections::BTreeMap::new();
+        while let Some(item) = stream.message().await.unwrap() {
+            assert_eq!(item.last_updated_at, 0);
+            assert_eq!(item.slot_name, values[0].0.to_string());
+            let key: Word = item.key.unwrap().decode_fields().unwrap();
+            let value: Word = item.value.unwrap().decode_fields().unwrap();
+            assert!(actual.insert(key, value).is_none());
+        }
+        assert_eq!(actual.len(), expected_count);
+        if from.is_none() {
+            for (_, key, value) in &values {
+                assert_eq!(actual.get(&key.as_word()), Some(value));
+            }
+        }
+    }
+}
+
+/// Missing targets and private-account requests must fail before map data is returned.
+#[tokio::test]
+async fn storage_map_stream_validates_target_presence_and_account_visibility() {
+    let (mut client, _, _store, _guard) = start_rpc_v2().await;
+    let public = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    let private = AccountId::dummy(
+        [1; 15],
+        AccountIdVersion::Version1,
+        AccountType::Private,
+        AssetCallbackFlag::Disabled,
+    );
+    for (account_id, range, detail) in [
+        (public, None, 1),
+        (
+            public,
+            Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: None,
+            }),
+            2,
+        ),
+        (
+            public,
+            Some(v2::StateDeltaRange {
+                from_block_exclusive: Some(1),
+                to_block_inclusive: Some(1),
+            }),
+            3,
+        ),
+        (
+            private,
+            Some(v2::StateDeltaRange {
+                from_block_exclusive: None,
+                to_block_inclusive: Some(0),
+            }),
+            6,
+        ),
+    ] {
+        let status = client
+            .sync_account_storage_maps(v2::SyncAccountStorageMapsRequest {
+                range,
+                account_id: Some(account_id.into()),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(status.details(), &[detail]);
     }
 }
 

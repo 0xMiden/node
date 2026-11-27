@@ -1,3 +1,5 @@
+mod sync_resumption;
+
 use std::collections::{BTreeSet, HashSet};
 use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
@@ -207,6 +209,24 @@ fn select_account_vault_updates_v2(
             tx,
             account_id,
             crate::ScopedBlockRange::new_unchecked(block_range),
+            cursor.as_ref(),
+            page_size,
+        )
+    })
+}
+
+fn select_account_storage_map_updates_v2(
+    db: &TestDb,
+    account: AccountId,
+    range: RangeInclusive<BlockNumber>,
+    cursor: Option<queries::StorageMapCursor>,
+    page_size: NonZeroUsize,
+) -> Result<queries::StorageMapUpdatesPage> {
+    db.read(move |tx| {
+        queries::account_storage_map_updates_page(
+            tx,
+            account,
+            crate::ScopedBlockRange::new_unchecked(range),
             cursor.as_ref(),
             page_size,
         )
@@ -4980,6 +5000,110 @@ fn account_state_forest_preserves_mixed_slots_independently() {
     assert!(map_a_root_at_1.is_some(), "Map A block 1 should be pruned");
 }
 
+/// Repeated map changes must collapse to target values without losing keys at same-block page
+/// boundaries.
+#[test]
+fn storage_map_stream_squashes_target_values_and_continues_within_blocks() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    for n in 1..=6 {
+        create_block(db, n.into());
+        upsert_mock_account(db, account, 0, n.into()).unwrap();
+    }
+    let slot = StorageSlotName::mock(1);
+    let other_slot = StorageSlotName::mock(2);
+    let key = StorageMapKey::new(num_to_word(0));
+    let deleted = StorageMapKey::new(num_to_word(2));
+    let unchanged = StorageMapKey::new(num_to_word(3));
+    for (block, name, map_key, value) in [
+        (1, slot.clone(), key, 10),
+        (1, slot.clone(), unchanged, 30),
+        (2, slot.clone(), deleted, 20),
+        (3, slot.clone(), key, 40),
+        (3, other_slot.clone(), key, 50),
+        (5, slot.clone(), deleted, 0),
+        (6, slot.clone(), key, 60),
+    ] {
+        insert_storage_map_value(db, account, block.into(), name, map_key, num_to_word(value))
+            .unwrap();
+    }
+    for size in [1, 2, 3, 20] {
+        let page_size = NonZeroUsize::new(size).unwrap();
+        let mut cursor: Option<queries::StorageMapCursor> = None;
+        let mut values = vec![];
+        loop {
+            let start = cursor.clone();
+            let page = select_account_storage_map_updates_v2(
+                db,
+                account,
+                2.into()..=5.into(),
+                cursor,
+                page_size,
+            )
+            .unwrap();
+            if let Some(start) = start {
+                assert_eq!(
+                    (&page.values[0].block_num, &page.values[0].slot_name, &page.values[0].key),
+                    (&start.block_num, &start.slot_name, &start.key)
+                );
+            }
+            values.extend(page.values);
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        assert_eq!(values.len(), 3);
+        assert!(
+            values
+                .iter()
+                .any(|v| v.slot_name == slot && v.key == key && v.value == num_to_word(40))
+        );
+        assert!(
+            values
+                .iter()
+                .any(|v| v.slot_name == other_slot && v.key == key && v.value == num_to_word(50))
+        );
+        assert!(values.iter().any(|v| v.key == deleted && v.value == Word::empty()));
+        assert!(values.iter().all(|v| v.key != unchanged));
+    }
+}
+
+/// Storage-map continuation must recheck target retention after history pruning.
+#[test]
+fn storage_map_stream_rechecks_retention_between_pages() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET).unwrap();
+    create_block(db, 5.into());
+    upsert_mock_account(db, account, 0, 5.into()).unwrap();
+    for key in 1..=2 {
+        insert_storage_map_value(
+            db,
+            account,
+            5.into(),
+            StorageSlotName::mock(1),
+            StorageMapKey::new(num_to_word(key)),
+            num_to_word(key),
+        )
+        .unwrap();
+    }
+    let page = |cursor| {
+        select_account_storage_map_updates_v2(
+            db,
+            account,
+            0.into()..=5.into(),
+            cursor,
+            NonZeroUsize::MIN,
+        )
+    };
+    let cursor = page(None).unwrap().next_cursor.expect("must continue within block five");
+    create_block(db, (5 + HISTORICAL_BLOCK_RETENTION).into());
+    assert!(page(Some(cursor.clone())).is_ok());
+    create_block(db, (6 + HISTORICAL_BLOCK_RETENTION).into());
+    prune_history(db, (6 + HISTORICAL_BLOCK_RETENTION).into()).unwrap();
+    assert_matches!(page(Some(cursor)), Err(DatabaseError::BlockPruned { .. }));
+}
+
 /// Vault pages include the first key at the range start and split a block without omissions.
 #[test]
 fn vault_pages_include_range_start_and_continue_within_one_block() {
@@ -5064,4 +5188,12 @@ fn streaming_history_queries_validate_retention_before_empty_selection() {
     let vault =
         select_account_vault_updates_v2(&db, account, 0.into()..=1.into(), None, NonZeroUsize::MIN);
     assert_matches!(vault, Err(DatabaseError::BlockPruned { .. }));
+    let maps = select_account_storage_map_updates_v2(
+        &db,
+        account,
+        0.into()..=1.into(),
+        None,
+        NonZeroUsize::MIN,
+    );
+    assert_matches!(maps, Err(DatabaseError::BlockPruned { .. }));
 }
