@@ -38,6 +38,7 @@ use miden_protocol::block::{
     ProposedBlock,
     SignedBlock,
     ValidatorConfig,
+    ValidatorSignature,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::dsa::eddsa_25519_sha512::KeyExchangeKey;
@@ -1236,7 +1237,11 @@ async fn protocol_config_transition_is_streamed_and_used_for_next_signature() {
     let transitioned_block = SignedBlock::new_unchecked(
         transitioned_header.clone(),
         body_2,
-        BlockSignatures::new(vec![signature]).unwrap(),
+        BlockSignatures::new(vec![ValidatorSignature::new(
+            tv.server.signer.public_key(),
+            signature,
+        )])
+        .unwrap(),
     );
     tv.server
         .db

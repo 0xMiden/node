@@ -1000,7 +1000,7 @@ mod tests {
         let target = records.remove(2);
         store_private_record(&writer, target.clone()).await;
         let target_file = directory.path().join("target-record.bin");
-        let encoded_transaction_id = hex::encode(transaction_id.to_bytes());
+        let encoded_transaction_id = hex::encode(transaction_id.as_word().to_bytes());
         let encoded_validator_id = format!("0x{}", hex::encode(target.record_id().validator_id()));
         export_record_file(
             directory.path(),

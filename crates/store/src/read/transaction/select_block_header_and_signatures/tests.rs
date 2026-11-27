@@ -9,8 +9,7 @@ use crate::db::{TestDb, queries};
 fn returns_the_requested_header_and_its_signatures() {
     let db = TestDb::new();
     let header = BlockHeader::mock(0, None, None, &[]);
-    let signatures =
-        BlockSignatures::new(vec![SigningKey::new().sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(&[SigningKey::new()], header.commitment());
     let expected = (header.clone(), signatures.clone());
     db.write(move |tx| queries::insert_block_header(tx, &header, &signatures))
         .unwrap();

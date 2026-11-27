@@ -2,6 +2,7 @@
 
 use axum::Json;
 use axum::extract::{Path, State};
+use miden_protocol::Word;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, Serializable};
 use serde::{Deserialize, Serialize};
@@ -23,7 +24,7 @@ pub(super) struct ValidatedPrivateTransaction {
 impl From<StoredPrivateRecord> for ValidatedPrivateTransaction {
     fn from(record: StoredPrivateRecord) -> Self {
         Self {
-            transaction_id: hex::encode(record.context().transaction_id().to_bytes()),
+            transaction_id: hex::encode(record.context().transaction_id().as_word().to_bytes()),
             final_ciphertext: hex::encode(record.encrypted_record()),
             cipher_nonce: hex::encode(record.nonce()),
             encrypted_record_key: hex::encode(record.encrypted_record_key()),
@@ -51,5 +52,7 @@ pub(super) fn parse_transaction_id(value: &str) -> Result<TransactionId, ApiErro
     // `read_from_bytes` does not reject bytes after the id, so the length is checked first.
     let bytes: [u8; 32] =
         decode_hex("transaction_id", value)?.try_into().map_err(|_bytes| invalid())?;
-    TransactionId::read_from_bytes(&bytes).map_err(|_error| invalid())
+    Word::read_from_bytes(&bytes)
+        .map(TransactionId::from_raw)
+        .map_err(|_error| invalid())
 }

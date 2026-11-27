@@ -122,11 +122,11 @@ impl BlockProducerValidatorClient {
 
     /// Signs the proposed block via every validator concurrently, returning each validator's
     /// signature, the block commitment it reports having signed (for cross-checking against the
-    /// locally built block), and its public key (so the caller can place the signature at the
-    /// correct position in the block's signature set).
+    /// locally built block), and its public key (identifying the signer in the block's signature
+    /// set).
     ///
-    /// Fails if any validator fails to respond, since every validator in the parent's set must
-    /// sign for the block to reach quorum.
+    /// Fails if any validator fails to respond, since the block producer requires a signature from
+    /// every validator in the parent's set.
     #[instrument(name = "validate_block", err)]
     pub async fn sign_block(
         &self,

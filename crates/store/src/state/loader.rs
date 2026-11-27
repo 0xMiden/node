@@ -700,10 +700,10 @@ mod tests {
         db.writer()
             .write::<_, DatabaseError, _>("insert corrupted block headers", move |tx| {
                 for header in &headers {
-                    let signatures = miden_protocol::block::BlockSignatures::new(vec![
-                        signing_key.sign(header.commitment()),
-                    ])
-                    .expect("one signature is within bounds");
+                    let signatures = miden_protocol::block::BlockSignatures::sign(
+                        std::slice::from_ref(&signing_key),
+                        header.commitment(),
+                    );
                     crate::db::queries::insert_block_header(tx, header, &signatures)?;
                 }
 

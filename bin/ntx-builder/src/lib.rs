@@ -109,8 +109,7 @@ mod bootstrap_tests {
     #[test]
     fn genesis_block_rejects_signed_block() {
         let (header, body, _) = crate::test_utils::mock_genesis_block().into_parts();
-        let signature = SigningKey::new().sign(header.commitment());
-        let signatures = BlockSignatures::new(vec![signature]).unwrap();
+        let signatures = BlockSignatures::sign(&[SigningKey::new()], header.commitment());
         let block = SignedBlock::new_unchecked(header, body, signatures);
 
         let err = GenesisBlock::new(block, test_protocol_config())

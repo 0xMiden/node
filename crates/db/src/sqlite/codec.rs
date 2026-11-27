@@ -14,10 +14,11 @@
 
 use std::rc::Rc;
 
-use miden_protocol::Felt;
 use miden_protocol::account::StorageSlotName;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::NoteTag;
+use miden_protocol::transaction::TransactionId;
+use miden_protocol::{Felt, Word};
 use rusqlite::ToSql;
 use rusqlite::types::{ToSqlOutput, Value, ValueRef};
 
@@ -370,11 +371,26 @@ macro_rules! impl_protobuf_codec {
 impl_raw_blob_codec!(
     miden_protocol::account::AccountId,
     miden_protocol::account::StorageMapKey,
-    miden_protocol::transaction::TransactionId,
     miden_protocol::note::NoteId,
     miden_protocol::note::Nullifier,
     miden_protocol::Word,
 );
+
+/// Stores a [`TransactionId`] as its underlying word.
+///
+/// The ID has no byte serialization of its own, and the word encoding keeps the raw BLOB codec's
+/// fixed width and ordering.
+impl ToSqlValue for TransactionId {
+    fn to_sql_value(&self) -> DbValue {
+        self.as_word().to_sql_value()
+    }
+}
+
+impl FromSqlValue for TransactionId {
+    fn from_sql_value(value: DbValueRef<'_>) -> Result<Self, DatabaseError> {
+        Word::from_sql_value(value).map(TransactionId::from_raw)
+    }
+}
 
 impl_protobuf_codec!(
     miden_protocol::block::BlockHeader,
@@ -605,13 +621,18 @@ mod tests {
             .map(|id| id.try_into().unwrap())
             .collect(),
         );
-        check(
-            words
-                .iter()
-                .copied()
-                .map(miden_protocol::transaction::TransactionId::from_raw)
-                .collect(),
-        );
+        // Transaction IDs share the word encoding, so they also share its ordering.
+        for word in &words {
+            let id = TransactionId::from_raw(*word);
+            let DbValue::Single(Value::Blob(bytes)) = id.to_sql_value() else {
+                panic!("expected blob")
+            };
+            assert_eq!(bytes, word.to_bytes());
+            assert_eq!(
+                TransactionId::from_sql_value(DbValueRef::new(ValueRef::Blob(&bytes))).unwrap(),
+                id
+            );
+        }
         check(words.iter().copied().map(miden_protocol::note::NoteId::from_raw).collect());
         check(words.iter().copied().map(miden_protocol::note::Nullifier::from_raw).collect());
         check(

@@ -185,7 +185,7 @@ impl RpcService {
             }),
             mmr_delta: Some(mmr_delta.into()),
             block_header: Some(block_header.into()),
-            block_signatures: block_signatures.as_signatures().iter().map(Into::into).collect(),
+            block_signatures: block_signatures.as_slice().iter().map(Into::into).collect(),
         })
     }
 }

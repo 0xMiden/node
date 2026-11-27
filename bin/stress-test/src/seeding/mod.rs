@@ -49,6 +49,7 @@ use miden_protocol::block::{
     ProposedBlock,
     SignedBlock,
     ValidatorConfig,
+    ValidatorSignature,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey as EcdsaSecretKey;
 use miden_protocol::crypto::dsa::falcon512_eidos::{PublicKey, SecretKey};
@@ -648,7 +649,7 @@ async fn apply_block(
     ) + miden_node_proto::prost::Message::encoded_len(
         &proto::blockchain::BlockBody::from(&body),
     );
-    let signature = signer.sign(header.commitment());
+    let signature = ValidatorSignature::new(signer.public_key(), signer.sign(header.commitment()));
     let signatures = BlockSignatures::new(vec![signature]).unwrap();
     // SAFETY: The header, body, and signature are known to correspond to each other.
     let signed_block = SignedBlock::new_unchecked(header, body, signatures);

@@ -11,6 +11,7 @@ use miden_protocol::block::{
     FeeParameters,
     SignedBlock,
     ValidatorConfig,
+    ValidatorSignature,
 };
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
 use miden_protocol::crypto::merkle::smt::Smt;
@@ -19,7 +20,12 @@ use miden_protocol::transaction::{PartialBlockchain, PublicTransactionLogs};
 use tokio::sync::mpsc;
 use url::Url;
 
-use super::{ProtocolConfigStreamState, RecoveredBlock, coalesce_signatures, next_coalesced_block};
+use super::{
+    ProtocolConfigStreamState,
+    RecoveredBlock,
+    next_coalesced_block,
+    require_full_signature_set,
+};
 
 fn signers(count: usize) -> Vec<SigningKey> {
     (0..count).map(|_| SigningKey::new()).collect()
@@ -48,27 +54,14 @@ fn protocol_configs() -> (ProtocolConfig, ProtocolConfig) {
 }
 
 #[test]
-fn signatures_are_ordered_against_the_validator_set() {
-    let commitment = Word::from([1u32, 2, 3, 4]);
-    let signers = signers(3);
-    let keys = validator_config(&signers);
-
-    // Reversed validator order exercises signature ordering in the recovered block.
-    let shuffled = signers.iter().rev().map(|signer| signer.sign(commitment)).collect();
-
-    let coalesced = coalesce_signatures(shuffled, commitment, &keys).unwrap();
-    coalesced.verify_against(commitment, &keys).unwrap();
-}
-
-#[test]
 fn signature_count_mismatch_is_rejected() {
     let commitment = Word::from([1u32, 2, 3, 4]);
     let signers = signers(3);
     let keys = validator_config(&signers);
 
-    let missing_one = signers.iter().take(2).map(|signer| signer.sign(commitment)).collect();
+    let missing_one = signers.iter().take(2).map(|signer| sign(signer, commitment)).collect();
 
-    let err = coalesce_signatures(missing_one, commitment, &keys).unwrap_err();
+    let err = require_full_signature_set(missing_one, &keys).unwrap_err();
     assert!(err.to_string().contains("collected 2 signatures"), "{err}");
 }
 
@@ -81,30 +74,20 @@ fn duplicate_validator_signature_is_rejected() {
     // Two streams served by the same validator: its signature appears twice and the third
     // validator's signature is missing.
     let duplicated = vec![
-        signers[0].sign(commitment),
-        signers[0].sign(commitment),
-        signers[1].sign(commitment),
+        sign(&signers[0], commitment),
+        sign(&signers[0], commitment),
+        sign(&signers[1], commitment),
     ];
 
-    let err = coalesce_signatures(duplicated, commitment, &keys).unwrap_err();
-    assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
+    let err = require_full_signature_set(duplicated, &keys).unwrap_err();
+    assert!(
+        err.to_string().contains("failed to construct the coalesced signature set"),
+        "{err}"
+    );
 }
 
-#[test]
-fn foreign_signature_is_rejected() {
-    let commitment = Word::from([1u32, 2, 3, 4]);
-    let signers = signers(3);
-    let keys = validator_config(&signers);
-
-    // One signature comes from a key outside the validator set.
-    let with_foreign = vec![
-        signers[0].sign(commitment),
-        signers[1].sign(commitment),
-        SigningKey::new().sign(commitment),
-    ];
-
-    let err = coalesce_signatures(with_foreign, commitment, &keys).unwrap_err();
-    assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
+fn sign(signer: &SigningKey, commitment: Word) -> ValidatorSignature {
+    ValidatorSignature::new(signer.public_key(), signer.sign(commitment))
 }
 
 #[test]
@@ -186,11 +169,10 @@ async fn coalescer_rejects_protocol_config_disagreement() {
     );
     let mut streams = Vec::new();
     for (index, config) in [first_config, second_config].into_iter().enumerate() {
-        let signature = signers[index].sign(header.commitment());
         let block = SignedBlock::new_unchecked(
             header.clone(),
             body.clone(),
-            BlockSignatures::new(vec![signature]).unwrap(),
+            BlockSignatures::sign(std::slice::from_ref(&signers[index]), header.commitment()),
         );
         let (tx, rx) = mpsc::channel(1);
         tx.send(Ok(RecoveredBlock {
@@ -236,7 +218,7 @@ fn empty_recovery_fixture() -> (miden_node_store::GenesisState, BlockProofReques
             .unwrap()
             .into_header_and_body()
             .unwrap();
-    let signatures = BlockSignatures::new(vec![key.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(&key), header.commitment());
     let request = BlockProofRequest {
         tx_batches: miden_protocol::batch::OrderedBatches::new(vec![]),
         block_header: header.clone(),
@@ -482,7 +464,7 @@ async fn input_streams(
                 .unwrap()
                 .into_header_and_body()
                 .unwrap();
-        let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
+        let signatures = BlockSignatures::sign(std::slice::from_ref(&signer), header.commitment());
         let request = BlockProofRequest {
             tx_batches: miden_protocol::batch::OrderedBatches::new(vec![]),
             block_header: header.clone(),
@@ -547,7 +529,7 @@ fn proposal_pair(
     .with_next_protocol_config(next)
     .into_header_and_body()
     .unwrap();
-    let signatures = BlockSignatures::new(vec![key.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(key), header.commitment());
     let request = BlockProofRequest {
         tx_batches: miden_protocol::batch::OrderedBatches::new(vec![]),
         block_header: header.clone(),
@@ -656,7 +638,7 @@ async fn recovery_uses_active_configuration_after_legacy_activation() {
         None,
         base.timestamp(),
     );
-    let signatures = BlockSignatures::new(vec![key.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(&key), header.commitment());
     let activation = SignedBlock::new_unchecked(header, body, signatures);
     writer.apply_block(activation.clone(), Some(second.clone())).await.unwrap();
     let mut chain = miden_protocol::transaction::PartialBlockchain::default();

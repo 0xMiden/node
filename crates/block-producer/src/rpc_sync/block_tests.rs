@@ -229,7 +229,7 @@ fn child(
         )
         .into_header_and_body()
         .unwrap();
-    let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(signer), header.commitment());
     SignedBlock::new_unchecked(header, body, signatures)
 }
 
@@ -334,9 +334,8 @@ async fn synced_public_logs_survive_restart_and_reject_missing_payloads() {
         None,
         t.timestamp(),
     );
-    let signature = signer.sign(header.commitment());
-    let block =
-        SignedBlock::new_unchecked(header, body, BlockSignatures::new(vec![signature]).unwrap());
+    let signatures = BlockSignatures::sign(std::slice::from_ref(&signer), header.commitment());
+    let block = SignedBlock::new_unchecked(header, body, signatures);
     let (result, tip) = sync_blocks(&genesis, vec![block.clone()]).await;
     result.unwrap();
     assert_eq!(&tip, block.header());

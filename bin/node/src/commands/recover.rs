@@ -21,8 +21,8 @@ use miden_protocol::block::{
     BlockSignatures,
     SignedBlock,
     ValidatorConfig,
+    ValidatorSignature,
 };
-use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -411,9 +411,7 @@ async fn coalesce_blocks(
 /// signatures into a fully signed block, validated against the trusted `parent` header.
 ///
 /// Every validator serves the same header and body for a committed block, but each backup carries
-/// exactly one signature — the validator's own — and does not record which position in the
-/// validator set that signature occupies. The signatures are therefore matched to their positions
-/// by verifying them against the validator keys committed to by the parent header.
+/// exactly one signature, the validator's own.
 async fn next_coalesced_block(
     block_streams: &mut [(Url, mpsc::Receiver<anyhow::Result<RecoveredBlock>>)],
     parent: &BlockHeader,
@@ -440,7 +438,7 @@ async fn next_coalesced_block(
         );
 
         let (header, body, block_signatures) = block.into_parts();
-        let signature = match block_signatures.as_signatures() {
+        let signature = match block_signatures.as_slice() {
             [signature] => signature.clone(),
             other => anyhow::bail!(
                 "backup block of validator {url} carries {} signatures but exactly one (its own) was expected",
@@ -472,8 +470,7 @@ async fn next_coalesced_block(
     let (header, body, protocol_config) =
         first_parts.context("at least one validator stream is required")?;
 
-    let signatures =
-        coalesce_signatures(signatures, header.commitment(), parent.validator_config())?;
+    let signatures = require_full_signature_set(signatures, parent.validator_config())?;
     let block = SignedBlock::new_unchecked(header, body, signatures);
 
     // Fully validate the reconstructed block before it is persisted, including verifying the
@@ -493,14 +490,12 @@ async fn next_coalesced_block(
     Ok(RecoveredBlock { block, protocol_config, proving_inputs })
 }
 
-/// Orders the collected per-validator signatures positionally against the validator set: the
-/// signature in slot `i` must be produced by the validator key at index `i`.
+/// Combines the signatures collected from the validators' backups into the block's signature set.
 ///
-/// A backup does not record which position its signature occupies, so each signature is matched to
-/// its position by verifying it against the validator keys over the block commitment.
-fn coalesce_signatures(
-    mut signatures: Vec<Signature>,
-    block_commitment: Word,
+/// Every validator in the set must have signed. The signatures are authenticated later, when the
+/// coalesced block is validated against its parent.
+fn require_full_signature_set(
+    signatures: Vec<ValidatorSignature>,
     validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {
     anyhow::ensure!(
@@ -511,21 +506,7 @@ fn coalesce_signatures(
         validator_config.len(),
     );
 
-    let mut ordered = Vec::with_capacity(validator_config.len());
-    for (position, key) in validator_config.keys().iter().enumerate() {
-        let matched = signatures
-            .iter()
-            .position(|signature| signature.verify(block_commitment, key))
-            .with_context(|| {
-                format!(
-                    "no unmatched signature verifies against the validator key at position \
-                     {position}; the provided validator URLs must cover the full validator set"
-                )
-            })?;
-        ordered.push(signatures.swap_remove(matched));
-    }
-
-    BlockSignatures::new(ordered).context("failed to construct the coalesced signature set")
+    BlockSignatures::new(signatures).context("failed to construct the coalesced signature set")
 }
 
 mod inputs;

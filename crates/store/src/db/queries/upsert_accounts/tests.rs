@@ -266,7 +266,7 @@ fn insert_block_header(db: &TestDb, block_num: BlockNumber) {
         0,
     );
     let signatures =
-        BlockSignatures::new(vec![secret_key.sign(block_header.commitment())]).unwrap();
+        BlockSignatures::sign(std::slice::from_ref(&secret_key), block_header.commitment());
 
     db.write::<_, DatabaseError, _>(move |tx| {
         queries::insert_block_header(tx, &block_header, &signatures)

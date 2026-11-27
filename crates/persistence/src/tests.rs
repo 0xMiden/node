@@ -143,11 +143,12 @@ fn empty_collections_roundtrip() {
 
 #[test]
 fn signature_collection_enforces_domain_limit() {
-    use miden_protocol::block::{BlockSignatures, ValidatorConfig};
+    use miden_protocol::block::{BlockSignatures, ValidatorConfig, ValidatorSignature};
     use miden_protocol::crypto::dsa::ecdsa_k256_keccak::SigningKey;
     use miden_protocol::utils::serde::Deserializable;
     let signer = SigningKey::read_from_bytes(&[7; 32]).unwrap();
-    let signature = signer.sign(miden_protocol::Word::empty());
+    let signature =
+        ValidatorSignature::new(signer.public_key(), signer.sign(miden_protocol::Word::empty()));
     let message = crate::generated::BlockSignatures {
         signatures: vec![(&signature).into(); ValidatorConfig::MAX_VALIDATORS + 1],
     };
