@@ -285,7 +285,7 @@ mod tests {
             .unwrap()
             .into_header_and_body()
             .unwrap();
-        let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
+        let signatures = BlockSignatures::sign(std::slice::from_ref(signer), header.commitment());
         SignedBlock::new_unchecked(header, body, signatures)
     }
 

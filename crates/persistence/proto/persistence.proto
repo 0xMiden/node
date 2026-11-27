@@ -32,7 +32,7 @@ message AccountCode {
 message MastForest { bytes encoded = 1; }
 
 // Stores a block's signatures in the store database's block_headers.signature column.
-message BlockSignatures { repeated primitives.Signature signatures = 1; }
+message BlockSignatures { repeated blockchain.ValidatorSignature signatures = 1; }
 
 // Stores a note's assets in the store database's notes.assets column.
 message NoteAssets { repeated asset.Asset assets = 1; }

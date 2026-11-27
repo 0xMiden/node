@@ -419,8 +419,7 @@ fn mock_block(block_num: BlockNumber) -> (BlockHeader, BlockSignatures) {
         11,
     );
 
-    let dummy_signature =
-        BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
+    let dummy_signature = BlockSignatures::sign(&[SigningKey::new()], block_header.commitment());
 
     (block_header, dummy_signature)
 }
@@ -1040,8 +1039,7 @@ fn db_block_header() {
     );
     // test insertion
 
-    let dummy_signature =
-        BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
+    let dummy_signature = BlockSignatures::sign(&[SigningKey::new()], block_header.commitment());
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
 
     // test fetch unknown block header
@@ -1073,8 +1071,7 @@ fn db_block_header() {
         21,
     );
 
-    let dummy_signature =
-        BlockSignatures::new(vec![SigningKey::new().sign(block_header2.commitment())]).unwrap();
+    let dummy_signature = BlockSignatures::sign(&[SigningKey::new()], block_header2.commitment());
     insert_block_header(db, &block_header2, &dummy_signature).unwrap();
 
     let res = select_chain_tip(db).unwrap();
@@ -2758,19 +2755,6 @@ fn serialization_symmetry_core_types() {
     let restored = Nullifier::read_from_bytes(&bytes).unwrap();
     assert_eq!(nullifier, restored, "Nullifier serialization must be symmetric");
 
-    // TransactionId
-    let tx_id = TransactionId::new(
-        num_to_word(1),
-        num_to_word(2),
-        num_to_word(3),
-        num_to_word(4),
-        miden_protocol::transaction::TransactionLogs::default().commitment(),
-        CodePatch::default().commitment(),
-    );
-    let bytes = tx_id.to_bytes();
-    let restored = TransactionId::read_from_bytes(&bytes).unwrap();
-    assert_eq!(tx_id, restored, "TransactionId serialization must be symmetric");
-
     // NoteId
     let note_id = NoteId::from_raw(num_to_word(1));
     let bytes = note_id.to_bytes();
@@ -2832,22 +2816,6 @@ fn serialization_symmetry_sparse_merkle_path() {
 }
 
 #[test]
-fn serialization_symmetry_note_metadata() {
-    let sender = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
-    // Use a tag that roundtrips properly - NoteTag::LocalAny stores the full u32 including type
-    // bits
-    let tag = NoteTag::with_account_target(sender);
-    let metadata = NoteMetadata::new(
-        PartialNoteMetadata::new(sender, NoteType::Public).with_tag(tag),
-        &NoteAttachments::default(),
-    );
-
-    let bytes = metadata.to_bytes();
-    let restored = NoteMetadata::read_from_bytes(&bytes).unwrap();
-    assert_eq!(metadata, restored, "NoteMetadata serialization must be symmetric");
-}
-
-#[test]
 fn serialization_symmetry_nullifier_vec() {
     let nullifiers: Vec<Nullifier> = (0..5).map(num_to_nullifier).collect();
     let bytes = nullifiers.to_bytes();
@@ -2885,8 +2853,7 @@ fn db_roundtrip_block_header() {
     );
 
     // Insert
-    let dummy_signature =
-        BlockSignatures::new(vec![SigningKey::new().sign(block_header.commitment())]).unwrap();
+    let dummy_signature = BlockSignatures::sign(&[SigningKey::new()], block_header.commitment());
     insert_block_header(db, &block_header, &dummy_signature).unwrap();
 
     // Retrieve

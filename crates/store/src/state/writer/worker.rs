@@ -1120,7 +1120,7 @@ mod tests {
         let block = SignedBlock::new(
             block.header().clone(),
             block.body().clone(),
-            BlockSignatures::new(vec![signer.sign(block.header().commitment())]).unwrap(),
+            BlockSignatures::sign(std::slice::from_ref(&signer), block.header().commitment()),
         )
         .unwrap();
         writer.apply_block(block.clone(), None).await.unwrap();

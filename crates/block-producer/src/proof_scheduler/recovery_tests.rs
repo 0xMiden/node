@@ -33,7 +33,7 @@ fn next_block(
             .unwrap()
             .into_header_and_body()
             .unwrap();
-    let signatures = BlockSignatures::new(vec![key.sign(header.commitment())]).unwrap();
+    let signatures = BlockSignatures::sign(std::slice::from_ref(key), header.commitment());
     (
         BlockProofRequest {
             tx_batches: OrderedBatches::new(vec![]),

@@ -9,7 +9,7 @@ impl ProtobufValue for BlockSignatures {
     type Message = generated::BlockSignatures;
     fn to_proto(&self) -> Self::Message {
         Self::Message {
-            signatures: self.as_signatures().iter().map(Into::into).collect(),
+            signatures: self.as_slice().iter().map(Into::into).collect(),
         }
     }
     fn from_proto(message: Self::Message) -> Result<Self, PersistenceError> {

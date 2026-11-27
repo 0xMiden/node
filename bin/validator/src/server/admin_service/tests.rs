@@ -152,7 +152,7 @@ async fn listed_record_drives_threshold_recovery() {
     let [listed] = response.transactions.as_slice() else {
         panic!("expected one listed transaction");
     };
-    assert_eq!(listed.transaction_id, hex::encode(transaction_id.to_bytes()));
+    assert_eq!(listed.transaction_id, hex::encode(transaction_id.as_word().to_bytes()));
     assert_eq!((listed.block_num, listed.block_tx_index), (4, 0));
     assert_eq!(listed.key_epoch, hex::encode(record.context().key_epoch().as_bytes()));
     assert_eq!(listed.setup_context_id, hex::encode(record.setup_context_id()));
@@ -210,7 +210,7 @@ async fn list_returns_metadata_only_by_default() {
     let [listed] = response.transactions.as_slice() else {
         panic!("expected one listed transaction");
     };
-    assert_eq!(listed.transaction_id, hex::encode(transaction_id.to_bytes()));
+    assert_eq!(listed.transaction_id, hex::encode(transaction_id.as_word().to_bytes()));
     assert!(listed.record.is_none());
 }
 
@@ -231,11 +231,11 @@ async fn list_omits_uncommitted_transactions() {
 
     let Json(fetched) = get_validated_private_transaction(
         State(service),
-        Path(hex::encode(transaction_id.to_bytes())),
+        Path(hex::encode(transaction_id.as_word().to_bytes())),
     )
     .await
     .unwrap();
-    assert_eq!(fetched.transaction_id, hex::encode(transaction_id.to_bytes()));
+    assert_eq!(fetched.transaction_id, hex::encode(transaction_id.as_word().to_bytes()));
 }
 
 /// A paged sweep returns committed rows in committed order, honoring the row limit exactly, and
@@ -263,7 +263,7 @@ async fn list_pages_in_committed_order_and_filters_by_block_range() {
         (transaction_ids[1], 2, 0),
         (transaction_ids[2], 2, 1),
     ]
-    .map(|(id, block_num, index)| (hex::encode(id.to_bytes()), block_num, index));
+    .map(|(id, block_num, index)| (hex::encode(id.as_word().to_bytes()), block_num, index));
 
     // Sweep asking for a single row per page: each page returns exactly one row, and the next page
     // is the same request resumed one position past the row just reported.
@@ -320,8 +320,8 @@ async fn list_pages_in_committed_order_and_filters_by_block_range() {
             .map(|item| item.transaction_id.as_str())
             .collect::<Vec<_>>(),
         vec![
-            hex::encode(transaction_ids[1].to_bytes()),
-            hex::encode(transaction_ids[2].to_bytes()),
+            hex::encode(transaction_ids[1].as_word().to_bytes()),
+            hex::encode(transaction_ids[2].as_word().to_bytes()),
         ],
     );
 }
@@ -387,7 +387,7 @@ async fn list_serves_a_replaced_tip_block_from_its_first_position() {
             .iter()
             .map(|item| (item.transaction_id.as_str(), item.block_num, item.block_tx_index))
             .collect::<Vec<_>>(),
-        vec![(hex::encode(transaction_ids[2].to_bytes()).as_str(), 1, 0)],
+        vec![(hex::encode(transaction_ids[2].as_word().to_bytes()).as_str(), 1, 0)],
     );
 }
 
@@ -437,11 +437,11 @@ async fn get_transaction_returns_the_full_record() {
 
     let Json(fetched) = get_validated_private_transaction(
         State(service.clone()),
-        Path(hex::encode(transaction_id.to_bytes())),
+        Path(hex::encode(transaction_id.as_word().to_bytes())),
     )
     .await
     .unwrap();
-    assert_eq!(fetched.transaction_id, hex::encode(transaction_id.to_bytes()));
+    assert_eq!(fetched.transaction_id, hex::encode(transaction_id.as_word().to_bytes()));
     assert_eq!(fetched.final_ciphertext, hex::encode(record.encrypted_record()));
     assert_eq!(fetched.cipher_nonce, hex::encode(record.nonce()));
     assert_eq!(fetched.encrypted_record_key, hex::encode(record.encrypted_record_key()));
@@ -450,7 +450,7 @@ async fn get_transaction_returns_the_full_record() {
     let unknown_id = TransactionId::from_raw(Word::from([9u32, 9, 9, 9]));
     let error = get_validated_private_transaction(
         State(service.clone()),
-        Path(hex::encode(unknown_id.to_bytes())),
+        Path(hex::encode(unknown_id.as_word().to_bytes())),
     )
     .await
     .unwrap_err();
@@ -465,7 +465,7 @@ async fn get_transaction_returns_the_full_record() {
     // An id with bytes after the 32-byte transaction id does not name the stored transaction.
     let error = get_validated_private_transaction(
         State(service),
-        Path(format!("{}00", hex::encode(transaction_id.to_bytes()))),
+        Path(format!("{}00", hex::encode(transaction_id.as_word().to_bytes()))),
     )
     .await
     .unwrap_err();
@@ -753,13 +753,16 @@ async fn http_private_record_recovery() {
     }
     let response = router(owner, reader.clone())
         .oneshot(
-            Request::post(format!("/admin/v1/transactions/{}/decrypt", hex::encode(tx.to_bytes())))
-                .header("content-type", "application/json")
-                .body(Body::from(format!(
-                    r#"{{"decryption_shares":["{}","{}"]}}"#,
-                    shares[0], shares[1],
-                )))
-                .unwrap(),
+            Request::post(format!(
+                "/admin/v1/transactions/{}/decrypt",
+                hex::encode(tx.as_word().to_bytes())
+            ))
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                r#"{{"decryption_shares":["{}","{}"]}}"#,
+                shares[0], shares[1],
+            )))
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -832,7 +835,8 @@ async fn decrypt_rejects_invalid_share_sets() {
         ("invalid encoding", vec!["00".into(), shares[1].clone()]),
         ("wrong ciphertext", vec![other_share, shares[1].clone()]),
     ] {
-        let (status, body) = decrypt_http(app.clone(), &hex::encode(tx.to_bytes()), &shares).await;
+        let (status, body) =
+            decrypt_http(app.clone(), &hex::encode(tx.as_word().to_bytes()), &shares).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {body}");
         assert!(body.get("plaintext").is_none(), "{name}");
         assert!(body["error"].is_string(), "{name}");
@@ -845,7 +849,7 @@ async fn decrypt_rejects_invalid_share_sets() {
 async fn decrypt_validates_transaction_selection() {
     let (_dir, _writer, reader) = test_database().await;
     let app = router(operator_keys().remove(0), reader);
-    let tx = hex::encode(TransactionId::from_raw(Word::from([8u32, 7, 6, 5])).to_bytes());
+    let tx = hex::encode(TransactionId::from_raw(Word::from([8u32, 7, 6, 5])).as_word().to_bytes());
     for (id, expected) in [
         ("zz".to_owned(), StatusCode::BAD_REQUEST),
         (format!("{tx}00"), StatusCode::BAD_REQUEST),
@@ -908,7 +912,7 @@ async fn decrypt_classifies_record_failures(#[case] defect: &str, #[case] expect
     writer.insert_validated_private_transaction(record.clone()).await.unwrap();
     let (status, body) = decrypt_http(
         router(operator_keys().remove(2), reader.clone()),
-        &hex::encode(tx.to_bytes()),
+        &hex::encode(tx.as_word().to_bytes()),
         &shares,
     )
     .await;

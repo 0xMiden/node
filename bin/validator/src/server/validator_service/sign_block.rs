@@ -2,7 +2,7 @@ use miden_node_proto::domain::sign_block_request::BlockSigningInputs;
 use miden_node_proto::errors::{ConversionError, ConversionResultExt};
 use miden_node_proto::{DecodeExecution, DecodeMessage, generated as grpc};
 use miden_node_tracing::{Instrument, info_span, instrument};
-use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock};
+use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock, ValidatorSignature};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::{PublicKey, Signature};
 use miden_protocol::{MIN_PROOF_SECURITY_LEVEL, Word};
 use miden_tx_batch::BatchVerifier;
@@ -96,8 +96,11 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         let block_commitment = header.commitment();
 
         // The backup contains this validator's signature. The producer assembles the full set.
-        let own_signature = BlockSignatures::new(vec![signature.clone()])
-            .expect("a single signature is within the signature set bounds");
+        let own_signature = BlockSignatures::new(vec![ValidatorSignature::new(
+            self.signer.public_key(),
+            signature.clone(),
+        )])
+        .expect("a single signature is within the signature set bounds");
         let signed_block = SignedBlock::new_unchecked(header.clone(), body, own_signature);
 
         self.db

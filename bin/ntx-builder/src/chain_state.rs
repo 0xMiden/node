@@ -240,21 +240,17 @@ mod tests {
             .unwrap();
 
         for signatures in [
-            vec![],
-            vec![attacker.sign(header.commitment())],
-            vec![signer.sign(parent.commitment())],
+            BlockSignatures::new(vec![]).unwrap(),
+            BlockSignatures::sign(std::slice::from_ref(&attacker), header.commitment()),
+            BlockSignatures::sign(std::slice::from_ref(&signer), parent.commitment()),
         ] {
-            let invalid = SignedBlock::new_unchecked(
-                header.clone(),
-                body.clone(),
-                BlockSignatures::new(signatures).unwrap(),
-            );
+            let invalid = SignedBlock::new_unchecked(header.clone(), body.clone(), signatures);
             assert!(chain.next_chain_tip(&invalid, None, 4).is_err());
             assert_eq!(&chain.chain_tip_header, parent);
             assert_eq!(chain.current_mmr(), initial_mmr);
         }
 
-        let signatures = BlockSignatures::new(vec![signer.sign(header.commitment())]).unwrap();
+        let signatures = BlockSignatures::sign(std::slice::from_ref(&signer), header.commitment());
         let valid = SignedBlock::new_unchecked(header, body, signatures);
         let next = chain.next_chain_tip(&valid, None, 4).unwrap();
         assert_eq!(&chain.chain_tip_header, parent, "building a snapshot does not advance the tip");

@@ -7,6 +7,7 @@ use miden_node_persistence::generated::private_record_file::Record;
 use miden_node_persistence::generated::{PrivateRecordFile, PrivateRecordFileV1};
 use miden_node_persistence::miden_protobuf::{ConversionError, DecodeMessageExt};
 use miden_node_persistence::{PersistenceError, ProtobufValue};
+use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::{Deserializable, DeserializationError, Serializable};
@@ -170,7 +171,7 @@ impl PrivateRecordContext {
 
     /// Returns the canonical context used by the record cipher and Golden.
     pub fn to_bytes(self) -> Vec<u8> {
-        let transaction_id = self.transaction_id.to_bytes();
+        let transaction_id = self.transaction_id.as_word().to_bytes();
         let mut context = Vec::with_capacity(CONTEXT_DOMAIN_V1.len() + 3 * 32 + size_of::<u32>());
         context.extend_from_slice(CONTEXT_DOMAIN_V1);
         context.extend_from_slice(self.chain_id.as_bytes());
@@ -196,8 +197,9 @@ impl PrivateRecordContext {
         {
             return Err(malformed());
         }
-        let transaction_id =
-            TransactionId::read_from_bytes(transaction_id).map_err(|_error| malformed())?;
+        let transaction_id = Word::read_from_bytes(transaction_id)
+            .map(TransactionId::from_raw)
+            .map_err(|_error| malformed())?;
         Ok(Self::new(
             PrivateRecordChainId::new(chain_id.try_into().expect("split yields 32 bytes")),
             StorageKeyEpoch::new(key_epoch.try_into().expect("split yields 32 bytes")),
@@ -737,7 +739,7 @@ mod tests {
     #[test]
     fn context_has_one_fixed_canonical_encoding() {
         let bytes = context().to_bytes();
-        let transaction_id = transaction_id().to_bytes();
+        let transaction_id = transaction_id().as_word().to_bytes();
 
         assert_eq!(&bytes[..CONTEXT_DOMAIN_V1.len()], CONTEXT_DOMAIN_V1);
         assert_eq!(

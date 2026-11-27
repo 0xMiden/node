@@ -762,9 +762,9 @@ message SyncChainMmrResponse {
     // Block header for the sync target.
     blockchain.BlockHeader block_header = 3;
 
-    // Validator signatures for the sync target, ordered positionally with respect to the
-    // validator set committed to by the parent block's header.
-    repeated primitives.Signature block_signatures = 4;
+    // Validator signatures for the sync target, each with the public key of the validator that
+    // produced it.
+    repeated blockchain.ValidatorSignature block_signatures = 4;
 
     // The target header's active configuration. Included when the client starts at genesis or
     // the starting and target headers have different configuration commitments.

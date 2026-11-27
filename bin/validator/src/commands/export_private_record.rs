@@ -1,4 +1,5 @@
 use anyhow::Context;
+use miden_protocol::Word;
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::PublicKey;
 use miden_protocol::transaction::TransactionId;
 use miden_protocol::utils::serde::Deserializable;
@@ -50,5 +51,7 @@ fn parse_transaction_id(encoded: &str) -> anyhow::Result<TransactionId> {
     let bytes = hex::decode(encoded).context("transaction id is not valid hex")?;
     let actual = bytes.len();
     anyhow::ensure!(actual == 32, "transaction id has {actual} bytes, expected 32");
-    TransactionId::read_from_bytes(&bytes).context("transaction id is not canonical")
+    Word::read_from_bytes(&bytes)
+        .map(TransactionId::from_raw)
+        .context("transaction id is not canonical")
 }

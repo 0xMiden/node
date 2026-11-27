@@ -24,7 +24,6 @@ use miden_protocol::account::{
 };
 use miden_protocol::asset::FungibleAsset;
 use miden_protocol::testing::account_id::AccountIdBuilder;
-use miden_protocol::utils::serde::{Deserializable, Serializable};
 use miden_standards::account::auth::AuthNetworkAccount;
 use miden_standards::account::fees::FeePolicyManager;
 use miden_standards::note::{NetworkAccountTarget, NoteExecutionHint};
@@ -185,15 +184,15 @@ fn measure(num_maps: u32, entries_per_map: u32) -> Row {
     let build_peak_bytes = peak_bytes().saturating_sub(live_before);
 
     // Serialize once for the size figure and to feed the deserialize benchmark.
-    let bytes = account.to_bytes();
+    let bytes = miden_node_persistence::encode(&account);
     let serialized_bytes = bytes.len();
 
     let deserialize = median_time(iters, || {
-        Account::read_from_bytes(&bytes).expect("account should deserialize")
+        miden_node_persistence::decode::<Account>(&bytes).expect("account should deserialize")
     });
     let clone = median_time(iters, || account.clone());
     let partial_from = median_time(iters, || PartialAccount::from(&account));
-    let serialize = median_time(iters, || account.to_bytes());
+    let serialize = median_time(iters, || miden_node_persistence::encode(&account));
 
     Row {
         entries: entries_per_map,
