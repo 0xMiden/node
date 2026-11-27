@@ -121,6 +121,7 @@ delta after target validation.
 | `SyncNullifiers`         | Streams every matching 16-bit-prefix consumption through the target.              |
 | `SyncAccountVault`       | Streams the final target value of every changed vault key.                        |
 | `SyncAccountStorageMaps` | Streams the final target value of every changed storage-map key.                  |
+| `GetTransactionsById`    | Streams requested transactions committed at or before `target_block_num`.         |
 | `SyncTransactions`       | Streams complete account transaction events in the requested range.               |
 
 Vault, storage-map, and nullifier stream items report the block of their last update in `last_updated_at`. This is a
@@ -130,6 +131,13 @@ block number, not a timestamp or the authenticated target.
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
 and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note
 bodies and missing attachment content with `GetNotesById`. Reject malformed or incomplete records.
+
+Use `GetTransactionsById` for locally pending or unconfirmed transaction IDs. Returned IDs committed by `N`. An ID
+omitted from a successfully completed stream was not committed by `N`; omission alone does not mean expiration,
+conflict, or permanent rejection. Continue separate expiration and conflict checks. This endpoint does not add a
+transaction-inclusion proof. Keep the existing transaction-validation rules. Use `SyncTransactions` when complete
+account event discovery is required, including recovery of previously untracked consumed public notes. Local-ID lookups
+cannot discover an externally submitted transaction whose ID the client does not know.
 
 All synchronization streams are finite. Only an OK end-of-stream completes a result, including an empty result. Stage
 all responses and their negative lookup outcomes. Commit one local update only after every required stream and proof

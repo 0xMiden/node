@@ -152,9 +152,11 @@ the maximum number of prefixes per request, see `GetLimits.endpoints["SyncNullif
 | `SyncNullifiers`                             | `1` malformed input, `2` invalid or missing range, `3` future target, `6` prefix length other than 16      |
 | `SyncAccountVault`, `SyncAccountStorageMaps` | `1` malformed input, `2` invalid range, `3` future target, `4` unavailable history, `6` non-public account |
 | `SyncNotes`, `SyncTransactions`              | `1` malformed input, `2` invalid range, `3` future target                                                  |
+| `GetTransactionsById`                        | `1` malformed input, `2` missing target, `3` future target                                                 |
 
-Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. Limits apply to the raw lists before
-decoding and deduplication and return `OUT_OF_RANGE`. Streaming does not relax per-message receive limits.
+Limits on account IDs, note tags, and nullifier prefixes remain 1000 per request. `GetTransactionsById` accepts at most
+1000 IDs under `GetLimits.endpoints["GetTransactionsById"].parameters["transaction_id"]`. Limits apply to the raw lists
+before decoding and deduplication and return `OUT_OF_RANGE`. Streaming does not relax per-message receive limits.
 
 A stalled producer send returns `DEADLINE_EXCEEDED`. Database or encoding failures use `INTERNAL` with detail `0`.
 Errors can arrive after valid messages; a terminal error means that stream did not complete. Do not interpret a partial

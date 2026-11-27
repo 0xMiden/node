@@ -1,0 +1,121 @@
+use std::sync::Arc;
+
+use miden_node_proto::{DecodeMessage, Verify, generated as proto};
+use miden_node_store::{DatabaseError, State, TransactionRecord};
+use miden_node_tracing::{instrument, miden_span_record};
+use miden_node_utils::limiter::QueryParamTransactionIdLimit;
+use miden_protocol::block::BlockNumber;
+use miden_protocol::transaction::TransactionId;
+
+use super::error_codes::GetTransactionsByIdErrorCode as ErrorCode;
+use super::stream_settings::{
+    SEND_TIMEOUT,
+    TRANSACTION_DB_PAGE_BYTES,
+    TRANSACTION_STREAM_BUFFER_SIZE,
+};
+use super::sync_stream::{Paginator, SyncPage, SyncResponseStream, SyncStream};
+use super::{RpcService, check, database_error_to_status};
+
+#[tonic::async_trait]
+impl proto::server::miden_node_v2_node_service::GetTransactionsById for RpcService {
+    type Input = (BlockNumber, Vec<TransactionId>);
+    type Item = TransactionRecord;
+    type ItemStream = SyncResponseStream<Self::Item>;
+
+    fn decode(
+        request: proto::miden::node::v2::GetTransactionsByIdRequest,
+    ) -> tonic::Result<Self::Input> {
+        check::<QueryParamTransactionIdLimit>(request.transaction_ids.len())?;
+        let request = request
+            .decode_fields()
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
+        let target = request.target_block_num.map(BlockNumber::from).ok_or_else(|| {
+            ErrorCode::MissingTarget.invalid_argument("transaction target is required")
+        })?;
+        let mut ids = request
+            .transaction_ids
+            .verify()
+            .map_err(|err| ErrorCode::DeserializationFailed.invalid_argument(err))?;
+        ids.sort_unstable();
+        ids.dedup();
+        Ok((target, ids))
+    }
+
+    fn encode(
+        item: Self::Item,
+    ) -> tonic::Result<proto::miden::node::v2::GetTransactionsByIdResponse> {
+        Ok(proto::miden::node::v2::GetTransactionsByIdResponse {
+            transaction: Some(super::transaction_stream::encode(item)?),
+        })
+    }
+
+    #[instrument(name = "get_transactions_by_id", err)]
+    async fn handle(
+        &self,
+        (target, ids): Self::Input,
+        _metadata: &tonic::metadata::MetadataMap,
+        _extensions: &tonic::codegen::http::Extensions,
+    ) -> tonic::Result<Self::ItemStream> {
+        miden_span_record!(
+            block.number = target,
+            transaction.count = ids.len(),
+            transaction.ids = super::trace_sample(&ids),
+        );
+
+        SyncStream::start(
+            LookupPaginator {
+                state: Arc::clone(&self.state),
+                target,
+                ids,
+                cursor: None,
+                done: false,
+            },
+            TRANSACTION_STREAM_BUFFER_SIZE,
+            SEND_TIMEOUT,
+        )
+        .await
+    }
+}
+
+struct LookupPaginator {
+    state: Arc<State>,
+    target: BlockNumber,
+    ids: Vec<TransactionId>,
+    cursor: Option<TransactionId>,
+    done: bool,
+}
+
+#[tonic::async_trait]
+impl Paginator for LookupPaginator {
+    type Item = TransactionRecord;
+    async fn load_next_page(&mut self) -> tonic::Result<Option<SyncPage<Self::Item>>> {
+        if self.done {
+            return Ok(None);
+        }
+        let is_first_page = self.cursor.is_none();
+        let ids = self.ids.clone();
+        let target = self.target;
+        let cursor = self.cursor;
+        let page = self
+            .state
+            .read(move |view| {
+                let target =
+                    view.snapshot.scope_block(target).ok_or(miden_node_store::RangeBeyondTip {
+                        chain_tip: view.snapshot.block_num,
+                        block_to: target,
+                    })?;
+                view.tx.transactions_by_id_page(ids, target, cursor, TRANSACTION_DB_PAGE_BYTES)
+            })
+            .await
+            .map_err(|err| match err {
+                DatabaseError::RangeBeyondTip(_) => ErrorCode::FutureTarget.invalid_argument(err),
+                _ => database_error_to_status(&err),
+            })?;
+        self.cursor = page.next_cursor;
+        self.done = page.next_cursor.is_none();
+        if is_first_page && self.done && page.records.is_empty() {
+            return Ok(None);
+        }
+        SyncPage::new(page.records).map(Some)
+    }
+}

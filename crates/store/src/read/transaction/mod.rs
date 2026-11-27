@@ -6,6 +6,7 @@ mod note_sync_page;
 mod nullifier_updates_page;
 mod select_block_header;
 mod transaction_records_page;
+mod transactions_by_id_page;
 pub(crate) use select_block_header::select_block_header;
 mod select_block_header_and_signatures;
 mod select_block_headers;

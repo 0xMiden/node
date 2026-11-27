@@ -4618,6 +4618,18 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
     };
 
     assert_eq!(*record, expected);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::transactions_by_id_page(
+                tx_db,
+                vec![tx.id()],
+                crate::ScopedBlockNum::new_unchecked(block_num),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, vec![expected]);
     let history = db
         .read(move |tx_db| {
             queries::transaction_records_page(
@@ -4629,7 +4641,7 @@ fn db_roundtrip_transactions_filters_missing_output_note_sync_records() {
             )
         })
         .unwrap();
-    assert_eq!(history.records, retrieved.1);
+    assert_eq!(history.records, lookup.records);
 }
 
 /// A public note whose nullifier matches an authenticated (headerless) input of a transaction is
@@ -4680,6 +4692,18 @@ fn select_transactions_records_resolves_consumed_public_note_refs() {
     let record = retrieved.1.first().expect("entry should exist");
 
     assert_eq!(record.consumed_note_refs, vec![(nullifier, note_id)]);
+    let lookup = db
+        .read(move |tx_db| {
+            queries::transactions_by_id_page(
+                tx_db,
+                vec![tx.id()],
+                crate::ScopedBlockNum::new_unchecked(block_num),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(lookup.records, retrieved.1);
     let history = db
         .read(move |tx_db| {
             queries::transaction_records_page(
@@ -5235,6 +5259,83 @@ fn note_stream_pages_continue_inside_blocks_and_preserve_tag_selection() {
 }
 
 /// Lookup must exclude unrequested and post-target transactions while preserving full record
+/// contents.
+#[test]
+fn transaction_lookup_stream_returns_only_requested_ids_committed_by_target() {
+    let db = &TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    let transactions: Vec<_> = (1..=4).map(|n| mock_block_transaction(account, n)).collect();
+    for height in 1..=2 {
+        create_block(db, height.into());
+        upsert_mock_account(db, account, u64::from(height), height.into()).unwrap();
+    }
+    insert_transactions(
+        db,
+        1.into(),
+        &OrderedTransactionHeaders::new_unchecked(transactions[..3].to_vec()),
+    )
+    .unwrap();
+    insert_transactions(
+        db,
+        2.into(),
+        &OrderedTransactionHeaders::new_unchecked(vec![transactions[3].clone()]),
+    )
+    .unwrap();
+    let missing = mock_block_transaction(account, 9).id();
+    let ids = vec![
+        transactions[0].id(),
+        transactions[2].id(),
+        transactions[3].id(),
+        missing,
+        transactions[0].id(),
+    ];
+    let mut cursor: Option<miden_protocol::transaction::TransactionId> = None;
+    let mut actual = vec![];
+    loop {
+        let start = cursor;
+        let requested = ids.clone();
+        let page = db
+            .read(move |tx| {
+                queries::transactions_by_id_page(
+                    tx,
+                    requested,
+                    crate::ScopedBlockNum::new_unchecked(1.into()),
+                    cursor,
+                    NonZeroUsize::MIN,
+                )
+            })
+            .unwrap();
+        if let Some(start) = start {
+            assert_eq!(page.records[0].header.id(), start);
+        }
+        actual.extend(page.records.into_iter().map(|r| {
+            assert_eq!(r.block_num, 1.into());
+            r.header
+        }));
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    let mut expected = vec![transactions[0].clone(), transactions[2].clone()];
+    expected.sort_by_key(TransactionHeader::id);
+    actual.sort_by_key(TransactionHeader::id);
+    assert_eq!(actual, expected);
+    let page = db
+        .read(move |tx| {
+            queries::transactions_by_id_page(
+                tx,
+                ids,
+                crate::ScopedBlockNum::new_unchecked(0.into()),
+                None,
+                NonZeroUsize::MIN,
+            )
+        })
+        .unwrap();
+    assert_eq!(page.records, []);
+}
+
+/// Same-block event pages must remain complete even when stored aggregate byte estimates are large.
 #[test]
 fn transaction_history_stream_continues_within_blocks_with_oversized_estimates() {
     let db = &TestDb::new();
@@ -5383,6 +5484,88 @@ fn nullifier_updates_page_preserves_partial_blocks_and_target() {
 }
 
 /// Transaction streams batch small records within a byte budget and keep progressing when an
+/// estimate exceeds the budget. A row cap bounds pages even when estimates are too small.
+#[test]
+fn transaction_stream_pages_respect_byte_budgets_and_make_progress() {
+    for (estimate, count, budget, expected_page_size) in [
+        (100_i64, 5, 250, 2),
+        (100, 4, 200, 2),
+        (i64::MAX, 3, 250, 1),
+        (0, 300, 1024, 256),
+    ] {
+        let db = &TestDb::new();
+        let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+        create_block(db, 1.into());
+        upsert_mock_account(db, account, 1, 1.into()).unwrap();
+        let mut headers: Vec<_> =
+            (1..=count).map(|number| mock_block_transaction(account, number)).collect();
+        insert_transactions(
+            db,
+            1.into(),
+            &OrderedTransactionHeaders::new_unchecked(headers.clone()),
+        )
+        .unwrap();
+        db.write(move |tx| -> Result<usize> {
+            Ok(tx.execute("UPDATE transactions SET size_in_bytes = ?1", &[&estimate])?)
+        })
+        .unwrap();
+        headers.sort_by_key(|header| header.id().as_bytes());
+        let ids: Vec<_> = headers.iter().map(TransactionHeader::id).collect();
+        let byte_limit = NonZeroUsize::new(budget).unwrap();
+
+        for lookup in [false, true] {
+            let mut history_cursor = None;
+            let mut lookup_cursor = None;
+            let mut actual = Vec::new();
+            loop {
+                let requested = ids.clone();
+                let (records, next_history, next_lookup) = db
+                    .read(move |tx| -> Result<_> {
+                        if lookup {
+                            let page = queries::transactions_by_id_page(
+                                tx,
+                                requested,
+                                crate::ScopedBlockNum::new_unchecked(1.into()),
+                                lookup_cursor,
+                                byte_limit,
+                            )?;
+                            Ok((page.records, None, page.next_cursor))
+                        } else {
+                            let page = queries::transaction_records_page(
+                                tx,
+                                vec![account],
+                                crate::ScopedBlockRange::new_unchecked(0.into()..=1.into()),
+                                history_cursor,
+                                byte_limit,
+                            )?;
+                            Ok((page.records, page.next_cursor, None))
+                        }
+                    })
+                    .unwrap();
+                history_cursor = next_history;
+                lookup_cursor = next_lookup;
+                let has_more = history_cursor.is_some() || lookup_cursor.is_some();
+                assert!(!records.is_empty(), "every page must make progress");
+                assert!(records.len() <= expected_page_size);
+                if actual.is_empty() {
+                    assert_eq!(records.len(), expected_page_size);
+                }
+                if has_more {
+                    let omitted = headers[actual.len() + records.len()].id();
+                    assert_eq!(lookup_cursor.or(history_cursor.map(|next| next.id)), Some(omitted));
+                }
+                actual.extend(records.into_iter().map(|record| record.header));
+                if !has_more {
+                    break;
+                }
+                assert!(actual.len() < headers.len(), "the final page must terminate");
+            }
+            assert_eq!(actual, headers);
+        }
+    }
+}
+
+/// Byte-budgeted pages preserve block order even when transaction IDs sort in the opposite order.
 #[test]
 fn transaction_history_byte_pages_preserve_order_across_blocks() {
     let db = &TestDb::new();
@@ -5513,6 +5696,68 @@ fn vault_pages_include_range_start_and_continue_within_one_block() {
     assert!(page.next_cursor.is_none());
 }
 
+/// Row and byte limits preserve nonempty terminal pages and empty selections.
+#[test]
+fn streaming_queries_return_every_page() {
+    let db = TestDb::new();
+    let account = AccountId::try_from(ACCOUNT_ID_PRIVATE_SENDER).unwrap();
+    create_block(&db, 1.into());
+    upsert_mock_account(&db, account, 0, 1.into()).unwrap();
+    let nullifiers: Vec<_> = (0..5).map(|n| num_to_nullifier((1 << 48) + n)).collect();
+    insert_nullifiers_for_block(&db, &nullifiers, 1.into()).unwrap();
+    let mut headers: Vec<_> = (0..5).map(|n| mock_block_transaction(account, n)).collect();
+    insert_transactions(&db, 1.into(), &OrderedTransactionHeaders::new_unchecked(headers.clone()))
+        .unwrap();
+    headers.sort_by_key(|header| header.id().as_bytes());
+    db.read(move |tx| -> Result<()> {
+        let nullifier_page = |prefixes, cursor| {
+            queries::nullifier_updates_page(
+                tx,
+                prefixes,
+                crate::ScopedBlockRange::new_unchecked(1.into()..=1.into()),
+                cursor,
+                NonZeroUsize::new(2).unwrap(),
+            )
+        };
+        let mut cursor = None;
+        let mut found = HashSet::new();
+        for expected_size in [2, 2, 1] {
+            let page = nullifier_page(vec![1], cursor)?;
+            assert_eq!(page.records.len(), expected_size);
+            found.extend(page.records.into_iter().map(|row| row.nullifier));
+            cursor = page.next_cursor;
+        }
+        assert!(cursor.is_none());
+        assert_eq!(found, nullifiers.into_iter().collect());
+        let empty = nullifier_page(vec![], None)?;
+        assert!(empty.records.is_empty() && empty.next_cursor.is_none());
+
+        let lookup = |ids, cursor| {
+            queries::transactions_by_id_page(
+                tx,
+                ids,
+                ScopedBlockNum::new_unchecked(1.into()),
+                cursor,
+                NonZeroUsize::MIN,
+            )
+        };
+        let ids: Vec<_> = headers.iter().map(TransactionHeader::id).collect();
+        let mut cursor = None;
+        for expected in headers {
+            let page = lookup(ids.clone(), cursor)?;
+            assert_eq!(page.records.len(), 1);
+            assert_eq!(page.records[0].header, expected);
+            cursor = page.next_cursor;
+        }
+        assert!(cursor.is_none());
+        let empty = lookup(vec![], None)?;
+        assert!(empty.records.is_empty() && empty.next_cursor.is_none());
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// Empty history selections must still reject targets older than the retention horizon.
 #[test]
 fn streaming_history_queries_validate_retention_before_empty_selection() {
     let db = TestDb::new();
