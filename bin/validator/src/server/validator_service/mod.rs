@@ -25,6 +25,7 @@ mod tests;
 mod block_subscription;
 mod block_validation;
 mod get_transaction_encryption_key;
+mod recovery;
 mod sign_block;
 mod status;
 mod submit_proven_transaction;
@@ -98,6 +99,7 @@ impl<T, E: miden_node_tracing::ErrorReport> StatusResultExt<T> for Result<T, E> 
 ///
 /// Implements the gRPC API for the validator.
 pub(crate) struct ValidatorService {
+    recovery: Option<recovery::Recovery>,
     signer: ValidatorSigner,
     /// Database handle for persisting signed blocks and validated transactions.
     db: ValidatorDbWriter,
@@ -188,6 +190,7 @@ impl ValidatorService {
             .await
             .map_err(|err| ValidatorError::EncryptionKeyAttestationFailed(err.to_string()))?;
         Ok(Self {
+            recovery: None,
             signer,
             decrypter,
             genesis_commitment,

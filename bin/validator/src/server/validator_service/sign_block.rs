@@ -19,6 +19,13 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
     type Input = BlockSigningInputs;
     type Output = (Signature, Word, PublicKey);
 
+    fn check_admission(&self) -> tonic::Result<()> {
+        if self.recovery.as_ref().is_some_and(|recovery| *recovery.running.borrow()) {
+            return Err(tonic::Status::unavailable("validator is recovering"));
+        }
+        Ok(())
+    }
+
     #[instrument(err)]
     fn decode(request: grpc::miden::validator::v1::SignBlockRequest) -> tonic::Result<Self::Input> {
         let inputs = request
@@ -61,18 +68,45 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
         _extensions: &tonic::codegen::http::Extensions,
     ) -> tonic::Result<Self::Output> {
         // Reject requests while a backup subscription is streaming.
-        let _guard = self.serve_lock.try_read().map_err(|_| {
+        let serve_guard = self.serve_lock.clone().try_read_owned().map_err(|_| {
             tonic::Status::resource_exhausted("validator is busy streaming a backup")
         })?;
 
-        let signing_guard = Arc::clone(&self.signing_lock)
+        let lock = Arc::clone(&self.signing_lock)
             .lock_owned()
-            .instrument(info_span!("acquire_signing_lock"))
-            .await;
-
+            .instrument(info_span!("acquire_signing_lock"));
+        let signing_guard = if let Some(recovery) = &self.recovery {
+            let mut running = recovery.running.subscribe();
+            tokio::select! {
+                biased;
+                _ = running.wait_for(|active| *active) => return Err(tonic::Status::unavailable("validator is recovering")),
+                guard = lock => guard,
+            }
+        } else {
+            lock.await
+        };
         let header = &proving_inputs.block_header;
+        let chain = self
+            .db
+            .read("chain_state", |tx| tx.select_chain_state())
+            .await
+            .or_internal("failed to load validator chain state")?
+            .ok_or_else(|| tonic::Status::internal("validator has no chain tip"))?;
+        let latest = chain.pending.as_ref().unwrap_or(&chain.tip);
+        let proposed_parent = header.block_num().parent();
+        if proposed_parent.is_some_and(|height| height > latest.block_num())
+            || (chain.pending.is_some()
+                && proposed_parent == Some(latest.block_num())
+                && header.prev_block_commitment() != latest.commitment())
+        {
+            let recovery = self.recovery.as_ref().ok_or_else(|| tonic::Status::unavailable(
+                "block number mismatch or unknown previous block commitment; configure --recovery.url for validator catch-up"
+            ))?;
+            recovery.start(self.db.clone(), chain.tip, signing_guard, serve_guard);
+            return Err(tonic::Status::unavailable("validator is recovering"));
+        }
         let confirms_validator_quorum = self
-            .validate_block(header, &body)
+            .validate_block(header, &body, &chain)
             .await
             .map_err(ValidatorError::into_validation_status)?;
 

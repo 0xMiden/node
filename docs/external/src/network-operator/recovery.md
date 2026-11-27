@@ -21,8 +21,8 @@ reconstruct their missing inputs.
 For recovery, you need:
 
 - An initialized data directory for the same network on the replacement node.
-- Reachable endpoints for every validator in the set, with their signing histories intact. Recovery requires all
-  validators' signatures, although one retained copy of a block's proving inputs is sufficient.
+- Validator backups that together supply the quorum authorized by each block's parent. The signers can differ between
+  heights. Copies of the same signature count once. One matching copy of the proving inputs is sufficient.
 - Proving inputs for every unproven block, either in the replacement's local storage or in validator backups. If neither
   has usable inputs, you need the original sequencer inputs or a surviving source of that block's proof.
 

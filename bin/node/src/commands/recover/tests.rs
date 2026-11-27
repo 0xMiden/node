@@ -57,16 +57,26 @@ fn protocol_configs() -> (ProtocolConfig, ProtocolConfig) {
 }
 
 #[test]
-fn signatures_are_ordered_against_the_validator_set() {
+fn signatures_from_overlapping_backups_can_form_a_quorum() {
     let commitment = Word::from([1u32, 2, 3, 4]);
     let signers = signers(3);
-    let keys = validator_config(&signers);
-
-    // Reversed validator order exercises signature ordering in the recovered block.
-    let shuffled = signers.iter().rev().map(|signer| signer.sign(commitment)).collect();
-
-    let coalesced = coalesce_signatures(shuffled, commitment, &keys).unwrap();
-    coalesced.verify_against(commitment, &keys).unwrap();
+    let keys =
+        ValidatorConfig::new(signers.iter().map(SigningKey::public_key).collect(), 2).unwrap();
+    for pair in [[2, 0], [1, 2], [0, 1]] {
+        let backups = vec![
+            signers[pair[0]].sign(commitment),
+            signers[pair[0]].sign(commitment),
+            signers[pair[1]].sign(commitment),
+        ];
+        let merged = coalesce_signatures(
+            vec![("http://backup".parse().unwrap(), backups)],
+            commitment,
+            &keys,
+        )
+        .unwrap();
+        assert_eq!(merged.len(), 2);
+        merged.verify_against(commitment, &keys).unwrap();
+    }
 }
 
 #[test]
@@ -77,8 +87,13 @@ fn signature_count_mismatch_is_rejected() {
 
     let missing_one = signers.iter().take(2).map(|signer| signer.sign(commitment)).collect();
 
-    let err = coalesce_signatures(missing_one, commitment, &keys).unwrap_err();
-    assert!(err.to_string().contains("collected 2 signatures"), "{err}");
+    let err = coalesce_signatures(
+        vec![("http://backup".parse().unwrap(), missing_one)],
+        commitment,
+        &keys,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("2 distinct"), "{err}");
 }
 
 #[test]
@@ -95,8 +110,13 @@ fn duplicate_validator_signature_is_rejected() {
         signers[1].sign(commitment),
     ];
 
-    let err = coalesce_signatures(duplicated, commitment, &keys).unwrap_err();
-    assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
+    let err = coalesce_signatures(
+        vec![("http://backup".parse().unwrap(), duplicated)],
+        commitment,
+        &keys,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("2 distinct"), "{err}");
 }
 
 #[test]
@@ -112,8 +132,13 @@ fn foreign_signature_is_rejected() {
         SigningKey::new().sign(commitment),
     ];
 
-    let err = coalesce_signatures(with_foreign, commitment, &keys).unwrap_err();
-    assert!(err.to_string().contains("no unmatched signature verifies"), "{err}");
+    let err = coalesce_signatures(
+        vec![("http://backup".parse().unwrap(), with_foreign)],
+        commitment,
+        &keys,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("2 distinct"), "{err}");
 }
 
 #[test]

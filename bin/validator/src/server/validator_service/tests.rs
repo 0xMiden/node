@@ -1,4 +1,5 @@
 mod proving_inputs;
+mod recovery;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -332,14 +333,15 @@ impl TestValidator {
 async fn setup_db_with_genesis(
     key: &SigningKey,
 ) -> (tempfile::TempDir, ValidatorDbWriter, BlockHeader, ProtocolConfig) {
+    setup_db_with_validators(ValidatorConfig::new(vec![key.public_key()], 1).unwrap()).await
+}
+
+async fn setup_db_with_validators(
+    validators: ValidatorConfig,
+) -> (tempfile::TempDir, ValidatorDbWriter, BlockHeader, ProtocolConfig) {
     let protocol_config = test_protocol_config();
-    let genesis_state = GenesisState::new(
-        vec![],
-        test_fee_params(),
-        0,
-        ValidatorConfig::new(vec![key.public_key()], 1).unwrap(),
-        protocol_config.clone(),
-    );
+    let genesis_state =
+        GenesisState::new(vec![], test_fee_params(), 0, validators, protocol_config.clone());
     let genesis_block = genesis_state.into_block().unwrap();
     let genesis_header = genesis_block.inner().header().clone();
 
@@ -908,7 +910,14 @@ async fn unknown_transactions_rejected() {
     let proposed = ProposedBlock::new(block_inputs, vec![batch]).unwrap();
 
     let (header, body) = proposed.into_header_and_body().unwrap();
-    let result = tv.server.validate_block(&header, &body).await;
+    let chain = tv
+        .server
+        .db
+        .read("test chain state", |tx| tx.select_chain_state())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = tv.server.validate_block(&header, &body, &chain).await;
     assert!(result.is_err(), "block with unknown transactions should be rejected");
     match result.unwrap_err() {
         ValidatorError::UnvalidatedTransactions(ids) => {
@@ -1098,7 +1107,14 @@ async fn validate_block_number_mismatch() {
     let block_3 = empty_block(&block_2_header, &chain);
 
     let (header, body) = block_3.into_header_and_body().unwrap();
-    let result = tv.server.validate_block(&header, &body).await;
+    let chain = tv
+        .server
+        .db
+        .read("test chain state", |tx| tx.select_chain_state())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = tv.server.validate_block(&header, &body, &chain).await;
     assert!(result.is_err());
     assert!(
         matches!(result.unwrap_err(), ValidatorError::BlockNumberMismatch { .. }),
@@ -2042,4 +2058,47 @@ async fn changing_validator_keys_is_rejected_even_with_a_registered_quorum() {
     let error = tv.call_sign_block(&block).await.unwrap_err();
     assert_eq!(error.code(), tonic::Code::InvalidArgument);
     assert!(error.message().contains("changing the validator key set is unsupported"));
+}
+
+#[tokio::test]
+async fn recovery_allows_transaction_submission_and_releases_signing_on_shutdown() {
+    let fixture = deferred_transaction_fixture().await;
+    let tv = &mut TestValidator::new().await;
+    let stalled = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stop = miden_node_utils::shutdown::CancellationToken::new();
+    let tasks = tokio_util::task::TaskTracker::new();
+    tv.server
+        .configure_recovery(
+            format!("http://{}", stalled.local_addr().unwrap()).parse().unwrap(),
+            miden_node_utils::clap::GrpcOptions::default(),
+            stop.clone(),
+            tasks.clone(),
+        )
+        .unwrap();
+
+    let child = tv.propose_empty_block();
+    let (parent, _) = child.clone().into_header_and_body().unwrap();
+    let mut chain = tv.chain.clone();
+    chain.add_block(&tv.chain_tip, false);
+    let skipped = empty_block(&parent, &chain);
+    assert_eq!(tv.call_sign_block(&skipped).await.unwrap_err().code(), tonic::Code::Unavailable);
+    assert_eq!(tv.call_status().await.status, "RECOVERING");
+    // An active session rejects even an undecodable proposal before spending time on its proofs.
+    let error = miden_validator_v1_validator_service::SignBlock::full(
+        &tv.server,
+        tonic::Request::new(proto::miden::validator::v1::SignBlockRequest::default()),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), tonic::Code::Unavailable);
+    tv.assert_backup_rejected(0).await;
+    let tx = &fixture.transaction;
+    tv.call_submit_proven_transaction(tx, tv.seal(tx.id(), &fixture.inputs.to_bytes()))
+        .await
+        .unwrap();
+    assert!(tv.transaction_exists(tx.id()).await);
+    stop.cancel();
+    tasks.close();
+    tasks.wait().await;
+    tv.call_sign_block(&child).await.unwrap();
 }

@@ -58,9 +58,11 @@ tempfile               = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }
+tokio-util             = { workspace = true }
 tonic                  = { default-features = true, features = ["transport"], workspace = true }
 tonic-reflection       = { workspace = true }
 tower-http             = { features = ["util"], workspace = true }
+url                    = { workspace = true }
 zeroize                = { workspace = true }
 
 [build-dependencies]

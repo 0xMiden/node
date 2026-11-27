@@ -32,6 +32,8 @@ use validator_service::ValidatorService;
 pub struct ValidatorServer {
     /// The address of the validator component.
     pub address: SocketAddr,
+    /// Public full-node RPC endpoint serving committed blocks for catch-up.
+    pub recovery_url: Option<url::Url>,
     /// gRPC server options for internal services (timeouts, connection caps).
     ///
     /// If the handler takes longer than this duration, the server cancels the call.
@@ -84,7 +86,7 @@ impl ValidatorServer {
             .build_v1()
             .context("failed to build reflection service")?;
 
-        let service = ValidatorService::new(
+        let mut service = ValidatorService::new(
             self.signer,
             db,
             self.decrypter,
@@ -94,6 +96,16 @@ impl ValidatorServer {
         )
         .await
         .context("failed to initialize validator server")?;
+        let recovery_stop = shutdown.child_token();
+        let recovery_tasks = tokio_util::task::TaskTracker::new();
+        if let Some(url) = self.recovery_url {
+            service.configure_recovery(
+                url,
+                self.grpc_options,
+                recovery_stop.clone(),
+                recovery_tasks.clone(),
+            )?;
+        }
         let endpoint = listener.local_addr().context("failed to read validator listen address")?;
         info!(
             "Validator ready",
@@ -104,7 +116,7 @@ impl ValidatorServer {
         );
 
         // Build the gRPC server with the API service and trace layer.
-        grpc::server_builder()
+        let result = grpc::server_builder()
             .layer(CatchPanicLayer::custom(catch_panic_layer_fn))
             .layer(grpc_trace_layer())
             .timeout(self.grpc_options.request_timeout)
@@ -118,6 +130,10 @@ impl ValidatorServer {
             ))
             .serve_with_incoming_shutdown(grpc::tcp_incoming(listener), shutdown.cancelled_owned())
             .await
-            .context("failed to serve validator API")
+            .context("failed to serve validator API");
+        recovery_stop.cancel();
+        recovery_tasks.close();
+        recovery_tasks.wait().await;
+        result
     }
 }

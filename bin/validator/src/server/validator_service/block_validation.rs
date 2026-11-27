@@ -18,6 +18,7 @@ impl ValidatorService {
         &self,
         proposed_header: &BlockHeader,
         proposed_body: &BlockBody,
+        chain: &crate::db::ChainState,
     ) -> Result<bool, ValidatorError> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -32,12 +33,6 @@ impl ValidatorService {
             });
         }
 
-        let chain = self
-            .db
-            .read("chain_state", |tx| tx.select_chain_state())
-            .await
-            .map_err(ValidatorError::DatabaseError)?
-            .ok_or(ValidatorError::NoChainTip)?;
         let latest = chain.pending.as_ref().unwrap_or(&chain.tip);
         miden_span_record!(tip.number = chain.tip.block_num());
 

@@ -58,9 +58,10 @@ impl WriteTransaction<'_> {
             self.delete_pending_validator_quorum()?;
         }
         self.inner.execute(
-            "INSERT INTO recovery_confirmation VALUES (1, ?1)
-             ON CONFLICT(singleton) DO UPDATE SET block_num = excluded.block_num",
-            &[&height],
+            "INSERT INTO recovery_confirmation (singleton, block_num, missed_heights) VALUES (1, ?1, ?2)
+             ON CONFLICT(singleton) DO UPDATE SET block_num = excluded.block_num,
+             missed_heights = missed_heights + excluded.missed_heights",
+            &[&height, &chain.pending.is_none()],
         )?;
         prune_expired_proving_inputs(self.inner, self.proving_input_retention_blocks)?;
         Ok(())

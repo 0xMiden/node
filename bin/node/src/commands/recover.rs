@@ -68,7 +68,7 @@ pub struct RecoverCommand {
 
     /// The validator service gRPC URLs to recover blocks from.
     ///
-    /// Repeat for each backup source. Recovering a new block requires signatures covering the
+    /// Repeat for each backup source. Recovering a new block requires a quorum of signatures from the
     /// parent validator set and one matching proving request. The environment variable accepts
     /// a comma-separated list.
     #[arg(
@@ -331,7 +331,7 @@ fn reconstruct(
     let mut payload = None;
     for (url, entry) in entries {
         let RecoveredBlock { block, protocol_config, proving_inputs } = entry;
-        signatures.extend_from_slice(block.signatures().as_signatures());
+        signatures.push((url.clone(), block.signatures().as_signatures().to_vec()));
         if let Some(supplied) = protocol_config {
             anyhow::ensure!(
                 supplied.to_commitment() == block.header().protocol_config_commitment(),
@@ -367,39 +367,38 @@ fn reconstruct(
     })
 }
 
-/// Orders the collected per-validator signatures positionally against the validator set: the
-/// signature in slot `i` must be produced by the validator key at index `i`.
-///
-/// A backup does not record which position its signature occupies, so each signature is matched to
-/// its position by verifying it against the validator keys over the block commitment.
+/// Collects one valid signature per authorized signer and checks the parent's quorum. Overlapping
+/// backups may supply the same signer's signature more than once.
 fn coalesce_signatures(
-    mut signatures: Vec<Signature>,
+    signatures: Vec<(Url, Vec<Signature>)>,
     block_commitment: Word,
     validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {
-    anyhow::ensure!(
-        signatures.len() >= validator_config.len(),
-        "collected {} signatures but the validator set has {} keys; the provided validator URLs \
-         must cover the full validator set",
-        signatures.len(),
-        validator_config.len(),
-    );
-
-    let mut ordered = Vec::with_capacity(validator_config.len());
-    for (position, key) in validator_config.keys().iter().enumerate() {
-        let matched = signatures
-            .iter()
-            .position(|signature| signature.verify(block_commitment, key))
-            .with_context(|| {
-                format!(
-                    "no unmatched signature verifies against the validator key at position \
-                     {position}; the provided validator URLs must cover the full validator set"
-                )
-            })?;
-        ordered.push(signatures.swap_remove(matched));
+    let quorum = usize::from(validator_config.quorum());
+    let mut distinct = BTreeMap::new();
+    for (url, contributions) in signatures {
+        for signature in contributions {
+            if let Some(index) = validator_config
+                .keys()
+                .iter()
+                .position(|key| signature.verify(block_commitment, key))
+            {
+                distinct.entry(index).or_insert(signature);
+            } else {
+                warn!(
+                    "Invalid backup block signature",
+                    sync.block_source.endpoint = url.as_str(),
+                    block.commitment = block_commitment
+                );
+            }
+        }
     }
-
-    BlockSignatures::new(ordered).context("failed to construct the coalesced signature set")
+    anyhow::ensure!(
+        distinct.len() >= quorum,
+        "only {} distinct validator signatures for block {block_commitment}, quorum requires {quorum}",
+        distinct.len()
+    );
+    Ok(BlockSignatures::new(distinct.into_values().take(quorum).collect())?)
 }
 
 mod branches;

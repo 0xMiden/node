@@ -163,6 +163,10 @@ pub enum ValidatorCommand {
 
     /// Starts the validator component.
     Start {
+        /// Public full-node RPC endpoint serving the committed chain used for validator catch-up.
+        #[arg(long = "recovery.url", env = "MIDEN_VALIDATOR_RECOVERY_URL", value_name = "URL", value_parser = |s: &str| s.parse::<url::Url>().map(Box::new))]
+        recovery_url: Option<Box<url::Url>>,
+
         /// Socket address at which to serve the gRPC API.
         #[arg(long = "listen", env = ENV_LISTEN, value_name = "IP:PORT")]
         listen: std::net::SocketAddr,
@@ -248,6 +252,7 @@ impl ValidatorCommand {
             Self::Privacy(options) => options.handle(shutdown).await,
             Self::ValidatorConfig(options) => options.handle().await,
             Self::Start {
+                recovery_url,
                 listen,
                 admin,
                 grpc_options,
@@ -288,6 +293,7 @@ impl ValidatorCommand {
                 start::start(
                     address,
                     admin.listen,
+                    recovery_url.map(|url| *url),
                     grpc_options,
                     start::ValidatorKeys { signer, decrypter, operator_key },
                     start::ValidatorDatabaseOptions {
