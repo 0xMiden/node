@@ -14,6 +14,8 @@ const ATTEMPTS: usize = 3;
 const TIMEOUT: Duration = Duration::from_secs(5);
 const BACKOFF: Duration = Duration::from_millis(200);
 
+/// Collects the advertised tip of each reachable backup. Failed status requests retain their
+/// endpoint so the caller can report gaps in coverage.
 pub(super) async fn discover(
     validators: Vec<(Url, ValidatorClient)>,
 ) -> anyhow::Result<(Vec<(Url, ValidatorClient, u32)>, Vec<(Url, anyhow::Error)>)> {
@@ -50,7 +52,8 @@ async fn tip(client: &mut ValidatorClient) -> anyhow::Result<u32> {
     unreachable!()
 }
 
-/// Resumes each interrupted stream at the first unread height with a fresh config baseline.
+/// Streams the inclusive range established during discovery. Each height has its own retry budget,
+/// so an interruption later in the stream preserves the prefix already delivered.
 pub(super) async fn read(
     mut client: ValidatorClient,
     url: Url,
@@ -68,10 +71,14 @@ pub(super) async fn read(
                         .block_subscription(BlockSubscriptionRequest { block_from: height })
                         .await?;
                     stream = Some(opened.into_inner());
+                    // A new subscription must supply its own baseline, even when it resumes at a
+                    // height with the same protocol configuration.
                     config = ProtocolConfigStreamState::default();
                 }
                 let event =
                     stream.as_mut().unwrap().message().await?.context("premature backup EOF")?;
+                // The source may advance after discovery. A lower tip would leave part of its
+                // advertised range unaccounted for.
                 anyhow::ensure!(event.committed_chain_tip >= tip, "backup tip regressed");
                 let item = decode_entry(event, Some(&url))?;
                 config.accept(

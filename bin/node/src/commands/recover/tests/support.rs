@@ -1,3 +1,6 @@
+//! Runs validators and backup proxies for failover tests. The proxies can interrupt a live
+//! subscription or serve a specific history to exercise recovery across forks and quorum changes.
+
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};

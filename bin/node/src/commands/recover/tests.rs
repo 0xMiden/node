@@ -1,3 +1,5 @@
+//! Recovery tests for quorum signatures, proving inputs, and branch selection.
+
 use std::collections::BTreeMap;
 
 use miden_protocol::Word;

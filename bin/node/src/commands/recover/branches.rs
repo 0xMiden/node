@@ -10,6 +10,7 @@ use tempfile::TempDir;
 
 use super::{BlockSubscriptionResponse, RecoveredBlock, decode_entry};
 
+/// A block ready to apply, held in memory on the shared prefix or on disk after a fork.
 pub(super) enum SelectedBlock {
     Direct(Box<RecoveredBlock>),
     Staged(PathBuf),
@@ -19,6 +20,8 @@ impl SelectedBlock {
     pub(super) async fn apply(self, state: &State, writer: &mut BlockWriter) -> anyhow::Result<()> {
         let staged = matches!(self, Self::Staged(_));
         let recovered = self.load().await?;
+        // The committed tip may have advanced since staging. Verify the reloaded block against the
+        // parent it will actually extend.
         if staged {
             let (parent, _) =
                 state.view().get_block_header(Some(state.committed_tip()), false).await?;
@@ -27,6 +30,8 @@ impl SelectedBlock {
         super::inputs::apply_recovered(state, writer, recovered).await
     }
 
+    /// Consumes the selected payload. For a staged block, the filename identifies the commitment
+    /// chosen during branch selection.
     pub(super) async fn load(self) -> anyhow::Result<RecoveredBlock> {
         match self {
             Self::Direct(block) => Ok(*block),
@@ -46,6 +51,8 @@ impl SelectedBlock {
     }
 }
 
+/// One staged candidate. The child count tracks how many surviving candidates at the next height
+/// still depend on it.
 struct Branch {
     parent: Word,
     children: usize,
@@ -92,6 +99,8 @@ impl Branches {
             tokio::fs::write(&path, event.encode_to_vec()).await?;
             level.insert(id, Branch { parent, children: 0, path });
         }
+        // Once this height is fully accounted for, a previous tip without a child here can no
+        // longer reach the highest recoverable block.
         self.keep_tips(&parents).await?;
         self.levels.push_back(level);
         Ok(self.release_common())
@@ -105,6 +114,8 @@ impl Branches {
         Ok(self.release_common())
     }
 
+    /// Deletes discarded tips and walks back through their ancestors until it reaches a parent that
+    /// still has a surviving child.
     async fn keep_tips(&mut self, keep: &BTreeSet<Word>) -> anyhow::Result<()> {
         let Some(last) = self.levels.len().checked_sub(1) else {
             return Ok(());
@@ -130,6 +141,8 @@ impl Branches {
         Ok(())
     }
 
+    /// Releases blocks in chain order while every surviving tip shares the same ancestor at the
+    /// oldest staged height.
     fn release_common(&mut self) -> Vec<SelectedBlock> {
         let mut selected = Vec::new();
         while self.levels.front().is_some_and(|level| level.len() == 1) {

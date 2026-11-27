@@ -1,3 +1,8 @@
+//! Recovers blocks and their proving inputs from validator backups.
+//!
+//! Recovery repairs gaps in the retained chain's proving inputs before extending its tip along
+//! the highest branch supported by the available backups.
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -43,6 +48,13 @@ struct RecoveredBlock {
     proving_inputs: Option<BlockProofRequest>,
 }
 
+/// A validator backup stream and the inclusive height through which recovery can read it.
+struct BackupStream {
+    endpoint: Url,
+    last_height: u32,
+    entries: mpsc::Receiver<anyhow::Result<RecoveredBlock>>,
+}
+
 /// Tracks the active protocol configuration commitment for one validator stream.
 #[derive(Default)]
 struct ProtocolConfigStreamState {
@@ -50,7 +62,8 @@ struct ProtocolConfigStreamState {
 }
 
 impl ProtocolConfigStreamState {
-    /// Accepts a stream event only if it supplies every required configuration payload.
+    /// Requires a full configuration on the first block of each subscription and whenever its
+    /// commitment changes. Intervening blocks may omit the repeated configuration.
     fn accept(&mut self, commitment: Word, supplied: bool) -> anyhow::Result<()> {
         match self.commitment {
             None if !supplied => anyhow::bail!("stream is missing its baseline protocol config"),
@@ -98,6 +111,8 @@ pub struct RecoverCommand {
 }
 
 impl RecoverCommand {
+    /// Restores the store and, when requested, proves the pending blocks using the recovered
+    /// inputs.
     pub async fn handle(self, shutdown: CancellationToken) -> anyhow::Result<()> {
         let (state, mut block_writer, mut proof_writer, writer_task) = self.load_state().await?;
         let result = async {
@@ -141,6 +156,7 @@ impl RecoverCommand {
         result
     }
 
+    /// Opens the existing store for recovery and starts its block and proof writers.
     async fn load_state(
         &self,
     ) -> anyhow::Result<(Arc<State>, BlockWriter, ProofWriter, WriterTask)> {
@@ -159,6 +175,8 @@ impl RecoverCommand {
         Ok((state, block_writer, proof_writer, writer_task))
     }
 
+    /// Builds a lazy client so discovery can handle each backup's connection failures
+    /// independently.
     fn validator_client(
         url: &Url,
         max_decoding_message_size: usize,
@@ -185,6 +203,8 @@ async fn recover_from_validators(
         _ = shutdown.cancelled() => anyhow::bail!("recovery cancelled"),
         result = Box::pin(restore(state, writer, validators)) => result?,
     }
+    // Report the tip actually restored. A backup can advertise blocks beyond the last height with
+    // both a quorum and usable proving inputs.
     let (tip, _) = state.view().get_block_header(Some(state.committed_tip()), false).await?;
     let tip = tip.context("missing recovered tip")?;
     info!(
@@ -195,6 +215,7 @@ async fn recover_from_validators(
     Ok(())
 }
 
+/// Determines the recovery range from the available backup tips and the local proving input gaps.
 async fn restore(
     state: &State,
     writer: &mut BlockWriter,
@@ -203,6 +224,7 @@ async fn restore(
     let (available, unknown) = sources::discover(validators).await?;
     let target = available.iter().map(|(_, _, tip)| *tip).max();
     let start = inputs::recovery_start(state, target.unwrap_or(0).into()).await;
+    // Include unreachable sources in the recovery report even if no usable range was found.
     let first_unread =
         start.as_ref().ok().copied().flatten().map_or_else(
             || state.committed_tip().as_u32().saturating_add(1),
@@ -237,39 +259,47 @@ async fn restore_range(
     let mut workers = JoinSet::new();
     let mut streams = Vec::new();
     for (url, client, tip) in available {
-        let (tx, rx) = mpsc::channel(BLOCK_CHANNEL_CAPACITY);
+        let (tx, entries) = mpsc::channel(BLOCK_CHANNEL_CAPACITY);
         workers.spawn(sources::read(client, url.clone(), start.as_u32(), tip, tx));
-        streams.push((url, tip, rx));
+        streams.push(BackupStream { endpoint: url, last_height: tip, entries });
     }
     let mut branches = branches::Branches::default();
     let mut progressed = false;
     for height in start.as_u32()..=target {
+        // Account for every backup covering this height before choosing candidates. Signatures and
+        // proving inputs for the same block can come from different validators.
         let mut groups = BTreeMap::<_, Vec<_>>::new();
-        for (url, tip, rx) in &mut streams {
-            if height > *tip {
+        for stream in &mut streams {
+            if height > stream.last_height {
                 continue;
             }
-            match rx.recv().await.context("backup worker stopped unexpectedly")? {
+            match stream.entries.recv().await.context("backup worker stopped unexpectedly")? {
                 Ok(entry) => groups
                     .entry(entry.block.header().commitment())
                     .or_default()
-                    .push((url.clone(), entry)),
+                    .push((stream.endpoint.clone(), entry)),
                 Err(error) => {
                     warn!(
                         error,
                         "Backup incomplete",
-                        sync.block_source.endpoint = url.as_str(),
+                        sync.block_source.endpoint = stream.endpoint.as_str(),
                         block.from = height
                     );
-                    *tip = height - 1;
+                    // The reader exhausted its retries at this height. Its earlier entries remain
+                    // usable.
+                    stream.last_height = height - 1;
                 },
             }
         }
+
+        // The retained chain fixes the block ID at these heights. Only its proving inputs may need
+        // repair.
         if height <= retained.as_u32() {
             inputs::repair_retained(state, writer, height.into(), groups).await?;
             progressed = true;
             continue;
         }
+
         let mut candidates = Vec::new();
         let mut only_partial_quorums = !groups.is_empty();
         for (id, entries) in groups {
@@ -293,6 +323,9 @@ async fn restore_range(
                 },
             }
         }
+
+        // Even before any progress, the retained tip can stand if every observed child has valid
+        // inputs and some authorized signatures but falls short of quorum.
         if candidates.is_empty() {
             anyhow::ensure!(
                 progressed || only_partial_quorums,
@@ -301,21 +334,29 @@ async fn restore_range(
             warn!("No recoverable continuation", block.number = height);
             break;
         }
+
         parents = candidates
             .iter()
             .map(|c| (c.block.header().commitment(), c.block.header().clone()))
             .collect();
+        // Apply the prefix shared by all surviving branches. Competing suffixes stay staged on disk
+        // until one extends farther or finish resolves a tie at the deepest height.
         for selected in branches.advance(candidates).await? {
             selected.apply(state, writer).await?;
         }
         progressed = true;
     }
+
     for selected in branches.finish().await? {
         selected.apply(state, writer).await?;
     }
     Ok(())
 }
 
+/// Decodes a backup entry received from a validator or read from a staged fork.
+///
+/// A malformed proving request from a validator can be discarded while retaining its signatures.
+/// Staged entries already passed reconstruction, so a decoding error there fails recovery.
 fn decode_entry(
     event: BlockSubscriptionResponse,
     source: Option<&Url>,
@@ -348,6 +389,9 @@ fn decode_entry(
 }
 
 /// Assembles a candidate from backup copies and verifies it against its reachable parent.
+///
+/// Any backup can contribute signatures. One proving request that reconstructs the same header
+/// and body is enough, even when the other validators learned the block through catch-up.
 fn reconstruct(
     entries: Vec<(Url, RecoveredBlock)>,
     parent: &BlockHeader,
@@ -401,6 +445,8 @@ fn coalesce_signatures(
     validator_config: &ValidatorConfig,
 ) -> anyhow::Result<BlockSignatures> {
     let quorum = usize::from(validator_config.quorum());
+    // Index by position in the parent's validator set so copied signatures count once and the
+    // resulting quorum is emitted in validator-key order.
     let mut distinct = BTreeMap::new();
     for (url, contributions) in signatures {
         for signature in contributions {
@@ -430,6 +476,8 @@ fn coalesce_signatures(
     Ok(BlockSignatures::new(distinct.into_values().take(quorum).collect())?)
 }
 
+/// Records how many authorized signers a candidate has. Recovery uses a nonzero count to
+/// distinguish a partially signed child from a candidate with no valid signatures.
 #[derive(Debug, thiserror::Error)]
 #[error(
     "only {actual} distinct validator signatures for block {block_commitment}, quorum requires {quorum}"

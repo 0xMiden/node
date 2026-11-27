@@ -1,3 +1,6 @@
+//! Exercises recovery through validator backup RPCs, including proving on a replacement node and
+//! resuming after a stream interruption.
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
