@@ -172,7 +172,7 @@ pub(crate) struct StateSnapshot {
     pub(crate) nullifier_tree: NullifierTree<LargeSmt<TreeStorageReader>>,
     pub(crate) blockchain: Blockchain,
     pub(crate) account_tree: AccountTreeWithHistory<TreeStorageReader>,
-    pub(super) forest: AccountStateForest<AccountStateForestBackendReader>,
+    pub(crate) forest: AccountStateForest<AccountStateForestBackendReader>,
 }
 
 impl StateSnapshot {

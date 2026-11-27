@@ -18,3 +18,16 @@ impl ReadTransaction<'_> {
         crate::db::queries::account_headers(self.inner, account, block)
     }
 }
+
+impl ReadTransaction<'_> {
+    /// Looks up the header pair used to validate a witness request at a tree-scoped height.
+    pub fn select_account_headers(
+        &self,
+        account: AccountId,
+        block: ScopedBlockNum,
+    ) -> Result<Option<(AccountHeader, AccountStorageHeader)>, DatabaseError> {
+        crate::db::queries::select_account_header_with_storage_header_at_block(
+            self.inner, account, *block,
+        )
+    }
+}

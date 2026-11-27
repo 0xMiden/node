@@ -4,6 +4,7 @@ use miden_protocol::account::{
     AccountCodePatch,
     AccountComponent,
     AccountHeader,
+    AccountStorage,
     AccountStoragePatch,
     AccountVaultPatch,
     StorageMap,
@@ -235,4 +236,78 @@ async fn v2_account_witnesses() {
     ] {
         assert!(call(height, ids).await.is_err());
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_entry_witnesses() {
+    for count in [1, 65] {
+        let (account, ..) = entry_witness_account(count);
+        let (mut store, genesis, config) = fixture(&account).await;
+        let asset = account.vault().assets().next().unwrap();
+        let mut updated = account.clone();
+        let patch = AccountPatch::new(
+            account.id(),
+            AccountStoragePatch::default(),
+            AccountVaultPatch::new(BTreeMap::from([(asset.id(), Word::empty())])).unwrap(),
+            AccountCodePatch::default(),
+            Some(account.nonce() + Felt::ONE),
+        )
+        .unwrap();
+        apply(&mut store, &genesis, &config, &mut updated, patch).await;
+        assert_ne!(updated.to_header().vault_root(), account.to_header().vault_root());
+        let rpc = service(&store);
+        let ids = vault_stream_values(count + 1);
+        let vault = |assets: Vec<AssetId>| {
+            rpc.get_account_vault_witnesses(Request::new(v2::GetAccountVaultWitnessesRequest {
+                account_id: Some(account.id().into()),
+                block_num: Some(0),
+                asset_ids: assets.into_iter().map(Into::into).collect(),
+            }))
+        };
+        let present = ids[0].0;
+        let absent = ids.last().unwrap().0;
+        let empty = vault(vec![]).await.unwrap().into_inner();
+        let empty_proof = empty.vault.unwrap().decode_fields().unwrap().verify().unwrap();
+        assert_eq!(empty_proof.root(), account.to_header().vault_root());
+        let response = vault(vec![present, absent]).await.unwrap().into_inner();
+        let proof = response.vault.unwrap().decode_fields().unwrap().verify().unwrap();
+        assert_eq!(proof.root(), account.to_header().vault_root());
+        assert_eq!(
+            proof.get_value(&present.hash().as_word()).unwrap(),
+            ids[0].1.as_ref().unwrap().to_value_word()
+        );
+        assert_eq!(proof.get_value(&absent.hash().as_word()).unwrap(), Word::empty());
+        assert!(
+            vault(vault_stream_values(64).into_iter().map(|(id, _)| id).collect())
+                .await
+                .is_ok()
+        );
+        assert!(vault(vec![present; 65]).await.is_err());
+    }
+}
+
+fn entry_witness_account(count: u32) -> (Account, StorageSlotName, StorageSlotName) {
+    let base = account(2, count, 1);
+    let empty_map = StorageSlotName::mock(1);
+    let value_slot = StorageSlotName::mock(2);
+    let slots = base
+        .storage()
+        .slots()
+        .iter()
+        .cloned()
+        .chain([
+            StorageSlot::with_map(empty_map.clone(), StorageMap::default()),
+            StorageSlot::with_value(value_slot.clone(), word(5)),
+        ])
+        .collect();
+    let account = Account::new(
+        base.id(),
+        base.vault().clone(),
+        AccountStorage::new(slots).unwrap(),
+        base.code().clone(),
+        base.nonce(),
+        None,
+    )
+    .unwrap();
+    (account, empty_map, value_slot)
 }

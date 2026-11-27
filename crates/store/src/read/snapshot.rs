@@ -1,10 +1,14 @@
 use std::ops::RangeInclusive;
 
 use miden_crypto::merkle::smt::RocksDbSnapshotStorage;
+use miden_node_proto::domain::account::AccountVaultDetails;
+use miden_protocol::account::AccountId;
+use miden_protocol::asset::AssetId;
 use miden_protocol::block::nullifier_tree::NullifierTree;
 use miden_protocol::block::{BlockNumber, Blockchain};
 use miden_protocol::crypto::merkle::smt::LargeSmt;
 
+use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 use crate::{
     AccountTreeWithHistory,
     DatabaseError,
@@ -19,6 +23,7 @@ use crate::{
 /// Callers use their native operations to compose reads and construct proofs at this height.
 #[non_exhaustive]
 pub struct StateSnapshot<'a> {
+    pub(super) forest: &'a AccountStateForest<AccountStateForestBackendReader>,
     pub block_num: BlockNumber,
     pub blockchain: &'a Blockchain,
     pub account_tree: &'a AccountTreeWithHistory<RocksDbSnapshotStorage>,
@@ -50,5 +55,24 @@ impl StateSnapshot<'_> {
             .into());
         }
         Ok(ScopedBlockRange::new(range))
+    }
+}
+
+impl StateSnapshot<'_> {
+    /// Opens a proof of the requested assets against the account vault at the selected block.
+    pub fn vault_witness(
+        &self,
+        account: AccountId,
+        block: ScopedBlockNum,
+        assets: Vec<AssetId>,
+    ) -> Result<AccountVaultDetails, DatabaseError> {
+        self.forest
+            .get_vault_details_for_assets(account, *block, assets)
+            .map_err(|err| {
+                DatabaseError::DataCorrupted(format!(
+                    "failed to open vault for account {account} at block {}: {err}",
+                    *block
+                ))
+            })
     }
 }
