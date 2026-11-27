@@ -41,8 +41,7 @@ impl proto::server::miden_node_v1_node_service::GetNoteScriptByRoot for RpcServi
 
         let script = self
             .state
-            .view()
-            .get_note_script_by_root(request)
+            .read(move |view| view.tx.select_note_script_by_root(request))
             .await
             .map_err(|err| database_error_to_status(&err))?;
 

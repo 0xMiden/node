@@ -61,11 +61,7 @@ impl proto::server::miden_node_v1_node_service::BlockSubscription for RpcService
                 let protocol_config = if previous == Some(commitment) {
                     None
                 } else {
-                    Some(
-                        super::super::load_protocol_config(&state.view(), block.header())
-                            .await?
-                            .into(),
-                    )
+                    Some(super::super::load_protocol_config(&state, block.header()).await?.into())
                 };
                 let response = proto::miden::node::v1::BlockSubscriptionResponse {
                     block: Some(block.into()),

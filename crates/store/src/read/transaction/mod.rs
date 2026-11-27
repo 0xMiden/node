@@ -1,5 +1,6 @@
 use miden_node_db::sqlite::ReadTx;
 
+mod filter_network_accounts;
 mod select_block_header;
 pub(crate) use select_block_header::select_block_header;
 mod select_block_header_and_signatures;
@@ -8,8 +9,11 @@ pub(crate) use select_block_headers::select_block_headers;
 mod select_existing_note_ids;
 mod select_note_inclusion_proofs;
 pub(crate) use select_note_inclusion_proofs::select_note_inclusion_proofs;
+mod select_note_script_by_root;
+mod select_notes_by_id;
 mod select_protocol_config;
 mod select_protocol_config_commitment_at;
+mod select_transaction_logs;
 
 /// Typed storage queries within a single read-only database snapshot.
 pub struct ReadTransaction<'a> {

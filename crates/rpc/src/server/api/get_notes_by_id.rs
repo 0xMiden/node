@@ -44,8 +44,7 @@ impl proto::server::miden_node_v1_node_service::GetNotesById for RpcService {
 
         let notes = self
             .state
-            .view()
-            .get_notes_by_id(note_ids)
+            .read(move |view| view.tx.select_notes_by_id(&note_ids))
             .await
             .map_err(|err| database_error_to_status(&err))?
             .into_iter()

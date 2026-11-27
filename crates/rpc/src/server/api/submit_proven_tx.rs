@@ -80,7 +80,7 @@ impl proto::server::miden_node_v1_node_service::SubmitProvenTx for RpcService {
         let reference_header = self
             .verify_reference_commitment(tx.ref_block_num(), tx.ref_block_commitment())
             .await?;
-        let protocol_config = load_protocol_config(&self.state.view(), &reference_header).await?;
+        let protocol_config = load_protocol_config(&self.state, &reference_header).await?;
         ensure_transaction_has_fee(
             &tx,
             protocol_config.fee_asset_id(),

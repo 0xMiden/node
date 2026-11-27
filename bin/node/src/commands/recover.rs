@@ -256,12 +256,12 @@ async fn run_recovery_pipeline(
     tasks: &mut JoinSet<anyhow::Result<()>>,
     shutdown: CancellationToken,
 ) -> anyhow::Result<()> {
-    let (parent, _) = state
-        .view()
-        .get_block_header(Some((start.as_u32() - 1).into()), false)
+    let parent_num = BlockNumber::from(start.as_u32() - 1);
+    let parent = state
+        .read(move |view| view.tx.select_block_header(parent_num))
         .await
-        .context("failed to load recovery parent")?;
-    let parent = parent.context("recovery parent header not found")?;
+        .context("failed to load recovery parent")?
+        .context("recovery parent header not found")?;
     let block_from = start.as_u32();
     let block_count = u64::from(target.as_u32()) - u64::from(block_from) + 1;
     info!(
