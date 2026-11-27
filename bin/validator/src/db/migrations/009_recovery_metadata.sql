@@ -3,6 +3,8 @@ ALTER TABLE recovery_confirmation
 ADD COLUMN missed_heights INTEGER NOT NULL DEFAULT 0 CHECK (missed_heights >= 0);
 
 -- A recovered block can include transactions that this validator has yet to validate.
+-- This migration removes the foreign reference on `validated_transactions(id)` to
+-- support that.
 CREATE TABLE block_transactions_new (
     block_num BIGINT NOT NULL REFERENCES blocks(block_num) ON DELETE CASCADE,
     block_tx_index BIGINT NOT NULL,
