@@ -12,7 +12,13 @@ use miden_node_store::{BlockWriter, ProofWriter, State, WriterTask};
 use miden_node_tracing::{info, warn};
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::Word;
-use miden_protocol::block::{BlockHeader, BlockSignatures, SignedBlock, ValidatorConfig};
+use miden_protocol::block::{
+    BlockHeader,
+    BlockNumber,
+    BlockSignatures,
+    SignedBlock,
+    ValidatorConfig,
+};
 use miden_protocol::crypto::dsa::ecdsa_k256_keccak::Signature;
 use miden_protocol::protocol_config::ProtocolConfig;
 use tokio::sync::mpsc;
@@ -212,6 +218,18 @@ async fn restore(
     }
     let target = target.context("no usable validator backup status")?;
     let Some(start) = start? else { return Ok(()) };
+    restore_range(state, writer, available, start, target).await
+}
+
+/// Repairs retained inputs and restores the highest recoverable continuation in the advertised
+/// range.
+async fn restore_range(
+    state: &State,
+    writer: &mut BlockWriter,
+    available: Vec<(Url, ValidatorClient, u32)>,
+    start: BlockNumber,
+    target: u32,
+) -> anyhow::Result<()> {
     let retained = state.committed_tip();
     let (parent, _) = state.view().get_block_header(Some(retained), false).await?;
     let parent = parent.context("missing recovery parent")?;
@@ -253,14 +271,19 @@ async fn restore(
             continue;
         }
         let mut candidates = Vec::new();
+        let mut only_partial_quorums = !groups.is_empty();
         for (id, entries) in groups {
             let header = entries[0].1.block.header();
             let Some(parent) = parents.get(&header.prev_block_commitment()) else {
+                only_partial_quorums = false;
                 continue;
             };
             match reconstruct(entries, parent) {
                 Ok(candidate) => candidates.push(candidate),
                 Err(error) => {
+                    only_partial_quorums &= error
+                        .downcast_ref::<InsufficientSignatures>()
+                        .is_some_and(|e| e.actual > 0);
                     warn!(
                         error,
                         "Unrecoverable backup candidate",
@@ -271,7 +294,10 @@ async fn restore(
             }
         }
         if candidates.is_empty() {
-            anyhow::ensure!(progressed, "no recoverable block at height {height}");
+            anyhow::ensure!(
+                progressed || only_partial_quorums,
+                "no recoverable block at height {height}"
+            );
             warn!("No recoverable continuation", block.number = height);
             break;
         }
@@ -393,12 +419,25 @@ fn coalesce_signatures(
             }
         }
     }
-    anyhow::ensure!(
-        distinct.len() >= quorum,
-        "only {} distinct validator signatures for block {block_commitment}, quorum requires {quorum}",
-        distinct.len()
-    );
+    if distinct.len() < quorum {
+        return Err(InsufficientSignatures {
+            block_commitment,
+            actual: distinct.len(),
+            quorum,
+        }
+        .into());
+    }
     Ok(BlockSignatures::new(distinct.into_values().take(quorum).collect())?)
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "only {actual} distinct validator signatures for block {block_commitment}, quorum requires {quorum}"
+)]
+struct InsufficientSignatures {
+    block_commitment: Word,
+    actual: usize,
+    quorum: usize,
 }
 
 mod branches;

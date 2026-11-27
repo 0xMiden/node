@@ -878,6 +878,15 @@ async fn restore_rotating_quorums_across_activation() -> anyhow::Result<()> {
             .connect_lazy();
         backups.push(start_proxy(unused, Fault::History(history)).await?);
     }
+    // Each backup alone has valid proving inputs but too few signatures for the first child.
+    recover_from_validators(
+        &state,
+        &mut writer,
+        vec![(backups[0].url.clone(), backups[0].client())],
+        CancellationToken::new(),
+    )
+    .await?;
+    ensure!(state.committed_tip() == 0.into());
     let result = recover_from_validators(
         &state,
         &mut writer,
