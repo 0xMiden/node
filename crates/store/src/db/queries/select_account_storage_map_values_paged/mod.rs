@@ -7,7 +7,6 @@ use miden_protocol::block::BlockNumber;
 
 use crate::db::pagination::{Page, Paginated, complete_blocks_page};
 use crate::errors::DatabaseError;
-use crate::state::ScopedBlockNum;
 
 const SQL: &str = include_str!("select_account_storage_map_values_paged.sql");
 
@@ -46,8 +45,8 @@ pub(crate) struct AccountStorageMapValuesPaged {
 impl AccountStorageMapValuesPaged {
     /// Creates the query for `account_id` up to and including `block_to`, with at most `limit`
     /// values per page.
-    pub(crate) fn new(account_id: AccountId, block_to: ScopedBlockNum, limit: usize) -> Self {
-        Self { account_id, block_to: *block_to, limit }
+    pub(crate) fn new(account_id: AccountId, block_to: BlockNumber, limit: usize) -> Self {
+        Self { account_id, block_to, limit }
     }
 }
 

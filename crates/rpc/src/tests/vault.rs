@@ -59,17 +59,17 @@ async fn get_account_selects_assets_from_a_large_vault() {
         AccountVaultRequest::Assets(keys.clone()),
     ] {
         let full = matches!(vault_request, AccountVaultRequest::All(_));
+        let request = GetAccountRequest {
+            account_id: account.id(),
+            block_num: Some(BlockNumber::GENESIS),
+            details: Some(AccountDetailRequest {
+                code_commitment: None,
+                vault_request,
+                storage_request: AccountStorageRequest::None,
+            }),
+        };
         let response = state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: account.id(),
-                block_num: Some(BlockNumber::GENESIS),
-                details: Some(AccountDetailRequest {
-                    code_commitment: None,
-                    vault_request,
-                    storage_request: AccountStorageRequest::None,
-                }),
-            })
+            .read(move |view| crate::server::api::read_account(&view, request))
             .await
             .unwrap();
         let wire: proto::miden::node::v1::GetAccountResponse = response.into();

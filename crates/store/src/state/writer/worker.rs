@@ -623,7 +623,6 @@ mod tests {
     use std::sync::Arc;
 
     use assert_matches::assert_matches;
-    use miden_node_proto::domain::account::GetAccountRequest;
     use miden_node_proto::generated::blockchain::SignedBlock as ProtoSignedBlock;
     use miden_node_utils::clap::StorageOptions;
     use miden_node_utils::fee::{test_fee_params, test_protocol_config};
@@ -1052,15 +1051,9 @@ mod tests {
         assert!(!notifications.has_changed().unwrap());
         assert!(state.load_block(1.into()).await.unwrap().is_none());
         let witness = state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
-            })
+            .read(move |view| Ok::<_, DatabaseError>(view.snapshot.account_tree.open_latest(id)))
             .await
-            .unwrap()
-            .witness;
+            .unwrap();
         assert_eq!(witness.state_commitment(), Word::empty());
         let counts = state.db.writer().write::<_, DatabaseError, _>("check rollback", |tx| {
             let counts = tx.query("SELECT (SELECT COUNT(*) FROM block_headers), (SELECT COUNT(*) FROM transactions), (SELECT COUNT(*) FROM transaction_logs), (SELECT COUNT(*) FROM accounts)", &[], |row| Ok((row.get::<u32>(0)?,row.get::<u32>(1)?,row.get::<u32>(2)?,row.get::<u32>(3)?)))?;
@@ -1072,15 +1065,9 @@ mod tests {
         notifications.changed().await.unwrap();
         assert_eq!(state.committed_tip(), 1.into());
         let witness = state
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
-            })
+            .read(move |view| Ok::<_, DatabaseError>(view.snapshot.account_tree.open_latest(id)))
             .await
-            .unwrap()
-            .witness;
+            .unwrap();
         assert_eq!(witness.state_commitment(), commitment);
         writer.stop(task).await;
     }
@@ -1141,16 +1128,11 @@ mod tests {
             decode(&reopened.load_block(BlockNumber::ONE).await.unwrap().unwrap()).unwrap();
         assert_eq!(stored.header().commitment(), block.header().commitment());
         assert_eq!(stored.body().public_logs(), block.body().public_logs());
-        let response = reopened
-            .view()
-            .get_account(GetAccountRequest {
-                account_id: id,
-                block_num: None,
-                details: None,
-            })
+        let witness = reopened
+            .read(move |view| Ok::<_, DatabaseError>(view.snapshot.account_tree.open_latest(id)))
             .await
             .unwrap();
-        assert_eq!(response.witness.state_commitment(), commitment);
+        assert_eq!(witness.state_commitment(), commitment);
         assert_eq!(reopened.committed_tip(), BlockNumber::ONE);
         reopened_writer.stop(task).await;
         writer.stop(source_task).await;

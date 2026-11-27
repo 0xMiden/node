@@ -14,7 +14,7 @@ use miden_protocol::account::{
     StorageSlot,
     StorageSlotName,
 };
-use miden_protocol::asset::AssetVault;
+use miden_protocol::asset::{Asset, AssetVault, FungibleAsset};
 use miden_protocol::block::account_tree::AccountTree;
 use miden_protocol::block::code_tree::CodePatch;
 use miden_protocol::block::nullifier_tree::NullifierTree;
@@ -29,6 +29,7 @@ use miden_protocol::block::{
 };
 use miden_protocol::note::Note;
 use miden_protocol::testing::account_id::{
+    ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET,
     ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE,
     account_id,
 };
@@ -44,6 +45,7 @@ use miden_protocol::transaction::{
 };
 use miden_protocol::{Felt, Word};
 
+use super::{AccountStorageMapResult, WitnessError};
 use crate::{DatabaseError, GenesisState, State};
 
 pub(crate) async fn state() -> (tempfile::TempDir, Arc<State>, crate::BlockWriter) {
@@ -104,12 +106,15 @@ async fn reads_header_and_configuration_from_the_snapshot() {
 }
 
 #[tokio::test]
-async fn storage_map_keys_open_only_up_to_the_snapshot_block() {
+async fn forest_reads_resolve_only_up_to_the_snapshot_block() {
     let slot_name = StorageSlotName::mock(0);
     let key = StorageMapKey::from_index(1);
+    let asset = Asset::from(
+        FungibleAsset::new(ACCOUNT_ID_PUBLIC_FUNGIBLE_FAUCET.try_into().unwrap(), 100).unwrap(),
+    );
     let account = Account::new_existing(
         ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE.try_into().unwrap(),
-        AssetVault::default(),
+        AssetVault::new(&[asset]).unwrap(),
         AccountStorage::new(vec![StorageSlot::with_map(
             slot_name.clone(),
             StorageMap::with_entries([(key, Word::from([1u32, 0, 0, 0]))]).unwrap(),
@@ -123,14 +128,42 @@ async fn storage_map_keys_open_only_up_to_the_snapshot_block() {
     state
         .read(move |view| -> Result<(), DatabaseError> {
             let snapshot = &view.snapshot;
+            let tip = snapshot.block_num;
+            let future = tip.child();
+
+            assert!(snapshot.open_storage_map_key(id, &slot_name, tip, key).is_some());
+            assert!(snapshot.open_storage_map_key(id, &slot_name, future, key).is_none());
+
+            let keys = vec![key];
             assert!(
-                snapshot.open_storage_map_key(id, &slot_name, snapshot.block_num, key).is_some()
+                snapshot
+                    .get_storage_map_details_for_keys(id, slot_name.clone(), tip, keys.clone())
+                    .is_some()
             );
             assert!(
                 snapshot
-                    .open_storage_map_key(id, &slot_name, snapshot.block_num.child(), key)
+                    .get_storage_map_details_for_keys(id, slot_name.clone(), future, keys)
                     .is_none()
             );
+
+            let all_entries = |block| {
+                snapshot.get_storage_map_details_for_all_entries(id, slot_name.clone(), block)
+            };
+            assert_ne!(all_entries(tip).unwrap(), AccountStorageMapResult::NotFound);
+            assert_eq!(all_entries(future).unwrap(), AccountStorageMapResult::NotFound);
+
+            let asset_ids = vec![asset.id()];
+            assert!(snapshot.get_vault_details_for_assets(id, tip, asset_ids.clone()).is_ok());
+            assert!(matches!(
+                snapshot.get_vault_details_for_assets(id, future, asset_ids),
+                Err(WitnessError::RootNotFound)
+            ));
+
+            assert!(snapshot.get_vault_details(id, tip).is_ok());
+            assert!(matches!(
+                snapshot.get_vault_details(id, future),
+                Err(WitnessError::RootNotFound)
+            ));
             Ok(())
         })
         .await

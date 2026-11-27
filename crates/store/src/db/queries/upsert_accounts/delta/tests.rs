@@ -103,7 +103,9 @@ fn select_vault_at_block(
     account_id: AccountId,
     block_num: BlockNumber,
 ) -> Result<Vec<Asset>> {
-    db.read(move |tx| queries::select_vault_at_block(tx, account_id, block_num))
+    db.read(move |tx| {
+        crate::read::ReadTransaction::new(tx).select_vault_at_block(account_id, block_num)
+    })
 }
 
 fn select_account_header_with_storage_header_at_block(

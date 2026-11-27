@@ -173,9 +173,6 @@ pub(crate) use select_public_account_ids_paged::PublicAccountIdsPaged;
 mod select_public_account_state_roots_paged;
 pub(crate) use select_public_account_state_roots_paged::PublicAccountStateRootsPaged;
 
-mod select_vault_at_block;
-pub(crate) use select_vault_at_block::select_vault_at_block;
-
 mod account_row;
 
 mod select_account;

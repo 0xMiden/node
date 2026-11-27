@@ -2,11 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::mem::size_of;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::pin::pin;
 use std::sync::Arc;
 
 use anyhow::Context;
-use futures::{Stream, TryStreamExt};
+use futures::Stream;
 use miden_node_db::sqlite::{DbReader, DbWriter, WriteTx};
 use miden_node_proto::domain::account::AccountInfo;
 use miden_node_proto::domain::transaction_logs::GetTransactionLogsResponse;
@@ -17,7 +16,7 @@ use miden_node_utils::limiter::{
     QueryParamNoteCommitmentLimit,
 };
 use miden_protocol::Word;
-use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader, StorageMapKey};
+use miden_protocol::account::{AccountHeader, AccountId, AccountStorageHeader};
 use miden_protocol::asset::{Asset, AssetId};
 use miden_protocol::block::{
     BlockAccountUpdate,
@@ -444,21 +443,6 @@ impl Db {
             .await
     }
 
-    /// Queries the account code by its commitment hash.
-    ///
-    /// Returns `None` if no code exists with that commitment.
-    #[instrument]
-    pub async fn select_account_code_by_commitment(
-        &self,
-        code_commitment: Word,
-    ) -> Result<Option<miden_protocol::account::AccountCode>> {
-        self.reader
-            .read("Get account code by commitment", move |tx| {
-                ReadTransaction::new(tx).select_account_code(code_commitment)
-            })
-            .await
-    }
-
     /// Queries the account header and storage header for a specific account at a block.
     ///
     /// Returns both in a single query to avoid querying the database twice.
@@ -575,86 +559,6 @@ impl Db {
         }
 
         resolved_note_ids
-    }
-
-    /// Reconstructs storage map details from the database for a specific slot at a block.
-    ///
-    /// Used as fallback when `AccountStateForest` cache misses (historical or evicted queries).
-    /// Rebuilds all entries by querying the DB and filtering to the specific slot.
-    ///
-    /// Returns:
-    ///     - `::LimitExceeded` when too many entries are present
-    ///     - `::AllEntries` if the size is less than or equal given `entries_limit`, if any
-    #[instrument]
-    pub(crate) async fn reconstruct_storage_map_from_db(
-        &self,
-        account_id: AccountId,
-        slot_name: miden_protocol::account::StorageSlotName,
-        block_num: ScopedBlockNum,
-        entries_limit: Option<usize>,
-    ) -> Result<miden_node_proto::domain::account::AccountStorageMapDetails> {
-        use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
-        use miden_protocol::EMPTY_WORD;
-
-        // TODO this remains expensive with a large history until we implement pruning for DB
-        // columns
-        let entries_limit = entries_limit.unwrap_or_else(default_storage_map_entries_limit);
-        let query =
-            queries::AccountStorageMapValuesPaged::new(account_id, block_num, entries_limit);
-
-        let mut values = Vec::new();
-        let mut pages = pin!(self.pages(query, BlockNumber::GENESIS));
-        loop {
-            match pages.try_next().await {
-                Ok(Some(page)) => values.extend(page),
-                Ok(None) => break,
-                // A single block holds more entries than fit in a page, as with genesis accounts
-                // that have large storage maps.
-                Err(DatabaseError::BlockExceedsPageLimit { .. }) => {
-                    return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
-                },
-                Err(err) => return Err(err),
-            }
-        }
-
-        // Filter to the specific slot and collect latest values per key
-        let mut latest_values = BTreeMap::<StorageMapKey, Word>::new();
-        for value in values {
-            if value.slot_name == slot_name {
-                let raw_key = value.key;
-                latest_values.insert(raw_key, value.value);
-            }
-        }
-
-        // Remove EMPTY_WORD entries (deletions)
-        latest_values.retain(|_, v| *v != EMPTY_WORD);
-
-        if latest_values.len() > AccountStorageMapDetails::MAX_RETURN_ENTRIES {
-            return Ok(AccountStorageMapDetails::limit_exceeded(slot_name));
-        }
-
-        let entries = latest_values.into_iter().collect::<Vec<_>>();
-        Ok(AccountStorageMapDetails {
-            slot_name,
-            entries: StorageMapEntries::AllEntries(entries),
-        })
-    }
-
-    /// Reconstructs the account vault from the database for a specific account at a block.
-    ///
-    /// Used as fallback when the `AccountStateForest` vault-key cache misses (historical or evicted
-    /// queries). Returns the latest asset for each vault key at or before `block_num`.
-    #[instrument]
-    pub async fn select_vault_at_block(
-        &self,
-        account_id: AccountId,
-        block_num: ScopedBlockNum,
-    ) -> Result<Vec<Asset>, DatabaseError> {
-        self.reader
-            .read("select vault at block", move |tx| {
-                queries::select_vault_at_block(tx, account_id, *block_num)
-            })
-            .await
     }
 
     /// Returns the script for a note by its root.

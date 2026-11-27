@@ -10,6 +10,8 @@ mod select_existing_note_ids;
 mod select_note_inclusion_proofs;
 mod select_protocol_config;
 mod select_protocol_config_commitment_at;
+mod select_storage_map_at_block;
+mod select_vault_at_block;
 
 /// Typed storage queries within a single read-only database snapshot.
 pub struct ReadTransaction<'a> {

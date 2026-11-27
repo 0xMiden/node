@@ -3,14 +3,18 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures::{StreamExt, stream};
-use miden_node_proto::DecodeMessageExt;
-use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::VaultRequest;
+use miden_node_proto::domain::account::{
+    AccountStorageMapDetails,
+    AccountVaultDetails,
+    StorageMapEntries,
+};
 use miden_node_proto::generated::{self as proto};
 use miden_node_store::DatabaseError;
+use miden_node_store::read::{AccountStorageMapResult, ReadView};
 use miden_node_store::state::State;
 use miden_node_utils::clap::StorageOptions;
-use miden_protocol::Word;
-use miden_protocol::account::AccountId;
+use miden_protocol::account::{AccountId, StorageSlotName};
+use miden_protocol::asset::Asset;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::crypto::merkle::mmr::Forest;
 use miden_protocol::note::NoteTag;
@@ -35,10 +39,12 @@ const NOTE_IDS_PER_NULLIFIERS_CHECK: usize = 20;
 // GET ACCOUNT
 // ================================================================================================
 
-/// Sends multiple `get_account` requests to the store and prints the performance.
+/// Reads the vault and a storage map of many public accounts, as `GetAccount` does, and prints the
+/// performance.
 ///
-/// Each request asks for all entries in `storage_map_slot`, which is intended to exercise the
-/// storage-map reconstruction path for public accounts seeded by this stress-test tool.
+/// Each read asks for the full vault and all entries in `storage_map_slot`, which is intended to
+/// exercise the vault and storage-map reconstruction paths for public accounts seeded by this
+/// stress-test tool.
 pub async fn bench_get_account(
     data_directory: PathBuf,
     iterations: usize,
@@ -123,35 +129,25 @@ async fn get_account(
     account_id: AccountId,
     storage_map_slot: String,
 ) -> GetAccountRun {
-    use miden_node_proto::generated::miden::node::v1::account_storage_details::account_storage_map_details::Result;
-
-    let request = get_account_request(account_id, storage_map_slot);
+    let slot_name =
+        StorageSlotName::new(storage_map_slot).expect("benchmark storage map slot should be valid");
 
     let start = Instant::now();
-    let request = request.decode_and_verify().expect("request should be valid");
-    let response: proto::miden::node::v1::GetAccountResponse =
-        state.view().get_account(request).await.unwrap().into();
+    let (vault, storage_map) = state
+        .read(move |view| read_vault_and_storage_map(&view, account_id, slot_name))
+        .await
+        .unwrap();
     let duration = start.elapsed();
 
-    let details = response.details;
-    let map_details = details
-        .as_ref()
-        .and_then(|details| details.storage_details.as_ref())
-        .and_then(|storage_details| storage_details.map_details.first());
-    let (storage_map_entries, storage_map_limit_exceeded) = match map_details {
-        Some(details) => match &details.result {
-            Some(Result::TooManyEntries(true)) => (0, true),
-            Some(Result::AllEntries(entries)) => (entries.entries.len(), false),
-            _ => (0, false),
-        },
-        None => (0, false),
+    let (storage_map_entries, storage_map_limit_exceeded) = match &storage_map.entries {
+        StorageMapEntries::LimitExceeded => (0, true),
+        StorageMapEntries::AllEntries(entries) => (entries.len(), false),
+        StorageMapEntries::PartialMap { .. } => (0, false),
     };
-
-    let vault_details = details.and_then(|details| details.vault_details);
-    let (vault_assets, vault_limit_exceeded) = match vault_details {
-        Some(details) if details.too_many_assets => (0, true),
-        Some(details) => (details.assets.len(), false),
-        None => (0, false),
+    let (vault_assets, vault_limit_exceeded) = match &vault {
+        AccountVaultDetails::LimitExceeded => (0, true),
+        AccountVaultDetails::Assets(assets) => (assets.len(), false),
+        AccountVaultDetails::Partial { .. } => (0, false),
     };
 
     GetAccountRun {
@@ -163,57 +159,58 @@ async fn get_account(
     }
 }
 
-fn get_account_request(
+/// Reads the full vault of `account_id` and every entry of its storage map at `slot_name`, as
+/// `GetAccount` does for a request that asks for both.
+///
+/// Each comes from the forest when the reverse-key caches hold every raw key, and from the
+/// database otherwise. A database read records the raw keys in the caches, like `GetAccount`.
+fn read_vault_and_storage_map(
+    view: &ReadView<'_>,
     account_id: AccountId,
-    storage_map_slot: String,
-) -> proto::miden::node::v1::GetAccountRequest {
-    use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDetailRequest;
-    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::storage_map_detail_request::SlotData;
-    use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
-        StorageMapDetailRequest,
-        StorageMapDetailRequests,
-        StorageRequest,
+    slot_name: StorageSlotName,
+) -> Result<(AccountVaultDetails, AccountStorageMapDetails), DatabaseError> {
+    let block_num = view.snapshot.block_num;
+
+    let forest_vault = view
+        .snapshot
+        .get_vault_details(account_id, block_num)
+        .map_err(|err| DatabaseError::DataCorrupted(err.to_string()))?;
+    let vault = if let Some(details) = forest_vault {
+        details
+    } else {
+        let assets = view.tx.select_vault_at_block(account_id, block_num)?;
+        if assets.len() > AccountVaultDetails::MAX_RETURN_ENTRIES {
+            AccountVaultDetails::LimitExceeded
+        } else {
+            view.snapshot.cache_vault_keys(assets.iter().map(Asset::id));
+            AccountVaultDetails::from_assets(assets)
+        }
     };
 
-    proto::miden::node::v1::GetAccountRequest {
-        account_id: Some(account_id.into()),
-        block_num: None,
-        details: Some(AccountDetailRequest {
-            code_commitment: None,
-            vault_request: Some(VaultRequest::AssetVaultCommitment(proto::primitives::Word::from(
-                Word::empty(),
-            ))),
-            storage_request: Some(StorageRequest::StorageMaps(StorageMapDetailRequests {
-                storage_maps: vec![StorageMapDetailRequest {
-                    slot_name: storage_map_slot,
-                    slot_data: Some(SlotData::AllEntries(true)),
-                }],
-            })),
-        }),
-    }
-}
+    let forest_storage_map = view
+        .snapshot
+        .get_storage_map_details_for_all_entries(account_id, slot_name.clone(), block_num)
+        .map_err(DatabaseError::MerkleError)?;
+    let storage_map = match forest_storage_map {
+        AccountStorageMapResult::Details(details) => details,
+        AccountStorageMapResult::CannotReconstructKeysFromCache => {
+            let details = view.tx.select_storage_map_at_block(
+                account_id,
+                slot_name,
+                block_num,
+                AccountStorageMapDetails::MAX_RETURN_ENTRIES,
+            )?;
+            if let StorageMapEntries::AllEntries(entries) = &details.entries {
+                view.snapshot.cache_storage_map_keys(entries.iter().map(|(key, _)| *key));
+            }
+            details
+        },
+        AccountStorageMapResult::NotFound => {
+            panic!("benchmark account {account_id} should have the storage map {slot_name}")
+        },
+    };
 
-#[cfg(test)]
-mod tests {
-    use miden_protocol::testing::account_id::ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE;
-
-    use super::*;
-
-    #[test]
-    fn get_account_request_includes_vault_details() {
-        let account_id = AccountId::try_from(ACCOUNT_ID_REGULAR_PUBLIC_ACCOUNT_IMMUTABLE_CODE)
-            .expect("test account id should be valid");
-        let request = get_account_request(
-            account_id,
-            crate::seeding::BENCHMARK_STORAGE_MAP_SLOT_NAME.to_string(),
-        );
-
-        let details = request.details.expect("details should be requested");
-        assert!(
-            details.vault_request.is_some(),
-            "benchmark get-account should request vault asset details"
-        );
-    }
+    Ok((vault, storage_map))
 }
 
 // SYNC NOTES

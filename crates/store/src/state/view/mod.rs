@@ -8,10 +8,8 @@
 use std::ops::RangeInclusive;
 use std::sync::Arc;
 
-use miden_node_tracing::Span;
 use miden_protocol::block::{BlockNumber, Blockchain};
 
-use crate::account_state_forest::{AccountStateForest, AccountStateForestBackendReader};
 use crate::db::{Db, HISTORICAL_BLOCK_RETENTION};
 use crate::errors::{DatabaseError, RangeBelowRetention, RangeBeyondTip};
 use crate::state::State;
@@ -23,8 +21,8 @@ mod snapshot;
 pub(in crate::state) use snapshot::PublishedGenerations;
 pub(crate) use snapshot::StateSnapshot;
 
-mod account;
 mod block;
+mod network_accounts;
 mod note;
 mod protocol_config;
 mod sync;
@@ -53,7 +51,7 @@ impl State {
     /// The view is frozen: it is unaffected if the writer publishes a new snapshot while it is
     /// held.
     ///
-    /// Use this only for one single-expression read (`state.view().get_account(..)`),
+    /// Use this only for one single-expression read (`state.view().get_block_header(..)`),
     /// where the temporary view drops at the end of the statement. Two `view()` calls observe
     /// potentially *different* snapshots — a block can commit between them — so reads that must
     /// be mutually consistent (e.g. a query and the tip it was served at) must share one view via
@@ -76,7 +74,7 @@ impl State {
     ///
     /// The closure receives a shared reference, so the view cannot escape the call, and the
     /// snapshot is not pinned through unrelated work that follows (e.g. response encoding). A
-    /// *single* read doesn't need it — `state.view().get_account(..)` drops its temporary view at
+    /// *single* read doesn't need it — `state.view().get_block_header(..)` drops its temporary view at
     /// the end of the statement.
     ///
     /// Work in the closure should be kept to low-complexity compute over the view, ideally with no
@@ -98,8 +96,7 @@ impl StateView {
     ///
     /// The MMR is the only part of the snapshot that is purely in-memory and therefore safe to
     /// access directly on an async worker thread. The account and nullifier trees may be backed
-    /// by `RocksDB` and are deliberately not reachable here — they must be accessed through
-    /// [`Self::with_inner_read_blocking`].
+    /// by `RocksDB` and are deliberately not reachable here.
     fn blockchain(&self) -> &Blockchain {
         &self.snapshot.blockchain
     }
@@ -143,27 +140,5 @@ impl StateView {
             return Err(RangeBelowRetention { oldest_retained, block_to: range.end() }.into());
         }
         Ok(range)
-    }
-
-    /// Runs a synchronous read-only operation over the pinned state snapshot on Tokio's blocking
-    /// path.
-    ///
-    /// The account and nullifier trees may be backed by `RocksDB`, so tree access must not run on
-    /// an async worker thread directly. This helper preserves the current tracing span while
-    /// moving the closure body into `block_in_place`.
-    fn with_inner_read_blocking<R>(&self, f: impl FnOnce(&StateSnapshot) -> R) -> R {
-        let span = Span::current();
-        tokio::task::block_in_place(|| span.in_scope(|| f(&self.snapshot)))
-    }
-
-    /// Runs a synchronous read-only operation over the account state forest snapshot on Tokio's
-    /// blocking path.
-    ///
-    /// See [`Self::with_inner_read_blocking`] for why this uses `block_in_place`.
-    fn with_forest_read_blocking<R>(
-        &self,
-        f: impl FnOnce(&AccountStateForest<AccountStateForestBackendReader>) -> R,
-    ) -> R {
-        self.with_inner_read_blocking(|snapshot| f(&snapshot.forest))
     }
 }

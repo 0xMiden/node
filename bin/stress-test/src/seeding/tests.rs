@@ -144,12 +144,8 @@ fn private_account_storage_map_update_is_skipped() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
-    use miden_node_proto::domain::account::{
-        AccountDetailRequest,
-        AccountStorageRequest,
-        GetAccountRequest,
-        StorageMapEntries,
-    };
+    use miden_node_proto::domain::account::{AccountStorageMapDetails, StorageMapEntries};
+    use miden_protocol::account::StorageSlotType;
 
     let temp_dir = tempfile::tempdir().unwrap();
     let data_directory = temp_dir.path().join("store");
@@ -161,23 +157,29 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
     let account_id = AccountId::from_hex(account_ids[0]).unwrap();
 
     let (state, block_writer, writer_task) = load_state(data_directory).await;
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id,
-            block_num: None,
-            details: Some(AccountDetailRequest {
-                code_commitment: None,
-                vault_request: miden_node_proto::domain::account::AccountVaultRequest::None,
-                storage_request: AccountStorageRequest::AllStorageMaps,
-            }),
+    let (map_slots, map_details) = state
+        .read(move |view| {
+            let block_num = view.snapshot.block_num;
+            let (_, storage_header) = view
+                .tx
+                .select_account_header_with_storage_header(account_id, block_num)?
+                .expect("the seeded account should exist");
+            let map_slots = storage_header
+                .slots()
+                .filter(|slot| slot.slot_type() == StorageSlotType::Map)
+                .map(|slot| slot.name().clone())
+                .collect::<Vec<_>>();
+            let map_details = view.tx.select_storage_map_at_block(
+                account_id,
+                benchmark_storage_map_slot(),
+                block_num,
+                AccountStorageMapDetails::MAX_RETURN_ENTRIES,
+            )?;
+            Ok::<_, DatabaseError>((map_slots, map_details))
         })
         .await
         .unwrap();
-    let details = response.details.expect("public account details should be returned");
-    assert_eq!(details.storage_details.map_details.len(), 1);
-    let map_details = &details.storage_details.map_details[0];
-    assert_eq!(map_details.slot_name, benchmark_storage_map_slot());
+    assert_eq!(map_slots, vec![benchmark_storage_map_slot()]);
     let StorageMapEntries::AllEntries(entries) = &map_details.entries else {
         panic!("small benchmark map should return all entries");
     };
@@ -197,8 +199,6 @@ async fn seed_store_persists_one_public_account_and_applies_one_map_update() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn seed_store_handles_map_larger_than_transaction_account_update_limit() {
-    use miden_node_proto::domain::account::GetAccountRequest;
-
     let temp_dir = tempfile::tempdir().unwrap();
     let data_directory = temp_dir.path().join("store");
     seed_store(data_directory.clone(), 1, 100, 4_096, 1, 1).await;
@@ -209,16 +209,13 @@ async fn seed_store_handles_map_larger_than_transaction_account_update_limit() {
     let account_id = AccountId::from_hex(account_ids[0]).unwrap();
 
     let (state, block_writer, writer_task) = load_state(data_directory).await;
-    let response = state
-        .view()
-        .get_account(GetAccountRequest {
-            account_id,
-            block_num: None,
-            details: None,
+    let witness = state
+        .read(move |view| {
+            Ok::<_, DatabaseError>(view.snapshot.account_tree.open_latest(account_id))
         })
         .await
         .unwrap();
-    assert_ne!(response.witness.state_commitment(), Word::empty());
+    assert_ne!(witness.state_commitment(), Word::empty());
 
     // Release the backing storage before the temporary directory is deleted.
     drop(state);

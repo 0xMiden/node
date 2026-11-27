@@ -47,7 +47,6 @@ pub use errors::{
     ApplyBlockError,
     ApplyBlockWithProvingInputsError,
     DatabaseError,
-    GetAccountError,
     GetBlockHeaderError,
     NoteSyncError,
     RangeBelowRetention,

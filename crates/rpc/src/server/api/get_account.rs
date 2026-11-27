@@ -9,18 +9,59 @@ use miden_node_proto::generated::miden::node::v1::get_account_request::AccountDe
 use miden_node_proto::generated::miden::node::v1::get_account_request::account_detail_request::{
     StorageRequest, VaultRequest, storage_map_detail_request::SlotData,
 };
+use miden_node_proto::errors::ConversionError;
 use miden_node_proto::{DecodeMessageExt, generated as proto};
-use miden_node_store::GetAccountError;
+use miden_node_store::DatabaseError;
 use miden_node_tracing::{debug, info_span, instrument, miden_span_record};
 use miden_node_utils::limiter::{
     QueryParamStorageMapKeyTotalLimit,
     QueryParamStorageMapSlotLimit,
     QueryParamVaultAssetLimit,
 };
+use miden_protocol::account::{AccountId, StorageSlotName};
+use miden_protocol::block::BlockNumber;
 use tonic::Status;
 
 use super::error_codes::GetAccountErrorCode;
 use super::{RpcService, check};
+
+mod read;
+#[cfg(test)]
+pub(crate) use read::get_account as read_account;
+
+// ERRORS
+// ================================================================================================
+
+/// Errors produced while reading an account witness and its details from the store.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum GetAccountError {
+    #[error("database error")]
+    DatabaseError(#[from] DatabaseError),
+    #[error("malformed request")]
+    DeserializationFailed(#[from] ConversionError),
+    #[error("account {0} not found at block {1}")]
+    AccountNotFound(AccountId, BlockNumber),
+    #[error("account {0} is not public")]
+    AccountNotPublic(AccountId),
+    #[error("block {0} is unknown")]
+    UnknownBlock(BlockNumber),
+    #[error("block {0} has been pruned")]
+    BlockPruned(BlockNumber),
+    #[error("account {account_id} has no storage slot {slot_name} at block {block_num}")]
+    StorageSlotNotFound {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
+    #[error(
+        "storage slot {slot_name} of account {account_id} is not a map slot at block {block_num}"
+    )]
+    StorageSlotNotMap {
+        account_id: AccountId,
+        slot_name: StorageSlotName,
+        block_num: BlockNumber,
+    },
+}
 
 #[tonic::async_trait]
 impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
@@ -61,8 +102,7 @@ impl proto::server::miden_node_v1_node_service::GetAccount for RpcService {
 
         let account_data = self
             .state
-            .view()
-            .get_account(request)
+            .read(move |view| read::get_account(&view, request))
             .await
             .map_err(get_account_error_to_status)?;
         Ok(account_data)
