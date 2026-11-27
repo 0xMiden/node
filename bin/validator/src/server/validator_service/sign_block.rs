@@ -86,6 +86,8 @@ impl grpc::server::miden_validator_v1_validator_service::SignBlock for Validator
             lock.await
         };
         let header = &proving_inputs.block_header;
+        super::block_validation::validate_timestamp(header.timestamp())
+            .map_err(ValidatorError::into_validation_status)?;
         let chain = self
             .db
             .read("chain_state", |tx| tx.select_chain_state())

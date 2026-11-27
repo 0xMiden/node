@@ -2092,6 +2092,10 @@ async fn recovery_allows_transaction_submission_and_releases_signing_on_shutdown
     let (parent, _) = child.clone().into_header_and_body().unwrap();
     let mut chain = tv.chain.clone();
     chain.add_block(&tv.chain_tip, false);
+    let future = empty_block_at(&parent, &chain, u32::MAX);
+    let error = tv.call_sign_block(&future).await.unwrap_err();
+    assert_eq!(error.code(), tonic::Code::InvalidArgument);
+    assert_eq!(tv.call_status().await.status, "OK");
     let skipped = empty_block(&parent, &chain);
     assert_eq!(tv.call_sign_block(&skipped).await.unwrap_err().code(), tonic::Code::Unavailable);
     assert_eq!(tv.call_status().await.status, "RECOVERING");
