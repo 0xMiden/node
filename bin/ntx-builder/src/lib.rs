@@ -23,6 +23,7 @@ use miden_node_tracing::{ErrorReport, warn};
 use miden_node_utils::lru_cache::LruCache;
 use miden_node_utils::shutdown::CancellationToken;
 use miden_protocol::account::AccountId;
+use miden_standards::tx_script::ExpirationTransactionScript;
 use sync::BlockStream;
 use tonic::metadata::AsciiMetadataValue;
 use url::Url;
@@ -51,6 +52,7 @@ mod selection;
 pub mod server;
 mod sponsorship;
 mod sync;
+mod tx_args;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
@@ -550,7 +552,7 @@ impl NtxBuilderConfig {
             db,
             script_cache: LruCache::new(self.script_cache_size),
             code_cache: LruCache::new(ACCOUNT_CODE_CACHE_SIZE),
-            tx_args: selection::build_tx_args(self.tx_expiration_delta),
+            expiration_script: ExpirationTransactionScript::new(self.tx_expiration_delta),
             config: NetworkTransactionConfig {
                 max_notes_per_tx: self.max_notes_per_tx,
                 max_note_attempts: self.max_note_attempts,

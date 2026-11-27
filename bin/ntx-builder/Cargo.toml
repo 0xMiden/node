@@ -32,6 +32,7 @@ miden-node-utils       = { workspace = true }
 miden-protocol         = { default-features = true, workspace = true }
 miden-standards        = { workspace = true }
 miden-tx               = { features = ["concurrent"], workspace = true }
+rand                   = { workspace = true }
 thiserror              = { workspace = true }
 tokio                  = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tokio-stream           = { features = ["net"], workspace = true }

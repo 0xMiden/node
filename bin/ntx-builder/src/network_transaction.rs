@@ -11,7 +11,8 @@ use miden_protocol::Word;
 use miden_protocol::account::{AccountCode, AccountId, PartialAccount};
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{Note, NoteScript, Nullifier};
-use miden_protocol::transaction::{TransactionArgs, TransactionId};
+use miden_protocol::transaction::TransactionId;
+use miden_standards::tx_script::ExpirationTransactionScript;
 
 use crate::candidate::TransactionCandidate;
 use crate::chain_state::ChainState;
@@ -68,9 +69,9 @@ pub struct NetworkTransactionContext {
     pub script_cache: LruCache<Word, NoteScript>,
     /// Shared LRU cache of account code retrieved over RPC, keyed by account ID.
     pub code_cache: LruCache<AccountId, AccountCode>,
-    /// [`TransactionArgs`] used by every network transaction. These are constant and are therefore
-    /// prebuilt once and cloned per transaction.
-    pub tx_args: TransactionArgs,
+    /// Expiration script attached to every network transaction, which bounds how long a submitted
+    /// transaction stays valid.
+    pub expiration_script: ExpirationTransactionScript,
     /// Configuration knobs for one network transaction.
     pub config: NetworkTransactionConfig,
 }
@@ -107,7 +108,7 @@ impl NetworkTransactionContext {
             db: db.clone(),
             script_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
             code_cache: LruCache::new(NonZeroUsize::new(1).unwrap()),
-            tx_args: crate::selection::build_tx_args(
+            expiration_script: ExpirationTransactionScript::new(
                 std::num::NonZeroU16::new(30).expect("literal is non-zero"),
             ),
             config: NetworkTransactionConfig {
@@ -278,7 +279,7 @@ impl NetworkTransactionContext {
             self.code_cache.clone(),
             self.db.clone(),
             self.config.max_cycles,
-            self.tx_args.clone(),
+            self.expiration_script,
             self.config.request_backoff_initial,
             self.config.request_backoff_max,
         )

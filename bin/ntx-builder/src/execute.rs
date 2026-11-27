@@ -32,13 +32,13 @@ use miden_protocol::transaction::{
     InputNotes,
     PartialBlockchain,
     ProvenTransaction,
-    TransactionArgs,
     TransactionId,
     TransactionInputs,
 };
 use miden_protocol::vm::FutureMaybeSend;
 use miden_protocol::{MastForest, Word};
 use miden_standards::account::fees::FeePolicyManager;
+use miden_standards::tx_script::ExpirationTransactionScript;
 use miden_tx::auth::UnreachableAuth;
 use miden_tx::{
     DataStore,
@@ -58,6 +58,7 @@ use miden_tx::{
 use crate::candidate::{SponsoredFeatureNote, TransactionCandidate};
 use crate::clients::{RemoteTransactionProver, RpcClient, RpcError, log_transient_retry};
 use crate::db::NtxDbReader;
+use crate::tx_args::NetworkTxArgs;
 
 mod proving;
 
@@ -191,9 +192,9 @@ pub struct NtxContext {
     /// Maximum number of VM execution cycles for network transactions.
     max_cycles: u32,
 
-    /// [`TransactionArgs`] shared by every network transaction. Cloned into each executed
-    /// transaction. Currently carries the canonical expiration script and its delta word.
-    tx_args: TransactionArgs,
+    /// Expiration script attached to every network transaction. Serviced network accounts must
+    /// allowlist its root ([`ExpirationTransactionScript::script_root`]).
+    expiration_script: ExpirationTransactionScript,
 
     /// [`ExponentialBuilder`] used to back off retries on transient request failures.
     request_backoff: ExponentialBuilder,
@@ -212,7 +213,7 @@ impl NtxContext {
         code_cache: LruCache<AccountId, AccountCode>,
         db: NtxDbReader,
         max_cycles: u32,
-        tx_args: TransactionArgs,
+        expiration_script: ExpirationTransactionScript,
         request_backoff_initial: Duration,
         request_backoff_max: Duration,
     ) -> Self {
@@ -224,7 +225,7 @@ impl NtxContext {
             code_cache,
             db,
             max_cycles,
-            tx_args,
+            expiration_script,
             request_backoff,
         }
     }
@@ -288,6 +289,10 @@ impl NtxContext {
     /// 3. Proving – a proof is generated for the executed transaction.
     /// 4. Submission – the proven transaction is submitted through the RPC service.
     ///
+    /// Each call is one attempt and builds its own [`NetworkTxArgs`], so every attempt seals with
+    /// a fresh seed. Filtering and execution share these arguments, while proving and submission
+    /// take them from the executed transaction's inputs.
+    ///
     /// # Returns
     ///
     /// On success, returns an [`NtxExecutionResult`] containing the transaction ID, any notes that
@@ -309,6 +314,7 @@ impl NtxContext {
     ) -> impl FutureMaybeSend<NtxResult<NtxExecutionResult>> {
         let num_notes = tx.num_notes();
         let TransactionCandidate { notes, chain_state } = tx;
+        let tx_args = NetworkTxArgs::new(self.expiration_script, &mut rand::rng());
         miden_span_record!(
             account.id = account.id(),
             account.id.network_prefix = account.id().prefix(),
@@ -350,9 +356,9 @@ impl NtxContext {
                                 deferred,
                                 oversized,
                                 dropped_sponsorships,
-                            } = ctx.filter_notes(&data_store, notes).await?;
+                            } = ctx.filter_notes(&data_store, notes, &tx_args).await?;
                             let executed_tx =
-                                Box::pin(ctx.execute(&data_store, successful)).await?;
+                                Box::pin(ctx.execute(&data_store, successful, &tx_args)).await?;
                             let scripts_to_cache = data_store.take_fetched_scripts();
                             Ok::<_, NtxError>((
                                 executed_tx,
@@ -416,9 +422,11 @@ impl NtxContext {
         &self,
         data_store: &NtxDataStore,
         sponsored_notes: Vec<SponsoredFeatureNote>,
+        tx_args: &NetworkTxArgs,
     ) -> NtxResult<FilteredNotes> {
         let all_notes = sponsored_notes.iter().flat_map(bundled_notes).collect::<Vec<_>>();
-        let (successful_notes, failed) = self.check_consumability(data_store, all_notes).await?;
+        let (successful_notes, failed) =
+            self.check_consumability(data_store, all_notes, tx_args).await?;
         let successful_ids = successful_notes.iter().map(Note::id).collect::<BTreeSet<_>>();
 
         let sponsor_to_feature = sponsored_notes
@@ -466,7 +474,8 @@ impl NtxContext {
         }
 
         let (cycle_limited, failed) = partition_cycle_limited(failed);
-        let (deferred, oversized) = self.classify_cycle_limited(data_store, cycle_limited).await;
+        let (deferred, oversized) =
+            self.classify_cycle_limited(data_store, cycle_limited, tx_args).await;
 
         Ok(FilteredNotes {
             successful,
@@ -483,6 +492,7 @@ impl NtxContext {
         &self,
         data_store: &NtxDataStore,
         notes: Vec<Note>,
+        tx_args: &NetworkTxArgs,
     ) -> NtxResult<(Vec<Note>, Vec<FailedNote>)> {
         let executor = self.create_executor(data_store);
         let checker = NoteConsumptionChecker::new(&executor);
@@ -491,7 +501,7 @@ impl NtxContext {
             data_store.account.id(),
             data_store.reference_block.block_num(),
             notes,
-            self.tx_args.clone(),
+            tx_args.to_transaction_args(),
         ))
         .await
         .map_err(NtxError::NoteFilter)?;
@@ -506,11 +516,12 @@ impl NtxContext {
         &self,
         data_store: &NtxDataStore,
         cycle_limited: Vec<FailedNote>,
+        tx_args: &NetworkTxArgs,
     ) -> (Vec<FailedNote>, Vec<FailedNote>) {
         let mut deferred = Vec::new();
         let mut oversized = Vec::new();
         for failed in cycle_limited {
-            if self.note_exceeds_budget_alone(data_store, failed.note()).await {
+            if self.note_exceeds_budget_alone(data_store, failed.note(), tx_args).await {
                 oversized.push(failed);
             } else {
                 deferred.push(failed);
@@ -521,7 +532,12 @@ impl NtxContext {
 
     /// Returns `true` if the note trips the cycle limit even as a single-note transaction, i.e. its
     /// own consumption exceeds the per-tx cycle budget and it can never be consumed.
-    async fn note_exceeds_budget_alone(&self, data_store: &NtxDataStore, note: &Note) -> bool {
+    async fn note_exceeds_budget_alone(
+        &self,
+        data_store: &NtxDataStore,
+        note: &Note,
+        tx_args: &NetworkTxArgs,
+    ) -> bool {
         let executor = self.create_executor(data_store);
         let checker = NoteConsumptionChecker::new(&executor);
 
@@ -529,7 +545,7 @@ impl NtxContext {
             data_store.account.id(),
             data_store.reference_block.block_num(),
             vec![note.clone()],
-            self.tx_args.clone(),
+            tx_args.to_transaction_args(),
         ))
         .await
         {
@@ -555,19 +571,15 @@ impl NtxContext {
         &self,
         data_store: &NtxDataStore,
         notes: InputNotes<InputNote>,
+        tx_args: &NetworkTxArgs,
     ) -> NtxResult<ExecutedTransaction> {
         let executor = self.create_executor(data_store);
-
-        // Attach the canonical expiration script (with its delta args) so the submitted tx is
-        // rejected on-chain if it does not land within the configured block delta. Serviced network
-        // accounts must allowlist this script's root; see the `tx_args` field docs.
-        let tx_args = self.tx_args.clone();
 
         Box::pin(executor.execute_transaction(
             data_store.account.id(),
             data_store.reference_block.block_num(),
             notes,
-            tx_args,
+            tx_args.to_transaction_args(),
         ))
         .await
         .map_err(NtxError::Execution)

@@ -7,7 +7,7 @@
 //! because a transaction attempt never writes to the database.
 
 use std::collections::{HashMap, HashSet};
-use std::num::{NonZeroU16, NonZeroUsize};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,8 +16,6 @@ use miden_node_utils::formatting::format_opt;
 use miden_protocol::account::Account;
 use miden_protocol::block::BlockNumber;
 use miden_protocol::note::{NoteId, Nullifier};
-use miden_protocol::transaction::TransactionArgs;
-use miden_standards::tx_script::ExpirationTransactionScript;
 use miden_tx::FailedNote;
 
 use crate::NoteError;
@@ -29,21 +27,6 @@ use crate::db::NtxDbReader;
 /// Maximum number of `FEE_SPONSORSHIP` notes attached to a single feature note. A feature note with
 /// more pending sponsorships than this keeps a subset of this size.
 const MAX_SPONSORSHIPS_PER_NOTE: usize = 3;
-
-/// Builds the [`TransactionArgs`] shared by every network transaction.
-///
-/// Currently these attach the canonical [`ExpirationTransactionScript`] for `expiration_delta`
-/// blocks, with the script paired to the `TX_SCRIPT_ARGS` word it reads its delta from.
-///
-/// The script itself is account-independent and its MAST root is identical for every delta (the
-/// delta travels in the args word, not the code), so the builder derives these once at startup and
-/// shares them across all attempts. The matching root
-/// ([`ExpirationTransactionScript::script_root`]) is what network accounts must allowlist for these
-/// transactions to be accepted on-chain.
-pub(crate) fn build_tx_args(expiration_delta: NonZeroU16) -> TransactionArgs {
-    let script = ExpirationTransactionScript::new(expiration_delta);
-    TransactionArgs::default().with_tx_script_and_args(script.into(), script.tx_script_args())
-}
 
 // SELECTION
 // ================================================================================================
@@ -272,7 +255,6 @@ pub(crate) fn log_deferred_notes(deferred: Vec<FailedNote>) {
 
 #[cfg(test)]
 mod tests {
-    use miden_protocol::Felt;
     use miden_protocol::account::AccountId;
     use miden_protocol::crypto::merkle::mmr::{Forest, MmrPeaks, PartialMmr};
 
@@ -495,27 +477,6 @@ end";
             selection.stale_eligibility.is_empty(),
             "the note was eligible; penalizing it is what moves its eligibility",
         );
-    }
-
-    /// The canonical expiration script carries its delta in `TX_SCRIPT_ARGS`, so every delta shares
-    /// a single script root (the one network accounts allowlist), while the args word encodes the
-    /// delta in its first element.
-    #[test]
-    fn expiration_script_shares_root_and_encodes_delta_in_args() {
-        let one = build_tx_args(NonZeroU16::new(1).unwrap());
-        let thirty = build_tx_args(NonZeroU16::new(30).unwrap());
-        let max = build_tx_args(NonZeroU16::MAX);
-
-        // All deltas resolve to the single allowlistable root.
-        let root = ExpirationTransactionScript::script_root();
-        assert_eq!(one.tx_script().unwrap().root(), root);
-        assert_eq!(thirty.tx_script().unwrap().root(), root);
-        assert_eq!(max.tx_script().unwrap().root(), root);
-
-        // The delta rides in the first element of the args word.
-        assert_eq!(one.tx_script_args()[0], Felt::from(1_u16));
-        assert_eq!(thirty.tx_script_args()[0], Felt::from(30_u16));
-        assert_eq!(max.tx_script_args()[0], Felt::from(u16::MAX));
     }
 
     #[test]
