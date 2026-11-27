@@ -6,7 +6,12 @@ use miden_crypto::merkle::smt::RocksDbStorage;
 use miden_node_tracing::instrument;
 use miden_protocol::account::{AccountId, AccountIdPrefix};
 use miden_protocol::block::BlockNumber;
-use miden_protocol::block::account_tree::{AccountMutationSet, AccountTree, AccountWitness};
+use miden_protocol::block::account_tree::{
+    AccountIdKey,
+    AccountMutationSet,
+    AccountTree,
+    AccountWitness,
+};
 use miden_protocol::crypto::merkle::smt::{
     LargeSmt,
     LeafIndex,
@@ -277,14 +282,19 @@ impl<S: SmtStorageReader> AccountTreeWithHistory<S> {
             leaf,
         )?;
 
-        // Extract commitment from leaf
-        let commitment = match leaf {
-            SmtLeaf::Empty(_) => EMPTY_WORD,
-            SmtLeaf::Single((_, value)) => value,
+        // A populated leaf authenticates its stored ID, including when the caller requested an
+        // absent account with the same prefix.
+        let (witness_id, commitment) = match leaf {
+            SmtLeaf::Empty(_) => (account_id, EMPTY_WORD),
+            SmtLeaf::Single((key, value)) => (
+                AccountIdKey::try_from_word(key)
+                    .expect("account tree leaves contain valid account IDs"),
+                value,
+            ),
             SmtLeaf::Multiple(_) => unreachable!("AccountTree uses prefix-free IDs"),
         };
 
-        AccountWitness::new(account_id, commitment, path).ok()
+        AccountWitness::new(witness_id, commitment, path).ok()
     }
 
     /// Initializes the path nodes array from the latest state.

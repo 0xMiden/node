@@ -129,6 +129,8 @@ block number, not a timestamp or the authenticated target.
 
 Use `GetAccountInfos` for public headers at the authenticated target.
 
+Verify the account commitments returned by `GetAccountWitnesses` against the target account root.
+
 `SyncNotes` sends a block frame exactly once before that block's notes. Reject notes before a block frame,
 repeated/backward block frames, and note proofs for another block. Verify each note path against its block's note root
 and each block path against the MMR with `N + 1` leaves, including the authenticated target header. Fetch public note

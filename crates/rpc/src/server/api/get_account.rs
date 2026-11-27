@@ -110,7 +110,7 @@ fn check_duplicate_slots(storage_request: &AccountStorageRequest) -> Result<(), 
     Ok(())
 }
 
-fn get_account_error_to_status(err: GetAccountError) -> Status {
+pub(super) fn get_account_error_to_status(err: GetAccountError) -> Status {
     let message = err.to_string();
     match err {
         GetAccountError::DatabaseError(err) => super::database_error_to_status(&err),

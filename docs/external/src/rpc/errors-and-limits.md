@@ -137,6 +137,11 @@ fall into the ordinary-gRPC-status bucket described above:
 
 ## Historical account and chain reads
 
+V2 `GetAccountInfos` and `GetAccountWitnesses` accept up to 1000 distinct IDs. Account witnesses require at least one
+ID. Headers and entry witnesses require public accounts. All account reads require an explicit height, with zero
+selecting genesis. Only an absent public account produces the per-ID `not_found` result from `GetAccountInfos`. A
+missing height, invalid ID or private ID in a header request fails the whole batch.
+
 V2 `SyncChainMmr` returns `INVALID_ARGUMENT` for a target below the starting height and `OUT_OF_RANGE` for a target
 above the requested finality tip. If the node has pruned account state at the authenticated height, select a newer
 authenticated block and repeat all account reads there.
