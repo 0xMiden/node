@@ -133,18 +133,13 @@ async fn status_reports_committed_quorum_and_registered_change() {
 }
 
 #[tokio::test]
-async fn registration_rejects_invalid_or_unsupported_changes() {
+async fn registration_rejects_invalid_changes() {
     let sequencer = TestSequencer::new().await;
     for (change, status, error) in [
         (json!({"active":3,"pending":0}), StatusCode::BAD_REQUEST, "greater than zero"),
         (json!({"active":3,"pending":3}), StatusCode::BAD_REQUEST, "identical"),
         (json!({"active":3,"pending":4}), StatusCode::BAD_REQUEST, "exceeds"),
         (json!({"active":4,"pending":2}), StatusCode::CONFLICT, "does not match"),
-        (
-            json!({"active":3,"pending":2}),
-            StatusCode::BAD_REQUEST,
-            "protocol does not support",
-        ),
     ] {
         let (actual, body) = sequencer.request("PUT", Some(change)).await;
         assert_eq!(actual, status, "{body}");
@@ -206,10 +201,12 @@ async fn scheduling_requires_an_activation_height_with_an_uncommitted_transition
         assert_eq!(status, StatusCode::CONFLICT);
         assert!(body["error"].as_str().unwrap().contains("transition block"), "{body}");
     }
-    // With the transition still ahead of the tip, only protocol support prevents registration.
     let (status, body) = sequencer.request_at("PUT", Some(change), Some(2)).await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("protocol does not support"), "{body}");
+    assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
+    assert_eq!(
+        sequencer.request("GET", None).await.1,
+        json!({"active":3,"pending":2,"activation_height":2})
+    );
     sequencer.stop().await;
 }
 
@@ -273,9 +270,8 @@ async fn transition_block(
         witnesses.nullifier_witnesses,
         BTreeMap::new(),
     );
-    // Two keys allow a protocol-valid quorum of two in this fixture.
     let config =
-        ValidatorConfig::new((0..2).map(|_| random_secret_key().public_key()).collect(), 2)
+        ValidatorConfig::new(inputs.prev_block_header().validator_config().keys().to_vec(), 2)
             .unwrap();
     let proposal = ProposedBlock::new(inputs.clone(), Vec::new())
         .unwrap()

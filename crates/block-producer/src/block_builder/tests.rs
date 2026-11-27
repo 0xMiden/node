@@ -60,13 +60,14 @@ async fn quorum_proposals_preserve_the_parent_validator_keys() {
     )
     .await
     .unwrap();
-    assert!(
-        BlockBuilder::propose_block(
-            inputs,
-            Some(PendingValidatorQuorum { quorum: 2, activation_height: 2.into() })
-        )
-        .await
-        .is_err()
-    );
+    let proposal = BlockBuilder::propose_block(
+        inputs,
+        Some(PendingValidatorQuorum { quorum: 2, activation_height: 2.into() }),
+    )
+    .await
+    .unwrap();
+    let (header, _) = proposal.proposed_block.into_header_and_body().unwrap();
+    assert_eq!(header.validator_config().keys(), config.keys());
+    assert_eq!(header.validator_config().quorum(), 2);
     writer.stop(task).await;
 }
